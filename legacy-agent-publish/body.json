@@ -1,0 +1,17 @@
+{
+  "api": {
+    "oauth2PermissionScopes": [
+      {
+        "adminConsentDescription": "Access the bot as a user",
+        "adminConsentDisplayName": "Access as user",
+        "id": "552af24f-1da6-4f82-993a-3e9c2766a40f",
+        "isEnabled": true,
+        "type": "User",
+        "userConsentDescription": "Access the bot on your behalf",
+        "userConsentDisplayName": "Access bot",
+        "value": "access_as_user"
+      }
+    ],
+    "requestedAccessTokenVersion": 2
+  }
+}

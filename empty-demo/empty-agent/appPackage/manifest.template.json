@@ -1,0 +1,65 @@
+{
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.17",
+    "version": "1.0.0",
+    "id": "${AAD_APP_CLIENT_ID}",
+    "developer": {
+        "name": "Empty Demo",
+        "websiteUrl": "https://github.com",
+        "privacyUrl": "https://github.com",
+        "termsOfUseUrl": "https://github.com"
+    },
+    "name": {
+        "short": "Empty Demo Agent",
+        "full": "Empty Demo Agent with OBO Flow"
+    },
+    "description": {
+        "short": "Teams agent demonstrating OBO flow to custom API",
+        "full": "A Teams bot that uses On-Behalf-Of flow to call both Microsoft Graph API and a custom Empty API, demonstrating token exchange and downstream API calls."
+    },
+    "icons": {
+        "color": "color.png",
+        "outline": "outline.png"
+    },
+    "accentColor": "#FFFFFF",
+    "bots": [
+        {
+            "botId": "${BOT_ID}",
+            "scopes": [
+                "personal",
+                "team",
+                "groupChat"
+            ],
+            "supportsFiles": false,
+            "isNotificationOnly": false,
+            "commandLists": [
+                {
+                    "scopes": [
+                        "personal",
+                        "team",
+                        "groupChat"
+                    ],
+                    "commands": [
+                        {
+                            "title": "help",
+                            "description": "Show help message"
+                        },
+                        {
+                            "title": "signout",
+                            "description": "Sign out from OAuth connections"
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "permissions": [
+        "identity",
+        "messageTeamMembers"
+    ],
+    "validDomains": [],
+    "webApplicationInfo": {
+        "id": "${AAD_APP_CLIENT_ID}",
+        "resource": "api://botid-${AAD_APP_CLIENT_ID}"
+    }
+}

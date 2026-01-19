@@ -1,0 +1,59 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "{{APP_ID}}",
+  "packageName": "com.example.agenttoteams",
+  "developer": {
+    "name": "Your Name",
+    "websiteUrl": "https://github.com/your-repo",
+    "privacyUrl": "https://github.com/your-repo",
+    "termsOfUseUrl": "https://github.com/your-repo"
+  },
+  "name": {
+    "short": "Agent Teams Bot",
+    "full": "Agent to Teams Bot with OAuth"
+  },
+  "description": {
+    "short": "AI Agent connected to Azure OpenAI",
+    "full": "A Teams bot that connects to Azure OpenAI backend with user authentication support."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "{{APP_ID}}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "Show help message"
+            },
+            {
+              "title": "token",
+              "description": "Get user OAuth token (demo)"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": [
+    "token.botframework.com",
+    "europe.token.botframework.com",
+    "unitedstates.token.botframework.com"
+  ],
+  "webApplicationInfo": {
+    "id": "{{APP_ID}}",
+    "resource": "api://botid-{{APP_ID}}"
+  }
+}

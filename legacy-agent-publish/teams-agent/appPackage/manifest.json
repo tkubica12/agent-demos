@@ -1,0 +1,59 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "92c9d598-788d-4db6-83aa-ec1fc3876695",
+  "packageName": "com.tkubica.agenttoteams",
+  "developer": {
+    "name": "tkubica12",
+    "websiteUrl": "https://github.com/tkubica12/agent-to-teams",
+    "privacyUrl": "https://github.com/tkubica12/agent-to-teams",
+    "termsOfUseUrl": "https://github.com/tkubica12/agent-to-teams"
+  },
+  "name": {
+    "short": "Agent Teams Bot",
+    "full": "Agent to Teams Bot with OAuth"
+  },
+  "description": {
+    "short": "AI Agent connected to Azure OpenAI",
+    "full": "A Teams bot that connects to Azure OpenAI backend with user authentication support."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "92c9d598-788d-4db6-83aa-ec1fc3876695",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "Show help message"
+            },
+            {
+              "title": "token",
+              "description": "Get user OAuth token (demo)"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": [
+    "token.botframework.com",
+    "europe.token.botframework.com",
+    "unitedstates.token.botframework.com"
+  ],
+  "webApplicationInfo": {
+    "id": "92c9d598-788d-4db6-83aa-ec1fc3876695",
+    "resource": "api://botid-92c9d598-788d-4db6-83aa-ec1fc3876695"
+  }
+}
