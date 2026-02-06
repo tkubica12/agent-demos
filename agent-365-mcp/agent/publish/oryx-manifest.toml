@@ -1,0 +1,7 @@
+[build]
+platform = "python"
+version = "3.13"
+build-command = "pip install -r requirements.txt"
+
+[run]
+command = "gunicorn --bind=0.0.0.0:8000 app:app"

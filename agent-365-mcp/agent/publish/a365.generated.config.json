@@ -1,0 +1,46 @@
+{
+  "managedIdentityPrincipalId": "c42f816b-bcf3-4977-9f09-fd56ec2bd895",
+  "agentBlueprintId": "2b0c2290-3903-4681-a2f8-1072408976ca",
+  "agentBlueprintObjectId": "2b0c2290-3903-4681-a2f8-1072408976ca",
+  "agentBlueprintServicePrincipalObjectId": "d849f353-bcdf-4e4a-aaec-aa861d8fc28c",
+  "AgenticAppId": null,
+  "AgenticUserId": null,
+  "agentBlueprintClientSecret": "AQAAANCMnd8BFdERjHoAwE/Cl\u002BsBAAAAXFyndHlHGkaE4XdJAo3vhQAAAAACAAAAAAAQZgAAAAEAACAAAABFBKwbhUiS6Mu1DYZoz\u002Bpkn8fwWizcRHEj4lDS/7hdLgAAAAAOgAAAAAIAACAAAACrEYEx9GwoU5Usll4DVYSALKfrTZbzY2nCMSliJyTW7DAAAAD/tYNHtoEQ4F1tb/ePo9Xhl/6ddOsCoKLgIkjOZxlz\u002BzzG3QB2vO/Crkn\u002B0PO\u002Bj8RAAAAAk9ceD2df96pPR4lwIvvekqgINfwZIxFNmKgoap2HMHa2muK5u4N7ANTrzqDZt86VcYFTKWkg3/Osqan/g2Lbfw==",
+  "agentBlueprintClientSecretProtected": true,
+  "botId": "2b0c2290-3903-4681-a2f8-1072408976ca",
+  "botMsaAppId": "2b0c2290-3903-4681-a2f8-1072408976ca",
+  "botMessagingEndpoint": "https://agent365mcpdemo-webapp.azurewebsites.net/api/messages",
+  "resourceConsents": [
+    {
+      "resourceName": "Messaging Bot API",
+      "resourceAppId": "5a807f24-c9de-44ee-a3a7-329e88a00ffc",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-02T15:39:20.4470249Z",
+      "scopes": [
+        "Authorization.ReadWrite",
+        "user_impersonation"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": true
+    },
+    {
+      "resourceName": "Observability API",
+      "resourceAppId": "9b975845-388f-4429-889e-eab1ef63949c",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-02T15:39:22.1779104Z",
+      "scopes": [
+        "user_impersonation"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": true
+    }
+  ],
+  "deploymentLastTimestamp": null,
+  "deploymentLastStatus": null,
+  "deploymentLastCommitHash": null,
+  "deploymentLastBuildId": null,
+  "lastUpdated": "2026-02-02T15:39:22.1805553Z",
+  "cliVersion": "1.1.59.53753",
+  "completed": true,
+  "completedAt": "2026-02-02T15:37:34.4999461Z"
+}

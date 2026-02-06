@@ -4,6 +4,15 @@ This repository contains multiple demos of AI agents and their integrations with
 
 ## Demos
 
+### agent-365-mcp
+
+Work-in-progress Agent 365 demo focused on the **tooling gateway / MCP** pattern (agents should invoke tools via MCP servers governed by Agent 365, rather than calling line-of-business APIs directly).
+
+- Current state: a minimal FastAPI-based Agent 365 “echo” agent deployed as a **blueprint** and working as an **instance** in Teams
+- In progress: agent identity + tool access through MCP (including exploring the Agent 365 tooling gateway / tooling servers)
+
+See [agent-365-mcp/README.md](agent-365-mcp/README.md) for details.
+
 ### empty-demo
 
 Showcases integration, UI capabilities, and authorization flows. It contains an empty agent (a demo agent that sends messages without a true AI system) and demonstrates:
@@ -34,6 +43,7 @@ See [legacy-agent-publish/README.md](legacy-agent-publish/README.md) for details
 - [ ] Microsoft Agent Framework integration to M365 demo
 - [ ] Foundry Agent Service integration to M365 demo
 - [ ] MCP layer into all demos between agent and API
+- [ ] Agent 365 tooling gateway / MCP servers (no direct API calls from agents)
 - [ ] Multi-agent and A2A
 - [ ] Copilot Studio + Foundry Agent Service + Microsoft Agent Framework interactions
 - [ ] Foundry IQ integration with user fencing
