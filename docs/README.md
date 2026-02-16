@@ -19,7 +19,7 @@ Provide governance and management of Large Language Models (LLMs) and other AI r
 
 Models can be accessed via APIs from different runtimes and hosting options including Foundry Agents and Copilot Studio, but can also be provided as part of the platform.
 
-Large-scale enterprise AI landing zone uses **Azure API Management** as AI Gateway to manage access to LLMs. This includes clever routing and capacity policies (priority-based access to models and privisioned throughput, capacity and quota management), access control, auditing capabilities (you can for example record interactions without dependency on developers use OpenTelemetry properly), inline security enforcement and so on. This can also be used to provide data plane proxy for MCP tools (see [Tools](#tools) section) to agents.
+Large-scale enterprise AI landing zone uses **Azure API Management** as AI Gateway to manage access to LLMs. This includes clever routing and capacity policies (priority-based access to models and privisioned throughput, capacity and quota management), access control, auditing capabilities (you can for example record interactions without dependency on developers use OpenTelemetry properly), inline security enforcement and so on. This can also be used to provide data plane proxy for MCP tools.
 
 **Foundry** provides concept of resources and project and UI experience such as playgrounds and agent builder. Support for bring-your-own APIM with full UI support is planned. 
 
@@ -123,7 +123,7 @@ Agents are more and more accessed using various channels such as custom web inte
 
 Channels should require strong authentication and authorization tunnels, provide user on-behalf-of flow and some might need to be access via public Internet (Copilot, Teams) so require proxy (relay) to expose agents hosted in internal networks securely.
 
-This is in Microsoft story handled with **Activity Protocol** and **[Microsoft 365 Agents SDK]** (for any agent) and automatically provided by **Copilot Studio** and **Foundry Agent Service** (supported for all agent types - Foundry Agent, hosted Microsoft Agent Framework, hosted LangGraph and others).
+This is in Microsoft story handled with **Activity Protocol** and **Microsoft 365 Agents SDK** (for any agent) and automatically provided by **Copilot Studio** and **Foundry Agent Service** (supported for all agent types - Foundry Agent, hosted Microsoft Agent Framework, hosted LangGraph and others).
 
 </details>
 
@@ -149,11 +149,13 @@ Agents can be published in Microsoft 365 with their icon, description, permissio
 
 ---
 
-All agents built in **Copilot Studio** and **Foundry Agent Service** (using any agent - Foundry Agent, hosted Microsoft Agent Framework, hosted LangGraph and others) can be easily published to Microsoft 365 ecosystem. Agents built with any framework and self-hosted can be published to Microsoft 365 when instrumented with **[Microsoft 365 Agents SDK]**.
+All agents built in **Copilot Studio** and **Foundry Agent Service** (using any agent - Foundry Agent, hosted Microsoft Agent Framework, hosted LangGraph and others) can be easily published to Microsoft 365 ecosystem. Agents built with any framework and self-hosted can be published to Microsoft 365 when instrumented with **Microsoft 365 Agents SDK**.
 
-While **[Microsoft 365 Agents SDK]** provides dicoverability for any agent, **Agent 365 SDK** allows any agent to integrate into identity, auditing, observability, security and tool access in **Agent 365** as well as forward-looking capabilities such as digital worker experience with agent user ID with access to its own email, Teams or Word comments, receiving notifications about new messages or meetings and mentions and so on.
+While **Microsoft 365 Agents SDK** provides dicoverability for any agent, **Agent 365 SDK** allows any agent to integrate into identity, auditing, observability, security and tool access in **Agent 365** as well as forward-looking capabilities such as digital worker experience with agent user ID with access to its own email, Teams or Word comments, receiving notifications about new messages or meetings and mentions and so on.
 
 **Agent 365** has concept of **blueprints** which are basicaly agent templates with predefined capabilities, permissions and tool access requirements. User can request **instantiation** of such agent for their use (hire an agent) which create specific instance with its own Agent ID in Entra ID and permissions consented or fine-tuned by user. 
+
+Coding agents are typically not published to general user population, but local tools such as GitHub Copilot CLI, Claude Code, CODEX CLI are often used bz developers as well as cloud-based agents in GitHub. **GitHub Agents HQ** is designed to govern, manage and monitor coding agents as part of GitHub Copilot platform including 3rd patry agents (Claude Code, CODEX). Note agents can now work as part of deployment pipelines with **GitHub Agentic Workflows**.
 
 </details>
 
