@@ -2,6 +2,9 @@
 
 This repository contains multiple demos of AI agents and their integrations with Microsoft 365, industry standards, governance patterns, and the Agent 365 ecosystem.
 
+## Overview
+For end-to-end story of agents see [AI agents end-to-end](./docs/README.md)
+
 ## Demos
 
 ### agent-365-mcp
