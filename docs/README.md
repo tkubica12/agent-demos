@@ -9,6 +9,8 @@
 - Security must understand curent agent landscape, posture, conditional access policies for agents, [responsible AI](#responsible-ai-and-agent-security) and [data security](#data-security). 
 - Successful development and continuous improvement of agents require strong [evaluations](#evals) and lifecycle management with [CI/CD](#cicd).
 
+See also [User Stories](./UserStories.md) for more context on needs and requirements for AI agents in enterprise.
+
 ## AI Landing Zones
 <details>
 <summary>
