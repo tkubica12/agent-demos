@@ -9,7 +9,7 @@
 - create agents using open source framework of my choice
 - have catalog of company tools (MCP servers) that I can quickly test and access from my agent
 - deep observability so I can drill down into individual turns in conversation to troubleshoot and understand how my agent is working
-- create evals so I can automatically test my agent's performance and track it over time
+- create evals so I can automatically test my agent's performance (quality, coherence, groundedness, speed, personality, ...) and track it over time
 - have catalog of other agents that I can use in my multi-agent system
 - create agent that can be accessed in different channels (e.g. web, mobile, slack, etc.) without need to rewrite code for each channel
 - publish my agent into Microsoft 365 environment so it can be used by my colleagues
