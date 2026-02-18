@@ -1,0 +1,6 @@
+bot:
+  id: mydemoa365agent@tkubica.net
+  name: mydemoa365agent Agent User
+  role: agenticUser
+  agenticUserId: <your-agentic-user-id>
+  agenticAppId: <your-agentic-app-id>

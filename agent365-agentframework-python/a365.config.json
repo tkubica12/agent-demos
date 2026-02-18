@@ -1,0 +1,20 @@
+{
+  "tenantId": "6ce4f237-667f-43f5-aafd-cbef954adf97",
+  "subscriptionId": "673af34d-6b28-41dc-bc7b-f507418045e6",
+  "resourceGroup": "rg-a365",
+  "location": "westeurope",
+  "environment": "prod",
+  "needDeployment": true,
+  "clientAppId": "ac045bd5-9d30-4362-9bd3-3d9ffab735d3",
+  "appServicePlanName": "appplan-a365",
+  "appServicePlanSku": "B1",
+  "webAppName": "mydemoa365agent-webapp",
+  "agentIdentityDisplayName": "mydemoa365agent Identity",
+  "agentBlueprintDisplayName": "mydemoa365agent Blueprint",
+  "agentUserPrincipalName": "UPN.mydemoa365agent@tkubica.net",
+  "agentUserDisplayName": "mydemoa365agent Agent User",
+  "managerEmail": "admin@tkubica.net",
+  "agentUserUsageLocation": "US",
+  "deploymentProjectPath": "C:\\git\\agent-demos\\agent365-agentframework-python",
+  "agentDescription": "mydemoa365agent - Agent 365 Agent"
+}

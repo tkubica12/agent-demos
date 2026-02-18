@@ -1,0 +1,84 @@
+{
+  "managedIdentityPrincipalId": null,
+  "agentBlueprintId": "68b002d2-2812-48ff-bb63-7b1cf09c9077",
+  "agentBlueprintObjectId": "68b002d2-2812-48ff-bb63-7b1cf09c9077",
+  "agentBlueprintServicePrincipalObjectId": null,
+  "AgenticAppId": null,
+  "AgenticUserId": null,
+  "agentBlueprintClientSecret": "AQAAANCMnd8BFdERjHoAwE/Cl\u002BsBAAAAXFyndHlHGkaE4XdJAo3vhQAAAAACAAAAAAAQZgAAAAEAACAAAADms3rLNErT9BVsp5ThUCS6h06Ie2il3GOzGLUdokOPuAAAAAAOgAAAAAIAACAAAADHOm\u002B95Pv6xemW0xIx/mdrGbqCUGLtiPGtGdGE/OKqgjAAAADI0mFQ2LyKRxWtRNv637fID2Hr5ilf5Ed0Ar1PqmxCtaY1gOxYISLonhR3g/lbXjFAAAAAYjW0jU8R\u002BrBvfeIVz36F2cW3zToFRGYlfYx2EgSu2Xd6gDk3xoK75yftaniFly3mnGF4onXcCZhwtiFXKjUnww==",
+  "agentBlueprintClientSecretProtected": true,
+  "botId": "68b002d2-2812-48ff-bb63-7b1cf09c9077",
+  "botMsaAppId": "68b002d2-2812-48ff-bb63-7b1cf09c9077",
+  "botMessagingEndpoint": "https://mydemoa365agent-webapp.azurewebsites.net/api/messages",
+  "resourceConsents": [
+    {
+      "resourceName": "Messaging Bot API",
+      "resourceAppId": "5a807f24-c9de-44ee-a3a7-329e88a00ffc",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-18T09:26:02.2542853Z",
+      "scopes": [
+        "Authorization.ReadWrite",
+        "user_impersonation"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": false
+    },
+    {
+      "resourceName": "Observability API",
+      "resourceAppId": "9b975845-388f-4429-889e-eab1ef63949c",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-18T09:26:05.9620462Z",
+      "scopes": [
+        "user_impersonation"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": false
+    },
+    {
+      "resourceName": "Microsoft Graph",
+      "resourceAppId": "00000003-0000-0000-c000-000000000000",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-18T09:23:47.7256382Z",
+      "scopes": [
+        "Mail.ReadWrite",
+        "Mail.Send",
+        "Chat.ReadWrite",
+        "User.Read.All",
+        "Sites.Read.All"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": false
+    },
+    {
+      "resourceName": "Agent 365 Tools",
+      "resourceAppId": "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-18T09:25:59.0844573Z",
+      "scopes": [
+        "McpServers.Mail.All",
+        "McpServersMetadata.Read.All"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": false
+    },
+    {
+      "resourceName": "Power Platform API",
+      "resourceAppId": "8578e004-a5c6-46e7-913e-12f58912df43",
+      "consentGranted": true,
+      "consentTimestamp": "2026-02-18T09:26:09.0846078Z",
+      "scopes": [
+        "Connectivity.Connections.Read"
+      ],
+      "inheritablePermissionsConfigured": true,
+      "inheritablePermissionsAlreadyExist": false
+    }
+  ],
+  "deploymentLastTimestamp": null,
+  "deploymentLastStatus": null,
+  "deploymentLastCommitHash": null,
+  "deploymentLastBuildId": null,
+  "lastUpdated": "2026-02-18T09:26:09.0847397Z",
+  "cliVersion": "1.1.62.13773",
+  "completed": true,
+  "completedAt": "2026-02-18T09:25:51.8218167Z"
+}

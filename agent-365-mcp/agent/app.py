@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 import uvicorn
 
+# Microsoft 365 Agents SDK imports
 from microsoft_agents.hosting.core import (
     AgentApplication,
     TurnState,
