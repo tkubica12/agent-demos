@@ -164,16 +164,22 @@ Coding agents are typically not published to general user population, but local 
 ## Observability
 <details>
 <summary>
-Developers need to understand how their agents are performing, identify issues and bottlenecks, and continuously improve them. Observability includes traces of conversations so developer can understand what is agent doing, what tools are called, how agents turn in multi-agent system including dimensions such as time and latency, user ID, role, group, tenant, and so on. 
+Agent are non-deterministic systems by nature therefore observability is even more important than with apps. Developers need to understand how their agents are performing, identify issues and bottlenecks, and continuously improve them. Observability includes traces of conversations so developer can understand what is agent doing, what tools are called, how agents turn in multi-agent system including dimensions such as time and latency, user ID, role, group, tenant, and so on. 
 </summary>
 
-**Copilot Studio** and **Foundry Agent Service** provide built-in observability capabilities, including logging, metrics, and tracing, to monitor agent performance and behavior. 
+---
 
-**Foundry Agent Service** goes one level deeper with access to raw traces in **Application Insights** so you can build your own views and dashboards. 
+Industry is standardizing on OpenTelemetry for agents with GenAI semantic conventions
 
-At this point Copilot Studio and Foundry Agents do not support custom OpenTelemetry endpoints for different observability systems, but you can use it with hosted agents in Foundry (Microsoft Agent Framework, LangGraph etc.) and with self-hosted agents (eg. with agents connected via Microsoft 365 Agents SDK).
+**Copilot Studio** and **Foundry Agent Service** both provide built-in observability capabilities, including logging, metrics, and tracing, to monitor agent performance and behavior. Both support direct access to **Application Insights** so customers can query raw data and build dashboards in Azure Monitor, Grafana o PowerBI.
 
-**Agent 365** platform works as OpenTelemetry collector and provides observability to published agents or custom agents instrumented with **Agent 365 SDK**. At this point this is more high-level (agent usage metrics).
+At this point Copilot Studio and Foundry Agents do not support custom OpenTelemetry endpoints for different observability systems, but you can use it with hosted agents in Foundry (Microsoft Agent Framework, LangGraph etc.) and with self-hosted agents (eg. with agents connected via Microsoft 365 Agents SDK). With those you can even implement OpenTelemetry Collector to receive single stream of telemetry and distribute it to various monitoring systems such as Foundry, LangFuse or Grafana Tempo.
+
+**Agent 365** platform works as OpenTelemetry collector and provides observability to published agents or custom agents instrumented with **Agent 365 SDK**. Data collected is leverage by multiple Microsoft products - Agent 365 for providing basic monitoring, Defender for AI for security insights, Purview for data security and can also be forwarded to Microsoft Sentinel. As of February 2026 customers cannot yet access raw telemetry data directly.
+
+Strategy (not available today) is instrument once, observer everywhere - developers in Foundry, Admins in Agent365, operations in Azure Monitor. 
+
+Vision for 2026 is intelligent observability - agents look after other agents
 
 </details>
 

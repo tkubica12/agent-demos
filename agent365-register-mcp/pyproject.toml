@@ -1,0 +1,10 @@
+[project]
+name = "agent365-register-mcp"
+version = "0.1.0"
+description = "Register a custom MCP server with Microsoft Agent 365 Tooling Gateway via MCPManagement"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.9.0",
+    "httpx>=0.28.0",
+    "azure-identity>=1.21.0",
+]

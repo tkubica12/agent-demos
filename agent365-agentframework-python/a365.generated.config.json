@@ -53,9 +53,10 @@
       "resourceName": "Agent 365 Tools",
       "resourceAppId": "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1",
       "consentGranted": true,
-      "consentTimestamp": "2026-02-18T09:25:59.0844573Z",
+      "consentTimestamp": "2026-02-20T06:28:25.5673111Z",
       "scopes": [
         "McpServers.Mail.All",
+        "McpServers.SharepointLists.All",
         "McpServersMetadata.Read.All"
       ],
       "inheritablePermissionsConfigured": true,
@@ -77,8 +78,8 @@
   "deploymentLastStatus": null,
   "deploymentLastCommitHash": null,
   "deploymentLastBuildId": null,
-  "lastUpdated": "2026-02-18T09:26:09.0847397Z",
-  "cliVersion": "1.1.62.13773",
+  "lastUpdated": "2026-02-20T06:28:25.5771191Z",
+  "cliVersion": "1.1.94.24848",
   "completed": true,
   "completedAt": "2026-02-18T09:25:51.8218167Z"
 }
