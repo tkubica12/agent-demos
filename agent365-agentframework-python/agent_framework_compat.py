@@ -17,7 +17,16 @@ Import this module BEFORE importing any microsoft_agents_a365 packages.
 import agent_framework
 
 if not hasattr(agent_framework, "ChatAgent"):
-    agent_framework.ChatAgent = agent_framework.Agent
+    _OriginalAgent = agent_framework.Agent
+
+    class _ChatAgentCompat(_OriginalAgent):
+        """Compat wrapper: translates old 'chat_client' kwarg to 'client'."""
+        def __init__(self, *args, **kwargs):
+            if "chat_client" in kwargs and "client" not in kwargs:
+                kwargs["client"] = kwargs.pop("chat_client")
+            super().__init__(*args, **kwargs)
+
+    agent_framework.ChatAgent = _ChatAgentCompat
 
 if not hasattr(agent_framework, "ChatMessage"):
     agent_framework.ChatMessage = agent_framework.Message

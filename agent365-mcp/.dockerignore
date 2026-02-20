@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+logs/
+logs.zip
+agent/
+*.md
+test_client.py
+*.ps1
+.gitignore
