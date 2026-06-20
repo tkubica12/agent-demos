@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from agui_client import AGUIConversation, DEFAULT_INVOCATIONS_URL, azure_ai_auth_headers
+from agui_client import AGUIConversation, DEFAULT_AGUI_URL
 
 
 def run_turn(
@@ -28,15 +28,13 @@ def run_turn(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default=DEFAULT_INVOCATIONS_URL)
+    parser.add_argument("--url", default=DEFAULT_AGUI_URL)
     parser.add_argument("--bearer-token")
     args = parser.parse_args()
 
     headers = {}
     if args.bearer_token:
         headers["Authorization"] = f"Bearer {args.bearer_token}"
-    elif args.url.startswith("https://"):
-        headers.update(azure_ai_auth_headers())
 
     conversation = AGUIConversation(args.url, headers=headers)
     first, first_run = run_turn(conversation, "Say exactly: agui first ok")

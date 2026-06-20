@@ -62,11 +62,13 @@ The repository keeps `pyproject.toml` and `uv.lock` for local `uv` workflows. Ho
 
 ## Enable A2A
 
-After deployment, patch the live agent endpoint to publish an agent card and enable incoming A2A:
+After deployment, patch the live agent endpoint to publish an agent card and enable incoming A2A. Foundry does not read A2A endpoint configuration from `agent.yaml` and the portal cannot configure it yet, so this REST patch is required:
 
 ```powershell
 .\scripts\Setup-A2A.ps1
 ```
+
+The script sends one merge-patch with both required properties: `agent_card` and `agent_endpoint.protocols = ["responses", "a2a"]`. It then verifies that the live agent reports `a2a` and that the v1.0 agent card is reachable. If the portal still shows **Set up** for A2A after this succeeds, treat that as a portal preview display issue and verify with the agent object or smoke test instead.
 
 Fetch the v1.0 agent card:
 

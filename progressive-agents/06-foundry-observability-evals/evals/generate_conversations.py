@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from agui_client import AGUIConversation, DEFAULT_INVOCATIONS_URL, azure_ai_auth_headers
+from agui_client import AGUIConversation, DEFAULT_AGUI_URL
 
 
 def load_cases(path: Path) -> list[dict]:
@@ -20,7 +20,7 @@ def load_cases(path: Path) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default=DEFAULT_INVOCATIONS_URL)
+    parser.add_argument("--url", default=DEFAULT_AGUI_URL)
     parser.add_argument("--cases", default="evals/personality_cases.jsonl")
     parser.add_argument("--out", default="evals/generated_conversations.jsonl")
     parser.add_argument("--bearer-token")
@@ -29,8 +29,6 @@ def main() -> None:
     headers = {}
     if args.bearer_token:
         headers["Authorization"] = f"Bearer {args.bearer_token}"
-    elif args.url.startswith("https://"):
-        headers.update(azure_ai_auth_headers())
 
     cases = load_cases(Path(args.cases))
     out_path = Path(args.out)

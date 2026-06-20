@@ -181,15 +181,8 @@
     <main>
       <header>
         <h1>Step 06: Foundry observability and evals</h1>
-        <p>Browser client posts AG-UI input directly to the deployed Foundry Invocations endpoint. Responses include correlation IDs for tracing.</p>
+        <p>Browser client posts AG-UI input to the ACA BFF. BFF and Foundry agent emit correlated traces.</p>
       </header>
-
-      <section class="status">
-        <label for="endpoint">Endpoint</label>
-        <textarea id="endpoint" rows="2">https://tomaskubica-foundry-resource.services.ai.azure.com/api/projects/tomaskubica-foundry-project/agents/step-06-foundry-observability-evals/endpoint/protocols/invocations?api-version=v1</textarea>
-        <label for="token">Bearer token</label>
-        <textarea id="token" rows="3" placeholder="Paste token from: az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv"></textarea>
-      </section>
 
       <section id="chat" class="chat" aria-live="polite"></section>
 
@@ -207,9 +200,6 @@
       const prompt = document.querySelector("#prompt");
       const send = document.querySelector("#send");
       const status = document.querySelector("#status");
-      const endpoint = document.querySelector("#endpoint");
-      const token = document.querySelector("#token");
-
       const messages = [];
       let threadId = crypto.randomUUID();
       let lastRunId = null;
@@ -242,22 +232,19 @@
 
         const assistantBubble = addMessage("assistant", "");
         const runId = crypto.randomUUID();
-        const target = endpoint.value.trim();
-        const bearer = token.value.trim();
-        if (!target) throw new Error("Endpoint is required.");
-        if (!bearer) throw new Error("Bearer token is required.");
-
-        const response = await fetch(target, {
+        const correlationId = crypto.randomUUID();
+        const response = await fetch("/agui", {
           method: "POST",
           headers: {
             Accept: "text/event-stream",
-            Authorization: `Bearer ${bearer}`,
             "Content-Type": "application/json",
+            "x-correlation-id": correlationId,
           },
           body: JSON.stringify({
             threadId,
             runId,
             parentRunId: lastRunId,
+            correlationId,
             state: {},
             messages,
             tools: [],

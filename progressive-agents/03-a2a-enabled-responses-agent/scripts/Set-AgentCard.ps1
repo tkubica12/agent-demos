@@ -21,7 +21,7 @@ $token = az account get-access-token --resource https://ai.azure.com --query acc
 $body = @{
     agent_card = @{
         description = "A concise helpful assistant exposed through Foundry incoming A2A."
-        version = "1.0"
+        version = "1.0.0"
         skills = @(
             @{
                 id = "general-text"
@@ -36,7 +36,7 @@ Invoke-RestMethod `
     -Method Patch `
     -Uri "$baseUrl/agents/$AgentName`?api-version=v1" `
     -Headers @{ Authorization = "Bearer $token" } `
-    -ContentType "application/json" `
+    -ContentType "application/merge-patch+json" `
     -Body $body | Out-Null
 
 Write-Host "Agent card configured for $AgentName."

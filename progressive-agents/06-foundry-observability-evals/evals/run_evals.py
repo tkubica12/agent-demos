@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from agui_client import AGUIConversation, DEFAULT_INVOCATIONS_URL, azure_ai_auth_headers
+from agui_client import AGUIConversation, DEFAULT_AGUI_URL
 
 
 HYPE_WORDS = {
@@ -109,7 +109,7 @@ def generate_response(case: dict, url: str, headers: dict[str, str]) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default=DEFAULT_INVOCATIONS_URL)
+    parser.add_argument("--url", default=DEFAULT_AGUI_URL)
     parser.add_argument("--cases", default="evals/personality_cases.jsonl")
     parser.add_argument("--generated")
     parser.add_argument("--out", default="evals/eval_results.json")
@@ -122,8 +122,6 @@ def main() -> None:
         headers = {}
         if args.bearer_token:
             headers["Authorization"] = f"Bearer {args.bearer_token}"
-        elif args.url.startswith("https://"):
-            headers.update(azure_ai_auth_headers())
         rows = [
             generate_response(case, args.url, headers)
             for case in load_cases(Path(args.cases))

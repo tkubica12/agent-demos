@@ -1,7 +1,7 @@
 [project]
 name = "foundry-observability-evals"
 version = "0.1.0"
-description = "Foundry Hosted Agent with AG-UI Invocations, OpenTelemetry, and evals."
+description = "Observable AG-UI gateway and Foundry Hosted Agent with evals."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -13,9 +13,11 @@ dependencies = [
     "azure-ai-projects>=2.2.0",
     "azure-identity>=1.25.0",
     "azure-monitor-opentelemetry",
+    "fastapi",
     "httpx==0.28.1",
     "mcp",
     "opentelemetry-api",
+    "pyjwt[crypto]",
     "textual",
     "uvicorn",
 ]

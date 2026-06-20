@@ -2,14 +2,14 @@
 
 kind: hosted
 name: step-06-foundry-observability-evals
-description: Microsoft Agent Framework hosted agent with AG-UI Invocations, OpenTelemetry, and evals.
+description: Microsoft Agent Framework hosted agent with OpenTelemetry and evals behind an AG-UI gateway.
 metadata:
     tags:
         - Microsoft Agent Framework
         - Foundry Hosted Agent
         - Responses Protocol
         - Invocations Protocol
-        - AG-UI
+        - Authenticated AG-UI Gateway
         - Observability
         - Evaluations
 protocols:

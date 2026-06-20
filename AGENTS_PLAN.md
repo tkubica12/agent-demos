@@ -14,7 +14,7 @@ progressive-agents/
   02-foundry-invocations-baseline/
   03-a2a-enabled-responses-agent/
   04-ag-ui-local-adapter/
-  05-ag-ui-through-invocations/
+  05-ag-ui-authenticated-gateway/
   06-foundry-observability-evals/
   07-foundry-memory-profile/
   08-skill-system-baseline/
@@ -49,7 +49,7 @@ Rule:
 | First hosted protocol | Responses |
 | Second hosted protocol | Invocations |
 | A2A | Enable on Responses agent. Foundry-managed A2A endpoint. |
-| AG-UI | Not native Hosted Agent protocol. Use local adapter first. Try Invocations bridge later. |
+| AG-UI | Not native browser-facing Hosted Agent protocol. Use local adapter first, then thin authenticated ACA BFF that exposes AG-UI and calls Foundry Hosted Agent. |
 | Observability | Application Insights + OpenTelemetry + Foundry traces |
 | Evals | Foundry evaluation path plus local repeatable scripts |
 | Memory | Foundry Memory first if usable. Else abstraction over files/Cosmos/Search. |
@@ -71,7 +71,7 @@ Other protocols/features:
 
 - Activity: platform bridge for Teams/M365 when publishing. Do not implement first.
 - A2A: Foundry can expose A2A endpoint for agents that support Responses. Enable after Responses works.
-- AG-UI: agent-to-user UI protocol. Not native Hosted Agent protocol. Use Agent Framework AG-UI adapter locally. If needed, bridge via Invocations.
+- AG-UI: agent-to-user UI protocol. Use Agent Framework AG-UI adapter locally first. For real app shape, terminate browser auth and AG-UI in a thin ACA BFF, then call the Foundry Hosted Agent.
 
 Implication:
 
@@ -79,7 +79,7 @@ Implication:
 Responses first.
 Invocations second.
 A2A layered on Responses.
-AG-UI via local adapter or Invocations/proxy.
+AG-UI via local adapter first, then ACA authenticated gateway to Foundry.
 ```
 
 ## Target architecture, final-ish
@@ -87,14 +87,17 @@ AG-UI via local adapter or Invocations/proxy.
 ```mermaid
 flowchart TD
     User[User / Teams / Web UI] --> Surface[Client surface]
-    Surface --> Foundry[Foundry Hosted Agent endpoint]
+    Surface --> Gateway[ACA BFF: Entra auth + AG-UI]
+    Gateway --> Foundry[Foundry Hosted Agent endpoint]
+    Surface --> FoundryDirect[Teams / A2A / direct agent channels]
+    FoundryDirect --> Foundry
 
     Foundry --> Responses[Responses protocol]
     Foundry --> Invocations[Invocations protocol]
     Foundry --> A2A[A2A endpoint enabled by Foundry]
 
     Responses --> Agent[Microsoft Agent Framework agent]
-    Invocations --> Adapter[Custom adapters: AG-UI, webhooks, jobs]
+    Invocations --> Adapter[Custom adapters: webhooks, jobs, non-browser payloads]
     Adapter --> Agent
     A2A --> Agent
 
@@ -128,7 +131,8 @@ Use these as primary references when implementing:
 - AG-UI docs: <https://docs.ag-ui.com/introduction.md>
 - Foundry observability and tracing: <https://learn.microsoft.com/azure/foundry/agents/concepts/observability>
 - Foundry evaluations: <https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai>
-- Foundry Memory: <https://learn.microsoft.com/azure/foundry/agents/how-to/memory>
+- Foundry Memory: <https://learn.microsoft.com/azure/foundry/agents/how-to/memory-usage>
+- Foundry sessions and conversations: <https://learn.microsoft.com/azure/foundry/agents/how-to/manage-sessions>
 - Agent 365 SDK: <https://learn.microsoft.com/microsoft-agent-365/developer/agent-365-sdk>
 - Agent 365 get started: <https://learn.microsoft.com/microsoft-agent-365/developer/get-started>
 - Agent 365 identity: <https://learn.microsoft.com/microsoft-agent-365/developer/identity>
@@ -298,44 +302,80 @@ Stop if:
 
 - Python AG-UI integration is too immature. Then document and continue with web UI over Responses.
 
-## Step 05: AG-UI through Invocations
+## Step 05: Authenticated AG-UI gateway
 
-Directory: `progressive-agents/05-ag-ui-through-invocations`
+Directory: `progressive-agents/05-ag-ui-authenticated-gateway`
 
-Copy step 04. Try Hosted Agent Invocations as AG-UI bridge.
+Copy step 04. Replace direct AG-UI-to-agent exposure with a thin Azure Container Apps BFF.
 
 Purpose:
 
-- Test if custom AG-UI stream can go through Foundry Invocations.
-- If not clean, document gap and use sidecar/proxy pattern later.
+- Prove production-shaped web/TUI access without moving agent logic out of Foundry.
+- Keep ACA BFF intentionally boring: Entra authentication, AG-UI HTTP/SSE surface, call-through to Foundry Hosted Agent.
+- Keep Foundry Hosted Agent as the agent runtime, managed endpoint, tool/memory/identity/observability surface.
 
 Must have:
 
-- Invocations handler that can emit AG-UI-shaped events or SSE if platform allows.
-- Client test.
-- Clear conclusion:
-  - native-enough through Invocations, or
-  - sidecar/proxy required.
+- ACA-hostable BFF exposing `/agui`.
+- Entra ID authentication on BFF:
+  - local dev mode can use Azure CLI or disabled-auth flag,
+  - deployed mode validates browser/user token for the BFF app registration.
+- BFF calls Foundry Hosted Agent using managed identity or configured credential.
+- BFF maps authenticated user to stable `userId` and passes it to Foundry as request metadata/header where possible.
+- BFF streams AG-UI SSE back to caller.
+- Web client works against BFF.
+- TUI works against BFF.
+- Hosted Agent Responses or Invocations endpoint still works for non-AG-UI smoke.
 
-Architecture option A:
+Architecture:
 
 ```text
-AG-UI client -> Foundry /invocations -> AG-UI adapter -> Agent
+AG-UI web/TUI -> ACA BFF -> Foundry Hosted Agent -> Agent Framework Agent -> Foundry model
 ```
 
-Architecture option B:
+What belongs in BFF:
 
 ```text
-AG-UI client -> sidecar web app -> Foundry /responses or /invocations -> Agent
+Entra auth
+AG-UI request/response/SSE adaptation
+CORS and browser-safe headers
+userId/tenantId/correlationId propagation
+minimal thread/conversation id mapping if required by protocol
+```
+
+What does not belong in BFF yet:
+
+```text
+agent instructions
+tool choice
+memory/profile logic
+skills
+business workflow reasoning
+```
+
+Identity spike:
+
+```text
+Browser token audience = BFF app/API
+BFF validates user
+BFF calls Foundry with managed identity
+BFF attempts to pass userId via x-memory-user-id/request metadata
+BFF documents whether Foundry Hosted Agent can also receive user token/assertion for OAuth identity passthrough
 ```
 
 Validation:
 
-- Streaming works, or failure documented with exact error/limitation.
+- Local BFF streams AG-UI from web.
+- Local BFF streams AG-UI from TUI.
+- Deployed ACA BFF requires Entra auth.
+- Deployed web client sends message and receives streamed response.
+- Deployed TUI sends message and receives streamed response.
+- Hosted Agent remains separately invokable.
 
 Stop if:
 
-- Foundry Invocations cannot carry required AG-UI streaming semantics.
+- BFF cannot call Foundry Hosted Agent with a managed identity or deployable credential.
+- Browser/TUI auth cannot be made simple enough for a demo. Fall back to local auth flag, but keep architecture and gaps explicit.
 
 ## Step 06: Foundry observability and evals
 
@@ -362,8 +402,8 @@ Must have:
 Architecture:
 
 ```text
-Agent -> OpenTelemetry -> Application Insights -> Foundry Observability
-Eval runner -> Agent endpoint -> eval results
+AG-UI client -> ACA BFF -> Foundry Hosted Agent -> OpenTelemetry -> App Insights / Foundry Observability
+Eval runner -> BFF or Foundry endpoint -> eval results
 ```
 
 Validation:
@@ -376,49 +416,155 @@ Stop if:
 
 - Foundry observability page cannot see custom traces. Keep App Insights proof and document Foundry gap.
 
-## Step 07: Foundry memory profile
+## Step 07: Foundry memory and user profile
 
 Directory: `progressive-agents/07-foundry-memory-profile`
 
-Copy step 06. Add user profile and preferences.
+Copy step 06. Add user profile, raw conversation history, conversation summaries, and long-term recall.
 
-First investigate Foundry Memory.
+Principle:
+
+- Leverage Foundry Memory as much as possible.
+- Keep BFF thin; memory/profile behavior belongs to the Foundry-hosted agent and its tools.
+- Use per-user scope everywhere. In proxy/BFF calls, pass stable user identity with `x-memory-user-id` or equivalent metadata.
+- Keep an abstraction so fallback stores can cover preview gaps without changing the agent contract.
 
 Memory target:
 
 ```text
-User profile
-User preferences
-Working notes
-Long-term recall
-Audit trail of changes
+1. User profile
+   - free-form JSON per user
+   - loaded into context at turn start
+   - manipulated through a profile patch tool
+   - audit every mutation
+
+2. Raw conversation store
+   - API-driven conversation list/detail for UI
+   - preserves previous conversations for the user
+   - not blindly injected into model context
+
+3. Conversation summaries
+   - generated after conversation end or scheduled sweep
+   - remove or redact critical PII
+   - condensed memory item for semantic search
+   - available to agent via memory search tool
+
+4. Contextual recall
+   - semantic search over user-scoped memories using latest messages
+   - retrieve relevant profile and chat summary memories per turn
+
+5. Static recall
+   - retrieve user profile/static memories at conversation start
+   - inject into system/developer context before first response
+
+6. Governance
+   - retention/TTL where Foundry Memory supports it
+   - access/delete path per user
+   - audit trail of additions, updates, deletes, and summary generation
 ```
 
 Must have:
 
 - Memory abstraction in code.
-- Foundry Memory implementation if available and suitable.
-- Fallback file/Cosmos/Search implementation if Foundry Memory is not ready.
-- Memory read/write tools.
-- Audit log for memory changes.
+- Foundry Memory store setup if available in region/project.
+- Foundry Memory API usage:
+  - create/update memory store,
+  - create/read/update/delete/list individual memory items,
+  - add conversation content to memory store,
+  - search memories by user scope.
+- Foundry Memory tool usage if usable from Hosted Agent:
+  - memory search tool attached to agent,
+  - scope set to user identity,
+  - direct remember/forget behavior tested,
+  - update delay understood and documented.
+- User profile tool:
+  - `get_profile`,
+  - `propose_profile_patch`,
+  - `apply_profile_patch`,
+  - `delete_profile_item` or forget operation.
+- Raw conversation API:
+  - list conversations for current user,
+  - get conversation messages,
+  - continue conversation.
+- Summary job:
+  - summarize completed conversation,
+  - redact critical PII,
+  - write summary memory,
+  - record audit entry.
+- Fallback file/Cosmos/Search implementation if Foundry Memory cannot cover a required lifecycle.
+- Audit log for all memory/profile changes.
 
 Architecture:
 
 ```text
-Agent -> Memory abstraction -> Foundry Memory
-                         \-> fallback store
+AG-UI client -> ACA BFF -> Foundry Hosted Agent
+                             |-> Foundry Memory tool/API
+                             |-> Profile tool/store
+                             |-> Raw conversation store/API
+                             |-> Summary job -> Foundry Memory summary items
+```
+
+Memory read path:
+
+```text
+Turn start:
+  get user profile JSON
+  retrieve static user memories by scope
+  retrieve contextual memories using latest messages
+  inject compact context into agent instructions/input
+```
+
+Memory write path:
+
+```text
+During turn:
+  agent calls profile patch tool for explicit or high-confidence profile updates
+  agent can use direct remember/forget if Foundry tool supports it
+
+After conversation:
+  app/job summarizes conversation
+  redacts critical PII
+  writes summary as scoped memory item
+  updates raw conversation metadata
+  writes audit record
 ```
 
 Validation:
 
-- Store user preference.
-- New turn recalls preference.
-- Restart/deploy still recalls preference.
-- Memory mutation is logged.
+- User profile JSON loads into first turn context.
+- Agent updates profile through patch tool.
+- Profile update is audited.
+- Web UI lists previous conversations from raw conversation API.
+- TUI can continue a previous conversation.
+- Conversation summary is created by app/job and stored as user-scoped memory.
+- Agent finds an old conversation summary through semantic memory search.
+- Critical PII redaction rule is exercised before summary memory write.
+- Direct remember/forget works if Foundry Memory tool supports it; otherwise fallback tool does it.
+- Restart/deploy still recalls profile and summary memory.
+
+Extensions to investigate after minimum:
+
+- Profile conflict solving:
+  - mark superseded facts inactive instead of deleting silently,
+  - keep confidence/source/last_confirmed timestamps,
+  - ask user when conflicting high-impact profile facts are detected.
+- Forgetting/fading:
+  - TTL for low-confidence or unconfirmed memories,
+  - decay score based on age and lack of reinforcement,
+  - scheduled cleanup that proposes deletion before removing important items.
+- Procedural memory:
+  - skill proposal memory for repeated workflows,
+  - candidate skill improvements stay as proposals,
+  - eval and human approval required before promotion.
+- Team/shared memory:
+  - separate user scope from optional team scope,
+  - never mix scopes without explicit policy.
 
 Stop if:
 
 - Foundry Memory cannot be written/read by Hosted Agent with required lifecycle. Use fallback and keep interface.
+- Foundry Memory cannot store profile JSON safely. Keep profile in profile store and project selected profile facts into Foundry Memory.
+- Foundry conversation APIs cannot provide UI history. Keep raw conversation store in BFF-side storage, but keep agent/memory logic in Foundry.
 
 ## Step 08: Skill system baseline
 

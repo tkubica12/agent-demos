@@ -26,14 +26,3 @@ code_configuration:
   runtime: python_3_13
   entry_point: main.py
   dependency_resolution: remote_build
-agent_card:
-  description: A concise helpful assistant exposed through Foundry incoming A2A.
-  version: "1.0"
-  skills:
-    - id: general-text
-      name: General text assistant
-      description: Answers short text questions and returns concise text responses.
-agent_endpoint:
-  protocols:
-    - responses
-    - a2a

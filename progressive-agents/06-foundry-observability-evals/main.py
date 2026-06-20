@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import uuid
 from collections.abc import AsyncGenerator
 from contextlib import contextmanager
 from typing import Any
@@ -126,33 +125,19 @@ def create_agent() -> Agent:
         name="FoundryObservabilityEvalsAgent",
         instructions=(
             f"{PERSONALITY_INSTRUCTIONS} "
-            "You are exposed through Foundry Hosted Agent Invocations using "
-            "AG-UI-shaped Server-Sent Events. Include correlation IDs only when "
-            "explicitly asked; otherwise answer naturally."
+            "You run as a Foundry Hosted Agent behind an authenticated AG-UI "
+            "gateway. Include correlation IDs only when explicitly asked; "
+            "otherwise answer naturally."
         ),
         default_options={"store": False},
     )
-
-
-def sse(event: dict) -> str:
-    return f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
-
-
-def latest_user_text(messages: list[dict]) -> str | None:
-    for message in reversed(messages):
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and content.strip():
-            return content
-    return None
 
 
 def correlation_id_from(request: Request, data: dict) -> str:
     value = request.headers.get("x-correlation-id") or data.get("correlationId")
     if isinstance(value, str) and value.strip():
         return value
-    return str(uuid.uuid4())
+    return request.state.session_id
 
 
 class ResponsesAndInvocationsHost(ResponsesHostServer):
@@ -164,156 +149,21 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
         async def handle_invoke(request: Request) -> Response:
             data = await request.json()
             correlation_id = correlation_id_from(request, data)
-            messages = data.get("messages")
 
             with span(
                 "request.received",
                 correlation_id,
                 protocol="invocations",
-                has_agui_messages=isinstance(messages, list),
+                user_id=request.headers.get("x-user-id"),
+                tenant_id=request.headers.get("x-tenant-id"),
             ):
                 log_event("request.received", correlation_id=correlation_id)
-
-            if isinstance(messages, list):
-                return await self._handle_agui_invocation(
-                    agent, request, data, messages, correlation_id
-                )
 
             return await self._handle_legacy_invocation(agent, request, data, correlation_id)
 
         for route in invocations.routes:
             if getattr(route, "path", "").startswith("/invocations"):
                 self.router.routes.append(route)
-
-    async def _handle_agui_invocation(
-        self,
-        agent: Agent,
-        request: Request,
-        data: dict,
-        messages: list[dict],
-        correlation_id: str,
-    ) -> Response:
-        user_message = latest_user_text(messages)
-        if user_message is None:
-            log_event("request.invalid", correlation_id=correlation_id, reason="missing_user")
-            return Response("Missing user message in AG-UI messages", status_code=400)
-
-        thread_id = data.get("threadId")
-        if not isinstance(thread_id, str) or not thread_id.strip():
-            thread_id = getattr(request.state, "session_id", str(uuid.uuid4()))
-        run_id = data.get("runId")
-        if not isinstance(run_id, str) or not run_id.strip():
-            run_id = str(uuid.uuid4())
-        message_id = str(uuid.uuid4())
-
-        with span("memory.read", correlation_id, thread_id=thread_id):
-            session = _sessions.setdefault(thread_id, AgentSession(session_id=thread_id))
-
-        async def stream_agui() -> AsyncGenerator[str]:
-            log_event(
-                "agui.run_started",
-                correlation_id=correlation_id,
-                thread_id=thread_id,
-                run_id=run_id,
-            )
-            yield sse(
-                {
-                    "type": "RUN_STARTED",
-                    "threadId": thread_id,
-                    "runId": run_id,
-                    "correlationId": correlation_id,
-                }
-            )
-            yield sse(
-                {
-                    "type": "TEXT_MESSAGE_START",
-                    "messageId": message_id,
-                    "role": "assistant",
-                    "correlationId": correlation_id,
-                }
-            )
-
-            assistant_text = ""
-            try:
-                with span("skill.load", correlation_id, skill_count=0):
-                    pass
-                with span("worker.dispatch", correlation_id, worker="agent.run"):
-                    with span("tool.call", correlation_id, tool_count=0):
-                        pass
-                    with span(
-                        "model.call",
-                        correlation_id,
-                        model=os.getenv(
-                            "AZURE_AI_MODEL_DEPLOYMENT_NAME", DEFAULT_MODEL_DEPLOYMENT
-                        ),
-                    ) as model_span:
-                        async for update in agent.run(
-                            user_message, session=session, stream=True
-                        ):
-                            if update.text:
-                                assistant_text += update.text
-                                yield sse(
-                                    {
-                                        "type": "TEXT_MESSAGE_CONTENT",
-                                        "messageId": message_id,
-                                        "delta": update.text,
-                                        "correlationId": correlation_id,
-                                    }
-                                )
-                        set_span_result(model_span, response_length=len(assistant_text))
-            except Exception as exc:
-                log_event("agui.run_error", correlation_id=correlation_id, error=str(exc))
-                yield sse(
-                    {
-                        "type": "RUN_ERROR",
-                        "message": str(exc),
-                        "correlationId": correlation_id,
-                    }
-                )
-                return
-
-            with span(
-                "memory.write",
-                correlation_id,
-                thread_id=thread_id,
-                response_length=len(assistant_text),
-            ):
-                pass
-            with span("skill.use", correlation_id, skill_count=0):
-                pass
-
-            yield sse(
-                {
-                    "type": "TEXT_MESSAGE_END",
-                    "messageId": message_id,
-                    "correlationId": correlation_id,
-                }
-            )
-            yield sse(
-                {
-                    "type": "RUN_FINISHED",
-                    "threadId": thread_id,
-                    "runId": run_id,
-                    "correlationId": correlation_id,
-                }
-            )
-            log_event(
-                "agui.run_finished",
-                correlation_id=correlation_id,
-                thread_id=thread_id,
-                run_id=run_id,
-                response_length=len(assistant_text),
-            )
-
-        return StreamingResponse(
-            stream_agui(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "x-correlation-id": correlation_id,
-            },
-        )
 
     async def _handle_legacy_invocation(
         self,
@@ -328,19 +178,40 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             log_event("request.invalid", correlation_id=correlation_id, reason="missing_message")
             return Response("Missing non-empty 'message' in request", status_code=400)
 
-        session_id = request.state.session_id
+        requested_session_id = data.get("threadId") or data.get("sessionId")
+        if isinstance(requested_session_id, str) and requested_session_id.strip():
+            session_id = requested_session_id
+        else:
+            session_id = request.state.session_id
         with span("memory.read", correlation_id, thread_id=session_id):
             session = _sessions.setdefault(session_id, AgentSession(session_id=session_id))
 
         if stream:
 
             async def stream_response() -> AsyncGenerator[str]:
-                with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT):
-                    async for update in agent.run(
-                        user_message, session=session, stream=True
-                    ):
-                        if update.text:
-                            yield update.text
+                assistant_text = ""
+                with span("skill.load", correlation_id, skill_count=0):
+                    pass
+                with span("worker.dispatch", correlation_id, worker="agent.run"):
+                    with span("tool.call", correlation_id, tool_count=0):
+                        pass
+                    with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
+                        async for update in agent.run(
+                            user_message, session=session, stream=True
+                        ):
+                            if update.text:
+                                assistant_text += update.text
+                                yield update.text
+                        set_span_result(model_span, response_length=len(assistant_text))
+                with span(
+                    "memory.write",
+                    correlation_id,
+                    thread_id=session_id,
+                    response_length=len(assistant_text),
+                ):
+                    pass
+                with span("skill.use", correlation_id, skill_count=0):
+                    pass
 
             return StreamingResponse(
                 stream_response(),
@@ -348,9 +219,22 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
 
-        with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT):
-            response = await agent.run([user_message], session=session, stream=False)
-        with span("memory.write", correlation_id, thread_id=session_id):
+        with span("skill.load", correlation_id, skill_count=0):
+            pass
+        with span("worker.dispatch", correlation_id, worker="agent.run"):
+            with span("tool.call", correlation_id, tool_count=0):
+                pass
+            with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
+                response = await agent.run([user_message], session=session, stream=False)
+                set_span_result(model_span, response_length=len(response.text or ""))
+        with span(
+            "memory.write",
+            correlation_id,
+            thread_id=session_id,
+            response_length=len(response.text or ""),
+        ):
+            pass
+        with span("skill.use", correlation_id, skill_count=0):
             pass
         return JSONResponse({"response": response.text, "correlationId": correlation_id})
 

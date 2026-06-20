@@ -19,6 +19,17 @@ if (-not $ProjectEndpoint) {
 $baseUrl = $ProjectEndpoint.TrimEnd("/")
 $token = az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv
 $body = @{
+    agent_card = @{
+        description = "A concise helpful assistant exposed through Foundry incoming A2A."
+        version = "1.0.0"
+        skills = @(
+            @{
+                id = "general-text"
+                name = "General text assistant"
+                description = "Answers short text questions and returns concise text responses."
+            }
+        )
+    }
     agent_endpoint = @{
         protocols = @("responses", "a2a")
     }
@@ -28,8 +39,18 @@ Invoke-RestMethod `
     -Method Patch `
     -Uri "$baseUrl/agents/$AgentName`?api-version=v1" `
     -Headers @{ Authorization = "Bearer $token" } `
-    -ContentType "application/json" `
+    -ContentType "application/merge-patch+json" `
     -Body $body | Out-Null
+
+$agent = Invoke-RestMethod `
+    -Method Get `
+    -Uri "$baseUrl/agents/$AgentName`?api-version=v1" `
+    -Headers @{ Authorization = "Bearer $token" }
+
+$protocols = @($agent.agent_endpoint.protocols)
+if ($protocols -notcontains "a2a") {
+    throw "A2A protocol was not enabled on $AgentName. Current protocols: $($protocols -join ', ')"
+}
 
 $a2aUrl = "$baseUrl/agents/$AgentName/endpoint/protocols/a2a"
 Write-Host "Incoming A2A endpoint enabled."

@@ -1,0 +1,8 @@
+.azure/
+.venv/
+__pycache__/
+*.pyc
+.git/
+uv.lock
+evals/generated_conversations.jsonl
+evals/eval_results.json
