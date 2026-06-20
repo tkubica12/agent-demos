@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: step-06-foundry-observability-evals
+services:
+    step-06-foundry-observability-evals:
+        project: .
+        host: azure.ai.agent
+        language: python
+        config:
+            container:
+                resources:
+                    cpu: "0.5"
+                    memory: 1Gi

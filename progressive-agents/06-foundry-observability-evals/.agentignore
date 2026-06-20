@@ -1,0 +1,37 @@
+# Files excluded from Foundry Hosted Agent code-deploy ZIP packaging.
+# Uses .gitignore syntax.
+
+# azd tooling files
+agent.yaml
+agent.manifest.yaml
+azure.yaml
+.agentignore
+
+# Keep uv project metadata in the repo, but deploy with the official
+# sample-style requirements.txt path to avoid remote uv.lock validation.
+pyproject.toml
+uv.lock
+
+# Security / secrets
+.env
+.env.*
+.azure/
+.git/
+
+# Generated eval artifacts
+evals/generated_conversations.jsonl
+evals/eval_results.json
+eval.yaml
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+
+# Docker
+Dockerfile
+.dockerignore

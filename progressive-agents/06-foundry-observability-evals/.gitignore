@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.azure/
+.env
+evals/generated_conversations.jsonl
+evals/eval_results.json

@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: step-06-foundry-observability-evals
+description: Microsoft Agent Framework hosted agent with AG-UI Invocations, OpenTelemetry, and evals.
+metadata:
+    tags:
+        - Microsoft Agent Framework
+        - Foundry Hosted Agent
+        - Responses Protocol
+        - Invocations Protocol
+        - AG-UI
+        - Observability
+        - Evaluations
+protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+resources:
+    cpu: "0.5"
+    memory: 1Gi
+environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+    - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+      value: "true"
+code_configuration:
+    runtime: python_3_13
+    entry_point: main.py
+    dependency_resolution: remote_build
