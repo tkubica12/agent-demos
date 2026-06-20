@@ -1,0 +1,37 @@
+name: hermes-foundry-gateway
+description: >
+  Hermes gateway adapter for Microsoft Foundry Hosted Agents. The container
+  exposes Foundry Responses and Invocations-compatible endpoints and delegates
+  turns to the real Hermes CLI/runtime.
+metadata:
+  tags:
+    - Hermes
+    - Agent 365
+    - AI Agent Hosting
+    - Responses Protocol
+    - Invocations Protocol
+template:
+  name: hermes-foundry-gateway
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+  environment_variables:
+    - name: HERMES_HOME
+      value: /files/hermes
+    - name: HERMES_EXECUTABLE
+      value: hermes
+    - name: HERMES_TURN_TIMEOUT_SECONDS
+      value: "900"
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-4.1
+    - name: AZURE_FOUNDRY_BASE_URL
+      value: https://tomaskubica-foundry-resource.cognitiveservices.azure.com/openai/v1
+    - name: HERMES_AZURE_FOUNDRY_TOKEN_AUTH
+      value: "true"
+resources:
+  - kind: model
+    id: gpt-4.1-mini
+    name: AZURE_AI_MODEL_DEPLOYMENT_NAME

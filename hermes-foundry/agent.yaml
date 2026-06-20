@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: hermes-foundry-gateway
+description: |
+    Hermes gateway adapter for Microsoft Foundry Hosted Agents. The container exposes Foundry Responses and Invocations-compatible endpoints and delegates turns to the real Hermes CLI/runtime.
+metadata:
+    tags:
+        - Hermes
+        - Agent 365
+        - AI Agent Hosting
+        - Responses Protocol
+        - Invocations Protocol
+protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+resources:
+    cpu: "0.5"
+    memory: 1Gi
+environment_variables:
+    - name: HERMES_HOME
+      value: /files/hermes
+    - name: HERMES_EXECUTABLE
+      value: hermes
+    - name: HERMES_TURN_TIMEOUT_SECONDS
+      value: "900"
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-4.1
+    - name: AZURE_FOUNDRY_BASE_URL
+      value: https://tomaskubica-foundry-resource.cognitiveservices.azure.com/openai/v1
+    - name: HERMES_AZURE_FOUNDRY_TOKEN_AUTH
+      value: "true"
+code_configuration:
+    runtime: python_3_13
+    entry_point: main.py
+    dependency_resolution: remote_build
