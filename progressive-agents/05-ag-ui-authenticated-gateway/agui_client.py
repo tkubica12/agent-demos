@@ -7,18 +7,7 @@ from collections.abc import Iterator
 import httpx
 
 
-DEFAULT_INVOCATIONS_URL = (
-    "https://tomaskubica-foundry-resource.services.ai.azure.com/api/projects/"
-    "tomaskubica-foundry-project/agents/step-05-ag-ui-through-invocations/"
-    "endpoint/protocols/invocations?api-version=v1"
-)
-
-
-def azure_ai_auth_headers() -> dict[str, str]:
-    from azure.identity import AzureCliCredential
-
-    token = AzureCliCredential().get_token("https://ai.azure.com/.default").token
-    return {"Authorization": f"Bearer {token}"}
+DEFAULT_AGUI_URL = "http://127.0.0.1:8095/agui"
 
 
 class AGUIConversation:

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)] [string] $ProjectEndpoint,
-    [Parameter(Mandatory = $false)] [string] $AgentName = "step-03-a2a-enabled-responses-agent"
+    [Parameter(Mandatory = $false)] [string] $AgentName = "step-05-ag-ui-authenticated-gateway"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,16 +19,8 @@ if (-not $ProjectEndpoint) {
 $baseUrl = $ProjectEndpoint.TrimEnd("/")
 $token = az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv
 $body = @{
-    agent_card = @{
-        description = "A concise helpful assistant exposed through Foundry incoming A2A."
-        version = "1.0"
-        skills = @(
-            @{
-                id = "general-text"
-                name = "General text assistant"
-                description = "Answers short text questions and returns concise text responses."
-            }
-        )
+    agent_endpoint = @{
+        protocols = @("responses", "a2a")
     }
 } | ConvertTo-Json -Depth 6
 
@@ -39,4 +31,7 @@ Invoke-RestMethod `
     -ContentType "application/json" `
     -Body $body | Out-Null
 
-Write-Host "Agent card configured for $AgentName."
+$a2aUrl = "$baseUrl/agents/$AgentName/endpoint/protocols/a2a"
+Write-Host "Incoming A2A endpoint enabled."
+Write-Host "A2A endpoint: $a2aUrl"
+Write-Host "Agent card:   $a2aUrl/agentCard/v1.0"

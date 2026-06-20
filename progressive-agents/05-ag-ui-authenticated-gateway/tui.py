@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from agui_client import AGUIConversation, DEFAULT_INVOCATIONS_URL, azure_ai_auth_headers
+from agui_client import AGUIConversation, DEFAULT_AGUI_URL
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
@@ -134,14 +134,12 @@ class AGUITui(App):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--url", default=DEFAULT_INVOCATIONS_URL)
+    parser.add_argument("--url", default=DEFAULT_AGUI_URL)
     parser.add_argument("--bearer-token")
     args = parser.parse_args()
     headers = {}
     if args.bearer_token:
         headers["Authorization"] = f"Bearer {args.bearer_token}"
-    elif args.url.startswith("https://"):
-        headers.update(azure_ai_auth_headers())
     AGUITui(args.url, headers=headers).run()
 
 

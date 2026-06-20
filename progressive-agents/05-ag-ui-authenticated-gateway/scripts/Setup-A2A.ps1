@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)] [string] $ProjectEndpoint,
-    [Parameter(Mandatory = $false)] [string] $AgentName = "step-03-a2a-enabled-responses-agent"
+    [Parameter(Mandatory = $false)] [string] $AgentName = "step-05-ag-ui-authenticated-gateway"
 )
 
 $ErrorActionPreference = "Stop"

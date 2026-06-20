@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 
-name: step-05-ag-ui-through-invocations
+name: step-05-ag-ui-authenticated-gateway
 services:
-    step-05-ag-ui-through-invocations:
+    step-05-ag-ui-authenticated-gateway:
         project: .
         host: azure.ai.agent
         language: python

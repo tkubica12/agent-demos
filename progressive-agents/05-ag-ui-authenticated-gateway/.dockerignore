@@ -1,0 +1,7 @@
+.azure/
+.venv/
+__pycache__/
+*.pyc
+.git/
+uv.lock
+azd-ai-agents-*.log

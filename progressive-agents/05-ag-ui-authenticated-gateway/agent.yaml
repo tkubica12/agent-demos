@@ -1,16 +1,15 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
 
 kind: hosted
-name: step-05-ag-ui-through-invocations
-description: Microsoft Agent Framework hosted agent that tries AG-UI-shaped SSE through Invocations.
+name: step-05-ag-ui-authenticated-gateway
+description: Microsoft Agent Framework hosted agent behind an authenticated AG-UI gateway.
 metadata:
     tags:
         - Microsoft Agent Framework
         - Foundry Hosted Agent
         - Responses Protocol
         - Invocations Protocol
-        - AG-UI
-        - AG-UI through Invocations
+        - Authenticated AG-UI Gateway
 protocols:
     - protocol: responses
       version: 1.0.0

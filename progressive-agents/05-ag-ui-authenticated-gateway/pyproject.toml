@@ -1,7 +1,7 @@
 [project]
-name = "ag-ui-through-invocations"
+name = "ag-ui-authenticated-gateway"
 version = "0.1.0"
-description = "AG-UI-shaped SSE over Foundry Hosted Agent Invocations."
+description = "Authenticated AG-UI gateway for a Foundry Hosted Agent."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -10,8 +10,10 @@ dependencies = [
     "agent-framework-foundry-hosting",
     "a2a-sdk==1.0.2",
     "azure-identity>=1.25.0",
+    "fastapi",
     "httpx==0.28.1",
     "mcp",
+    "pyjwt[crypto]",
     "textual",
     "uvicorn",
 ]
