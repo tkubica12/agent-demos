@@ -1,0 +1,5 @@
+agent-framework-core>=1.2.2
+agent-framework-foundry>=1.2.2
+agent-framework-foundry-hosting
+azure-identity>=1.25.0
+mcp
