@@ -1,0 +1,25 @@
+name: step-04-ag-ui-local-adapter
+description: Microsoft Agent Framework agent with local AG-UI adapter plus prior Hosted Agent protocols.
+metadata:
+  tags:
+    - Microsoft Agent Framework
+    - Foundry Hosted Agent
+    - Responses Protocol
+    - Invocations Protocol
+    - AG-UI
+    - Local AG-UI
+template:
+  name: step-04-ag-ui-local-adapter
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+  environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+resources:
+  - kind: model
+    id: gpt-5.4-mini
+    name: AZURE_AI_MODEL_DEPLOYMENT_NAME

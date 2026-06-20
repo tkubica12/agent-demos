@@ -1,0 +1,10 @@
+agent-framework-core>=1.2.2
+agent-framework-ag-ui
+agent-framework-foundry>=1.2.2
+agent-framework-foundry-hosting
+azure-identity>=1.25.0
+fastapi
+httpx==0.28.1
+mcp
+textual
+uvicorn
