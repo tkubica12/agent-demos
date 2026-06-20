@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: step-03-a2a-enabled-responses-agent
+description: Microsoft Agent Framework hosted agent with Responses, Invocations, and Foundry-managed incoming A2A.
+metadata:
+  tags:
+    - Microsoft Agent Framework
+    - Foundry Hosted Agent
+    - Responses Protocol
+    - Invocations Protocol
+    - A2A
+    - Incoming A2A
+protocols:
+  - protocol: responses
+    version: 1.0.0
+  - protocol: invocations
+    version: 1.0.0
+resources:
+  cpu: "0.5"
+  memory: 1Gi
+environment_variables:
+  - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+    value: gpt-5.4-mini
+code_configuration:
+  runtime: python_3_13
+  entry_point: main.py
+  dependency_resolution: remote_build
+agent_card:
+  description: A concise helpful assistant exposed through Foundry incoming A2A.
+  version: "1.0"
+  skills:
+    - id: general-text
+      name: General text assistant
+      description: Answers short text questions and returns concise text responses.
+agent_endpoint:
+  protocols:
+    - responses
+    - a2a
