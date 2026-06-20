@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: step-05-ag-ui-through-invocations
+description: Microsoft Agent Framework hosted agent that tries AG-UI-shaped SSE through Invocations.
+metadata:
+    tags:
+        - Microsoft Agent Framework
+        - Foundry Hosted Agent
+        - Responses Protocol
+        - Invocations Protocol
+        - AG-UI
+        - AG-UI through Invocations
+protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+resources:
+    cpu: "0.5"
+    memory: 1Gi
+environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+code_configuration:
+    runtime: python_3_13
+    entry_point: main.py
+    dependency_resolution: remote_build

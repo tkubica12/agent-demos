@@ -1,0 +1,23 @@
+[project]
+name = "ag-ui-through-invocations"
+version = "0.1.0"
+description = "AG-UI-shaped SSE over Foundry Hosted Agent Invocations."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "agent-framework-core>=1.2.2",
+    "agent-framework-foundry>=1.2.2",
+    "agent-framework-foundry-hosting",
+    "a2a-sdk==1.0.2",
+    "azure-identity>=1.25.0",
+    "httpx==0.28.1",
+    "mcp",
+    "textual",
+    "uvicorn",
+]
+
+[tool.uv]
+prerelease = "if-necessary-or-explicit"
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
