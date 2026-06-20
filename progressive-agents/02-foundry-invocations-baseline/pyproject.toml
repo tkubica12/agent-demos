@@ -1,0 +1,19 @@
+[project]
+name = "foundry-invocations-baseline"
+version = "0.1.0"
+description = "Smallest Microsoft Agent Framework Hosted Agent using Foundry Responses and Invocations protocols."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "agent-framework-core>=1.2.2",
+    "agent-framework-foundry>=1.2.2",
+    "agent-framework-foundry-hosting",
+    "azure-identity>=1.25.0",
+    "mcp",
+]
+
+[tool.uv]
+prerelease = "if-necessary-or-explicit"
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]

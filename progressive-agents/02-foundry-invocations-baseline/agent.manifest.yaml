@@ -1,0 +1,23 @@
+name: step-02-foundry-invocations-baseline
+description: Minimal Microsoft Agent Framework agent exposed through Foundry Hosted Agent Responses and Invocations protocols.
+metadata:
+  tags:
+    - Microsoft Agent Framework
+    - Foundry Hosted Agent
+    - Responses Protocol
+    - Invocations Protocol
+template:
+  name: step-02-foundry-invocations-baseline
+  kind: hosted
+  protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+  environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+resources:
+  - kind: model
+    id: gpt-5.4-mini
+    name: AZURE_AI_MODEL_DEPLOYMENT_NAME
