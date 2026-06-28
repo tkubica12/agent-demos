@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: step-07-foundry-memory-profile
+services:
+    step-07-foundry-memory-profile:
+        project: .
+        host: azure.ai.agent
+        language: python
+        config:
+            container:
+                resources:
+                    cpu: "0.5"
+                    memory: 1Gi
+            deployments:
+                - model:
+                    format: OpenAI
+                    name: gpt-5.4-mini
+                    version: "2026-03-17"
+                  name: gpt-5.4-mini
+                  sku:
+                    capacity: 603
+                    name: GlobalStandard

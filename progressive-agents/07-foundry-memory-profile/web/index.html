@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Step 07 Foundry Memory Profile</title>
+    <script>
+      (() => {
+        const param = new URLSearchParams(window.location.search).get("clawpilotTheme");
+        const theme =
+          param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --cp-bg: #f7f4ef;
+        --cp-bg-elevated: #fcfbf8;
+        --cp-surface: #ffffff;
+        --cp-surface-soft: #f5f5f5;
+        --cp-border: #dedede;
+        --cp-border-strong: #919191;
+        --cp-text: #242424;
+        --cp-text-muted: #5c5c5c;
+        --cp-text-soft: #6f6f6f;
+        --cp-accent: #b11f4b;
+        --cp-accent-hover: #9a1a41;
+        --cp-accent-soft: rgba(177, 31, 75, 0.08);
+        --cp-accent-fg: #ffffff;
+        --cp-success: #16a34a;
+        --cp-danger: #dc2626;
+        --cp-warning: #f59e0b;
+        --cp-link: #0078d4;
+        --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+        --cp-overlay: rgba(255, 255, 255, 0.8);
+        --cp-panel: rgba(255, 255, 255, 0.86);
+        --cp-panel-strong: rgba(255, 255, 255, 0.96);
+        --cp-sheen: rgba(255, 255, 255, 0.55);
+        --cp-highlight: rgba(177, 31, 75, 0.12);
+      }
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --cp-bg: #3d3b3a;
+        --cp-bg-elevated: #343231;
+        --cp-surface: #292929;
+        --cp-surface-soft: #2e2e2e;
+        --cp-border: #474747;
+        --cp-border-strong: #5f5f5f;
+        --cp-text: #dedede;
+        --cp-text-muted: #919191;
+        --cp-text-soft: #b0b0b0;
+        --cp-accent: #fd8ea1;
+        --cp-accent-hover: #fb7b91;
+        --cp-accent-soft: rgba(253, 142, 161, 0.14);
+        --cp-accent-fg: #1a1a1a;
+        --cp-success: #4ade80;
+        --cp-danger: #f87171;
+        --cp-warning: #fbbf24;
+        --cp-link: #4da6ff;
+        --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+        --cp-overlay: rgba(41, 41, 41, 0.88);
+        --cp-panel: rgba(41, 41, 41, 0.72);
+        --cp-panel-strong: rgba(41, 41, 41, 0.96);
+        --cp-sheen: rgba(255, 255, 255, 0.04);
+        --cp-highlight: rgba(253, 142, 161, 0.12);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--cp-bg);
+        color: var(--cp-text);
+        font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      main {
+        display: grid;
+        grid-template-rows: auto 1fr auto auto;
+        gap: 16px;
+        width: min(960px, calc(100vw - 32px));
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 24px 0;
+      }
+      header,
+      .chat,
+      form,
+      .status {
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+        box-shadow: 0 0 2px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.14);
+      }
+      header {
+        padding: 20px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.25rem;
+      }
+      p {
+        margin: 0;
+        color: var(--cp-text-muted);
+      }
+      .workspace {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 16px;
+        min-height: 360px;
+      }
+      .memory-panel,
+      .chat {
+        min-height: 360px;
+        overflow: auto;
+        padding: 16px;
+      }
+      .memory-panel {
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+      }
+      .memory-panel h2 {
+        margin: 0 0 12px;
+        font-size: 1rem;
+      }
+      .conversation {
+        width: 100%;
+        margin: 0 0 8px;
+        border: 1px solid var(--cp-border);
+        background: var(--cp-surface-soft);
+        color: var(--cp-text);
+        padding: 8px;
+        text-align: left;
+        font-size: 0.875rem;
+      }
+      .conversation.active {
+        border-color: var(--cp-accent);
+      }
+      .chat {
+        min-height: 360px;
+        overflow: auto;
+        padding: 16px;
+      }
+      .message {
+        width: fit-content;
+        max-width: 78%;
+        margin: 0 0 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+        white-space: pre-wrap;
+      }
+      .message.user {
+        margin-left: auto;
+        background: var(--cp-accent-soft);
+        border-color: var(--cp-accent);
+      }
+      .message.assistant {
+        margin-right: auto;
+      }
+      .meta {
+        margin-top: 8px;
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 0.75rem;
+        color: var(--cp-text-soft);
+      }
+      form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        padding: 12px;
+      }
+      textarea {
+        min-height: 52px;
+        max-height: 160px;
+        resize: vertical;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        padding: 12px;
+        background: var(--cp-bg-elevated);
+        color: var(--cp-text);
+        font: inherit;
+      }
+      button {
+        border: 0;
+        border-radius: 0.625rem;
+        padding: 0 20px;
+        background: var(--cp-accent);
+        color: var(--cp-accent-fg);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover {
+        background: var(--cp-accent-hover);
+      }
+      button:disabled {
+        cursor: not-allowed;
+        background: var(--cp-border-strong);
+      }
+      .status {
+        padding: 10px 12px;
+        color: var(--cp-text-muted);
+        font-size: 0.875rem;
+      }
+      .error {
+        color: var(--cp-danger);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Step 07: Foundry memory and user profile</h1>
+        <p>AG-UI chat with per-user profile, raw history, summaries, recall, and audit.</p>
+      </header>
+
+      <section class="workspace">
+        <aside class="memory-panel">
+          <h2>Conversations</h2>
+          <button id="newThread" type="button">New</button>
+          <div id="conversations"></div>
+        </aside>
+        <section id="chat" class="chat" aria-live="polite"></section>
+      </section>
+
+      <form id="form">
+        <textarea id="prompt" placeholder="Ask something. Shift+Enter for newline." required autofocus></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+
+      <div id="status" class="status">Ready. Thread is created on first run.</div>
+    </main>
+
+    <script>
+      const chat = document.querySelector("#chat");
+      const form = document.querySelector("#form");
+      const prompt = document.querySelector("#prompt");
+      const send = document.querySelector("#send");
+      const status = document.querySelector("#status");
+      const conversations = document.querySelector("#conversations");
+      const newThread = document.querySelector("#newThread");
+      const messages = [];
+      let threadId = crypto.randomUUID();
+      let lastRunId = null;
+
+      function addMessage(role, text = "") {
+        const bubble = document.createElement("div");
+        bubble.className = `message ${role}`;
+        bubble.textContent = text;
+        chat.appendChild(bubble);
+        chat.scrollTop = chat.scrollHeight;
+        return bubble;
+      }
+
+      function setStatus(text, isError = false) {
+        status.textContent = text;
+        status.classList.toggle("error", isError);
+      }
+
+      function appendMeta(bubble, text) {
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = text;
+        bubble.appendChild(meta);
+      }
+
+      async function refreshConversations() {
+        const response = await fetch("/api/conversations");
+        if (!response.ok) return;
+        const payload = await response.json();
+        conversations.textContent = "";
+        for (const item of payload.conversations || []) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `conversation ${item.id === threadId ? "active" : ""}`;
+          button.textContent = `${item.title || item.id} (${item.messageCount})`;
+          button.addEventListener("click", () => loadConversation(item.id));
+          conversations.appendChild(button);
+        }
+      }
+
+      async function loadConversation(id) {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
+        if (!response.ok) {
+          setStatus(`Could not load conversation ${id}`, true);
+          return;
+        }
+        const payload = await response.json();
+        const conversation = payload.conversation;
+        threadId = conversation.id;
+        lastRunId = null;
+        messages.length = 0;
+        chat.textContent = "";
+        for (const message of conversation.messages || []) {
+          messages.push({ id: message.id, role: message.role, content: message.content });
+          addMessage(message.role, message.content);
+        }
+        setStatus(`Loaded. thread=${threadId}`);
+        await refreshConversations();
+      }
+
+      newThread.addEventListener("click", async () => {
+        threadId = crypto.randomUUID();
+        lastRunId = null;
+        messages.length = 0;
+        chat.textContent = "";
+        setStatus("New thread.");
+        await refreshConversations();
+      });
+
+      async function sendMessage(content) {
+        const userMessage = { id: crypto.randomUUID(), role: "user", content };
+        messages.push(userMessage);
+        addMessage("user", content);
+
+        const assistantBubble = addMessage("assistant", "");
+        const runId = crypto.randomUUID();
+        const correlationId = crypto.randomUUID();
+        const response = await fetch("/agui", {
+          method: "POST",
+          headers: {
+            Accept: "text/event-stream",
+            "Content-Type": "application/json",
+            "x-correlation-id": correlationId,
+          },
+          body: JSON.stringify({
+            threadId,
+            runId,
+            parentRunId: lastRunId,
+            correlationId,
+            state: {},
+            messages,
+            tools: [],
+            context: [],
+            forwardedProps: {},
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`AG-UI request failed: ${response.status} ${response.statusText}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let assistantText = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split("\n\n");
+          buffer = events.pop() || "";
+
+          for (const raw of events) {
+            const line = raw.split("\n").find((entry) => entry.startsWith("data:"));
+            if (!line) continue;
+            const event = JSON.parse(line.slice(5).trim());
+
+            if (event.type === "RUN_STARTED") {
+              threadId = event.threadId || threadId;
+              lastRunId = event.runId || runId;
+              setStatus(`Streaming. thread=${threadId} run=${lastRunId}`);
+            }
+            if (event.type === "TEXT_MESSAGE_CONTENT" && event.delta) {
+              assistantText += event.delta;
+              assistantBubble.textContent = assistantText;
+              chat.scrollTop = chat.scrollHeight;
+            }
+            if (event.type === "RUN_ERROR") {
+              throw new Error(event.message || "AG-UI run failed");
+            }
+            if (event.type === "RUN_FINISHED") {
+              setStatus(`Done. thread=${threadId} run=${lastRunId}`);
+            }
+          }
+        }
+
+        messages.push({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: assistantText,
+        });
+        appendMeta(assistantBubble, `thread=${threadId}`);
+        await refreshConversations();
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const content = prompt.value.trim();
+        if (!content) return;
+        prompt.value = "";
+        send.disabled = true;
+        try {
+          await sendMessage(content);
+        } catch (error) {
+          setStatus(error.message, true);
+        } finally {
+          send.disabled = false;
+          prompt.focus();
+        }
+      });
+
+      prompt.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          form.requestSubmit();
+        }
+      });
+
+      refreshConversations();
+    </script>
+  </body>
+</html>
