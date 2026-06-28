@@ -1,0 +1,17 @@
+name: smoke-core
+agent:
+    name: step-07-foundry-memory-profile
+    kind: hosted
+    version: "7"
+    config: .agent_configs\baseline\metadata.yaml
+dataset:
+    name: smoke-core
+    version: "1.0"
+    local_uri: datasets\smoke-core
+evaluators:
+    - name: smoke-core
+      version: "1"
+      local_uri: evaluators\smoke-core\rubric_dimensions.json
+options:
+    eval_model: gpt-5.4-mini
+max_samples: 15

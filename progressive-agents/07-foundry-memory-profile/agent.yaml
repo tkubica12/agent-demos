@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: step-07-foundry-memory-profile
+description: Microsoft Agent Framework hosted agent with user profile, raw history, summaries, recall, and audit.
+metadata:
+    tags:
+        - Microsoft Agent Framework
+        - Foundry Hosted Agent
+        - Responses Protocol
+        - Invocations Protocol
+        - Authenticated AG-UI Gateway
+        - Observability
+        - Evaluations
+        - Memory
+        - User Profile
+protocols:
+    - protocol: responses
+      version: 1.0.0
+    - protocol: invocations
+      version: 1.0.0
+resources:
+    cpu: "0.5"
+    memory: 1Gi
+environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+    - name: MEMORY_STORE_NAME
+      value: step-07-memory-profile
+    - name: MEMORY_UPDATE_DELAY_SECONDS
+      value: "1"
+    - name: MEMORY_DEFAULT_USER_ID
+      value: playground-user
+    - name: MEMORY_STORE_PATH
+      value: /files/step-07-memory-store.json
