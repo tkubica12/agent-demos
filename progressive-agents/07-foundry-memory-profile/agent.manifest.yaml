@@ -22,9 +22,18 @@ template:
   environment_variables:
     - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
       value: gpt-5.4-mini
+    - name: MEMORY_STORE_NAME
+      value: step-07-memory-profile
+    - name: MEMORY_UPDATE_DELAY_SECONDS
+      value: "1"
+    - name: MEMORY_DEFAULT_USER_ID
+      value: playground-user
     - name: MEMORY_STORE_PATH
       value: /files/step-07-memory-store.json
 resources:
   - kind: model
     id: gpt-5.4-mini
     name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+  - kind: model
+    id: text-embedding-3-large
+    name: MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME

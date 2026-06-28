@@ -38,7 +38,17 @@ def main() -> None:
     project_client = AIProjectClient(
         endpoint=required_env("FOUNDRY_PROJECT_ENDPOINT"),
         credential=DefaultAzureCredential(),
+        allow_preview=True,
     )
+    existing = [
+        store
+        for store in project_client.beta.memory_stores.list()
+        if getattr(store, "name", None) == args.name
+    ]
+    if existing:
+        print(json.dumps(model_dump(existing[0]), indent=2, default=str))
+        return
+
     options = MemoryStoreDefaultOptions(
         chat_summary_enabled=True,
         user_profile_enabled=True,

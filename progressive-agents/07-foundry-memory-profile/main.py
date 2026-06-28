@@ -53,6 +53,16 @@ def required_env(name: str) -> str:
     return value
 
 
+def optional_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer.") from exc
+
+
 def log_event(event: str, **fields: Any) -> None:
     logger.info(
         json.dumps(
@@ -121,6 +131,24 @@ def create_agent() -> Agent:
         model=os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", DEFAULT_MODEL_DEPLOYMENT),
         credential=create_credential(),
     )
+    memory_store_name = os.getenv("MEMORY_STORE_NAME", "step-07-memory-profile")
+    memory_scope = os.getenv("MEMORY_SCOPE", "{{$userId}}")
+    memory_update_delay = optional_int_env("MEMORY_UPDATE_DELAY_SECONDS", 1)
+    memory_default_user_id = os.getenv("MEMORY_DEFAULT_USER_ID", "playground-user")
+    memory_tool = FoundryChatClient.get_memory_search_tool(
+        memory_store_name=memory_store_name,
+        scope=memory_scope,
+        update_delay=memory_update_delay,
+    )
+    # Agent Framework currently serializes plain dict tools for Foundry preview tools.
+    tools = [memory_tool.as_dict()]
+    log_event(
+        "memory.foundry_tool_configured",
+        memory_store_name=memory_store_name,
+        memory_scope=memory_scope,
+        memory_update_delay=memory_update_delay,
+        memory_default_user_id=memory_default_user_id,
+    )
 
     return Agent(
         client=client,
@@ -134,7 +162,11 @@ def create_agent() -> Agent:
             "provided by the host API. Include correlation IDs only when "
             "explicitly asked; otherwise answer naturally."
         ),
-        default_options={"store": False},
+        tools=tools,
+        default_options={
+            "store": False,
+            "extra_headers": {"x-memory-user-id": memory_default_user_id},
+        },
     )
 
 
@@ -231,6 +263,10 @@ def enrich_message_for_memory(user_id: str, user_message: str) -> str:
     return f"{context.to_prompt()}\n\nCurrent user message:\n{user_message}"
 
 
+def foundry_memory_options(user_id: str) -> dict[str, Any]:
+    return {"extra_headers": {"x-memory-user-id": user_id}}
+
+
 class ResponsesAndInvocationsHost(ResponsesHostServer):
     def __init__(self, agent: Agent) -> None:
         super().__init__(agent)
@@ -285,6 +321,7 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
 
         with span("memory.read", correlation_id, thread_id=session_id):
             session = _sessions.setdefault(session_id, AgentSession(session_id=session_id))
+            log_event("memory.scope_resolved", correlation_id=correlation_id, user_id=user_id, thread_id=session_id)
             store.add_message(
                 user_id,
                 session_id,
@@ -304,7 +341,12 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
                     with span("tool.call", correlation_id, tool_count=0):
                         pass
                     with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
-                        async for update in agent.run(enriched_message, session=session, stream=True):
+                        async for update in agent.run(
+                            enriched_message,
+                            session=session,
+                            stream=True,
+                            options=foundry_memory_options(user_id),
+                        ):
                             if update.text:
                                 assistant_text += update.text
                                 yield update.text
@@ -337,7 +379,12 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             with span("tool.call", correlation_id, tool_count=0):
                 pass
             with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
-                response = await agent.run([enriched_message], session=session, stream=False)
+                response = await agent.run(
+                    [enriched_message],
+                    session=session,
+                    stream=False,
+                    options=foundry_memory_options(user_id),
+                )
                 set_span_result(model_span, response_length=len(response.text or ""))
         with span(
             "memory.write",

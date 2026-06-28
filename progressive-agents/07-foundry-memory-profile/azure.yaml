@@ -5,7 +5,9 @@ services:
     step-07-foundry-memory-profile:
         project: .
         host: azure.ai.agent
-        language: python
+        language: docker
+        docker:
+            remoteBuild: true
         config:
             container:
                 resources:
@@ -20,3 +22,12 @@ services:
                   sku:
                     capacity: 603
                     name: GlobalStandard
+                - model:
+                    format: OpenAI
+                    name: text-embedding-3-large
+                    version: "1"
+                  name: text-embedding-3-large
+                  sku:
+                    capacity: 470
+                    name: GlobalStandard
+            startupCommand: python main.py
