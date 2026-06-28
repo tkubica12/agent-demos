@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import jwt
+import pytest
+from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
+
+from private_incidents_mcp.server import create_auth_provider
+
+
+@pytest.mark.asyncio
+async def test_static_key_uses_fastmcp_static_token_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_AUTH_MODE", "static_key")
+    monkeypatch.setenv("MCP_STATIC_KEY", "local-key")
+
+    provider = create_auth_provider()
+
+    assert isinstance(provider, StaticTokenVerifier)
+    assert await provider.verify_token("wrong") is None
+    token = await provider.verify_token("local-key")
+    assert token is not None
+    assert token.client_id == "local-demo-client"
+
+
+@pytest.mark.asyncio
+async def test_jwt_managed_identity_uses_fastmcp_jwt_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_AUTH_MODE", "jwt_managed_identity")
+    monkeypatch.setenv("MCP_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("MCP_JWT_ALGORITHM", "HS256")
+    monkeypatch.setenv("MCP_JWT_ISSUER", "https://sts.windows.net/demo/")
+    monkeypatch.setenv("MCP_JWT_AUDIENCE", "api://private-incidents-mcp")
+    provider = create_auth_provider()
+    token = jwt.encode(
+        {
+            "aud": "api://private-incidents-mcp",
+            "iss": "https://sts.windows.net/demo/",
+            "azp": "agent-managed-identity-client-id",
+            "oid": "agent-managed-identity-object-id",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    assert isinstance(provider, JWTVerifier)
+    access_token = await provider.verify_token(token)
+    assert access_token is not None
+    assert access_token.claims["oid"] == "agent-managed-identity-object-id"
+
+
+@pytest.mark.asyncio
+async def test_jwt_user_obo_uses_fastmcp_jwt_verifier_with_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_AUTH_MODE", "jwt_user_obo")
+    monkeypatch.setenv("MCP_JWT_SECRET", "test-secret")
+    monkeypatch.setenv("MCP_JWT_ALGORITHM", "HS256")
+    monkeypatch.setenv("MCP_JWT_ISSUER", "https://login.microsoftonline.com/demo/v2.0")
+    monkeypatch.setenv("MCP_JWT_AUDIENCE", "api://private-incidents-mcp")
+    monkeypatch.setenv("MCP_REQUIRED_SCOPES", "Incidents.Read")
+    provider = create_auth_provider()
+    token = jwt.encode(
+        {
+            "aud": "api://private-incidents-mcp",
+            "iss": "https://login.microsoftonline.com/demo/v2.0",
+            "oid": "user-object-id",
+            "preferred_username": "analyst@example.test",
+            "scp": "Incidents.Read",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    assert isinstance(provider, JWTVerifier)
+    access_token = await provider.verify_token(token)
+    assert access_token is not None
+    assert access_token.scopes == ["Incidents.Read"]

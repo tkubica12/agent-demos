@@ -1,0 +1,14 @@
+.data/
+.workspace/
+.venv/
+.azure/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.log
+.local/
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/**/generated.*.auto.tfvars.json
