@@ -574,53 +574,149 @@ Copy step 07. Add reusable skills.
 
 Skill means:
 
-- versioned unit,
-- explicit metadata,
+- Agent Skills-compatible `SKILL.md` package,
+- explicit frontmatter metadata,
 - reusable by replicas,
 - testable,
 - promotable.
 
-Possible shape:
+Use Microsoft Agent Framework's native Agent Skills support instead of a
+custom manifest/loader. MAF follows the public Agent Skills specification:
+each skill is a directory with a required `SKILL.md` file and optional
+`references/`, `assets/`, and `scripts/` subdirectories. The `.agent/skills`
+layout used by coding-agent harnesses is a product convention around the same
+portable skill package idea; MAF does not require that path and can load skills
+from any configured directory.
+
+Baseline shape:
 
 ```text
 skills/
   base/
     research/
-      skill.toml
-      instructions.md
-      tools.py
-      tests/
+      SKILL.md
+      references/
+    support-style/
+      SKILL.md
+      assets/
 ```
+
+MAF behavior to demonstrate:
+
+```text
+SkillsProvider/AgentSkillsProvider
+  -> advertise name + description in prompt
+  -> expose load_skill
+  -> expose read_skill_resource when resources exist
+  -> expose run_skill_script only when scripts exist and a runner is provided
+```
+
+Questions to answer in this step:
+
+- Does the Python Agent Framework package in this repo expose `SkillsProvider`
+  and file-based `SKILL.md` loading in the version we use?
+- Does it expose `MCPSkillsSource`, and can it consume skills attached to a
+  Foundry toolbox MCP endpoint?
+- What tool calls are visible in traces when the model selects a skill?
+- Can we prove a skill was loaded on demand rather than baked into the base
+  prompt?
+- Can we prove a referenced resource is loaded only when needed?
+- What is the minimal safe path for script-capable skills, and should scripts
+  be deferred to the worker sandbox step?
+- Which skill distribution path should step 08 use first, and which should it
+  document for later?
+
+Skill distribution paths to compare:
+
+| Path | How it works | Use in this plan |
+| --- | --- | --- |
+| Local file skills | Agent loads checked-in `SKILL.md` packages with `SkillsProvider.from_paths(...)`. | Primary step 08 implementation because it is local, repeatable, and easy to test. |
+| Foundry Skills download | Skills are uploaded/versioned through Foundry Skills API, then downloaded by the hosted agent at startup and served locally to `SkillsProvider`. | Document as the deployment/promotion path when we want central versioning without toolbox indirection. |
+| Foundry toolbox MCP skills | Skills are attached to a toolbox version and exposed over the toolbox MCP endpoint. MAF consumes them with `SkillsProvider(MCPSkillsSource(...))`; discovery uses `skill://index.json` and content/resources are fetched with MCP `resources/read`. | Add as a step 08 spike or optional mode if environment supports toolbox preview. This is the best path when multiple MCP clients should discover the same curated skill set. |
+
+Baseline test skills:
+
+| Skill | Purpose | Why it exists in the demo |
+| --- | --- | --- |
+| `support-style` | Defines tone, formatting, escalation language, and includes a canary token. | Proves instruction-only skills are advertised and loaded on demand. |
+| `escalation-policy` | Contains explicit escalation rules plus a `references/escalation-matrix.md` resource. | Proves resource-backed skills and `read_skill_resource` behavior. |
+| `profile-update-policy` | Defines when user profile updates are allowed, when to ask confirmation, and what not to store. | Connects skills to step 07 memory/profile behavior without adding new tools. |
+
+Use at least two in the baseline implementation. Prefer `support-style` and
+`escalation-policy` first because they are easy to validate with deterministic
+prompts. Add `profile-update-policy` if the step needs a memory-specific skill.
+
+Do not start with a script skill. If script support is explored, keep it as an
+explicit spike named `skill-script-spike` with a harmless deterministic script
+and no production enablement. Production-like execution belongs in step 13
+worker sandbox dispatch.
+
+Important boundary:
+
+- MAF is not a full coding-agent harness with generic find/list/read/grep/shell
+  tools for arbitrary workspace access.
+- File-based skill resources are read through `read_skill_resource`.
+- Skill scripts run only through `run_skill_script`, and only if the host
+  provides a runner.
+- Do not add executable skill scripts in the baseline unless they are
+  allow-listed and sandboxed. Start with instruction/resource skills.
 
 Must have:
 
-- Skill manifest.
-- Skill loader.
-- Skill registry.
-- At least two sample skills.
+- Agent Skills `SKILL.md` packages with valid frontmatter.
+- MAF `SkillsProvider.from_paths(...)` wired as an agent context provider.
+- Skill discovery/selection config for base skills.
+- At least two sample skills from the baseline skill list.
 - Skill tests/evals.
+- Notes comparing local file-based skills, Foundry Skills download, and
+  Foundry toolbox MCP skills.
+- Optional toolbox MCP spike using `TOOLBOX_NAME`, bearer auth, preview feature
+  header, and `MCPSkillsSource`.
 
 Architecture:
 
 ```text
-Agent startup -> skill registry -> selected skills -> agent tools/instructions
+Agent startup -> MAF SkillsProvider -> selected skills -> load_skill/read_skill_resource -> agent response
 ```
 
 Validation:
 
-- Agent loads base skills.
-- Agent uses skill in response.
+- Agent advertises base skills.
+- Agent calls `load_skill` for a relevant prompt.
+- Agent reads a referenced resource when required.
+- Agent uses skill instructions in response.
+- Instruction-only skill canary appears only for matching prompt.
+- Resource-backed skill canary appears only after resource read.
 - Skill test passes.
+
+Later promotion path:
+
+```text
+local SKILL.md package
+  -> eval
+  -> upload/version in Foundry Skills API
+  -> either hosted agent downloads selected skills at startup
+     or toolbox version references skills for MCP discovery
+```
 
 Stop if:
 
-- Agent Framework has native skill abstraction that should be used instead. Prefer platform-native if real.
+- Target MAF Python package version lacks `SkillsProvider`. Use the latest
+  Agent Framework package or temporarily implement only the `SKILL.md` package
+  layout and tests, but do not invent a conflicting skill format.
 
 ## Step 09: Guarded skill evolution
 
 Directory: `progressive-agents/09-guarded-skill-evolution`
 
 Copy step 08. Add self-improvement, but guarded.
+
+Step 09 stays conceptually on track, but now the artifact under review is an
+Agent Skills package/version, not a custom `skill.toml` registry entry. The
+agent may draft a new `SKILL.md`, propose an edit to an existing `SKILL.md`,
+or add/update `references/` and `assets/`. It must not mutate active base
+skills, publish a toolbox version, or promote a Foundry skill default version
+without human action.
 
 Allowed automatically:
 
@@ -633,24 +729,29 @@ Allowed automatically:
 Not allowed automatically:
 
 - promote skill to base,
+- publish or promote a Foundry skill default version,
+- publish a toolbox version or change toolbox skill references,
 - change identity,
 - change permissions,
 - change system policy,
-- add risky tools,
+- add executable skill scripts or risky tools,
 - create proactive schedule.
 
 Must have:
 
-- Skill proposal format.
+- Skill proposal format for `SKILL.md` package diffs.
 - Review queue.
 - Eval gate.
 - Audit log.
 - Promotion command requiring human action.
+- Optional Foundry Skills API publish/promote command, also requiring human
+  action.
+- Optional toolbox update/publish command, also requiring human action.
 
 Architecture:
 
 ```text
-Agent learning -> proposal -> eval -> human review -> promoted skill
+Agent learning -> SKILL.md proposal -> eval -> human review -> promoted local/Foundry skill
 ```
 
 Validation:
@@ -658,7 +759,11 @@ Validation:
 - Agent proposes skill improvement.
 - Eval runs.
 - Proposal waits for approval.
-- Approved skill becomes available.
+- Approved skill becomes available after explicit promotion/reload.
+- If Foundry-backed skills are used, promotion creates or updates an immutable
+  skill version and only changes `default_version` after approval.
+- If toolbox-backed skills are used, approval creates a new toolbox version and
+  only publishes it after human approval.
 
 Stop if:
 
