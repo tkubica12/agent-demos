@@ -81,6 +81,36 @@ class OpenClawGatewayClient:
             )
         return self._response_text(payload)
 
+    async def invoke_agent_streaming(
+        self,
+        *,
+        message: str,
+        session_key: str,
+        on_delta,
+        agent_id: str | None = None,
+    ) -> str:
+        async with websockets.connect(self.url, max_size=25 * 1024 * 1024) as websocket:
+            await self._connect(websocket)
+            idempotency_key = str(uuid.uuid4())
+            params: dict[str, Any] = {
+                "message": message,
+                "sessionKey": session_key,
+                "timeout": self.timeout_seconds,
+                "cleanupBundleMcpOnRunEnd": True,
+                "idempotencyKey": idempotency_key,
+            }
+            if agent_id:
+                params["agentId"] = agent_id
+            payload = await self._request(
+                websocket,
+                "agent",
+                params,
+                expect_final=True,
+                timeout_seconds=self.timeout_seconds + 30,
+                on_event=GatewayStreamEvents(on_delta=on_delta, run_id=idempotency_key),
+            )
+        return self._response_text(payload)
+
     async def _connect(self, websocket) -> None:
         deadline = asyncio.get_running_loop().time() + 30
         while True:
@@ -146,6 +176,7 @@ class OpenClawGatewayClient:
         *,
         timeout_seconds: int,
         expect_final: bool = False,
+        on_event: "GatewayStreamEvents | None" = None,
     ) -> dict[str, Any]:
         request_id = str(uuid.uuid4())
         await websocket.send(json.dumps({"type": "req", "id": request_id, "method": method, "params": params}))
@@ -156,6 +187,8 @@ class OpenClawGatewayClient:
                 raise TimeoutError(f"Timed out waiting for OpenClaw gateway method {method}.")
             frame = json.loads(await asyncio.wait_for(websocket.recv(), timeout=timeout))
             if frame.get("type") == "event":
+                if on_event:
+                    await on_event.handle(frame)
                 continue
             if frame.get("type") != "res" or frame.get("id") != request_id:
                 continue
@@ -166,6 +199,8 @@ class OpenClawGatewayClient:
             payload = frame.get("payload") or {}
             if expect_final and payload.get("status") == "accepted":
                 self.accepted[request_id] = payload
+                if on_event:
+                    on_event.accept(payload)
                 continue
             return payload
 
@@ -194,6 +229,55 @@ class OpenClawGatewayClient:
 
 def base64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+class GatewayStreamEvents:
+    def __init__(self, *, on_delta, run_id: str) -> None:
+        self.on_delta = on_delta
+        self.run_id = run_id
+        self.last_text = ""
+
+    def accept(self, payload: dict[str, Any]) -> None:
+        run_id = payload.get("runId")
+        if isinstance(run_id, str) and run_id.strip():
+            self.run_id = run_id.strip()
+
+    async def handle(self, frame: dict[str, Any]) -> None:
+        if frame.get("event") != "chat":
+            return
+        payload = frame.get("payload") or {}
+        if not isinstance(payload, dict) or payload.get("runId") != self.run_id:
+            return
+        state = payload.get("state")
+        if state not in {"delta", "final"}:
+            return
+        delta_text = payload.get("deltaText")
+        if isinstance(delta_text, str) and delta_text:
+            await self.on_delta(delta_text)
+            self.last_text += delta_text
+            return
+        full_text = extract_chat_message_text(payload.get("message"))
+        if not full_text or len(full_text) <= len(self.last_text):
+            return
+        delta = full_text[len(self.last_text) :]
+        self.last_text = full_text
+        if delta:
+            await self.on_delta(delta)
+
+
+def extract_chat_message_text(message: Any) -> str:
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        if parts:
+            return "\n".join(parts)
+    text = message.get("text")
+    return text if isinstance(text, str) else ""
 
 
 def create_device_auth(

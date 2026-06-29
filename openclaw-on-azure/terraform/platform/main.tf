@@ -153,7 +153,7 @@ resource "azurerm_private_dns_a_record" "private_mcp_wildcard" {
 
 resource "azapi_resource" "bridge_env" {
   type      = "Microsoft.App/managedEnvironments@2025-07-01"
-  name      = "ocbridge-${local.suffix}"
+  name      = "ocbridge-se-${local.suffix}"
   parent_id = azurerm_resource_group.main.id
   location  = var.bridge_location
   tags      = local.tags

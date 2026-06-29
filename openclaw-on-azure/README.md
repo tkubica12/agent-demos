@@ -238,7 +238,7 @@ Latest fresh run created:
 Resource group: rg-openclaw-ehvw
 ACR:            oclawehvw
 Bridge app:     ocbridge-ehvw
-Bridge URL:     https://ocbridge-ehvw.gentlecoast-d88ff215.westcentralus.azurecontainerapps.io
+Bridge URL:     Run `terraform output -raw bridge_url` in `terraform\apps`
 Private MCP:    ocmcp-ehvw
 Bridge volume:  openclaw-bridge-e2e-clean
 ```

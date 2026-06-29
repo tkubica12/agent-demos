@@ -192,14 +192,26 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
 async def run_openclaw_for_teams(ctx: ActivityContext[MessageActivity], conversation_id: str, message: str) -> None:
     done = asyncio.Event()
     progress_task = asyncio.create_task(send_stream_progress_updates(ctx, conversation_id, done))
+    streamed = False
+
+    async def emit_delta(delta: str) -> None:
+        nonlocal streamed
+        if not delta:
+            return
+        streamed = True
+        ctx.stream.emit(delta)
+        record_teams_diag({"event": "streamDeltaQueued", "conversationId": conversation_id, "length": len(delta)})
+
     try:
         record_teams_diag({"event": "backgroundStart", "conversationId": conversation_id})
         result = await invoke_openclaw(
             conversation_id=conversation_id,
             session_key=f"teams:{conversation_id}",
             message=message,
+            on_delta=emit_delta,
         )
-        ctx.stream.emit(result.response)
+        if not streamed:
+            ctx.stream.emit(result.response)
         await ctx.stream.close()
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
     except Exception as exc:
@@ -250,7 +262,7 @@ async def send_stream_progress_updates(ctx: ActivityContext[MessageActivity], co
         )
 
 
-async def invoke_openclaw(*, conversation_id: str, session_key: str, message: str) -> InvokeResponse:
+async def invoke_openclaw(*, conversation_id: str, session_key: str, message: str, on_delta=None) -> InvokeResponse:
     config = sandbox_config()
     credential = azure_credential()
     async with _sandbox_lock:
@@ -266,11 +278,20 @@ async def invoke_openclaw(*, conversation_id: str, session_key: str, message: st
         device_token=env_optional("OPENCLAW_BRIDGE_DEVICE_TOKEN") or None,
         device_private_key_pem=env_optional("OPENCLAW_BRIDGE_DEVICE_PRIVATE_KEY_PEM") or None,
     )
-    result = await gateway.invoke_agent(
-        message=message,
-        session_key=session_key,
-        agent_id=env_optional("OPENCLAW_BRIDGE_AGENT_ID") or None,
-    )
+    agent_id = env_optional("OPENCLAW_BRIDGE_AGENT_ID") or None
+    if on_delta:
+        result = await gateway.invoke_agent_streaming(
+            message=message,
+            session_key=session_key,
+            agent_id=agent_id,
+            on_delta=on_delta,
+        )
+    else:
+        result = await gateway.invoke_agent(
+            message=message,
+            session_key=session_key,
+            agent_id=agent_id,
+        )
     return InvokeResponse(
         conversationId=conversation_id,
         sandboxId=sandbox.sandbox_id,

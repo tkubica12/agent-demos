@@ -5,7 +5,7 @@ variable "location" {
 
 variable "bridge_location" {
   type    = string
-  default = "westcentralus"
+  default = "swedencentral"
 }
 
 variable "model_deployment_name" {
