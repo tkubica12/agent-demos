@@ -21,3 +21,15 @@ output "bridge_fqdn" {
 output "bridge_url" {
   value = "https://${azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn}"
 }
+
+output "teams_bot_name" {
+  value = var.teams_bot_app_id == "" ? "" : local.teams_bot_name
+}
+
+output "teams_bot_endpoint" {
+  value = var.teams_bot_app_id == "" ? "" : azapi_resource.teams_bot[0].output.properties.endpoint
+}
+
+output "teams_bot_app_id" {
+  value = var.teams_bot_app_id
+}

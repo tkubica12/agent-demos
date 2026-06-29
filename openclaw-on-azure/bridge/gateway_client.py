@@ -122,7 +122,7 @@ class OpenClawGatewayClient:
                     "maxProtocol": 4,
                     "client": {
                         "id": "gateway-client",
-                        "displayName": "openclaw-aca-express-bridge",
+                        "displayName": "openclaw-aca-bridge",
                         "version": "0.1.0",
                         "platform": sys.platform,
                         "mode": "backend",

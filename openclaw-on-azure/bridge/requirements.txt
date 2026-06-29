@@ -1,7 +1,8 @@
 azure-containerapps-sandbox==0.1.0b3
 azure-identity>=1.25.0
 cryptography>=43.0.0
-fastapi==0.115.6
+fastapi>=0.115.13
 httpx==0.28.1
-uvicorn[standard]==0.34.0
+microsoft-teams-apps>=2.0.13.4
+uvicorn[standard]>=0.34.3
 websockets==14.1

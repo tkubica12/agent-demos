@@ -15,11 +15,11 @@ locals {
     layer = "platform"
   }
 
-  sandbox_data_owner_role_id              = "c24cf47c-5077-412d-a19c-45202126392c"
-  foundry_user_role_id                    = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
-  foundry_owner_role_id                   = "c883944f-8b7b-4483-af10-35834be79c4a"
-  cognitive_services_user_role_id         = "a97b65f3-24c7-4388-baec-2e87135dc908"
-  cognitive_services_openai_user_role_id  = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+  sandbox_data_owner_role_id             = "c24cf47c-5077-412d-a19c-45202126392c"
+  foundry_user_role_id                   = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
+  foundry_owner_role_id                  = "c883944f-8b7b-4483-af10-35834be79c4a"
+  cognitive_services_user_role_id        = "a97b65f3-24c7-4388-baec-2e87135dc908"
+  cognitive_services_openai_user_role_id = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
 }
 
 resource "azurerm_resource_group" "main" {
@@ -48,6 +48,13 @@ resource "azurerm_subnet" "sandbox" {
       name = "Microsoft.App/environments"
     }
   }
+
+  lifecycle {
+    ignore_changes = [
+      default_outbound_access_enabled,
+      delegation[0].service_delegation[0].actions,
+    ]
+  }
 }
 
 resource "azurerm_subnet" "private_mcp" {
@@ -61,6 +68,13 @@ resource "azurerm_subnet" "private_mcp" {
     service_delegation {
       name = "Microsoft.App/environments"
     }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      default_outbound_access_enabled,
+      delegation[0].service_delegation[0].actions,
+    ]
   }
 }
 
@@ -138,7 +152,7 @@ resource "azurerm_private_dns_a_record" "private_mcp_wildcard" {
 }
 
 resource "azapi_resource" "bridge_env" {
-  type      = "Microsoft.App/managedEnvironments@2025-10-02-preview"
+  type      = "Microsoft.App/managedEnvironments@2025-07-01"
   name      = "ocbridge-${local.suffix}"
   parent_id = azurerm_resource_group.main.id
   location  = var.bridge_location
@@ -150,16 +164,18 @@ resource "azapi_resource" "bridge_env" {
         destination               = null
         logAnalyticsConfiguration = null
       }
-      customDomainConfiguration = null
-      daprAIInstrumentationKey  = null
-      environmentMode           = "express"
-      vnetConfiguration         = null
-      workloadProfiles          = null
-      zoneRedundant             = false
+      publicNetworkAccess = "Enabled"
+      workloadProfiles = [
+        {
+          name                = "Consumption"
+          workloadProfileType = "Consumption"
+        }
+      ]
+      zoneRedundant = false
     }
   }
 
-  schema_validation_enabled = false
+  response_export_values = ["properties.defaultDomain"]
 }
 
 resource "azapi_resource" "foundry" {
@@ -240,7 +256,7 @@ resource "azapi_resource" "sandbox_group" {
     type = "SystemAssigned"
   }
 
-  response_export_values = ["identity.principalId"]
+  response_export_values    = ["identity.principalId"]
   schema_validation_enabled = false
 }
 
@@ -256,6 +272,8 @@ resource "azapi_resource" "sandbox_vnet_connection" {
     }
   }
 
+
+
   schema_validation_enabled = false
 }
 
@@ -264,49 +282,49 @@ locals {
 }
 
 resource "azurerm_role_assignment" "deployer_sandbox_data_owner" {
-  scope                = azapi_resource.sandbox_group.id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
-  principal_id         = data.azurerm_client_config.current.object_id
-  principal_type       = "User"
+  scope                            = azapi_resource.sandbox_group.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
+  principal_id                     = data.azurerm_client_config.current.object_id
+  principal_type                   = "User"
   skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "sandbox_foundry_project_user" {
-  scope                = azapi_resource.foundry_project.id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.foundry_user_role_id}"
-  principal_id         = local.sandbox_group_principal_id
-  principal_type       = "ServicePrincipal"
+  scope                            = azapi_resource.foundry_project.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.foundry_user_role_id}"
+  principal_id                     = local.sandbox_group_principal_id
+  principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "sandbox_foundry_account_user" {
-  scope                = azapi_resource.foundry.id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.foundry_user_role_id}"
-  principal_id         = local.sandbox_group_principal_id
-  principal_type       = "ServicePrincipal"
+  scope                            = azapi_resource.foundry.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.foundry_user_role_id}"
+  principal_id                     = local.sandbox_group_principal_id
+  principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "sandbox_foundry_account_owner" {
-  scope                = azapi_resource.foundry.id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.foundry_owner_role_id}"
-  principal_id         = local.sandbox_group_principal_id
-  principal_type       = "ServicePrincipal"
+  scope                            = azapi_resource.foundry.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.foundry_owner_role_id}"
+  principal_id                     = local.sandbox_group_principal_id
+  principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "sandbox_cognitive_services_user" {
-  scope                = azapi_resource.foundry.id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.cognitive_services_user_role_id}"
-  principal_id         = local.sandbox_group_principal_id
-  principal_type       = "ServicePrincipal"
+  scope                            = azapi_resource.foundry.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.cognitive_services_user_role_id}"
+  principal_id                     = local.sandbox_group_principal_id
+  principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 }
 
 resource "azurerm_role_assignment" "sandbox_cognitive_services_openai_user" {
-  scope                = azapi_resource.foundry.id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.cognitive_services_openai_user_role_id}"
-  principal_id         = local.sandbox_group_principal_id
-  principal_type       = "ServicePrincipal"
+  scope                            = azapi_resource.foundry.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.cognitive_services_openai_user_role_id}"
+  principal_id                     = local.sandbox_group_principal_id
+  principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 }

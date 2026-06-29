@@ -33,7 +33,7 @@ New strategy:
 3. **Use scripts for build, generated inputs, and interactive flows**:
    - ACR remote builds.
    - Resolve image digests.
-   - Create/rotate Entra app credentials where ACA Express lacks managed identity.
+   - Generate OpenClaw bridge device identity.
    - Generate OpenClaw bridge device identity.
    - Guide the user through OpenClaw device approval.
 4. **Terraform owns durable resources; scripts prepare inputs**. Scripts should not create or mutate ACA apps behind Terraform.
@@ -49,7 +49,7 @@ Owns only durable shared infrastructure:
 - ACR.
 - VNet/subnets/private DNS.
 - ACA environment for private MCP.
-- ACA Express environment for bridge.
+- Standard ACA environment for bridge.
 - ACA SandboxGroup and VNet connection.
 - Foundry/Azure AI account, project, model deployment.
 - Platform-level managed identities/RBAC.
@@ -57,7 +57,7 @@ Owns only durable shared infrastructure:
 Must not own:
 
 - Container Apps.
-- ACA Express bridge app.
+- Standard ACA bridge app.
 - App revisions/images/env vars/secrets.
 - Teams/Agent 365 app-specific config.
 
@@ -66,10 +66,10 @@ Must not own:
 Owns all deployed app resources and app runtime configuration:
 
 - Private incidents MCP Container App.
-- ACA Express bridge Container App.
+- Standard ACA bridge Container App.
 - Image digest references.
 - App env vars and secrets.
-- Bridge gateway token, app registration client ID/secret, and OpenClaw device private key.
+- Bridge gateway token and OpenClaw device private key.
 - Any later Teams/Agent 365 settings that require changing app resources.
 
 Must not own:
@@ -123,20 +123,13 @@ The repository now uses the Terraform two-layer strategy:
 
 Validated learnings from the transitional implementation:
 
-- ACA Express environment can be created with `Microsoft.App/managedEnvironments@2025-10-02-preview`.
-- Express create body uses `properties.environmentMode: "express"` and `workloadProfiles: null`.
-- ACA Express bridge app can be created with `Microsoft.App/containerApps@2025-10-02-preview`.
-- Express app shape should use:
-  - `activeRevisionsMode: "single"`
-  - `transport: "auto"`
-  - `workloadProfileName: null`
-  - explicit scale `{ minReplicas: 0, maxReplicas: 1, rules: [] }`
-  - private ACR credentials as Container App registry secrets.
-- `az containerapp secret set` and `azd deploy` can fail against ACA Express preview with internal control-plane errors. Prefer declarative app deployment through ARM/Terraform/azapi instead of CLI secret mutation.
-- The bridge `/health` path can run successfully on ACA Express.
+- Standard ACA bridge environment can be created with `Microsoft.App/managedEnvironments@2025-07-01`.
+- Standard ACA bridge app can be created with `Microsoft.App/containerApps@2025-07-01`.
+- Standard ACA supports user-assigned managed identity for bridge Azure API calls and ACR pull.
+- The previous ACA Express bridge path was abandoned because outbound Teams replies failed TLS validation behind an undocumented ADC egress proxy root CA.
 - `/invoke` requires:
   - Stable gateway token.
-  - ACA Express Azure API credential because Express lacks managed identity today.
+  - Standard ACA managed identity with Sandbox Data Owner role.
   - Consistent DataDisk volume/token pairing. Reusing a sandbox started with a different gateway token causes `gateway token mismatch`.
   - Approved OpenClaw bridge device identity for write-scoped `agent` calls. In the current flow, no device token copy is needed after UI approval; the bridge uses its stable private key.
 
@@ -156,15 +149,13 @@ OpenClaw ACA Sandbox
   heavier runtime, DataDisk, private MCP VNet access, suspend/resume
 ```
 
-### ACA Express remains the preferred bridge target for now
+### Bridge uses standard Azure Container Apps
 
-Use ACA Express for the bridge while evaluating preview limitations:
+ACA Express was evaluated for the bridge, but Teams replies exposed an outbound TLS trust problem. ACA Express egress presented certificates issued by `CN=ADC Egress Proxy Root CA`; no public/internal documentation was found for a supported customer contract to retrieve/trust that root CA or disable Express egress inspection for container apps.
 
-- Public HTTPS endpoint.
-- Automatic scale from zero.
-- Good fit for a small Teams/Agent webhook endpoint.
+Decision: use standard Azure Container Apps for the bridge. See `docs\adr\0001-standard-aca-bridge.md`.
 
-Fallback if ACA Express blocks progress: regular Azure Container Apps with `minReplicas: 1` and managed identity. That costs more but removes several preview limitations.
+Standard ACA gives the bridge public HTTPS ingress, managed identity, ACR pull through managed identity, and documented outbound networking options.
 
 ### Bridge does not need VNet integration
 
@@ -177,11 +168,9 @@ The bridge path is public/control-plane oriented:
 
 The OpenClaw sandbox still needs VNet because it reaches private incidents MCP.
 
-### ACA Express currently needs app registration secrets
+### Bridge uses managed identity
 
-ACA Express preview currently lacks managed identity. Bridge Azure API calls need an Entra app registration/client secret for now. Plan to switch to managed identity when ACA Express supports it.
-
-Do not store long-lived secrets in source.
+Standard ACA supports managed identity. Bridge Azure API calls should use the bridge user-assigned managed identity, not an Entra app registration/client secret.
 
 ### All SDK work should be Python
 
@@ -294,7 +283,7 @@ POST /invoke
 ```
 
 - Bridge behavior:
-  1. Use Azure credential from app registration secret while ACA Express lacks managed identity.
+  1. Use bridge managed identity for Azure API calls.
   2. Find existing OpenClaw sandbox for configured DataDisk or create one.
   3. Ensure sandbox is running.
   4. Get sandbox public Gateway URL.
@@ -318,6 +307,8 @@ Definition of done:
 - Pairing flow is documented and repeatable.
 - No Teams/Agent 365 complexity yet.
 
+Status: complete. The README records deployed `/health` and `/invoke` success after bridge device approval.
+
 ### Milestone 2: Teams 1:1 chat to OpenClaw
 
 Purpose: prove Teams can talk to OpenClaw through the bridge.
@@ -330,6 +321,14 @@ Deliverables:
 - Support 1:1 chat only.
 - Map Teams conversation ID to OpenClaw conversation/session ID.
 - Text in, plain text out.
+
+Initial implementation status:
+
+- Bridge now hosts a Teams SDK `/api/messages` endpoint.
+- Only `personal` conversations are accepted.
+- Teams conversation IDs map to OpenClaw session keys as `teams:<conversation-id>`.
+- The apps Terraform layer owns the Azure Bot resource, Teams channel, and bridge app Teams credential settings.
+- Scripts prepare generated Teams tfvars and package the Teams app for sideloading.
 
 Architecture:
 
@@ -465,25 +464,15 @@ Docs:
 
 ## Risks and limitations
 
-### ACA Express limitations
+### ACA Express limitation and bridge target
 
-ACA Express is preview. Current documented/observed gaps:
-
-- No managed identity.
-- No VNet integration.
-- No custom domains.
-- No health probes.
-- No advanced autoscaling.
-- No SLA during preview.
-- Limited regions.
-- Control-plane bugs with some CLI/azd secret operations.
+ACA Express is no longer the bridge target. Teams validation found outbound TLS interception by an undocumented `ADC Egress Proxy Root CA`, and no supported customer mechanism was found to retrieve/trust that CA or disable Express egress inspection for container apps.
 
 Impact:
 
-- Bridge must use app registration secret until managed identity is supported.
-- Bridge cannot directly reach private VNet resources.
-- Bridge app deployment should be IaC/ARM/azapi-driven rather than CLI secret mutation.
-- Regular ACA fallback remains valid if Express preview blocks Teams reliability.
+- Bridge runs on standard Azure Container Apps.
+- Bridge uses managed identity instead of an app registration secret for Azure API calls.
+- Future egress control should use documented standard ACA networking features.
 
 ### Teams and Agent 365 webhook expectations
 
@@ -501,13 +490,4 @@ Do not assume group chat gives access to every participant's private data. OBO i
 
 ## Immediate next step for future work
 
-Do **not** start Teams integration yet.
-
-Recommended next step:
-
-1. Refactor deployment into the two Terraform layers.
-2. Add image build script that writes digest tfvars.
-3. Move bridge app ownership into the apps layer.
-4. Make bridge credential/pairing scripts generate tfvars rather than mutate Container Apps.
-5. Revalidate Milestone 1 `/invoke`.
-6. Start Teams 1:1 only after `/invoke` is stable.
+Milestone 1 is complete. Continue Milestone 2 by running the README Step 7 flow, sideloading the generated Teams package, and validating a 1:1 Teams message end to end.

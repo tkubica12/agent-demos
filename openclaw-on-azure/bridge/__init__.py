@@ -1,1 +1,1 @@
-"""ACA Express bridge for OpenClaw-on-Azure."""
+"""Azure Container Apps bridge for OpenClaw-on-Azure."""

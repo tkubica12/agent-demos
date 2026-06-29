@@ -26,9 +26,10 @@ locals {
 
   private_mcp_app_name = "ocmcp-${local.suffix}"
   bridge_app_name      = "ocbridge-${local.suffix}"
+  teams_bot_name       = "oc-teams-${local.suffix}"
+  teams_bot_tenant_id  = var.teams_bot_tenant_id == "" ? data.azurerm_client_config.current.tenant_id : var.teams_bot_tenant_id
 
-  bridge_registry_password_secret_name = "${replace(local.acr_login_server, ".", "")}-${data.terraform_remote_state.platform.outputs.acr_name}"
-  sandbox_data_owner_role_id           = "c24cf47c-5077-412d-a19c-45202126392c"
+  sandbox_data_owner_role_id = "c24cf47c-5077-412d-a19c-45202126392c"
 }
 
 resource "azurerm_user_assigned_identity" "private_mcp" {
@@ -45,12 +46,25 @@ resource "azurerm_role_assignment" "private_mcp_acr_pull" {
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_role_assignment" "bridge_sandbox_data_owner" {
-  count                = var.bridge_azure_client_object_id == "" ? 0 : 1
-  scope                = data.terraform_remote_state.platform.outputs.sandbox_group_id
-  role_definition_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
-  principal_id         = var.bridge_azure_client_object_id
+resource "azurerm_user_assigned_identity" "bridge" {
+  name                = "id-ocbridge-${local.suffix}"
+  location            = local.bridge_location
+  resource_group_name = local.resource_group_name
+  tags                = local.tags
+}
+
+resource "azurerm_role_assignment" "bridge_acr_pull" {
+  scope                = data.terraform_remote_state.platform.outputs.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.bridge.principal_id
   principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "bridge_sandbox_data_owner" {
+  scope              = data.terraform_remote_state.platform.outputs.sandbox_group_id
+  role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
+  principal_id       = azurerm_user_assigned_identity.bridge.principal_id
+  principal_type     = "ServicePrincipal"
 }
 
 resource "azapi_resource" "private_mcp_app" {
@@ -126,41 +140,35 @@ resource "azapi_resource" "private_mcp_app" {
 }
 
 resource "azapi_resource" "bridge_app" {
-  type      = "Microsoft.App/containerApps@2025-10-02-preview"
+  type      = "Microsoft.App/containerApps@2025-07-01"
   name      = local.bridge_app_name
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
   location  = local.bridge_location
   tags      = local.tags
 
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.bridge.id]
+  }
+
   body = {
     properties = {
       managedEnvironmentId = data.terraform_remote_state.platform.outputs.bridge_env_id
-      environmentId        = data.terraform_remote_state.platform.outputs.bridge_env_id
-      workloadProfileName  = null
       configuration = {
-        activeRevisionsMode = "single"
+        activeRevisionsMode = "Single"
         ingress = {
           external      = true
           targetPort    = 8000
-          transport     = "auto"
+          transport     = "Http"
           allowInsecure = false
         }
         registries = [
           {
-            server            = local.acr_login_server
-            username          = data.azurerm_container_registry.acr.admin_username
-            passwordSecretRef = local.bridge_registry_password_secret_name
+            server   = local.acr_login_server
+            identity = azurerm_user_assigned_identity.bridge.id
           }
         ]
         secrets = [
-          {
-            name  = local.bridge_registry_password_secret_name
-            value = data.azurerm_container_registry.acr.admin_password
-          },
-          {
-            name  = "bridge-azure-client-secret"
-            value = var.bridge_azure_client_secret == "" ? "not-configured" : var.bridge_azure_client_secret
-          },
           {
             name  = "openclaw-gateway-token"
             value = var.openclaw_gateway_token == "" ? "not-configured" : var.openclaw_gateway_token
@@ -180,6 +188,10 @@ resource "azapi_resource" "bridge_app" {
           {
             name  = "private-incidents-mcp-static-key"
             value = var.private_incidents_mcp_static_key
+          },
+          {
+            name  = "openclaw-teams-bot-secret"
+            value = var.teams_bot_app_secret == "" ? "not-configured" : var.teams_bot_app_secret
           }
         ]
       }
@@ -206,12 +218,8 @@ resource "azapi_resource" "bridge_app" {
                 value = local.location
               },
               {
-                name  = "OPENCLAW_BRIDGE_AZURE_CLIENT_ID"
-                value = var.bridge_azure_client_id
-              },
-              {
-                name      = "OPENCLAW_BRIDGE_AZURE_CLIENT_SECRET"
-                secretRef = "bridge-azure-client-secret"
+                name  = "AZURE_CLIENT_ID"
+                value = azurerm_user_assigned_identity.bridge.client_id
               },
               {
                 name      = "OPENCLAW_GATEWAY_TOKEN"
@@ -272,6 +280,30 @@ resource "azapi_resource" "bridge_app" {
               {
                 name  = "OPENCLAW_BRIDGE_DEBUG"
                 value = "true"
+              },
+              {
+                name  = "OPENCLAW_TEAMS_BOT_ID"
+                value = var.teams_bot_app_id == "" ? "not-configured" : var.teams_bot_app_id
+              },
+              {
+                name      = "OPENCLAW_TEAMS_BOT_SECRET"
+                secretRef = "openclaw-teams-bot-secret"
+              },
+              {
+                name  = "OPENCLAW_TEAMS_BOT_TENANT_ID"
+                value = var.teams_bot_app_id == "" ? "not-configured" : local.teams_bot_tenant_id
+              },
+              {
+                name  = "CLIENT_ID"
+                value = var.teams_bot_app_id == "" ? "not-configured" : var.teams_bot_app_id
+              },
+              {
+                name      = "CLIENT_SECRET"
+                secretRef = "openclaw-teams-bot-secret"
+              },
+              {
+                name  = "TENANT_ID"
+                value = var.teams_bot_app_id == "" ? "not-configured" : local.teams_bot_tenant_id
               }
             ]
           }
@@ -285,27 +317,65 @@ resource "azapi_resource" "bridge_app" {
     }
   }
 
-  response_export_values = ["properties.configuration.ingress.fqdn"]
+  response_export_values    = ["properties.configuration.ingress.fqdn"]
   schema_validation_enabled = false
 
-  lifecycle {
-    # ACA Express preview normalizes these fields on read:
-    # - activeRevisionsMode: "single" -> "Single"
-    # - ingress.transport: "auto" -> "Http"
-    # - workloadProfileName: null -> "Consumption"
-    # - omitted container resources -> default CPU/memory
-    # Keep Terraform focused on intentional changes such as image digests,
-    # env vars, secrets, and app identity inputs.
-    ignore_changes = [
-      body.properties.configuration.activeRevisionsMode,
-      body.properties.configuration.ingress.transport,
-      body.properties.workloadProfileName,
-      body.properties.template.containers[0].resources,
-    ]
-  }
-
   depends_on = [
+    azurerm_role_assignment.bridge_acr_pull,
     azurerm_role_assignment.bridge_sandbox_data_owner,
     azapi_resource.private_mcp_app
   ]
+}
+
+resource "azapi_resource" "teams_bot" {
+  count     = var.teams_bot_app_id == "" ? 0 : 1
+  type      = "Microsoft.BotService/botServices@2023-09-15-preview"
+  name      = local.teams_bot_name
+  parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
+  location  = "global"
+  tags      = local.tags
+
+  body = {
+    kind = "azurebot"
+    sku = {
+      name = "F0"
+    }
+    properties = {
+      displayName         = "OpenClaw on Azure"
+      description         = "OpenClaw ACA Sandbox bridge for Teams 1:1 chat."
+      endpoint            = "https://${azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn}/api/messages"
+      msaAppId            = var.teams_bot_app_id
+      msaAppTenantId      = local.teams_bot_tenant_id
+      msaAppType          = var.teams_bot_app_type
+      publicNetworkAccess = "Enabled"
+    }
+  }
+
+  schema_validation_enabled = false
+  response_export_values    = ["properties.endpoint"]
+
+  depends_on = [
+    azapi_resource.bridge_app
+  ]
+}
+
+resource "azapi_resource" "teams_channel" {
+  count     = var.teams_bot_app_id == "" ? 0 : 1
+  type      = "Microsoft.BotService/botServices/channels@2021-03-01"
+  name      = "MsTeamsChannel"
+  parent_id = azapi_resource.teams_bot[0].id
+  location  = "global"
+
+  body = {
+    properties = {
+      channelName = "MsTeamsChannel"
+      properties = {
+        deploymentEnvironment = "CommercialDeployment"
+        enableCalling         = false
+        isEnabled             = true
+      }
+    }
+  }
+
+  schema_validation_enabled = false
 }

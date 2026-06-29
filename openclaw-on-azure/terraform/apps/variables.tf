@@ -10,22 +10,6 @@ variable "private_mcp_image" {
   type = string
 }
 
-variable "bridge_azure_client_id" {
-  type    = string
-  default = "not-configured"
-}
-
-variable "bridge_azure_client_object_id" {
-  type    = string
-  default = ""
-}
-
-variable "bridge_azure_client_secret" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
 variable "openclaw_gateway_token" {
   type      = string
   default   = ""
@@ -53,4 +37,25 @@ variable "private_incidents_mcp_static_key" {
   type      = string
   default   = "demo-static-key"
   sensitive = true
+}
+
+variable "teams_bot_app_id" {
+  type    = string
+  default = ""
+}
+
+variable "teams_bot_app_secret" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "teams_bot_tenant_id" {
+  type    = string
+  default = ""
+}
+
+variable "teams_bot_app_type" {
+  type    = string
+  default = "SingleTenant"
 }
