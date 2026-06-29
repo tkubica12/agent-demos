@@ -6,7 +6,7 @@ import os
 import httpx
 from azure.identity import DefaultAzureCredential
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import StreamingResponse
 
 
 TOKEN_SCOPE = os.getenv("FOUNDRY_TOKEN_SCOPE", "https://cognitiveservices.azure.com/.default")
@@ -66,22 +66,33 @@ def translated_body(path: str, body: bytes) -> bytes:
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-async def proxy(path: str, request: Request) -> Response:
+async def proxy(path: str, request: Request) -> StreamingResponse:
     body = translated_body(request.url.path, await request.body())
     url = target_url(request.url.path, request.url.query.encode("utf-8"))
-    async with httpx.AsyncClient(timeout=None, verify=verify_setting()) as client:
-        upstream = await client.request(
+    client = httpx.AsyncClient(timeout=None, verify=verify_setting())
+    upstream = await client.send(
+        client.build_request(
             request.method,
             url,
             content=body,
             headers=forwarded_headers(request),
-        )
-        excluded = {"content-encoding", "transfer-encoding", "connection"}
-        headers = {key: value for key, value in upstream.headers.items() if key.lower() not in excluded}
+        ),
+        stream=True,
+    )
+    excluded = {"content-encoding", "transfer-encoding", "connection"}
+    headers = {key: value for key, value in upstream.headers.items() if key.lower() not in excluded}
 
-        return Response(
-            content=upstream.content,
-            status_code=upstream.status_code,
-            headers=headers,
-            media_type=upstream.headers.get("content-type"),
-        )
+    async def stream_body():
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        stream_body(),
+        status_code=upstream.status_code,
+        headers=headers,
+        media_type=upstream.headers.get("content-type"),
+    )

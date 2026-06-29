@@ -75,6 +75,8 @@ def main() -> None:
     for var_name, (repository, dockerfile, context) in images.items():
         digest = acr_build(registry=registry, repository=repository, dockerfile=dockerfile, context=context, tag=tag)
         tfvars[var_name] = f"{login_server}/{repository}@{digest}"
+        if var_name == "openclaw_image":
+            tfvars["openclaw_disk_image_name"] = f"openclaw-gateway-{digest.removeprefix('sha256:')[:12]}"
 
     write_tfvars(APPS_DIR / "generated.images.auto.tfvars.json", tfvars)
     print(json.dumps({"tag": tag, **tfvars}, indent=2))

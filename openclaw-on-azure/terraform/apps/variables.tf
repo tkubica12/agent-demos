@@ -2,6 +2,11 @@ variable "openclaw_image" {
   type = string
 }
 
+variable "openclaw_disk_image_name" {
+  type    = string
+  default = "openclaw-gateway-image-with-private-mcp"
+}
+
 variable "bridge_image" {
   type = string
 }

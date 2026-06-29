@@ -254,6 +254,10 @@ resource "azapi_resource" "bridge_app" {
                 value = var.openclaw_image
               },
               {
+                name  = "OPENCLAW_DISK_IMAGE_NAME"
+                value = var.openclaw_disk_image_name
+              },
+              {
                 name  = "ACR_NAME"
                 value = data.terraform_remote_state.platform.outputs.acr_name
               },
