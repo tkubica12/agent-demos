@@ -285,7 +285,7 @@ To build an optional public-preview package for Teams targeted private messages,
 uv run python -m scripts.package_teams_app --preview-targeted-messages --output .local\ehvw\teams\openclaw-teams-targeted-preview.zip
 ```
 
-Use the normal package first. The preview package switches the manifest schema to `1.29` and adds `supportsTargetedMessages: true`. Some Teams upload validators still reject this public-preview capability if the tenant/client is not enabled for the preview schema.
+Use the normal package first. The preview package switches the manifest schema to `1.29`, adds `supportsTargetedMessages: true`, and sets `supportsChannelFeatures: "tier1"` because schema 1.25+ requires that root property for apps with `team` scope. Some Teams upload validators still reject this public-preview capability if the tenant/client is not enabled for the preview schema.
 
 For the current environment, the package is:
 
