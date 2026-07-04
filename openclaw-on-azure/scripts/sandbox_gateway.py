@@ -101,17 +101,13 @@ def existing_named(items, name: str):
     return None
 
 
-def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str, disk_id: str | None = None) -> dict | None:
+def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str) -> dict | None:
     for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
         labels = sandbox.get("labels", {})
         volumes = sandbox.get("volumes", [])
         if labels.get("app") != "openclaw-on-azure":
             continue
         if any(volume.get("volumeName") == data_volume_name for volume in volumes):
-            if disk_id:
-                sandbox_disk_id = (((sandbox.get("sourcesRef") or {}).get("diskImage") or {}).get("id") or "").strip()
-                if sandbox_disk_id != disk_id:
-                    continue
             return sandbox
     return None
 
@@ -310,7 +306,7 @@ def ensure_gateway_sandbox(
             labels={"app": "openclaw-on-azure"},
         )
 
-    existing_sandbox = existing_gateway_sandbox(client, config.data_volume_name, disk_id)
+    existing_sandbox = existing_gateway_sandbox(client, config.data_volume_name)
     reused_existing_sandbox = existing_sandbox is not None
     if existing_sandbox:
         sandbox_id = existing_sandbox["id"]

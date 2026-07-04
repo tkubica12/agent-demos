@@ -1,6 +1,6 @@
 {
-  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
-  "manifestVersion": "1.17",
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.21/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.21",
   "version": "0.1.0",
   "id": "{{TEAMS_APP_ID}}",
   "developer": {
@@ -15,25 +15,47 @@
   },
   "description": {
     "short": "Chat with OpenClaw running in ACA Sandboxes.",
-    "full": "A base 1:1 Teams app that sends text prompts to the OpenClaw Azure Container Apps bridge, wakes the ACA Sandbox Gateway, and returns the OpenClaw response."
+    "full": "A Teams app that sends text prompts from 1:1 chats, group chats, and channel threads to the OpenClaw Azure Container Apps bridge, wakes the ACA Sandbox Gateway, and returns the OpenClaw response."
   },
   "icons": {
     "outline": "outline.png",
     "color": "color.png"
   },
   "accentColor": "#6264A7",
+  "webApplicationInfo": {
+    "id": "{{TEAMS_BOT_APP_ID}}",
+    "resource": "api://{{BRIDGE_DOMAIN}}/{{TEAMS_BOT_APP_ID}}"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "type": "Application",
+          "name": "ChannelMessage.Read.Group"
+        },
+        {
+          "type": "Application",
+          "name": "ChatMessage.Read.Chat"
+        }
+      ]
+    }
+  },
   "bots": [
     {
       "botId": "{{TEAMS_BOT_APP_ID}}",
       "scopes": [
-        "personal"
+        "personal",
+        "groupChat",
+        "team"
       ],
       "supportsFiles": false,
       "isNotificationOnly": false,
       "commandLists": [
         {
           "scopes": [
-            "personal"
+            "personal",
+            "groupChat",
+            "team"
           ],
           "commands": [
             {

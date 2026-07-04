@@ -346,7 +346,7 @@ resource "azapi_resource" "teams_bot" {
     }
     properties = {
       displayName         = "OpenClaw on Azure"
-      description         = "OpenClaw ACA Sandbox bridge for Teams 1:1 chat."
+      description         = "OpenClaw ACA Sandbox bridge for Teams chats and channel threads."
       endpoint            = "https://${azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn}/api/messages"
       msaAppId            = var.teams_bot_app_id
       msaAppTenantId      = local.teams_bot_tenant_id

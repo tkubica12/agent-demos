@@ -247,12 +247,12 @@ Bridge `/health` works.
 
 Bridge `/invoke` now works after bridge device approval.
 
-## 7. Teams 1:1 base app
+## 7. Teams app
 
-This adds the first Teams surface over the same bridge:
+This adds the Teams surface over the same bridge:
 
 ```text
-Teams 1:1 chat -> bridge /api/messages -> OpenClaw Gateway -> Teams reply
+Teams chat/channel -> bridge /api/messages -> OpenClaw Gateway -> Teams reply
 ```
 
 Prepare a single-tenant Teams bot app registration and generated app tfvars:
@@ -277,7 +277,7 @@ cd D:\agent-demos\openclaw-on-azure
 uv run python -m scripts.package_teams_app
 ```
 
-Upload the printed `.local\<suffix>\teams\openclaw-teams.zip` package to Teams. The base version supports only 1:1 chat. Group chat/channel support and @mention handling are later milestones.
+Upload the printed `.local\<suffix>\teams\openclaw-teams.zip` package to Teams. The app supports personal chats, group chats, team channel threads, weak-signal message observation with RSC, and message reaction events.
 
 For the current environment, the package is:
 
@@ -292,14 +292,125 @@ Install it in Teams:
 3. Choose **Manage your apps** or **Upload a custom app**.
 4. Select **Upload an app** / **Upload a custom app**.
 5. Pick `D:\agent-demos\openclaw-on-azure\.local\ehvw\teams\openclaw-teams.zip`.
-6. Choose **Add** to install it for yourself.
-7. Open a 1:1 chat with **OpenClaw** and send a prompt such as:
+6. Choose **Add** to install it for yourself, or add it to a group chat/team when testing collaborative scopes.
+7. If Teams shows a consent prompt for resource-specific permissions, approve it. These permissions allow OpenClaw to receive unmentioned messages in the installed chat/team:
+
+```text
+ChannelMessage.Read.Group
+ChatMessage.Read.Chat
+```
+
+If the app was already installed before these permissions were added, remove and reinstall or update the app in the target chat/team so Teams re-prompts for consent.
+8. Open a 1:1 chat with **OpenClaw** and send a prompt such as:
 
 ```text
 List services from private incidents MCP
 ```
 
-Expected result: Teams sends the message to `https://ocbridge-ehvw.gentlecoast-d88ff215.westcentralus.azurecontainerapps.io/api/messages`, the bridge wakes/reuses the ACA Sandbox, and OpenClaw replies in the 1:1 chat.
+Expected result: Teams sends the message to `https://ocbridge-ehvw.icymeadow-c517d14c.swedencentral.azurecontainerapps.io/api/messages`, the bridge wakes/reuses the ACA Sandbox, and OpenClaw replies in the current chat or channel thread.
+
+For group chats and channel threads, mention the bot and include the prompt:
+
+```text
+@OpenClaw List services from private incidents MCP
+```
+
+The bridge accepts `groupchat`, `channel`, and `team` conversation types. When OpenClaw is mentioned, the bridge strips the bot mention before forwarding the prompt and preserves the Teams conversation/thread in the OpenClaw session key.
+
+Every Teams turn sent to OpenClaw includes a metadata envelope so the agent can distinguish:
+
+```text
+Signal type: explicit_bot_mention | targeted_private_message | reply_in_thread_without_bot_mention | reaction_to_message | undirected_message
+Response contract: must_answer | observe_then_maybe_answer
+Conversation type / id
+Activity id
+Reply-to activity id
+Sender
+Targeted private message flag
+Bot explicitly mentioned flag
+Reaction types, when present
+```
+
+For mention and targeted private messages, OpenClaw must answer. For unmentioned public messages and reactions received through RSC/activity events, the bridge sends the event to OpenClaw as context and suppresses the reply if OpenClaw returns exactly `NO_RESPONSE`.
+
+Plain-text references to `OpenClaw` without a Teams mention are treated as `textual_bot_name_mention` and use `must_answer`. Channel replies in a thread where OpenClaw has already answered are also promoted to `must_answer`; Teams channel replies can carry the thread root in `conversation.id` as `;messageid=...`, so the bridge keys memory by that root instead of by each reply activity.
+
+### Teams context window sent to OpenClaw
+
+The bridge does not send the whole Teams conversation and does not send only the latest message. It keeps a bounded in-memory history per Teams session/thread and sends OpenClaw:
+
+```text
+1. Current Teams event envelope
+2. Recent local window for the same session/thread
+3. Reply/reacted-to anchor when the referenced message is in bridge memory
+4. Latest OpenClaw answer when available
+5. Current message text
+```
+
+Default context policy:
+
+| Signal | Recent events sent |
+| --- | --- |
+| `explicit_bot_mention`, `targeted_private_message`, 1:1 | 18 |
+| `reply_in_thread_without_bot_mention` | 12 |
+| `undirected_message` | 8 |
+| `reaction_to_message` | 6 |
+
+The context is limited by both event count and characters. Current knobs:
+
+```text
+OPENCLAW_TEAMS_MEMORY_MAX_EVENTS=30
+OPENCLAW_TEAMS_MEMORY_EVENT_CHARS=1200
+OPENCLAW_TEAMS_CONTEXT_MAX_CHARS=12000
+OPENCLAW_TEAMS_CONTEXT_MUST_ANSWER_EVENTS=18
+OPENCLAW_TEAMS_CONTEXT_REPLY_EVENTS=12
+OPENCLAW_TEAMS_CONTEXT_WEAK_SIGNAL_EVENTS=8
+OPENCLAW_TEAMS_CONTEXT_REACTION_EVENTS=6
+```
+
+This memory is intentionally bridge-local and demo-grade. It survives while the bridge replica is warm, but it is not durable across bridge restarts or scale-out replicas. Production should replace or augment it with durable conversation state plus Teams Graph/RSC retrieval.
+
+Response delivery policy:
+
+```text
+1:1 personal chats     -> Teams streaming response
+group chats/channels   -> regular Teams send into the current conversation/thread
+```
+
+The bridge intentionally does not use Teams streaming for group chat or channel replies because channel validation showed Teams accepted the incoming activity and OpenClaw completed, but streaming updates were not visible in the channel UI. Microsoft documents streaming bot messages as a Teams SDK capability for AI-powered bots, with informative progress updates and final message features, but the reliable path for this deployed channel demo is regular send. Processing reactions such as eyes are disabled by default because the current SDK send path returned `400 Bad Request`; set `OPENCLAW_TEAMS_ADD_REACTIONS=true` only when reaction sending is fixed for the target Teams scope.
+
+To test the current Teams behavior:
+
+1. **1:1**: send `List services from private incidents MCP`; OpenClaw should answer.
+2. **Group chat mention**: add OpenClaw to a group chat and send `@OpenClaw List services from private incidents MCP`; OpenClaw should react with eyes while working and answer.
+3. **Channel mention**: add OpenClaw to a team, open a standard channel thread, and send `@OpenClaw List services from private incidents MCP`; OpenClaw should answer in that thread.
+4. **Weak signal**: in the same group chat or channel, send a normal message without mentioning OpenClaw, for example `We should run the production migration during peak traffic.` With RSC consent, the bridge receives it and lets OpenClaw decide whether to jump in; no answer is expected if OpenClaw returns `NO_RESPONSE`.
+5. **Reaction event**: add a reaction to a message in the group/chat thread. The bridge records and forwards reaction events as context; OpenClaw replies only if it decides the event needs a public answer.
+6. **Targeted private message preview**: the bridge runtime can recognize and answer targeted private messages if Teams sends them, but the current Teams app package does not opt in because the Teams upload validator rejects the preview `supportsTargetedMessages` manifest property. Re-enable it in `teams\manifest.template.json` only when your tenant/client/schema accepts that preview property.
+
+### Suggested Teams test script
+
+Use these examples in a standard channel where OpenClaw is installed. Start with a clean channel thread so it is easy to see what happened.
+
+| Scenario | Message/action | Expected behavior |
+| --- | --- | --- |
+| Explicit mention | `@OpenClaw Ahoj, slyšíš mě? Kdo jsem?` | OpenClaw answers in the channel thread. |
+| Reply in OpenClaw thread | Reply to OpenClaw's answer with `dobře, co umíš?` | OpenClaw treats this as part of an active OpenClaw thread and answers, even without another `@OpenClaw`. |
+| Plain-text name, no Teams mention | New channel post: `Možná by mohl OpenClaw říct ahoj, i když ho netaguji, ne?` | OpenClaw treats plain-text `OpenClaw` as `textual_bot_name_mention` and should answer. |
+| Weak untagged context | New channel post: `Budeme dělat migraci databáze v pátek večer.` | Bridge sends it to OpenClaw as weak context. OpenClaw may stay silent by returning `NO_RESPONSE`. |
+| Strong weak-signal intervention | New channel post: `Navrhuji spustit produkční migraci databáze během špičky bez rollback plánu.` | OpenClaw should jump in because it can prevent a material mistake. |
+| Emoji received | Add a heart/like to OpenClaw's answer. | Bridge receives a `reaction_to_message` event and sends it to OpenClaw as feedback context. It usually stays silent unless follow-up is useful. |
+| Emoji/status sent by bot | Not enabled by default. | Processing reactions from the bot are currently disabled because Teams returned `400 Bad Request` for this SDK path. |
+
+When troubleshooting, call:
+
+```powershell
+cd D:\agent-demos\openclaw-on-azure\terraform\apps
+$bridge = terraform output -raw bridge_url
+Invoke-RestMethod "$bridge/diag/teams" | ConvertTo-Json -Depth 12
+```
+
+Look for `handler`, `messageReaction`, `responseSent`, `responseSuppressed`, and `backgroundException` events.
 
 If **Upload a custom app** is not available, Teams app sideloading is disabled for your user or tenant. Enable custom app upload in Teams admin settings or use a tenant/user where custom apps are allowed, then retry the same zip.
 
@@ -307,7 +418,6 @@ If **Upload a custom app** is not available, Teams app sideloading is disabled f
 
 - Do not move Teams webhook handling into the sandbox.
 - Do not call private MCP directly from the bridge.
-- Do not add group chat/channel behavior until the 1:1 path works.
 - Do not add Work IQ MCP until Teams/Agent identity shape is clear.
 
 ## Cleanup

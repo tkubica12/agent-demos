@@ -322,13 +322,14 @@ Deliverables:
 - Map Teams conversation ID to OpenClaw conversation/session ID.
 - Text in, plain text out.
 
-Initial implementation status:
+Implementation status:
 
 - Bridge now hosts a Teams SDK `/api/messages` endpoint.
-- Only `personal` conversations are accepted.
-- Teams conversation IDs map to OpenClaw session keys as `teams:<conversation-id>`.
+- Milestone 2 validated the `personal` conversation path.
+- The Milestone 2 Teams session key was based on the Teams conversation ID.
 - The apps Terraform layer owns the Azure Bot resource, Teams channel, and bridge app Teams credential settings.
 - Scripts prepare generated Teams tfvars and package the Teams app for sideloading.
+- Status: complete. Deployed `/health`, direct `/invoke`, and Teams package generation have been revalidated after bridge device approval.
 
 Architecture:
 
@@ -358,6 +359,27 @@ Deliverables:
 - Preserve conversation/thread IDs.
 - Add typing indicators and basic error messages.
 - Optional: add emoji reactions once a message is accepted/processed.
+
+Implementation status:
+
+- Manifest now includes `personal`, `groupchat`, and `team` bot scopes.
+- Bridge accepts `personal`, `groupchat`, `channel`, and `team` conversation types.
+- Personal chats still send plain text directly.
+- Group chats and channel/team conversations require an OpenClaw bot mention; unmentioned messages are ignored.
+- Bot mentions are stripped before forwarding prompts to OpenClaw.
+- OpenClaw session keys preserve Teams conversation IDs, and channel/team requests include team, channel, and thread identifiers where present.
+- The bridge sends a Teams typing activity before starting OpenClaw work and keeps the existing progress/error stream messages.
+- The bridge now sends a Teams event metadata envelope to OpenClaw with signal type, response contract, conversation/thread IDs, activity IDs, sender, targeting, mention status, and reaction types. Signal types include `explicit_bot_mention`, `targeted_private_message`, `reply_in_thread_without_bot_mention`, `reaction_to_message`, and `undirected_message`.
+- The bridge keeps bounded in-memory Teams history per session/thread and sends OpenClaw a compact context window, not only the latest message and not the whole conversation. The context includes recent local events, reply/reaction anchors when already observed, latest OpenClaw answer when available, and hard event/character limits.
+- Default context window sizes: 18 events for `must_answer`, 12 for replies, 8 for weak undirected messages, and 6 for reactions. Environment knobs include `OPENCLAW_TEAMS_MEMORY_MAX_EVENTS`, `OPENCLAW_TEAMS_MEMORY_EVENT_CHARS`, `OPENCLAW_TEAMS_CONTEXT_MAX_CHARS`, `OPENCLAW_TEAMS_CONTEXT_MUST_ANSWER_EVENTS`, `OPENCLAW_TEAMS_CONTEXT_REPLY_EVENTS`, `OPENCLAW_TEAMS_CONTEXT_WEAK_SIGNAL_EVENTS`, and `OPENCLAW_TEAMS_CONTEXT_REACTION_EVENTS`.
+- Current memory is bridge-local and demo-grade; production should replace or augment it with durable conversation state plus Teams Graph/RSC retrieval.
+- Channel troubleshooting showed Teams delivered the channel mention to `/api/messages` and OpenClaw completed, but Teams streaming responses were not visible in channel UI. The bridge now limits streaming to 1:1 personal chats and uses regular `ctx.send()` for group chat/channel replies.
+- Follow-up channel testing showed reactions, unmentioned channel messages, and thread messages were received through Teams/RSC. Reactions and weak signals reached OpenClaw, but OpenClaw returned `NO_RESPONSE`, so the bridge correctly suppressed public replies.
+- Signal tuning now treats plain-text `OpenClaw` references as `textual_bot_name_mention` with `must_answer`, even without an explicit Teams mention. It also treats channel-thread replies as thread replies based on the Teams `conversation.id` `;messageid=...` root and promotes replies in threads where OpenClaw already answered to `must_answer`.
+- Processing reactions are disabled by default because sending `messageReaction` through the current SDK path returned `400 Bad Request`; keep `OPENCLAW_TEAMS_ADD_REACTIONS=false` until reaction sending is fixed for the target scope.
+- RSC manifest permissions allow unmentioned channel/group messages to be received after chat/team install consent. Those messages use an `observe_then_maybe_answer` response contract; OpenClaw can return exactly `NO_RESPONSE` to avoid jumping in.
+- The bridge runtime handles targeted private messages if Teams sends `recipient.is_targeted`, but the current sideload package does not include `supportsTargetedMessages` because Teams upload validation rejected that preview manifest property in this tenant/client.
+- Status: implemented and deployed in the current environment. The Teams package has been refreshed at `.local\ehvw\teams\openclaw-teams.zip`; upload it to Teams before testing group chat and channel scopes.
 
 Important auth behavior:
 
@@ -490,4 +512,4 @@ Do not assume group chat gives access to every participant's private data. OBO i
 
 ## Immediate next step for future work
 
-Milestone 1 is complete. Continue Milestone 2 by running the README Step 7 flow, sideloading the generated Teams package, and validating a 1:1 Teams message end to end.
+Milestone 3 is implemented and deployed in the bridge and manifest. Continue by uploading the refreshed Teams package and validating a group chat mention plus a channel thread mention end to end.
