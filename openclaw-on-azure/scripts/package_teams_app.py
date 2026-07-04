@@ -49,6 +49,8 @@ def render_manifest(template: str, values: dict[str, str]) -> str:
 
 def enable_targeted_messages_preview(manifest: str) -> str:
     payload = json.loads(manifest)
+    payload["$schema"] = "https://developer.microsoft.com/en-us/json-schemas/teams/v1.29/MicrosoftTeams.schema.json"
+    payload["manifestVersion"] = "1.29"
     for bot in payload.get("bots", []):
         bot["supportsTargetedMessages"] = True
     return json.dumps(payload, indent=2) + "\n"
