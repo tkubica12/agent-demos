@@ -279,6 +279,14 @@ uv run python -m scripts.package_teams_app
 
 Upload the printed `.local\<suffix>\teams\openclaw-teams.zip` package to Teams. The app supports personal chats, group chats, team channel threads, weak-signal message observation with RSC, and message reaction events.
 
+To build an optional public-preview package for Teams targeted private messages, run:
+
+```powershell
+uv run python -m scripts.package_teams_app --preview-targeted-messages --output .local\ehvw\teams\openclaw-teams-targeted-preview.zip
+```
+
+Use the normal package first. The preview package adds `supportsTargetedMessages: true`, which some Teams upload validators still reject.
+
 For the current environment, the package is:
 
 ```text
@@ -320,7 +328,7 @@ The bridge accepts `groupchat`, `channel`, and `team` conversation types. When O
 Every Teams turn sent to OpenClaw includes a metadata envelope so the agent can distinguish:
 
 ```text
-Signal type: explicit_bot_mention | targeted_private_message | reply_in_thread_without_bot_mention | reaction_to_message | undirected_message
+Signal type: explicit_bot_mention | targeted_private_message | textual_bot_name_mention | reply_in_thread_without_bot_mention | reaction_to_message | undirected_message
 Response contract: must_answer | observe_then_maybe_answer
 Conversation type / id
 Activity id
@@ -370,14 +378,18 @@ OPENCLAW_TEAMS_CONTEXT_REACTION_EVENTS=6
 
 This memory is intentionally bridge-local and demo-grade. It survives while the bridge replica is warm, but it is not durable across bridge restarts or scale-out replicas. Production should replace or augment it with durable conversation state plus Teams Graph/RSC retrieval.
 
-Response delivery policy:
+Response delivery and UX policy:
 
 ```text
 1:1 personal chats     -> Teams streaming response
-group chats/channels   -> regular Teams send into the current conversation/thread
+group chats/channels   -> quoted Teams reply into the current conversation/thread
+must-answer work       -> eyes reaction on the triggering message when supported
+gratitude in thread    -> like reaction instead of noisy text, when supported
 ```
 
-The bridge intentionally does not use Teams streaming for group chat or channel replies because channel validation showed Teams accepted the incoming activity and OpenClaw completed, but streaming updates were not visible in the channel UI. Microsoft documents streaming bot messages as a Teams SDK capability for AI-powered bots, with informative progress updates and final message features, but the reliable path for this deployed channel demo is regular send. Processing reactions such as eyes are disabled by default because the current SDK send path returned `400 Bad Request`; set `OPENCLAW_TEAMS_ADD_REACTIONS=true` only when reaction sending is fixed for the target Teams scope.
+The bridge intentionally does not use Teams streaming for group chat or channel replies because channel validation showed Teams accepted the incoming activity and OpenClaw completed, but streaming updates were not visible in the channel UI. Microsoft documents streaming bot messages as a Teams SDK capability for AI-powered bots, but the reliable path for this deployed channel demo is a normal Teams message. For collaborative scopes the bridge uses `ctx.reply()` by default so Teams renders a quoted reply and keeps channel responses in the current thread. Set `OPENCLAW_TEAMS_QUOTED_REPLIES=false` to fall back to unquoted `ctx.send()`.
+
+Bot reactions use the documented Teams SDK reaction API (`ctx.api.reactions.add`). `OPENCLAW_TEAMS_ADD_REACTIONS=true` by default. The bridge adds an eyes reaction when OpenClaw must answer, and a like reaction when a user posts a simple thanks in an active OpenClaw thread. If a target Teams scope rejects reaction writes, the bridge records `reactionSendFailed` in `/diag/teams` and continues normally.
 
 To test the current Teams behavior:
 
@@ -386,7 +398,7 @@ To test the current Teams behavior:
 3. **Channel mention**: add OpenClaw to a team, open a standard channel thread, and send `@OpenClaw List services from private incidents MCP`; OpenClaw should answer in that thread.
 4. **Weak signal**: in the same group chat or channel, send a normal message without mentioning OpenClaw, for example `We should run the production migration during peak traffic.` With RSC consent, the bridge receives it and lets OpenClaw decide whether to jump in; no answer is expected if OpenClaw returns `NO_RESPONSE`.
 5. **Reaction event**: add a reaction to a message in the group/chat thread. The bridge records and forwards reaction events as context; OpenClaw replies only if it decides the event needs a public answer.
-6. **Targeted private message preview**: the bridge runtime can recognize and answer targeted private messages if Teams sends them, but the current Teams app package does not opt in because the Teams upload validator rejects the preview `supportsTargetedMessages` manifest property. Re-enable it in `teams\manifest.template.json` only when your tenant/client/schema accepts that preview property.
+6. **Targeted private message preview**: the bridge runtime can recognize and answer targeted private messages if Teams sends them. Build and upload the preview package with `--preview-targeted-messages` only in a tenant/client where the Teams upload validator accepts `supportsTargetedMessages`.
 
 ### Suggested Teams test script
 
@@ -400,7 +412,10 @@ Use these examples in a standard channel where OpenClaw is installed. Start with
 | Weak untagged context | New channel post: `Budeme dělat migraci databáze v pátek večer.` | Bridge sends it to OpenClaw as weak context. OpenClaw may stay silent by returning `NO_RESPONSE`. |
 | Strong weak-signal intervention | New channel post: `Navrhuji spustit produkční migraci databáze během špičky bez rollback plánu.` | OpenClaw should jump in because it can prevent a material mistake. |
 | Emoji received | Add a heart/like to OpenClaw's answer. | Bridge receives a `reaction_to_message` event and sends it to OpenClaw as feedback context. It usually stays silent unless follow-up is useful. |
-| Emoji/status sent by bot | Not enabled by default. | Processing reactions from the bot are currently disabled because Teams returned `400 Bad Request` for this SDK path. |
+| Quoted/threaded answer | `@OpenClaw Ahoj, slyšíš mě? Kdo jsem?` | In a channel, OpenClaw should answer in the current thread with a visual quote of the triggering message. |
+| Emoji/status sent by bot | Mention OpenClaw or reply in an active thread. | OpenClaw should add eyes while working if Teams accepts reaction writes. |
+| Thanks acknowledgement | Reply in the OpenClaw thread with `díky!` | OpenClaw should add a like reaction and avoid a noisy text reply. |
+| Targeted private message preview | Package with `--preview-targeted-messages` and test in a preview-enabled Teams client/tenant. | If Teams sends `recipient.is_targeted`, the bridge responds privately to the targeted user. Preview messages expire and do not support reactions/replies/forwarding. |
 
 When troubleshooting, call:
 

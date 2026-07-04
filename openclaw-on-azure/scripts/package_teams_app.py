@@ -47,9 +47,21 @@ def render_manifest(template: str, values: dict[str, str]) -> str:
     return rendered
 
 
+def enable_targeted_messages_preview(manifest: str) -> str:
+    payload = json.loads(manifest)
+    for bot in payload.get("bots", []):
+        bot["supportsTargetedMessages"] = True
+    return json.dumps(payload, indent=2) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Package the OpenClaw Teams app manifest for sideloading.")
     parser.add_argument("--output", default="")
+    parser.add_argument(
+        "--preview-targeted-messages",
+        action="store_true",
+        help="Add supportsTargetedMessages=true. This is public developer preview and may be rejected by some Teams upload validators.",
+    )
     args = parser.parse_args()
 
     platform = terraform_output(PLATFORM_DIR)
@@ -67,6 +79,8 @@ def main() -> None:
             "BRIDGE_DOMAIN": domain,
         },
     )
+    if args.preview_targeted_messages:
+        manifest = enable_targeted_messages_preview(manifest)
 
     manifest_path = out_dir / "manifest.json"
     outline_path = out_dir / "outline.png"
@@ -78,7 +92,7 @@ def main() -> None:
     solid_png(color_path, width=192, height=192, rgba=(98, 100, 167, 255))
 
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(manifest_path, "manifest.json")
+        archive.writestr("manifest.json", manifest)
         archive.write(outline_path, "outline.png")
         archive.write(color_path, "color.png")
 
@@ -89,6 +103,7 @@ def main() -> None:
                 "manifest": str(manifest_path),
                 "teamsBotAppId": teams["teams_bot_app_id"],
                 "bridgeDomain": domain,
+                "previewTargetedMessages": args.preview_targeted_messages,
             },
             indent=2,
         )

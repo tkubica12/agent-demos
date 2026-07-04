@@ -353,7 +353,7 @@ Purpose: make OpenClaw participate where work happens.
 
 Deliverables:
 
-- Add `groupchat` and later `team` scopes.
+- Add `groupChat` and later `team` scopes.
 - Handle @mentions.
 - Strip bot mention from prompt text before sending to OpenClaw.
 - Preserve conversation/thread IDs.
@@ -362,10 +362,10 @@ Deliverables:
 
 Implementation status:
 
-- Manifest now includes `personal`, `groupchat`, and `team` bot scopes.
+- Manifest now includes `personal`, `groupChat`, and `team` bot scopes.
 - Bridge accepts `personal`, `groupchat`, `channel`, and `team` conversation types.
 - Personal chats still send plain text directly.
-- Group chats and channel/team conversations require an OpenClaw bot mention; unmentioned messages are ignored.
+- Group chats and channel/team conversations receive mentions by default and can observe unmentioned messages when Teams grants the RSC permissions in the manifest.
 - Bot mentions are stripped before forwarding prompts to OpenClaw.
 - OpenClaw session keys preserve Teams conversation IDs, and channel/team requests include team, channel, and thread identifiers where present.
 - The bridge sends a Teams typing activity before starting OpenClaw work and keeps the existing progress/error stream messages.
@@ -373,12 +373,12 @@ Implementation status:
 - The bridge keeps bounded in-memory Teams history per session/thread and sends OpenClaw a compact context window, not only the latest message and not the whole conversation. The context includes recent local events, reply/reaction anchors when already observed, latest OpenClaw answer when available, and hard event/character limits.
 - Default context window sizes: 18 events for `must_answer`, 12 for replies, 8 for weak undirected messages, and 6 for reactions. Environment knobs include `OPENCLAW_TEAMS_MEMORY_MAX_EVENTS`, `OPENCLAW_TEAMS_MEMORY_EVENT_CHARS`, `OPENCLAW_TEAMS_CONTEXT_MAX_CHARS`, `OPENCLAW_TEAMS_CONTEXT_MUST_ANSWER_EVENTS`, `OPENCLAW_TEAMS_CONTEXT_REPLY_EVENTS`, `OPENCLAW_TEAMS_CONTEXT_WEAK_SIGNAL_EVENTS`, and `OPENCLAW_TEAMS_CONTEXT_REACTION_EVENTS`.
 - Current memory is bridge-local and demo-grade; production should replace or augment it with durable conversation state plus Teams Graph/RSC retrieval.
-- Channel troubleshooting showed Teams delivered the channel mention to `/api/messages` and OpenClaw completed, but Teams streaming responses were not visible in channel UI. The bridge now limits streaming to 1:1 personal chats and uses regular `ctx.send()` for group chat/channel replies.
+- Channel troubleshooting showed Teams delivered the channel mention to `/api/messages` and OpenClaw completed, but Teams streaming responses were not visible in channel UI. The bridge now limits streaming to 1:1 personal chats and uses non-streaming replies for group chat/channel replies.
 - Follow-up channel testing showed reactions, unmentioned channel messages, and thread messages were received through Teams/RSC. Reactions and weak signals reached OpenClaw, but OpenClaw returned `NO_RESPONSE`, so the bridge correctly suppressed public replies.
 - Signal tuning now treats plain-text `OpenClaw` references as `textual_bot_name_mention` with `must_answer`, even without an explicit Teams mention. It also treats channel-thread replies as thread replies based on the Teams `conversation.id` `;messageid=...` root and promotes replies in threads where OpenClaw already answered to `must_answer`.
-- Processing reactions are disabled by default because sending `messageReaction` through the current SDK path returned `400 Bad Request`; keep `OPENCLAW_TEAMS_ADD_REACTIONS=false` until reaction sending is fixed for the target scope.
+- Processing reactions now use the documented Teams SDK reaction client (`ctx.api.reactions.add`) instead of sending a `messageReaction` activity. `OPENCLAW_TEAMS_ADD_REACTIONS=true` by default; failed reaction writes are recorded in `/diag/teams` and do not block the answer.
 - RSC manifest permissions allow unmentioned channel/group messages to be received after chat/team install consent. Those messages use an `observe_then_maybe_answer` response contract; OpenClaw can return exactly `NO_RESPONSE` to avoid jumping in.
-- The bridge runtime handles targeted private messages if Teams sends `recipient.is_targeted`, but the current sideload package does not include `supportsTargetedMessages` because Teams upload validation rejected that preview manifest property in this tenant/client.
+- The bridge runtime handles targeted private messages if Teams sends `recipient.is_targeted`. The default sideload package does not include `supportsTargetedMessages` because Teams upload validation rejected that preview manifest property in this tenant/client; `scripts.package_teams_app --preview-targeted-messages` builds an alternate preview package for tenants/clients that accept it.
 - Status: implemented and deployed in the current environment. The Teams package has been refreshed at `.local\ehvw\teams\openclaw-teams.zip`; upload it to Teams before testing group chat and channel scopes.
 
 Important auth behavior:
@@ -392,6 +392,42 @@ Docs:
 - Teams SSO overview: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/authentication/bot-sso-overview
 - Teams group/channel bot conversations: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-and-group-conversations
 - Build 2026 collaborative Teams agents blog: https://devblogs.microsoft.com/microsoft365dev/build-collaborative-agents-where-work-happens/
+
+### Milestone 3.5: Teams collaborative UX polish
+
+Purpose: make OpenClaw feel less like a command bot and more like a polite teammate in chats, channels, and threads before moving to full Agent 365 identity.
+
+Build/DEM334/DEM332 takeaways:
+
+- **Manners**: agents should use quoted replies, thread locality, and lightweight reactions instead of flooding public chat.
+- **Privacy**: targeted private messages let a user interact with the agent privately inside a shared channel/group context, but this is public developer preview and requires `supportsTargetedMessages`.
+- **Polish**: good Teams agents use Markdown, Adaptive Cards where useful, feedback/citations/sensitivity labels where applicable, and clear progress cues. Streaming remains reliable for 1:1; channel/group experiences should use normal sends/replies plus reactions.
+
+Deliverables:
+
+- Use `ctx.reply()` for non-personal responses by default so Teams renders a quoted reply and keeps channel answers in the current thread.
+- Keep 1:1 chat on Teams streaming.
+- Use the documented `ctx.api.reactions.add(conversation_id, activity_id, reaction_type)` path for agent reactions.
+- Add eyes (`1f440_eyes`) when a must-answer message starts processing.
+- Add like (`like`) for simple gratitude in an active OpenClaw thread instead of a noisy text reply.
+- Keep reaction failures non-blocking and observable through `/diag/teams`.
+- Add an opt-in preview Teams package flag for targeted private messages without breaking the default validator-safe package.
+- Update README with a demo script for quoted/threaded replies, received reactions, sent reactions, gratitude acknowledgement, weak-signal intervention, and targeted-message preview.
+
+Implementation status:
+
+- `OPENCLAW_TEAMS_QUOTED_REPLIES=true` by default. Set it to `false` to use unquoted `ctx.send()` in collaborative scopes.
+- `OPENCLAW_TEAMS_ADD_REACTIONS=true` by default. If a Teams scope rejects reaction writes, the bridge records `reactionSendFailed` and still completes the text response.
+- `scripts.package_teams_app --preview-targeted-messages` adds `supportsTargetedMessages: true` to the bot manifest only for a separate preview package.
+- Targeted messages remain preview-limited: they are private inside the shared context, expire after 24 hours, and do not support reactions, replies, or forwarding.
+- Adaptive Cards, structured feedback buttons, citations, and AI/sensitivity labels are intentionally deferred until OpenClaw has a stable answer schema and Agent 365 identity.
+
+Definition of done:
+
+- Unit tests cover quoted/reaction defaults and gratitude reaction policy.
+- Stable Teams package still omits `supportsTargetedMessages` and uploads in normal tenants.
+- Preview Teams package can be generated explicitly for tenants/clients that accept targeted-message preview schema.
+- README demo guide shows how to test quoted replies, threaded replies, sent/received emoji reactions, weak signals, and targeted preview behavior.
 
 ### Milestone 4: Agent 365 registration around the same bridge
 

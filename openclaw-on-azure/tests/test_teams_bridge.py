@@ -9,7 +9,9 @@ from bridge.app import (
     openclaw_memory_record,
     remember_teams_event,
     response_should_be_suppressed,
+    should_acknowledge_with_reaction,
     should_add_processing_reaction,
+    should_quote_group_responses,
     supports_streaming_response,
     teams_event_memory_record,
     teams_is_targeted,
@@ -153,8 +155,9 @@ class TeamsBridgeTests(unittest.TestCase):
         self.assertTrue(supports_streaming_response(ns(activity=ns(conversation=ns(conversation_type="personal")))))
         self.assertFalse(supports_streaming_response(ns(activity=ns(conversation=ns(conversation_type="channel")))))
 
-    def test_processing_reactions_default_off(self):
-        self.assertFalse(should_add_processing_reaction())
+    def test_processing_reactions_and_quoted_replies_default_on(self):
+        self.assertTrue(should_add_processing_reaction())
+        self.assertTrue(should_quote_group_responses())
 
     def test_event_prompt_marks_mention_as_must_answer(self):
         activity = ns(
@@ -208,6 +211,14 @@ class TeamsBridgeTests(unittest.TestCase):
 
         self.assertEqual(signal_type, "textual_bot_name_mention")
         self.assertEqual(response_contract, "must_answer")
+
+    def test_thanks_in_active_thread_can_be_acknowledged_with_reaction(self):
+        session_key = "teams:channel:conversation-1;messageid=root-message:thread:root-message"
+        remember_teams_event(session_key, openclaw_memory_record("Ahoj, slyším tě."))
+
+        self.assertTrue(should_acknowledge_with_reaction("díky!", "reply_in_thread_without_bot_mention", session_key))
+        self.assertFalse(should_acknowledge_with_reaction("díky OpenClaw", "textual_bot_name_mention", session_key))
+        self.assertFalse(should_acknowledge_with_reaction("díky!", "reply_in_thread_without_bot_mention", "teams:channel:other"))
 
     def test_channel_thread_reply_after_openclaw_answer_is_must_answer(self):
         activity = ns(

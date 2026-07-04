@@ -5,13 +5,14 @@ import html
 import os
 import re
 import time
+import unicodedata
 from collections import deque
 from typing import Any
 
 from azure.identity import DefaultAzureCredential
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from microsoft_teams.api import MessageActivity, MessageActivityInput, MessageReaction, MessageReactionActivity, MessageReactionActivityInput, TypingActivityInput
+from microsoft_teams.api import MessageActivity, MessageActivityInput, MessageReactionActivity, TypingActivityInput
 from microsoft_teams.apps import ActivityContext, App, FastAPIAdapter
 from pydantic import BaseModel, Field
 
@@ -176,7 +177,26 @@ def should_observe_unmentioned_messages() -> bool:
 
 
 def should_add_processing_reaction() -> bool:
-    return env_optional("OPENCLAW_TEAMS_ADD_REACTIONS", "false").lower() in {"1", "true", "yes"}
+    return env_optional("OPENCLAW_TEAMS_ADD_REACTIONS", "true").lower() in {"1", "true", "yes"}
+
+
+def should_quote_group_responses() -> bool:
+    return env_optional("OPENCLAW_TEAMS_QUOTED_REPLIES", "true").lower() in {"1", "true", "yes"}
+
+
+def normalized_ascii(value: str) -> str:
+    return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def is_gratitude_message(message: str) -> bool:
+    normalized = normalized_ascii(message)
+    return bool(re.search(r"\b(thanks|thank you|thx|diky|dik|dekuji|good bot)\b", normalized))
+
+
+def should_acknowledge_with_reaction(message: str, signal_type: str, session_key: str | None) -> bool:
+    if signal_type in {"explicit_bot_mention", "targeted_private_message", "textual_bot_name_mention"}:
+        return False
+    return is_gratitude_message(message) and memory_has_openclaw_response(session_key)
 
 
 def env_int(name: str, default: int) -> int:
@@ -547,6 +567,20 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
     signal_type = teams_signal_type(ctx.activity, message=message)
     response_contract = teams_response_contract(ctx.activity, signal_type, session_key=session_key)
     must_answer = response_contract == "must_answer"
+    if should_add_processing_reaction() and should_acknowledge_with_reaction(message, signal_type, session_key):
+        remember_teams_event(
+            session_key,
+            teams_event_memory_record(
+                ctx.activity,
+                event="message",
+                message=message,
+                signal_type=signal_type,
+                response_contract="emoji_acknowledgement",
+            ),
+        )
+        await send_message_reaction(ctx, ctx.activity.id, "like")
+        record_teams_diag({"event": "responseSuppressed", "reason": "emojiAcknowledgement", "conversationId": conversation_id})
+        return
     context = format_teams_context(
         session_key,
         signal_type=signal_type,
@@ -681,13 +715,8 @@ async def send_message_reaction(ctx: ActivityContext, message_id: str | None, re
     if not message_id:
         return
     try:
-        await ctx.send(
-            MessageReactionActivityInput(
-                replyToId=message_id,
-                reactionsAdded=[MessageReaction(type=reaction_type)],
-            )
-        )
-        record_teams_diag({"event": "reactionSent", "messageId": message_id, "reactionType": reaction_type})
+        await ctx.api.reactions.add(teams_conversation_id(ctx.activity), message_id, reaction_type)
+        record_teams_diag({"event": "reactionSent", "method": "api.reactions.add", "messageId": message_id, "reactionType": reaction_type})
     except Exception as exc:
         record_teams_diag(
             {
@@ -710,8 +739,12 @@ async def send_teams_response(ctx: ActivityContext, response: str, *, targeted_r
         record_teams_diag({"event": "responseSent", "method": "targeted"})
         return
     if teams_conversation_type(ctx.activity) != "personal":
-        await ctx.send(response)
-        record_teams_diag({"event": "responseSent", "method": "send", "conversationType": teams_conversation_type(ctx.activity)})
+        if should_quote_group_responses():
+            await ctx.reply(response)
+            record_teams_diag({"event": "responseSent", "method": "reply", "conversationType": teams_conversation_type(ctx.activity)})
+        else:
+            await ctx.send(response)
+            record_teams_diag({"event": "responseSent", "method": "send", "conversationType": teams_conversation_type(ctx.activity)})
         return
     ctx.stream.emit(response)
     await ctx.stream.close()
