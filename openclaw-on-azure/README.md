@@ -207,7 +207,127 @@ This preview package adds:
 
 If Teams validation rejects it, use the normal package. The rest of the demo does not require targeted private messages.
 
-## 7. Demo script
+## 7. Register Agent 365 identity
+
+Milestone 4 uses the deployed bridge as an externally hosted Agent 365 messaging endpoint:
+
+```text
+https://<bridge-fqdn>/api/messages
+```
+
+The Agent 365 working files are generated under `.local\<suffix>\agent365\` so tenant-specific IDs and generated secrets stay out of source control. The existing Teams sideload package remains the fallback/demo path until the Agent 365 instance is visible and tested in Teams.
+
+Install or update the Agent 365 CLI if needed:
+
+```powershell
+dotnet tool install --global Microsoft.Agents.A365.DevTools.Cli
+a365 -h
+```
+
+Prepare the local Agent 365 workspace and print the exact commands for the current bridge endpoint:
+
+```powershell
+cd D:\agent-demos\openclaw-on-azure
+uv run python -m scripts.setup_agent365
+```
+
+Run setup when you are ready to create/update tenant resources:
+
+```powershell
+uv run python -m scripts.setup_agent365 --run-setup
+```
+
+The milestone default is the Agent 365 AI teammate flow because it is the path that can create an agent user identity. If your tenant is not in the Frontier preview or you only want a blueprint-backed M365 agent without an Entra user, use:
+
+```powershell
+uv run python -m scripts.setup_agent365 --blueprint-agent --run-setup
+```
+
+After setup succeeds, capture non-secret IDs for handoff and troubleshooting:
+
+```powershell
+uv run python -m scripts.setup_agent365 --capture
+```
+
+Generated files, do not commit:
+
+```text
+.local\<suffix>\agent365\a365.config.json
+.local\<suffix>\agent365\a365.generated.config.json
+.local\<suffix>\agent365\openclaw-agent365-identifiers.json
+```
+
+Configure the blueprint in Teams Developer Portal:
+
+```text
+https://dev.teams.microsoft.com/tools/agent-blueprint/<agentBlueprintId>/configuration
+```
+
+Use:
+
+```text
+Agent Type: API Based
+Notification URL: https://<bridge-fqdn>/api/messages
+```
+
+If the bridge URL changes later, update only the Agent 365 endpoint registration:
+
+```powershell
+cd D:\agent-demos\openclaw-on-azure\.local\<suffix>\agent365
+a365 setup blueprint --update-endpoint https://<new-bridge-fqdn>/api/messages
+```
+
+Publish the package and upload it in Microsoft 365 admin center:
+
+```powershell
+cd D:\agent-demos\openclaw-on-azure
+uv run python -m scripts.setup_agent365 --publish
+```
+
+Current demo state:
+
+```text
+Setup done: blueprint created, permissions verified with `a365 query-entra inheritance`, bridge endpoint registered.
+Package ready: D:\agent-demos\openclaw-on-azure\.local\ehvw\agent365\manifest\manifest.zip
+IDs file:      D:\agent-demos\openclaw-on-azure\.local\ehvw\agent365\openclaw-agent365-identifiers.json
+```
+
+Next manual steps:
+
+1. Open the `developerPortalConfigurationUrl` from the IDs file, set **Agent Type** to **API Based**, and set **Notification URL** to the bridge `/api/messages` URL.
+2. Upload `.local\<suffix>\agent365\manifest\manifest.zip` at:
+
+```text
+https://admin.microsoft.com -> Agents -> All agents -> Upload custom agent
+```
+
+3. Create/request the instance from Teams Apps. If admin approval is required, approve it at:
+
+```text
+https://admin.cloud.microsoft/#/agents/all/requested
+```
+
+4. Search for the agent user in Teams and send a smoke message. The bridge should receive the same `/api/messages` traffic path as the sideloaded Teams package.
+
+Ownership boundary:
+
+| Surface | Owner |
+| --- | --- |
+| Existing Teams sideload manifest, RSC permissions, preview targeted-message package | `teams\manifest.template.json` and `scripts.package_teams_app` |
+| Bridge `/api/messages` runtime, Teams event routing, quoting/reactions | `bridge\` and `terraform\apps` app settings |
+| Agent 365 blueprint, instance, agent user lifecycle, admin-center publishing | `.local\<suffix>\agent365\` generated config plus `a365` CLI |
+| Generated tenant IDs and agent user metadata | `.local\<suffix>\agent365\openclaw-agent365-identifiers.json` |
+
+Cleanup commands are destructive; preview first:
+
+```powershell
+cd D:\agent-demos\openclaw-on-azure\.local\<suffix>\agent365
+a365 cleanup --dry-run
+a365 cleanup instance --dry-run
+a365 cleanup blueprint --endpoint-only
+```
+
+## 8. Demo script
 
 ### 1:1 chat
 
@@ -300,7 +420,7 @@ surprised  risky or alarming proposal
 check      done / confirmed
 ```
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 Check bridge health:
 
@@ -339,10 +459,11 @@ No channel messages: reinstall/update the Teams app and approve RSC permissions.
 No channel answer: check /diag/teams for responseSent or backgroundException.
 No bot reactions: reactionSendFailed means Teams rejected reaction writes in that scope; text answers still work.
 Preview package rejected: use the normal package; targeted messages require preview schema support in the tenant/client.
+Agent 365 instance is not visible in Teams: confirm the Developer Portal blueprint configuration uses API Based and the deployed bridge `/api/messages` notification URL, then wait 5-10 minutes for propagation.
 Upload custom app missing: Teams sideloading is disabled for your user or tenant.
 ```
 
-## 9. Local validation
+## 10. Local validation
 
 Run targeted tests after bridge/script changes:
 
@@ -352,7 +473,7 @@ uv run python -m unittest tests.test_teams_bridge
 uv run python -m compileall bridge scripts tests -q
 ```
 
-## 10. Cleanup
+## 11. Cleanup
 
 ```powershell
 cd D:\agent-demos\openclaw-on-azure\terraform\apps

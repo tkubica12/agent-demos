@@ -464,6 +464,63 @@ Docs:
 - Create agent instances: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/create-instance
 - ADR 0004: `docs\adr\0004-agent-identity-before-workiq.md`
 
+Implementation status:
+
+- Milestone 4 setup has been run against the current tenant.
+- The Agent 365 CLI was updated and the tenant has an `Agent 365 CLI` client app with public-client redirects, `wids`, required Microsoft Graph delegated permissions, and admin consent.
+- The Agent 365 blueprint is created/reused, the bridge `/api/messages` endpoint is registered, and `a365 query-entra inheritance` reports effective inheritance for all five resources.
+- The Agent 365 package is generated and OpenClaw-branded at `.local\ehvw\agent365\manifest\manifest.zip`.
+- Current blocker: waiting for the Agent 365 license/tenant enablement before the browser-only publish/instance steps can be completed.
+- The script uses the existing `terraform\apps` `bridge_url` output and prepares `.local\<suffix>\agent365\a365.config.json` with:
+  - `messagingEndpoint = https://<bridge-fqdn>/api/messages`
+  - `needDeployment = false`
+  - `deploymentProjectPath = "."`
+- The default script path is Agent 365 AI teammate setup because that is the path expected to create an agent user identity. Use `--blueprint-agent` only when testing blueprint registration without an Entra user.
+- The script captures non-secret generated values from `.local\<suffix>\agent365\a365.generated.config.json` into `.local\<suffix>\agent365\openclaw-agent365-identifiers.json`; do not commit any `.local` output.
+- Existing Teams app packaging remains the fallback/demo path. Agent 365 owns blueprint, instance, agent user lifecycle, admin-center publishing, and the Developer Portal API-based endpoint configuration.
+
+Authoritative commands for the current approach:
+
+```powershell
+cd D:\agent-demos\openclaw-on-azure
+
+# Prepare local workspace and print exact commands for the deployed bridge.
+uv run python -m scripts.setup_agent365
+
+# Create or update the Agent 365 blueprint/AI teammate registration.
+uv run python -m scripts.setup_agent365 --run-setup
+
+# If Frontier/AI teammate is unavailable, create a blueprint-backed M365 agent only.
+uv run python -m scripts.setup_agent365 --blueprint-agent --run-setup
+
+# Capture non-secret IDs after setup.
+uv run python -m scripts.setup_agent365 --capture
+
+# Update endpoint registration after a bridge URL change.
+cd D:\agent-demos\openclaw-on-azure\.local\<suffix>\agent365
+a365 setup blueprint --update-endpoint https://<new-bridge-fqdn>/api/messages
+
+# Publish package for Microsoft 365 admin center upload.
+cd D:\agent-demos\openclaw-on-azure
+uv run python -m scripts.setup_agent365 --publish
+
+# Preview destructive cleanup.
+cd D:\agent-demos\openclaw-on-azure\.local\<suffix>\agent365
+a365 cleanup --dry-run
+a365 cleanup instance --dry-run
+a365 cleanup blueprint --endpoint-only
+```
+
+Manual Agent 365 browser steps:
+
+Status: blocked until Agent 365 licensing is available.
+
+1. Configure the blueprint in Teams Developer Portal. Use `developerPortalConfigurationUrl` from `.local\<suffix>\agent365\openclaw-agent365-identifiers.json`.
+2. Set **Agent Type** to **API Based** and **Notification URL** to the bridge `/api/messages` URL.
+3. Upload `.local\<suffix>\agent365\manifest\manifest.zip` in Microsoft 365 admin center under **Agents > All agents > Upload custom agent**.
+4. Create/request the instance in Teams Apps and approve pending requests at `https://admin.cloud.microsoft/#/agents/all/requested`.
+5. Verify the agent user object ID, display name, UPN, and lifecycle owner; record those non-secret values in `.local\<suffix>\agent365\openclaw-agent365-identifiers.json` and summarize them in the handoff without hard-coding tenant-specific IDs in source.
+
 ### Milestone 5: Agent-owned identity and auth boundary
 
 Purpose: give OpenClaw a clear enterprise identity model: when it acts as itself, when it acts for a human, and how that identity is represented in prompts, logs, and tool calls.
@@ -564,4 +621,4 @@ Do not assume group chat gives access to every participant's private data. OBO i
 
 ## Immediate next step for future work
 
-Start Milestone 4: create/register the Agent 365 blueprint and instance for the existing deployed bridge endpoint. Treat Teams collaborative UX as complete baseline and focus the next work on Agent 365 identity: agent user/instance IDs, auth boundary, prompt identity context, and OBO versus agent-owned actions.
+Resume Milestone 4 after the Agent 365 license/tenant enablement is available. Start with the browser-only steps in the Milestone 4 section: Developer Portal API-based endpoint configuration, Microsoft 365 admin-center package upload, Teams instance request/approval, then record agent instance/user identifiers. Treat Teams collaborative UX as complete baseline; the next code milestone after registration is Milestone 5 identity context in the prompt envelope and diagnostics.
