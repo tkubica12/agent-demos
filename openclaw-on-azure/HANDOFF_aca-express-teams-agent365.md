@@ -377,8 +377,10 @@ Implementation status:
 - Follow-up channel testing showed reactions, unmentioned channel messages, and thread messages were received through Teams/RSC. Reactions and weak signals reached OpenClaw, but OpenClaw returned `NO_RESPONSE`, so the bridge correctly suppressed public replies.
 - Signal tuning now treats plain-text `OpenClaw` references as `textual_bot_name_mention` with `must_answer`, even without an explicit Teams mention. It also treats channel-thread replies as thread replies based on the Teams `conversation.id` `;messageid=...` root and promotes replies in threads where OpenClaw already answered to `must_answer`.
 - Processing reactions now use the documented Teams SDK reaction client (`ctx.api.reactions.add`) instead of sending a `messageReaction` activity. `OPENCLAW_TEAMS_ADD_REACTIONS=true` by default; failed reaction writes are recorded in `/diag/teams` and do not block the answer.
+- For forwarded non-personal messages, the bridge can add temporary eyes (`1f440_eyes`) as status UX and removes it after OpenClaw finishes deciding, whether OpenClaw answers, returns `NO_RESPONSE`, or asks for a final semantic reaction.
+- The bridge remembers OpenClaw-sent Teams message IDs in bridge-local memory. Reactions to those messages are forwarded as feedback context; reactions to unrelated human messages are ignored by default and recorded as `ignoredReactionToNonOpenClawMessage`.
 - RSC manifest permissions allow unmentioned channel/group messages to be received after chat/team install consent. Those messages use an `observe_then_maybe_answer` response contract; OpenClaw can return exactly `NO_RESPONSE` to avoid jumping in.
-- The bridge runtime handles targeted private messages if Teams sends `recipient.is_targeted`. The default sideload package does not include `supportsTargetedMessages` because Teams upload validation rejected that preview manifest property in this tenant/client; `scripts.package_teams_app --preview-targeted-messages` builds an alternate preview package for tenants/clients that accept it.
+- The bridge runtime handles targeted private messages if Teams sends `recipient.is_targeted`. The default sideload package stays validator-safe; `scripts.package_teams_app --preview-targeted-messages` builds an alternate manifest 1.29 package with `supportsTargetedMessages: true` and root `supportsChannelFeatures: "tier1"` for tenants/clients with Teams Public Preview enabled.
 - Status: implemented and deployed in the current environment. The Teams package has been refreshed at `.local\ehvw\teams\openclaw-teams.zip`; upload it to Teams before testing group chat and channel scopes.
 
 Important auth behavior:
@@ -392,6 +394,8 @@ Docs:
 - Teams SSO overview: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/authentication/bot-sso-overview
 - Teams group/channel bot conversations: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-and-group-conversations
 - Build 2026 collaborative Teams agents blog: https://devblogs.microsoft.com/microsoft365dev/build-collaborative-agents-where-work-happens/
+- ADR 0002: `docs\adr\0002-teams-event-routing-and-reactions.md`
+- ADR 0003: `docs\adr\0003-targeted-messages-preview-package.md`
 
 ### Milestone 3.5: Teams collaborative UX polish
 
@@ -408,7 +412,7 @@ Deliverables:
 - Use `ctx.reply()` for non-personal responses by default so Teams renders a quoted reply and keeps channel answers in the current thread.
 - Keep 1:1 chat on Teams streaming.
 - Use the documented `ctx.api.reactions.add(conversation_id, activity_id, reaction_type)` path for agent reactions.
-- Add eyes (`1f440_eyes`) when a must-answer message starts processing.
+- Add temporary eyes (`1f440_eyes`) when a forwarded non-personal message starts processing and remove it when OpenClaw finishes deciding.
 - Add like (`like`) for simple gratitude in an active OpenClaw thread instead of a noisy text reply.
 - Keep reaction failures non-blocking and observable through `/diag/teams`.
 - Add an opt-in preview Teams package flag for targeted private messages without breaking the default validator-safe package.
@@ -418,7 +422,11 @@ Implementation status:
 
 - `OPENCLAW_TEAMS_QUOTED_REPLIES=true` by default. Set it to `false` to use unquoted `ctx.send()` in collaborative scopes.
 - `OPENCLAW_TEAMS_ADD_REACTIONS=true` by default. If a Teams scope rejects reaction writes, the bridge records `reactionSendFailed` and still completes the text response.
-- `scripts.package_teams_app --preview-targeted-messages` adds `supportsTargetedMessages: true` to the bot manifest only for a separate preview package.
+- OpenClaw can request a reaction through a control line that the bridge strips from visible Teams text: `TEAMS_REACTION: eyes|like|heart|smile|surprised|check`. Reaction-only output is supported; reaction plus visible text is also supported.
+- Current decision: bridge owns fast transport/status reactions such as temporary eyes; OpenClaw owns semantic/social reactions such as heart, smile, surprised, check, or like. Do not expand bridge static rules into semantic judgment. If classification is needed later, use it only as a forwarding throttle in high-volume channels.
+- Demo-grade implementation: OpenClaw-sent Teams message IDs are remembered in bridge-local memory so reactions to OpenClaw messages are forwarded as feedback, while reactions to unrelated human messages are ignored by default.
+- Demo-grade implementation: temporary eyes are removed when OpenClaw finishes deciding, whether it answers or returns `NO_RESPONSE`; any OpenClaw-requested final semantic reaction is then added.
+- `scripts.package_teams_app --preview-targeted-messages` emits a separate manifest 1.29 package with `supportsTargetedMessages: true` and `supportsChannelFeatures: "tier1"`.
 - Targeted messages remain preview-limited: they are private inside the shared context, expire after 24 hours, and do not support reactions, replies, or forwarding.
 - Adaptive Cards, structured feedback buttons, citations, and AI/sensitivity labels are intentionally deferred until OpenClaw has a stable answer schema and Agent 365 identity.
 
@@ -429,91 +437,99 @@ Definition of done:
 - Preview Teams package can be generated explicitly for tenants/clients that accept targeted-message preview schema.
 - README demo guide shows how to test quoted replies, threaded replies, sent/received emoji reactions, weak signals, and targeted preview behavior.
 
-### Milestone 4: Agent 365 registration around the same bridge
+### Milestone 4: Agent 365 identity registration
 
-Purpose: move from Teams app/bot demo toward Agent 365 governed agent lifecycle.
+Purpose: turn the working Teams bridge experience into a governed Agent 365 identity. Do not revisit Teams channel UX here; mentions, RSC observation, quoted/threaded replies, reactions, targeted-message preview packaging, and the OpenClaw reaction control channel are already implemented and documented.
 
 Deliverables:
 
-- Use Agent 365 CLI to create/publish blueprint.
-- Register same bridge `/api/messages` as API-based agent endpoint.
-- Configure Developer Portal:
+- Create an Agent 365 blueprint for OpenClaw that points at the existing bridge `/api/messages` endpoint.
+- Publish/create an Agent 365 instance for the current tenant.
+- Verify whether Agent 365 creates or links an **agent user** and capture its object ID, display name, UPN, and lifecycle owner.
+- Keep the existing Teams bot package as the fallback/demo path until the Agent 365 instance is confirmed in Teams.
+- Document exactly which parts of the current Teams manifest remain owned by Teams app packaging versus Agent 365 blueprint/configuration.
+- Add generated Agent 365 identifiers to ignored/generated tfvars or `.local\<suffix>\...` files; do not hard-code tenant-specific IDs in source.
 
-```text
-Agent Type: API Based
-Notification URL: https://<bridge>/api/messages
-```
+Definition of done:
 
-- Create an agent instance in Teams.
-- Confirm agent appears in Microsoft 365 admin center and Teams.
+- OpenClaw appears as a governed agent/instance in the relevant Microsoft 365 or Agent 365 admin surfaces.
+- The same deployed bridge endpoint receives messages from the Agent 365 path.
+- Existing Teams package demos still work after Agent 365 registration.
+- Handoff records the authoritative create/update/delete commands for the blueprint and instance.
 
 Docs:
 
 - Agent 365 SDK and CLI: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/
 - Agent 365 CLI: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/agent-365-cli
 - Create agent instances: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/create-instance
+- ADR 0004: `docs\adr\0004-agent-identity-before-workiq.md`
 
-### Milestone 5: Agent 365 identity / AI teammate path
+### Milestone 5: Agent-owned identity and auth boundary
 
-Purpose: give OpenClaw its own enterprise identity instead of only acting as a bot/app.
+Purpose: give OpenClaw a clear enterprise identity model: when it acts as itself, when it acts for a human, and how that identity is represented in prompts, logs, and tool calls.
 
-Agent 365 identity components:
+Questions to answer and implement:
 
-- Agent blueprint.
-- Agent instance.
-- Agent user.
+- What agent user or service principal is created by Agent 365 for this OpenClaw instance?
+- Which identity should OpenClaw use for autonomous actions such as posting status, sending reminders, or maintaining its own mailbox/calendar?
+- Which flows require OBO for the invoking user, especially private mail/calendar/files/chats?
+- How should a Teams activity map to identity context in the OpenClaw prompt: sender, tenant, conversation, targeted/private flag, and agent identity?
+- How should consent be requested and cached per user without assuming a group chat grants access to every participant?
 
-Agent user capabilities from docs:
+Required bridge changes:
 
-- Marked agentic in directory.
-- Own UPN.
-- Can be @mentioned.
-- Can have mailbox and OneDrive after license assignment.
-- Appears in org chart and people cards.
-- Can use agent identity authentication for autonomous work.
+- Add an identity context block to the Teams/Agent prompt envelope:
+  - agent instance ID / agent user ID when known
+  - incoming human sender ID and display name
+  - auth mode available for this turn: `agent_identity`, `obo_user`, `none`, or `unknown`
+  - privacy boundary: public channel/group, targeted private message, or 1:1
+- Add diagnostics that show chosen auth mode without logging tokens or private data.
+- Keep OpenClaw Gateway approval/device identity separate from Microsoft 365/Agent 365 identity; they are different trust boundaries.
 
-Auth modes:
+Identity rules:
 
-| Mode | Identity used | Use |
-| --- | --- | --- |
-| Agent identity auth | OpenClaw's agent user | Autonomous tasks, posting as itself, own mailbox/calendar |
-| OBO | Invoking human user | User-private mail/calendar/files/chats |
+| Scenario | Identity |
+| --- | --- |
+| Agent posts/replies as teammate | Agent identity |
+| Agent sends its own reminder/status | Agent identity |
+| "What is on my calendar?" | OBO of invoking user |
+| "Summarize my unread mail" | OBO of invoking user |
+| Agent schedules on behalf of user | OBO of invoking user |
+| Agent needs another participant's private data | That participant must invoke/consent, or use another governed/admin-approved pattern |
+
+Definition of done:
+
+- Prompt envelope and diagnostics make the identity boundary explicit for every Teams/Agent turn.
+- At least one agent-identity action and one OBO-required scenario are documented with expected behavior.
+- No feature assumes group/channel membership implies access to all participants' private data.
 
 Docs:
 
 - Agent 365 identity: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/identity
 - Agent 365 get started: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/get-started
+- Teams SSO/OBO overview: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/authentication/bot-sso-overview
 
-### Milestone 6: Work IQ MCP
+### Milestone 6: Work IQ MCP with explicit identity selection
 
-Purpose: give OpenClaw governed access to Microsoft 365 data and actions.
+Purpose: give OpenClaw governed Microsoft 365 data/actions after identity is explicit, not before.
 
-Work IQ MCP tools to test:
+Scope:
 
-- Work IQ Mail: create/update/delete/reply/search messages.
-- Work IQ Calendar: create/list/update/delete events, accept/decline.
-- Work IQ Teams: create/update/delete chats, add members, post messages, channel operations.
-- Work IQ SharePoint/OneDrive/User/Word later.
+- Start with read-only Work IQ queries that demonstrate identity selection:
+  - OBO user: "What is on my calendar?"
+  - OBO user: "Summarize my unread mail."
+  - Agent identity: "What reminders/status items does OpenClaw own?"
+- Then add write actions only with clear confirmation UX:
+  - Agent posts status as itself.
+  - User-approved calendar/mail action via OBO.
+  - Optional public share after targeted private draft/approval.
+- Defer broad SharePoint/OneDrive/Word actions until Mail/Calendar/Teams identity behavior is proven.
 
-Identity rule in group chats:
+Bridge/OpenClaw requirements:
 
-```text
-Group chat has many humans.
-One incoming activity has one sender.
-OBO = sender / consenting user.
-Agent identity = agent user itself.
-```
-
-Examples:
-
-| Scenario | Identity |
-| --- | --- |
-| "What is on my calendar?" | OBO of invoking user |
-| "Summarize my unread mail" | OBO of invoking user |
-| Agent posts/replies as teammate | Agent identity |
-| Agent schedules from its own calendar | Agent identity |
-| Agent schedules on behalf of user | OBO of invoking user |
-| Agent needs another participant's private data | That participant must invoke/consent, or use another governed/admin-approved pattern |
+- Tool calls must carry the selected identity mode explicitly.
+- If a requested tool requires OBO and no user token/consent exists, OpenClaw must ask that user to authenticate rather than silently failing or using agent identity.
+- If a requested tool would expose private user data in a public thread, prefer targeted private response or ask before sharing publicly.
 
 Docs:
 
@@ -548,4 +564,4 @@ Do not assume group chat gives access to every participant's private data. OBO i
 
 ## Immediate next step for future work
 
-Milestone 3 is implemented and deployed in the bridge and manifest. Continue by uploading the refreshed Teams package and validating a group chat mention plus a channel thread mention end to end.
+Start Milestone 4: create/register the Agent 365 blueprint and instance for the existing deployed bridge endpoint. Treat Teams collaborative UX as complete baseline and focus the next work on Agent 365 identity: agent user/instance IDs, auth boundary, prompt identity context, and OBO versus agent-owned actions.

@@ -58,6 +58,25 @@ _teams_memory: dict[str, deque[dict[str, Any]]] = {}
 _SUPPORTED_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat", "channel", "team"}
 _CHANNEL_TEAMS_CONVERSATION_TYPES = {"channel", "team"}
 _NO_RESPONSE = "NO_RESPONSE"
+_TEAMS_REACTION_PREFIX = "TEAMS_REACTION:"
+_TEAMS_REACTION_ALIASES = {
+    "eyes": "1f440_eyes",
+    "working": "1f440_eyes",
+    "watching": "1f440_eyes",
+    "like": "like",
+    "thanks": "like",
+    "thank_you": "like",
+    "heart": "heart",
+    "love": "heart",
+    "praise": "heart",
+    "smile": "smile",
+    "joke": "smile",
+    "surprised": "surprised",
+    "surprise": "surprised",
+    "shocked": "surprised",
+    "check": "2705_whiteheavycheckmark",
+    "done": "2705_whiteheavycheckmark",
+}
 
 
 def record_teams_diag(event: dict[str, Any]) -> None:
@@ -160,7 +179,7 @@ def teams_session_key(activity: MessageActivity) -> str:
     if conversation_type not in _CHANNEL_TEAMS_CONVERSATION_TYPES:
         return f"teams:{conversation_type}:{conversation_id}"
 
-    thread_id = field_value(activity, "reply_to_id") or channel_thread_root_id(activity) or field_value(activity, "id") or "root"
+    thread_id = channel_thread_root_id(activity) or field_value(activity, "reply_to_id") or field_value(activity, "id") or "root"
     team_id = field_value(activity, "channel_data", "team", "id")
     channel_id = field_value(activity, "channel_data", "channel", "id")
     parts = ["teams", conversation_type, conversation_id]
@@ -184,6 +203,10 @@ def should_quote_group_responses() -> bool:
     return env_optional("OPENCLAW_TEAMS_QUOTED_REPLIES", "true").lower() in {"1", "true", "yes"}
 
 
+def should_add_status_reaction(activity: MessageActivity) -> bool:
+    return should_add_processing_reaction() and teams_conversation_type(activity) != "personal" and not teams_is_targeted(activity) and bool(field_value(activity, "id"))
+
+
 def normalized_ascii(value: str) -> str:
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").lower()
 
@@ -197,6 +220,23 @@ def should_acknowledge_with_reaction(message: str, signal_type: str, session_key
     if signal_type in {"explicit_bot_mention", "targeted_private_message", "textual_bot_name_mention"}:
         return False
     return is_gratitude_message(message) and memory_has_openclaw_response(session_key)
+
+
+def normalize_requested_reaction(value: str) -> str | None:
+    key = re.sub(r"[\s-]+", "_", value.strip().lower())
+    return _TEAMS_REACTION_ALIASES.get(key)
+
+
+def split_teams_response_instructions(response: str) -> tuple[str, str | None]:
+    visible_lines: list[str] = []
+    reaction: str | None = None
+    for line in response.splitlines():
+        match = re.match(rf"^\s*{re.escape(_TEAMS_REACTION_PREFIX)}\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+        if match:
+            reaction = reaction or normalize_requested_reaction(match.group(1))
+            continue
+        visible_lines.append(line)
+    return "\n".join(visible_lines).strip(), reaction
 
 
 def env_int(name: str, default: int) -> int:
@@ -239,6 +279,16 @@ def memory_has_openclaw_response(session_key: str | None) -> bool:
     if not session_key:
         return False
     return any(event.get("role") == "openclaw" and not response_should_be_suppressed(str(event.get("text") or "")) for event in teams_memory(session_key))
+
+
+def memory_has_openclaw_message_id(session_key: str | None, message_id: str | None) -> bool:
+    if not session_key or not message_id:
+        return False
+    return any(event.get("role") == "openclaw" and event.get("activityId") == message_id for event in teams_memory(session_key))
+
+
+def reacted_message_id(activity: MessageReactionActivity) -> str:
+    return str(field_value(activity, "reply_to_id") or field_value(activity, "replyToId") or "")
 
 
 def teams_signal_type(activity: MessageActivity, *, message: str | None = None, reactions: list[str] | None = None) -> str:
@@ -381,11 +431,12 @@ def teams_event_memory_record(
     }
 
 
-def openclaw_memory_record(response: str) -> dict[str, Any]:
+def openclaw_memory_record(response: str, activity_id: str | None = None) -> dict[str, Any]:
     return {
         "role": "openclaw",
         "event": "response",
         "signalType": "agent_response",
+        "activityId": activity_id or "",
         "sender": "OpenClaw",
         "text": response,
     }
@@ -429,7 +480,10 @@ def format_teams_event_prompt(
         "- If signal_type is textual_bot_name_mention, answer because the conversation invoked you by name even without an explicit Teams mention.\n"
         "- If signal_type is reply_in_thread_without_bot_mention, treat it as relevant context because it is in a thread where you may have participated. If response_contract is must_answer, answer normally.\n"
         "- If signal_type is reaction_to_message, treat emoji as feedback or status context; answer only when the reaction implies a question, risk, approval flow, or useful follow-up.\n"
-        "- If signal_type is undirected_message, treat it as weak signal context. Reply only when your input is clearly useful, urgent, corrective, or prevents a material mistake.\n"
+        "- If signal_type is undirected_message, treat it as weak signal context. You decide whether to answer or return NO_RESPONSE. Reply only when your input is clearly useful, urgent, corrective, or prevents a material mistake.\n"
+        "- In group/chat channel scopes, you may request one Teams reaction on the triggering message by adding a separate control line: TEAMS_REACTION: <name>. Allowed names: eyes, like, heart, smile, surprised, check. Do not use this control line in personal chats.\n"
+        "- Good reaction choices: eyes=working or looking into it, like=thanks/simple acknowledgement, heart=user praises you, smile=light related joke, surprised=risky or alarming proposal, check=done/confirmed.\n"
+        "- If you use a reaction and no public answer is needed, combine it with NO_RESPONSE.\n"
         f"- If you should not jump in, return exactly {_NO_RESPONSE} and nothing else.\n"
         "- If you reply to an unmentioned discussion, keep it concise and explain why you are jumping in."
     )
@@ -605,10 +659,10 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
             response_contract=response_contract,
         ),
     )
-    if must_answer and should_add_processing_reaction():
-        await send_message_reaction(ctx, ctx.activity.id, "1f440_eyes")
-    if must_answer:
-        await send_typing_indicator(ctx, conversation_id)
+    status_reaction_message_id = field_value(ctx.activity, "id") if should_add_status_reaction(ctx.activity) else None
+    if status_reaction_message_id:
+        await send_message_reaction(ctx, status_reaction_message_id, "1f440_eyes")
+    await send_typing_indicator(ctx, conversation_id)
     asyncio.create_task(
         run_openclaw_for_teams(
             ctx,
@@ -618,6 +672,7 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
             targeted_response=targeted,
             memory_session_key=session_key,
             suppress_no_response=not must_answer,
+            status_reaction_message_id=status_reaction_message_id,
         )
     )
 
@@ -627,6 +682,7 @@ async def handle_teams_message_reaction(ctx: ActivityContext[MessageReactionActi
     conversation_id = teams_conversation_id(ctx.activity)
     added = [reaction.type for reaction in (ctx.activity.reactions_added or [])]
     removed = [reaction.type for reaction in (ctx.activity.reactions_removed or [])]
+    reacted_to_id = reacted_message_id(ctx.activity)
     record_teams_diag(
         {
             "event": "messageReaction",
@@ -634,6 +690,7 @@ async def handle_teams_message_reaction(ctx: ActivityContext[MessageReactionActi
             "conversationType": teams_conversation_type(ctx.activity),
             "conversationId": conversation_id,
             "replyToId": ctx.activity.reply_to_id,
+            "reactedToId": reacted_to_id,
             "added": added,
             "removed": removed,
         }
@@ -642,6 +699,9 @@ async def handle_teams_message_reaction(ctx: ActivityContext[MessageReactionActi
         return
 
     session_key = teams_session_key(ctx.activity)
+    if not memory_has_openclaw_message_id(session_key, reacted_to_id):
+        record_teams_diag({"event": "ignoredReactionToNonOpenClawMessage", "conversationId": conversation_id, "reactedToId": reacted_to_id})
+        return
     signal_type = teams_signal_type(ctx.activity, reactions=added)
     response_contract = teams_response_contract(ctx.activity, signal_type, session_key=session_key)
     context = format_teams_context(
@@ -729,26 +789,51 @@ async def send_message_reaction(ctx: ActivityContext, message_id: str | None, re
         )
 
 
-def response_should_be_suppressed(response: str) -> bool:
-    return response.strip().upper() == _NO_RESPONSE
-
-
-async def send_teams_response(ctx: ActivityContext, response: str, *, targeted_response: bool = False) -> None:
-    if targeted_response and field_value(ctx.activity, "from_"):
-        await ctx.send(MessageActivityInput(text=response).with_recipient(ctx.activity.from_, is_targeted=True))
-        record_teams_diag({"event": "responseSent", "method": "targeted"})
+async def delete_message_reaction(ctx: ActivityContext, message_id: str | None, reaction_type: str) -> None:
+    if not message_id:
         return
+    try:
+        await ctx.api.reactions.delete(teams_conversation_id(ctx.activity), message_id, reaction_type)
+        record_teams_diag({"event": "reactionDeleted", "method": "api.reactions.delete", "messageId": message_id, "reactionType": reaction_type})
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "reactionDeleteFailed",
+                "messageId": message_id,
+                "reactionType": reaction_type,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+
+
+def response_should_be_suppressed(response: str) -> bool:
+    visible_response, _reaction = split_teams_response_instructions(response)
+    return visible_response.strip().upper() == _NO_RESPONSE
+
+
+def response_has_visible_text(response: str) -> bool:
+    visible_response, _reaction = split_teams_response_instructions(response)
+    return bool(visible_response and visible_response.strip().upper() != _NO_RESPONSE)
+
+
+async def send_teams_response(ctx: ActivityContext, response: str, *, targeted_response: bool = False) -> str | None:
+    if targeted_response and field_value(ctx.activity, "from_"):
+        sent = await ctx.send(MessageActivityInput(text=response).with_recipient(ctx.activity.from_, is_targeted=True))
+        record_teams_diag({"event": "responseSent", "method": "targeted"})
+        return field_value(sent, "id")
     if teams_conversation_type(ctx.activity) != "personal":
         if should_quote_group_responses():
-            await ctx.reply(response)
+            sent = await ctx.reply(response)
             record_teams_diag({"event": "responseSent", "method": "reply", "conversationType": teams_conversation_type(ctx.activity)})
         else:
-            await ctx.send(response)
+            sent = await ctx.send(response)
             record_teams_diag({"event": "responseSent", "method": "send", "conversationType": teams_conversation_type(ctx.activity)})
-        return
+        return field_value(sent, "id")
     ctx.stream.emit(response)
     await ctx.stream.close()
     record_teams_diag({"event": "responseSent", "method": "stream", "conversationType": teams_conversation_type(ctx.activity)})
+    return None
 
 
 def supports_streaming_response(ctx: ActivityContext) -> bool:
@@ -764,6 +849,7 @@ async def run_openclaw_for_teams(
     targeted_response: bool = False,
     memory_session_key: str | None = None,
     suppress_no_response: bool = False,
+    status_reaction_message_id: str | None = None,
 ) -> None:
     done = asyncio.Event()
     show_public_progress = supports_streaming_response(ctx) and not targeted_response and not suppress_no_response
@@ -786,20 +872,27 @@ async def run_openclaw_for_teams(
             message=message,
             on_delta=emit_delta if show_public_progress else None,
         )
-        if suppress_no_response and response_should_be_suppressed(result.response):
+        visible_response, requested_reaction = split_teams_response_instructions(result.response)
+        if status_reaction_message_id:
+            await delete_message_reaction(ctx, status_reaction_message_id, "1f440_eyes")
+        if requested_reaction and should_add_processing_reaction():
+            await send_message_reaction(ctx, field_value(ctx.activity, "id"), requested_reaction)
+        if response_should_be_suppressed(result.response) or (requested_reaction and not response_has_visible_text(result.response)):
             record_teams_diag({"event": "responseSuppressed", "conversationId": conversation_id})
             if memory_session_key:
-                remember_teams_event(memory_session_key, openclaw_memory_record(_NO_RESPONSE))
+                remember_teams_event(memory_session_key, openclaw_memory_record(visible_response or _NO_RESPONSE))
         elif not streamed:
-            await send_teams_response(ctx, result.response, targeted_response=targeted_response)
+            sent_activity_id = await send_teams_response(ctx, visible_response, targeted_response=targeted_response)
             if memory_session_key:
-                remember_teams_event(memory_session_key, openclaw_memory_record(result.response))
+                remember_teams_event(memory_session_key, openclaw_memory_record(visible_response, sent_activity_id))
         else:
             await ctx.stream.close()
             if memory_session_key:
-                remember_teams_event(memory_session_key, openclaw_memory_record(result.response))
+                remember_teams_event(memory_session_key, openclaw_memory_record(visible_response or _NO_RESPONSE))
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
     except Exception as exc:
+        if status_reaction_message_id:
+            await delete_message_reaction(ctx, status_reaction_message_id, "1f440_eyes")
         record_teams_diag(
             {
                 "event": "backgroundException",
