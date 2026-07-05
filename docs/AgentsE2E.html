@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>
+  (() => {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("clawpilotTheme");
+    const isTheme = (value) => value === "light" || value === "dark";
+    let stored = null;
+    try { stored = localStorage.getItem("interactive-article-theme"); } catch {}
+    const system = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", isTheme(requested) ? requested : isTheme(stored) ? stored : system);
+  })();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI agents end-to-end</title>
+<meta name="description" content="End-to-end enterprise AI agents reference across landing zones, runtime, hosting, tools, knowledge, channels, identity, control plane, observability, security, evals, and CI/CD.">
+<style>
+:root {
+  --cp-bg: #ffffff;
+  --cp-bg-elevated: #f8fafc;
+  --cp-surface: #f6f8fa;
+  --cp-surface-soft: #eef2f6;
+  --cp-panel: #ffffff;
+  --cp-text: #172033;
+  --cp-text-muted: #475569;
+  --cp-text-soft: #64748b;
+  --cp-border: #d8dee9;
+  --cp-border-strong: #b6c2cf;
+  --cp-accent: #0969da;
+  --cp-accent-soft: rgba(9, 105, 218, 0.08);
+  --cp-link: #0969da;
+  --cp-success: #1a7f37;
+  --cp-warning: #9a6700;
+  --cp-danger: #cf222e;
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  --cp-bg: #0d1117;
+  --cp-bg-elevated: #161b22;
+  --cp-surface: #161b22;
+  --cp-surface-soft: #21262d;
+  --cp-panel: #0d1117;
+  --cp-text: #f0f6fc;
+  --cp-text-muted: #c9d1d9;
+  --cp-text-soft: #8b949e;
+  --cp-border: #30363d;
+  --cp-border-strong: #484f58;
+  --cp-accent: #58a6ff;
+  --cp-accent-soft: rgba(88, 166, 255, 0.13);
+  --cp-link: #58a6ff;
+  --cp-success: #3fb950;
+  --cp-warning: #d29922;
+  --cp-danger: #f85149;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--cp-bg);
+  color: var(--cp-text);
+  font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: Consolas, "Courier New", Courier, monospace;
+}
+
+a {
+  color: var(--cp-link);
+}
+
+a:hover {
+  color: var(--cp-accent);
+}
+
+.ia-controls {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ia-control {
+  padding: 9px 16px;
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-border-strong);
+  border-radius: 6px;
+  color: var(--cp-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.ia-control:hover {
+  border-color: var(--cp-accent);
+  color: var(--cp-accent);
+}
+
+.ia-control.theme {
+  min-width: 112px;
+}
+
+.ia-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 72px 36px 96px;
+}
+
+.ia-header {
+  margin-bottom: 48px;
+}
+
+.ia-eyebrow {
+  margin: 0 0 16px;
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.ia-title {
+  margin: 0 0 18px;
+  color: var(--cp-text);
+  font-size: clamp(36px, 5vw, 54px);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.ia-subtitle {
+  max-width: 780px;
+  margin: 0;
+  color: var(--cp-text-muted);
+  font-size: 20px;
+}
+
+.ia-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--cp-border);
+  color: var(--cp-text-soft);
+  font-size: 14px;
+}
+
+.ia-links a {
+  text-decoration: none;
+}
+
+.ia-links a:hover {
+  text-decoration: underline;
+}
+
+.ia-author-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.ia-author-row .ia-eyebrow {
+  margin: 0;
+}
+
+.ia-avatar {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--cp-border-strong), 0 16px 40px var(--cp-border);
+}
+
+.ia-avatar-small {
+  width: 40px;
+  height: 40px;
+  box-shadow: 0 0 0 1px var(--cp-border-strong), 0 8px 20px var(--cp-border);
+}
+
+.ia-date {
+  margin: 14px 0 0;
+  color: var(--cp-text-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ia-intro-box {
+  max-width: 860px;
+  margin: 0 0 56px;
+  padding: 24px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 12px;
+}
+
+.ia-intro-kicker {
+  margin: 0 0 8px;
+  color: var(--cp-text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ia-intro-box p {
+  margin: 0 0 14px;
+  color: var(--cp-text-muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.ia-intro-box p:last-child {
+  margin-bottom: 0;
+}
+
+.ia-intro-box ul {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--cp-text-muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.ia-intro-box li {
+  margin-bottom: 6px;
+}
+
+.ia-intro-box li:last-child {
+  margin-bottom: 0;
+}
+
+.ia-intro-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cp-border);
+  font-size: 14px;
+}
+
+.ia-intro-links a {
+  text-decoration: none;
+}
+
+.ia-intro-links a:hover {
+  text-decoration: underline;
+}
+
+.ia-toc {
+  margin: 0 0 56px;
+  padding: 20px 24px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 10px;
+}
+
+.ia-toc-title,
+.ia-group-title,
+.summary-title {
+  margin: 0;
+  color: var(--cp-text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.ia-toc-title {
+  margin-bottom: 14px;
+}
+
+.ia-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ia-toc-list a {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 0;
+  color: var(--cp-text-muted);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.ia-toc-list a:hover {
+  color: var(--cp-accent);
+}
+
+.ia-toc-num {
+  min-width: 24px;
+  color: var(--cp-text-soft);
+  font-family: Consolas, "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+.ia-group {
+  margin-top: 40px;
+  margin-bottom: 56px;
+}
+
+.ia-group-title {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--cp-border);
+}
+
+.ia-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ia-card {
+  overflow: hidden;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ia-card:hover {
+  border-color: var(--cp-border-strong);
+}
+
+.ia-card.is-open {
+  background: var(--cp-bg-elevated);
+  border-color: var(--cp-accent);
+}
+
+.ia-card-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: none;
+  border: 0;
+  color: var(--cp-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.ia-card-num {
+  flex: 0 0 auto;
+  width: 28px;
+  color: var(--cp-text-soft);
+  font-family: Consolas, "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ia-card.is-open .ia-card-num {
+  color: var(--cp-accent);
+}
+
+.ia-card-title {
+  flex: 1;
+  color: var(--cp-text);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.ia-card-title-main,
+.ia-card-subtitle {
+  display: block;
+}
+
+.ia-card-subtitle {
+  margin-top: 3px;
+  color: var(--cp-text-muted);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.ia-card-toggle {
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  transition: color 0.15s, transform 0.2s;
+}
+
+.ia-card.is-open .ia-card-toggle {
+  color: var(--cp-accent);
+  transform: rotate(180deg);
+}
+
+.ia-card-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.ia-card.is-open .ia-card-body,
+html:not(.ia-js) .ia-card-body {
+  grid-template-rows: 1fr;
+}
+
+.ia-card-body-clip {
+  overflow: hidden;
+}
+
+.ia-card-content {
+  padding: 0 32px 32px 72px;
+  color: var(--cp-text-muted);
+  font-size: 17.5px;
+}
+
+.ia-prose > *:first-child {
+  margin-top: 0;
+}
+
+.ia-prose > *:last-child {
+  margin-bottom: 0;
+}
+
+.ia-prose p {
+  margin: 0 0 12px;
+  color: var(--cp-text);
+}
+
+.ia-prose ul,
+.ia-prose ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  color: var(--cp-text-muted);
+}
+
+.ia-prose li {
+  margin-bottom: 6px;
+}
+
+.ia-prose strong,
+.ia-prose h3 {
+  color: var(--cp-text);
+  font-weight: 650;
+}
+
+.ia-prose h3 {
+  margin: 18px 0 6px;
+  font-size: 18px;
+}
+
+.ia-callout {
+  margin: 18px 0;
+  padding: 18px 22px;
+  background: var(--cp-accent-soft);
+  border-left: 3px solid var(--cp-accent);
+  border-radius: 6px;
+  color: var(--cp-text);
+  font-size: 17px;
+}
+
+.ia-callout-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--cp-accent);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ia-footer {
+  margin-top: 48px;
+  padding: 48px 20px 0;
+  border-top: 1px solid var(--cp-border);
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  body {
+    font-size: 17px;
+  }
+
+  .ia-page {
+    padding: 48px 20px 120px;
+  }
+
+  .ia-card-head {
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .ia-card-content {
+    padding: 0 22px 26px 32px;
+  }
+
+  .ia-controls {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    justify-content: flex-end;
+  }
+
+  .ia-control {
+    padding: 8px 12px;
+  }
+}
+</style>
+</head>
+<body>
+<div class="ia-controls" aria-label="Article controls">
+  <button class="ia-control" type="button" data-expand-all>Expand all</button>
+  <button class="ia-control" type="button" data-collapse-all>Collapse all</button>
+  <button class="ia-control theme" type="button" data-theme-toggle>Dark mode</button>
+</div>
+
+<div class="ia-page">
+  <header class="ia-header">
+    <div class="ia-author-row">
+      <img class="ia-avatar ia-avatar-small" src="https://tomaskubica.cz/assets/img/avatar.png" alt="Tomáš Kubica" width="40" height="40" decoding="async">
+      <p class="ia-eyebrow">Enterprise AI agents</p>
+    </div>
+    <h1 class="ia-title">AI agents end-to-end</h1>
+    <p class="ia-subtitle">A full-stack reference for enterprise agents: models, runtime, hosting, tools, knowledge, channels, identity, governance, observability, security, evaluations, and delivery.</p>
+    <p class="ia-date"><time datetime="2026-07-05">5. 7. 2026</time></p>
+    <nav class="ia-links" aria-label="Navigation">
+      <a href="AgentsIntro.html">Agents intro</a>
+      <a href="UserStories.html">User stories</a>
+      <a href="#content">Sections</a>
+    </nav>
+  </header>
+
+  <section class="ia-intro-box" aria-label="Brief summary">
+    <p class="ia-intro-kicker">Brief summary</p>
+    <ul>
+      <li>AI agents leverage LLMs either in your own <a href="#ai-landing-zones">AI Landing Zones</a> or as part of a managed solution.</li>
+      <li>They need <a href="#runtime-framework">Runtime</a> to operate and must be <a href="#hosting">hosted</a> somewhere.</li>
+      <li>Agents need to access various <a href="#tools">tools</a> to take actions and <a href="#knowledge-with-microsoft-iq">knowledge</a> for grounding.</li>
+      <li>Users interact with agents from different experiences using <a href="#channels">channels</a>.</li>
+      <li>Agents typically need to work with <a href="#identity-authentication-and-authorization">identity</a> to support user-delegated permissions, but they also have their own identity for autonomous tasks (to access tools, knowledge, or other agents).</li>
+      <li>All of this should be governed by a control plane to provide <a href="#agents-control-plane">administration</a>, <a href="#observability">observability</a>, catalog, onboarding, security, and more.</li>
+      <li>Security must understand the current agent landscape, posture, conditional access policies for agents, <a href="#responsible-ai-and-agent-security">responsible AI</a>, and <a href="#data-security">data security</a>.</li>
+      <li>Successful development and continuous improvement of agents require strong <a href="#evals">evaluations</a> and lifecycle management with <a href="#cicd">CI/CD</a>.</li>
+    </ul>
+  </section>
+
+  <nav class="ia-toc" aria-label="Table of contents">
+    <p class="ia-toc-title">Contents</p>
+    <div class="ia-toc-list">
+      <a href="#ai-landing-zones"><span class="ia-toc-num">01</span><span>AI Landing Zones</span></a>
+      <a href="#runtime-framework"><span class="ia-toc-num">02</span><span>Runtime (framework)</span></a>
+      <a href="#hosting"><span class="ia-toc-num">03</span><span>Hosting</span></a>
+      <a href="#tools"><span class="ia-toc-num">04</span><span>Tools</span></a>
+      <a href="#knowledge-with-microsoft-iq"><span class="ia-toc-num">05</span><span>Knowledge with Microsoft IQ</span></a>
+      <a href="#channels"><span class="ia-toc-num">06</span><span>Channels</span></a>
+      <a href="#identity-authentication-and-authorization"><span class="ia-toc-num">07</span><span>Identity, authentication and authorization</span></a>
+      <a href="#agents-control-plane"><span class="ia-toc-num">08</span><span>Agents control plane</span></a>
+      <a href="#observability"><span class="ia-toc-num">09</span><span>Observability</span></a>
+      <a href="#data-security"><span class="ia-toc-num">10</span><span>Data security</span></a>
+      <a href="#responsible-ai-and-agent-security"><span class="ia-toc-num">11</span><span>Responsible AI and agent security</span></a>
+      <a href="#evals"><span class="ia-toc-num">12</span><span>Evals</span></a>
+      <a href="#cicd"><span class="ia-toc-num">13</span><span>CI/CD</span></a>
+    </div>
+  </nav>
+
+  <main id="content">
+    <section class="ia-group">
+      <h2 class="ia-group-title">Reference architecture sections</h2>
+      <div class="ia-card-list">
+        <article class="ia-card is-open" id="ai-landing-zones" data-ia-card>
+          <button class="ia-card-head" id="card-01-head" type="button" aria-expanded="true" aria-controls="card-01" data-ia-card-button>
+            <span class="ia-card-num">01</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">AI Landing Zones</span><span class="ia-card-subtitle">Provide governance and management of LLMs and other AI resources, including access control, cost management, security, compliance, and monitoring.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-01" aria-labelledby="card-01-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Models can be accessed via APIs from different runtimes and hosting options including Foundry Agents and Copilot Studio, but can also be provided as part of the platform.</p>
+              <p>A large-scale enterprise AI landing zone uses <strong>Azure API Management</strong> as an AI gateway to manage access to LLMs. This includes clever routing and capacity policies, access control, auditing capabilities, inline security enforcement, and a data plane proxy for MCP tools.</p>
+              <p><strong>Foundry</strong> provides resources and projects, plus UI experiences such as playgrounds and an agent builder. Support for bring-your-own APIM with full UI support is planned.</p>
+              <p><strong>Foundry</strong> also provides a developer-oriented experience with observability, evals, a model catalog, an agents catalog, and a tools catalog for discovery.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="runtime-framework" data-ia-card>
+          <button class="ia-card-head" id="card-02-head" type="button" aria-expanded="false" aria-controls="card-02" data-ia-card-button>
+            <span class="ia-card-num">02</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Runtime (framework)</span><span class="ia-card-subtitle">An LLM is stateless, so an agent needs runtime to maintain state, manage context, and handle interactions over time.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-02" aria-labelledby="card-02-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <h3>Responses API</h3>
+              <p>Can be considered a lightweight runtime, but this story focuses on more advanced ones.</p>
+              <h3>Copilot Studio</h3>
+              <p>A no-code platform that leverages Foundry runtime under the covers.</p>
+              <h3>Foundry Agent Service</h3>
+              <p>A developer-oriented platform ranging from declarative agents and workflows all the way to hosting other runtimes.</p>
+              <h3>Microsoft Agent Framework</h3>
+              <p>An open-source framework, very strong in <strong>Python</strong> and <strong>C#</strong>, sponsored by Microsoft to build agents, multi-agent systems, and orchestration workflows that can be hosted anywhere.</p>
+              <h3>LangGraph</h3>
+              <p>Another open-source framework, strong in <strong>Python</strong>, modern and low-level, with some higher-level constructs from LangChain. It has a community-driven clone for Java.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="hosting" data-ia-card>
+          <button class="ia-card-head" id="card-03-head" type="button" aria-expanded="false" aria-controls="card-03" data-ia-card-button>
+            <span class="ia-card-num">03</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Hosting</span><span class="ia-card-subtitle">Agent runtime is code that must run somewhere: platform-hosted or self-hosted and connected to Microsoft 365.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-03" aria-labelledby="card-03-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <h3>Hosted options</h3>
+              <p><strong>Copilot Studio</strong> hosts only Copilot Studio agents, but it can interact with other agents and tools outside of it.</p>
+              <p><strong>Foundry Agent Service</strong> supports multiple runtimes, such as <strong>declarative Foundry agents</strong>, hosting of <strong>Microsoft Agent Framework</strong> or <strong>LangGraph</strong>, and others via SDK integration and a Docker image.</p>
+              <h3>Self-hosted options</h3>
+              <p>Can run anywhere, for example <strong>Azure Container Apps</strong> or <strong>Azure Kubernetes Service</strong>, and can use the <strong>Microsoft 365 Agents SDK</strong> to integrate into governance, security, and Microsoft experiences.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="tools" data-ia-card>
+          <button class="ia-card-head" id="card-04-head" type="button" aria-expanded="false" aria-controls="card-04" data-ia-card-button>
+            <span class="ia-card-num">04</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Tools</span><span class="ia-card-subtitle">Agents become useful when they can access APIs, data sources, other agents, and tools, often through MCP.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-04" aria-labelledby="card-04-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p><strong>Authentication and authorization</strong> for tools is critical and should be based on Entra ID identities and scopes. MCP should publish scopes in Entra ID, and users via OBO plus agents via Agent ID should request the proper scope.</p>
+              <p>Granular authorization is important: an MCP server can parse token claims such as roles or security groups and enforce different policies. MCP is often a facade over existing APIs, so authn/authz should be implemented at the API level; <strong>Azure API Management</strong> can enforce it where backends are not ready.</p>
+              <p><strong>Data plane policies</strong> protect backend systems from overuse, implement routing and version control, enforce auditing and logging, and apply network restrictions. These can be handled by <strong>Azure API Management</strong>, including republishing an API as MCP or providing a data plane proxy.</p>
+              <p>A <strong>catalog</strong> of tools is available as part of <strong>Agent 365</strong>, which works as a <strong>tool gateway</strong> and is visible in Microsoft agent development tools such as <strong>Copilot Studio</strong>. Microsoft provides built-in MCP tools such as Outlook Email, Teams, SharePoint and OneDrive, Outlook Calendar, Microsoft Dataverse, and others.</p>
+              <p><strong>Azure API Center</strong> is another extensible catalog option. It can import MCPs from <strong>Azure API Management</strong>, supports a web-based catalog with RBAC, and can be accessed programmatically by <strong>Foundry Agent Service</strong> or <strong>GitHub Copilot</strong> private MCP lists.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="knowledge-with-microsoft-iq" data-ia-card>
+          <button class="ia-card-head" id="card-05-head" type="button" aria-expanded="false" aria-controls="card-05" data-ia-card-button>
+            <span class="ia-card-num">05</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Knowledge with Microsoft IQ</span><span class="ia-card-subtitle">Agents need curated knowledge sources with built-in agentic search, provided by WorkIQ, Foundry IQ, and Fabric IQ.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-05" aria-labelledby="card-05-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>All IQs provide a simple MCP-based interface for agents to access complex knowledge without understanding the complexity of underlying data sources and retrieval techniques.</p>
+              <h3>WorkIQ</h3>
+              <p>Brings knowledge about people and work: emails, calendar, chats, meetings, and more.</p>
+              <h3>Foundry IQ</h3>
+              <p>Brings institutional knowledge about your organization: documents, wikis, databases, policies, and more.</p>
+              <p>You can build processing pipelines that ingest knowledge from various sources, including poorly structured data such as PDFs, and build indexes in <strong>AI Search</strong>. Agents use Foundry IQ, which implements agentic search such as query rewriting, query decomposition, semantic search, keyword search, BM25, semantic ranking, and filtering.</p>
+              <h3>Fabric IQ</h3>
+              <p>Brings semantic knowledge about your business: customers, products, inventory, transactions, and more. Data teams manage data and semantic layers so agents can understand business data and use data agents for questions about business context.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="channels" data-ia-card>
+          <button class="ia-card-head" id="card-06-head" type="button" aria-expanded="false" aria-controls="card-06" data-ia-card-button>
+            <span class="ia-card-num">06</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Channels</span><span class="ia-card-subtitle">Agents are accessed through custom web, Teams, Microsoft 365 Copilot, Slack, SMS, Azure Communication Services, and more.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-06" aria-labelledby="card-06-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Channels require more than messages: reasoning events, typing, commands, multi-modality, and declarative UI extensions such as Adaptive Cards.</p>
+              <p>They should require strong authentication and authorization tunnels, provide user on-behalf-of flow, and sometimes expose internal agents securely to public internet channels such as Copilot or Teams through a proxy or relay.</p>
+              <p>In Microsoft's story, this is handled with <strong>Activity Protocol</strong> and the <strong>Microsoft 365 Agents SDK</strong>, and automatically provided by <strong>Copilot Studio</strong> and <strong>Foundry Agent Service</strong> for supported agent types.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="identity-authentication-and-authorization" data-ia-card>
+          <button class="ia-card-head" id="card-07-head" type="button" aria-expanded="false" aria-controls="card-07" data-ia-card-button>
+            <span class="ia-card-num">07</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Identity, authentication and authorization</span><span class="ia-card-subtitle">Agents work with user-delegated permissions and their own identity for autonomous tasks.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-07" aria-labelledby="card-07-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Agents published to Microsoft 365 have identities assigned automatically and permissions managed in Agent 365. Underlying Microsoft Entra capabilities can be used for other agents too, although they require manual permission and access policy configuration.</p>
+              <p>Agents support an <strong>on-behalf-of</strong> user authentication flow, where <strong>Azure Bot Service</strong> with the <strong>Microsoft 365 Agents SDK</strong> or <strong>Agent 365 SDK</strong> handles token exchange and OBO flow management. The SDK delivers access tokens for tools and services such as custom MCP servers, Microsoft Graph, or Microsoft MCP tools.</p>
+              <p>Agent identity, similar to app registration client credentials but curated for agents, is used for <strong>background agents</strong> without user interaction and for <strong>agent-to-agent</strong> scenarios. In the future, an agent user ID may let agents act as digital employees with their own Outlook, Teams, notifications, and more.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="agents-control-plane" data-ia-card>
+          <button class="ia-card-head" id="card-08-head" type="button" aria-expanded="false" aria-controls="card-08" data-ia-card-button>
+            <span class="ia-card-num">08</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Agents control plane</span><span class="ia-card-subtitle">Agents need discoverability, access control, monitoring, auditing, observability, and digital worker concepts.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-08" aria-labelledby="card-08-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Agents can be published in Microsoft 365 with icon, description, required permissions, and metadata. Users discover them in Microsoft 365 and use them across Microsoft 365 Copilot, Teams, and other channels. Administrators can manage access and monitor usage.</p>
+              <p>All agents built in <strong>Copilot Studio</strong> and <strong>Foundry Agent Service</strong> can be published to the Microsoft 365 ecosystem. Agents built with any framework and self-hosted can be published when instrumented with the <strong>Microsoft 365 Agents SDK</strong>.</p>
+              <p>The <strong>Agent 365 SDK</strong> allows any agent to integrate into identity, auditing, observability, security, and tool access in <strong>Agent 365</strong>, plus forward-looking digital worker capabilities such as an agent user ID with email, Teams, Word comments, notifications, meetings, and mentions.</p>
+              <p><strong>Agent 365</strong> uses <strong>blueprints</strong>: agent templates with predefined capabilities, permissions, and tool access. Users can request <strong>instantiation</strong> of an agent for their use, which creates a specific instance with its own Agent ID in Entra ID and consented or fine-tuned permissions.</p>
+              <p><strong>Coding agents</strong> are different but important. Expect less off-the-shelf software and more custom code written by agents. GitHub Copilot CLI, Claude Code, CODEX, cloud-based GitHub agents, <strong>GitHub Agents HQ</strong>, and <strong>GitHub Agentic Workflows</strong> are part of the control-plane story for software delivery agents.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="observability" data-ia-card>
+          <button class="ia-card-head" id="card-09-head" type="button" aria-expanded="false" aria-controls="card-09" data-ia-card-button>
+            <span class="ia-card-num">09</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Observability</span><span class="ia-card-subtitle">Agents are non-deterministic systems, so traces, metrics, logs, and context dimensions are critical.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-09" aria-labelledby="card-09-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Developers need to understand performance, issues, bottlenecks, and improvement opportunities. Observability includes traces of conversations, tool calls, multi-agent turns, time, latency, user ID, role, group, tenant, and more.</p>
+              <p>Industry is standardizing on OpenTelemetry for agents with GenAI semantic conventions.</p>
+              <p><strong>Copilot Studio</strong> and <strong>Foundry Agent Service</strong> provide built-in logging, metrics, tracing, and access to <strong>Application Insights</strong> so customers can query raw data and build dashboards in Azure Monitor, Grafana, or Power BI.</p>
+              <p>Custom OpenTelemetry endpoints are available for hosted agents in Foundry such as Microsoft Agent Framework or LangGraph, and for self-hosted agents connected via Microsoft 365 Agents SDK. You can use an OpenTelemetry Collector to distribute telemetry to systems such as Foundry, LangFuse, or Grafana Tempo.</p>
+              <p><strong>Agent 365</strong> acts as an OpenTelemetry collector and provides observability to published agents or custom agents instrumented with the <strong>Agent 365 SDK</strong>. Data is used by Agent 365, Defender for AI, Purview, and Microsoft Sentinel. As of February 2026, customers cannot yet access raw telemetry directly.</p>
+              <p>Strategy: instrument once, observe everywhere. Vision for 2026: intelligent observability where agents look after other agents.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="data-security" data-ia-card>
+          <button class="ia-card-head" id="card-10-head" type="button" aria-expanded="false" aria-controls="card-10" data-ia-card-button>
+            <span class="ia-card-num">10</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Data security</span><span class="ia-card-subtitle">AI agents should be governed by the same data protection and compliance standards as other enterprise systems.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-10" aria-labelledby="card-10-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>AI agents inherit <strong>Microsoft Purview</strong> protections for data classification, sensitivity labels, DLP, and auditing. Agents respect user and agent identity-based access controls and are subject to the same encryption and compliance policies as users.</p>
+              <p>Purview integrates with Microsoft 365, Azure, and Agent 365 to enforce zero trust, prevent oversharing, and ensure auditability. Agent-specific risk indicators and observability are available via Agent 365 and Purview dashboards.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="responsible-ai-and-agent-security" data-ia-card>
+          <button class="ia-card-head" id="card-11-head" type="button" aria-expanded="false" aria-controls="card-11" data-ia-card-button>
+            <span class="ia-card-num">11</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Responsible AI and agent security</span><span class="ia-card-subtitle">Agents need guardrails and mechanisms to detect jailbreaking and other security threats.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-11" aria-labelledby="card-11-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Microsoft <strong>AI Guardrails</strong> provide <strong>inline</strong> protection against harmful content, PII oversharing, or jailbreaking risks. Because they sit in the flow of agent-to-LLM interactions, they can block or annotate risks in real time.</p>
+              <p>Microsoft <strong>Defender for AI</strong> provides <strong>post-hoc</strong> detection capabilities and can detect more complex attack patterns. It also brings posture management capabilities with risk indicators and recommendations for mitigation. Defender for AI reports to <strong>Defender for Cloud</strong> and <strong>Microsoft Sentinel</strong> for SOC correlation.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="evals" data-ia-card>
+          <button class="ia-card-head" id="card-12-head" type="button" aria-expanded="false" aria-controls="card-12" data-ia-card-button>
+            <span class="ia-card-num">12</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Evals</span><span class="ia-card-subtitle">Evaluations are critical because what cannot be measured cannot be improved.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-12" aria-labelledby="card-12-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <h3>Copilot Studio</h3>
+              <p>Has built-in eval capabilities.</p>
+              <h3>Foundry Agent Service</h3>
+              <p>Comes with rich built-in evaluations and red teaming capabilities, including offline and batch evals, continuous evaluations, and CI/CD integration.</p>
+              <p>All Foundry agent types support API access and can therefore be evaluated with eval frameworks such as DeepEval or LangFuse.</p>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="cicd" data-ia-card>
+          <button class="ia-card-head" id="card-13-head" type="button" aria-expanded="false" aria-controls="card-13" data-ia-card-button>
+            <span class="ia-card-num">13</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">CI/CD</span><span class="ia-card-subtitle">Agents need continuous improvement, updates, testing, and deployment processes.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-13" aria-labelledby="card-13-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p><strong>Copilot Studio</strong> supports CI/CD capabilities via Power Platform ALM.</p>
+              <p><strong>Foundry Agent Service</strong> fully supports any CI/CD for all types of agents, and even declarative agents can be managed effectively via SDK.</p>
+            </div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="ia-footer">
+    <p>Interactive HTML full story for enterprise AI agents. <a href="AgentsIntro.html">Back to agents intro</a>.</p>
+  </footer>
+</div>
+
+<script>
+(() => {
+  document.documentElement.classList.add("ia-js");
+
+  const root = document.documentElement;
+  const updateThemeButtons = () => {
+    const isDark = root.getAttribute("data-theme") === "dark";
+    document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+      button.textContent = isDark ? "Light mode" : "Dark mode";
+      button.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+    });
+  };
+
+  updateThemeButtons();
+
+  document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      updateThemeButtons();
+    });
+  });
+
+  document.querySelectorAll("[data-ia-card]").forEach((card) => {
+    const button = card.querySelector("[data-ia-card-button]");
+    if (!button) {
+      return;
+    }
+
+    const setOpen = (open) => {
+      card.classList.toggle("is-open", open);
+      button.setAttribute("aria-expanded", String(open));
+    };
+
+    setOpen(button.getAttribute("aria-expanded") === "true" || card.classList.contains("is-open"));
+    button.addEventListener("click", () => setOpen(!card.classList.contains("is-open")));
+  });
+
+  document.querySelectorAll("[data-expand-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-ia-card]").forEach((card) => {
+        const control = card.querySelector("[data-ia-card-button]");
+        card.classList.add("is-open");
+        if (control) {
+          control.setAttribute("aria-expanded", "true");
+        }
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-collapse-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-ia-card]").forEach((card) => {
+        const control = card.querySelector("[data-ia-card-button]");
+        card.classList.remove("is-open");
+        if (control) {
+          control.setAttribute("aria-expanded", "false");
+        }
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>

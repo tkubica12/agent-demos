@@ -3,7 +3,7 @@
 This repository contains multiple demos of AI agents and their integrations with Microsoft 365, industry standards, governance patterns, and the Agent 365 ecosystem.
 
 ## Overview
-For end-to-end story of agents see [AI agents end-to-end](./docs/README.md)
+For end-to-end story of agents see [AI agents end-to-end](./docs/AgentsE2E.html).
 
 ## Demos
 
@@ -52,4 +52,3 @@ See [legacy-agent-publish/README.md](legacy-agent-publish/README.md) for details
 - [ ] Foundry IQ integration with user fencing
 - [ ] AG-UI interface and integration into Entra ID etc.
 - [ ] MCP registry integration and governance
-

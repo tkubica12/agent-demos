@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>
+  (() => {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("clawpilotTheme");
+    const isTheme = (value) => value === "light" || value === "dark";
+    let stored = null;
+    try { stored = localStorage.getItem("interactive-article-theme"); } catch {}
+    const system = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", isTheme(requested) ? requested : isTheme(stored) ? stored : system);
+  })();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User stories for agentic AI</title>
+<meta name="description" content="Role-based user stories for enterprise agentic AI platforms.">
+<style>
+:root {
+  --cp-bg: #ffffff;
+  --cp-bg-elevated: #f8fafc;
+  --cp-surface: #f6f8fa;
+  --cp-surface-soft: #eef2f6;
+  --cp-panel: #ffffff;
+  --cp-text: #172033;
+  --cp-text-muted: #475569;
+  --cp-text-soft: #64748b;
+  --cp-border: #d8dee9;
+  --cp-border-strong: #b6c2cf;
+  --cp-accent: #0969da;
+  --cp-accent-soft: rgba(9, 105, 218, 0.08);
+  --cp-link: #0969da;
+  --cp-success: #1a7f37;
+  --cp-warning: #9a6700;
+  --cp-danger: #cf222e;
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  --cp-bg: #0d1117;
+  --cp-bg-elevated: #161b22;
+  --cp-surface: #161b22;
+  --cp-surface-soft: #21262d;
+  --cp-panel: #0d1117;
+  --cp-text: #f0f6fc;
+  --cp-text-muted: #c9d1d9;
+  --cp-text-soft: #8b949e;
+  --cp-border: #30363d;
+  --cp-border-strong: #484f58;
+  --cp-accent: #58a6ff;
+  --cp-accent-soft: rgba(88, 166, 255, 0.13);
+  --cp-link: #58a6ff;
+  --cp-success: #3fb950;
+  --cp-warning: #d29922;
+  --cp-danger: #f85149;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--cp-bg);
+  color: var(--cp-text);
+  font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: Consolas, "Courier New", Courier, monospace;
+}
+
+a {
+  color: var(--cp-link);
+}
+
+a:hover {
+  color: var(--cp-accent);
+}
+
+.ia-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 72px 36px 96px;
+}
+
+.ia-header {
+  margin-bottom: 48px;
+}
+
+.ia-author-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.ia-avatar {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--cp-border-strong), 0 8px 20px var(--cp-border);
+}
+
+.ia-avatar-small {
+  width: 40px;
+  height: 40px;
+}
+
+.ia-eyebrow {
+  margin: 0;
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.ia-title {
+  margin: 0 0 18px;
+  color: var(--cp-text);
+  font-size: clamp(36px, 5vw, 54px);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.ia-subtitle {
+  max-width: 780px;
+  margin: 0;
+  color: var(--cp-text-muted);
+  font-size: 20px;
+}
+
+.ia-date {
+  margin: 14px 0 0;
+  color: var(--cp-text-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ia-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--cp-border);
+  color: var(--cp-text-soft);
+  font-size: 14px;
+}
+
+.ia-links a,
+.ia-intro-links a {
+  text-decoration: none;
+}
+
+.ia-links a:hover,
+.ia-intro-links a:hover {
+  text-decoration: underline;
+}
+
+.ia-intro-box,
+.ia-toc {
+  max-width: 860px;
+  margin: 0 0 56px;
+  padding: 24px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 12px;
+}
+
+.ia-intro-kicker,
+.ia-toc-title,
+.ia-group-title {
+  margin: 0;
+  color: var(--cp-text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.ia-intro-box p {
+  margin: 8px 0 0;
+  color: var(--cp-text-muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.ia-intro-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cp-border);
+  font-size: 14px;
+}
+
+.ia-toc {
+  padding: 20px 24px;
+  border-radius: 10px;
+}
+
+.ia-toc-title {
+  margin-bottom: 14px;
+}
+
+.ia-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ia-toc-list a {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 0;
+  color: var(--cp-text-muted);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.ia-toc-list a:hover {
+  color: var(--cp-accent);
+}
+
+.ia-toc-num {
+  min-width: 24px;
+  color: var(--cp-text-soft);
+  font-family: Consolas, "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+.ia-group {
+  margin-top: 40px;
+  margin-bottom: 56px;
+}
+
+.ia-group-title {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--cp-border);
+}
+
+.ia-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ia-card {
+  overflow: hidden;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ia-card:hover {
+  border-color: var(--cp-border-strong);
+}
+
+.ia-card.is-open {
+  background: var(--cp-bg-elevated);
+  border-color: var(--cp-accent);
+}
+
+.ia-card-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: none;
+  border: 0;
+  color: var(--cp-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.ia-card-num {
+  flex: 0 0 auto;
+  width: 28px;
+  color: var(--cp-text-soft);
+  font-family: Consolas, "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ia-card.is-open .ia-card-num {
+  color: var(--cp-accent);
+}
+
+.ia-card-title {
+  flex: 1;
+  color: var(--cp-text);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.ia-card-toggle {
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  transition: color 0.15s, transform 0.2s;
+}
+
+.ia-card.is-open .ia-card-toggle {
+  color: var(--cp-accent);
+  transform: rotate(180deg);
+}
+
+.ia-card-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.ia-card.is-open .ia-card-body,
+html:not(.ia-js) .ia-card-body {
+  grid-template-rows: 1fr;
+}
+
+.ia-card-body-clip {
+  overflow: hidden;
+}
+
+.ia-card-content {
+  padding: 0 32px 32px 72px;
+  color: var(--cp-text-muted);
+  font-size: 17.5px;
+}
+
+.ia-prose ul {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--cp-text-muted);
+}
+
+.ia-prose li {
+  margin-bottom: 6px;
+}
+
+.ia-prose li:last-child {
+  margin-bottom: 0;
+}
+
+.ia-controls {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ia-control {
+  padding: 9px 16px;
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-border-strong);
+  border-radius: 6px;
+  color: var(--cp-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.ia-control:hover {
+  border-color: var(--cp-accent);
+  color: var(--cp-accent);
+}
+
+.ia-control.theme {
+  min-width: 112px;
+}
+
+.ia-footer {
+  margin-top: 48px;
+  padding: 48px 20px 0;
+  border-top: 1px solid var(--cp-border);
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  body {
+    font-size: 17px;
+  }
+
+  .ia-page {
+    padding: 48px 20px 120px;
+  }
+
+  .ia-card-head {
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .ia-card-content {
+    padding: 0 22px 26px 32px;
+  }
+
+  .ia-controls {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    justify-content: flex-end;
+  }
+
+  .ia-control {
+    padding: 8px 12px;
+  }
+}
+</style>
+</head>
+<body>
+<div class="ia-controls" aria-label="Article controls">
+  <button class="ia-control" type="button" data-expand-all>Expand all</button>
+  <button class="ia-control" type="button" data-collapse-all>Collapse all</button>
+  <button class="ia-control theme" type="button" data-theme-toggle>Dark mode</button>
+</div>
+
+<div class="ia-page">
+  <header class="ia-header">
+    <div class="ia-author-row">
+      <img class="ia-avatar ia-avatar-small" src="https://tomaskubica.cz/assets/img/avatar.png" alt="Tomáš Kubica" width="40" height="40" decoding="async">
+      <p class="ia-eyebrow">Enterprise AI agents</p>
+    </div>
+    <h1 class="ia-title">User stories for agentic AI</h1>
+    <p class="ia-subtitle">Role-based needs and requirements for enterprise agent platforms.</p>
+    <p class="ia-date"><time datetime="2026-07-05">5. 7. 2026</time></p>
+    <nav class="ia-links" aria-label="Navigation">
+      <a href="README.html">← End-to-end story</a>
+      <a href="AgentsIntro.html">Agents intro</a>
+    </nav>
+  </header>
+
+  <section class="ia-intro-box" aria-label="Brief summary">
+    <p class="ia-intro-kicker">Brief summary</p>
+    <p>Four perspectives on agentic AI adoption: developers need platform capabilities, administrators need governance, security teams need posture and controls, and business users need trusted agents they can use and create.</p>
+    <nav class="ia-intro-links" aria-label="Quick links">
+      <a href="#developer">Developer</a>
+      <a href="#administrator">Administrator</a>
+      <a href="#security">Security</a>
+      <a href="#business-user">Business user</a>
+    </nav>
+  </section>
+
+  <nav class="ia-toc" aria-label="Table of contents">
+    <p class="ia-toc-title">Contents</p>
+    <div class="ia-toc-list">
+      <a href="#developer"><span class="ia-toc-num">01</span><span>Developer</span></a>
+      <a href="#administrator"><span class="ia-toc-num">02</span><span>Administrator</span></a>
+      <a href="#security"><span class="ia-toc-num">03</span><span>Security person</span></a>
+      <a href="#business-user"><span class="ia-toc-num">04</span><span>Business user</span></a>
+    </div>
+  </nav>
+
+  <main id="content">
+    <section class="ia-group">
+      <h2 class="ia-group-title">User stories</h2>
+      <div class="ia-card-list">
+        <article class="ia-card is-open" id="developer" data-ia-card>
+          <button class="ia-card-head" id="card-01-head" type="button" aria-expanded="true" aria-controls="card-01" data-ia-card-button>
+            <span class="ia-card-num">01</span>
+            <span class="ia-card-title">As developer I want to be able to ...</span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-01" aria-labelledby="card-01-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>gain access to LLMs of my choice with quota and performance I need</li>
+                <li>use playground where I can quickly test my agentic AI ideas</li>
+                <li>use declarative methods to define my agent or workflow so I can prototype quickly without need to go deep into code</li>
+                <li>create agents using open source framework of my choice</li>
+                <li>have catalog of company tools (MCP servers) that I can quickly test and access from my agent</li>
+                <li>deep observability so I can drill down into individual turns in conversation to troubleshoot and understand how my agent is working</li>
+                <li>create evals so I can automatically test my agent's performance (quality, coherence, groundedness, speed, personality, ...) and track it over time</li>
+                <li>have catalog of other agents that I can use in my multi-agent system</li>
+                <li>create agent that can be accessed in different channels (e.g. web, mobile, slack, etc.) without need to rewrite code for each channel</li>
+                <li>publish my agent into Microsoft 365 environment so it can be used by my colleagues</li>
+                <li>have versioned-control catalog of prompts so I can track changes, reuse or do A/B testing on prompts</li>
+                <li>have agent access to user stuff in Microsoft 365 - emails, Teams messages, calendar, files</li>
+                <li>have agent access to institutional knowledge - e.g. company wiki, internal databases, knowledge bases, etc.</li>
+                <li>have agent access to business data</li>
+                <li>be able to work with full lifecycle of agent development and CI/CD support</li>
+                <li>ability to work with memory for my agents</li>
+                <li>apply policy-based guardrails at user input, tool call, tool response, and output stages</li>
+                <li>implement human-in-the loop</li>
+                <li>understand cost implications of my agent behavior with drill down into individual conversations so I can optimize for cost</li>
+                <li>have identity for agent so I can work both on user behalf (OBO) as well as build autonomous workflows with agent identity that can have its own permissions and access</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="administrator" data-ia-card>
+          <button class="ia-card-head" id="card-02-head" type="button" aria-expanded="false" aria-controls="card-02" data-ia-card-button>
+            <span class="ia-card-num">02</span>
+            <span class="ia-card-title">As administrator I want to be able to ...</span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-02" aria-labelledby="card-02-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>manage access to LLMs and tools for my developers</li>
+                <li>monitor usage of LLMs and tools by my developers</li>
+                <li>manage costs associated with LLM usage</li>
+                <li>manage access to agents created by developers for different users in my organization</li>
+                <li>configure permissions for agents to access different data sources and tools or other agents</li>
+                <li>manage curated catalog of internal, Microsoft and 3rd party agents</li>
+                <li>manage curated catalog of internal, Microsoft and 3rd party tools</li>
+                <li>manage agents via different zones/environments to isolate development, testing and production stages</li>
+                <li>enforce data governance, compliance, and behavioral policies across the agent lifecycle</li>
+                <li>policy-driven publishing process for agents</li>
+                <li>generate usage, compliance, and cost reports for agents</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="security" data-ia-card>
+          <button class="ia-card-head" id="card-03-head" type="button" aria-expanded="false" aria-controls="card-03" data-ia-card-button>
+            <span class="ia-card-num">03</span>
+            <span class="ia-card-title">As security person I want to be able to ...</span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-03" aria-labelledby="card-03-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>ensure that all agents comply with my organization's security policies</li>
+                <li>monitor agent activity for potential security threats</li>
+                <li>understand security posture of agentic AI usage in my organization</li>
+                <li>have tools to investigate and respond to security incidents involving agents</li>
+                <li>have controls to restrict agent access to sensitive data and tools</li>
+                <li>enforce data security to prevent overshearing and data leakage</li>
+                <li>have audit logs of agent activity for compliance and forensic purposes</li>
+                <li>enforce secure development practices through CI/CD, automated scans, and guardrails</li>
+                <li>enforce strong authentication and access controls for agents and implement zero trust principles</li>
+                <li>ensure that agents are regularly updated and patched to address security vulnerabilities</li>
+                <li>regularly and automatically run red-teaming and adversarial simulations</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" id="business-user" data-ia-card>
+          <button class="ia-card-head" id="card-04-head" type="button" aria-expanded="false" aria-controls="card-04" data-ia-card-button>
+            <span class="ia-card-num">04</span>
+            <span class="ia-card-title">As business user I want to be able to ...</span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-04" aria-labelledby="card-04-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>easily find and use agents that can help me with my work</li>
+                <li>trust that the agents I use are secure and compliant with company policies</li>
+                <li>create my own agents and workflows without needing to know how to code</li>
+                <li>publish agents I create so that my colleagues can use them</li>
+                <li>have agent access to user data in Microsoft 365 - emails, Teams messages, calendar, files</li>
+                <li>have agent access to institutional knowledge - e.g. company wiki, internal databases, knowledge bases, etc.</li>
+                <li>have agent access to business data</li>
+                <li>have agent access to curated list of company-approved tools</li>
+                <li>understand what data and tools an agent uses</li>
+                <li>see references or sources behind agent outputs</li>
+                <li>provide feedback on agent quality or errors</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="ia-footer">
+    <p>Interactive HTML user stories for enterprise agentic AI. <a href="README.html">Back to end-to-end story</a>.</p>
+  </footer>
+</div>
+
+<script>
+(() => {
+  document.documentElement.classList.add("ia-js");
+
+  const root = document.documentElement;
+  const updateThemeButtons = () => {
+    const isDark = root.getAttribute("data-theme") === "dark";
+    document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+      button.textContent = isDark ? "Light mode" : "Dark mode";
+      button.setAttribute("aria-label", isDark ? "Switch to light mode" : "Switch to dark mode");
+    });
+  };
+
+  updateThemeButtons();
+
+  document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      updateThemeButtons();
+    });
+  });
+
+  document.querySelectorAll("[data-ia-card]").forEach((card) => {
+    const button = card.querySelector("[data-ia-card-button]");
+    if (!button) {
+      return;
+    }
+
+    const setOpen = (open) => {
+      card.classList.toggle("is-open", open);
+      button.setAttribute("aria-expanded", String(open));
+    };
+
+    setOpen(button.getAttribute("aria-expanded") === "true" || card.classList.contains("is-open"));
+    button.addEventListener("click", () => setOpen(!card.classList.contains("is-open")));
+  });
+
+  document.querySelectorAll("[data-expand-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-ia-card]").forEach((card) => {
+        const control = card.querySelector("[data-ia-card-button]");
+        card.classList.add("is-open");
+        if (control) {
+          control.setAttribute("aria-expanded", "true");
+        }
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-collapse-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-ia-card]").forEach((card) => {
+        const control = card.querySelector("[data-ia-card-button]");
+        card.classList.remove("is-open");
+        if (control) {
+          control.setAttribute("aria-expanded", "false");
+        }
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="cs-CZ">
+<head>
+<script>
+  (() => {
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("clawpilotTheme");
+    const isTheme = (value) => value === "light" || value === "dark";
+    let stored = null;
+    try { stored = localStorage.getItem("interactive-article-theme"); } catch {}
+    const system = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", isTheme(requested) ? requested : isTheme(stored) ? stored : system);
+  })();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tahák: cesta k agentům</title>
+<meta name="description" content="Interaktivní tahák k vysvětlení modelů, workflow a skutečných agentů.">
+<style>
+:root {
+  --cp-bg: #ffffff;
+  --cp-bg-elevated: #f8fafc;
+  --cp-surface: #f6f8fa;
+  --cp-surface-soft: #eef2f6;
+  --cp-panel: #ffffff;
+  --cp-text: #172033;
+  --cp-text-muted: #475569;
+  --cp-text-soft: #64748b;
+  --cp-border: #d8dee9;
+  --cp-border-strong: #b6c2cf;
+  --cp-accent: #0969da;
+  --cp-accent-soft: rgba(9, 105, 218, 0.08);
+  --cp-link: #0969da;
+  --cp-success: #1a7f37;
+  --cp-warning: #9a6700;
+  --cp-danger: #cf222e;
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  --cp-bg: #0d1117;
+  --cp-bg-elevated: #161b22;
+  --cp-surface: #161b22;
+  --cp-surface-soft: #21262d;
+  --cp-panel: #0d1117;
+  --cp-text: #f0f6fc;
+  --cp-text-muted: #c9d1d9;
+  --cp-text-soft: #8b949e;
+  --cp-border: #30363d;
+  --cp-border-strong: #484f58;
+  --cp-accent: #58a6ff;
+  --cp-accent-soft: rgba(88, 166, 255, 0.13);
+  --cp-link: #58a6ff;
+  --cp-success: #3fb950;
+  --cp-warning: #d29922;
+  --cp-danger: #f85149;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--cp-bg);
+  color: var(--cp-text);
+  font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: Consolas, "Courier New", Courier, monospace;
+}
+
+a {
+  color: var(--cp-link);
+}
+
+a:hover {
+  color: var(--cp-accent);
+}
+
+.ia-controls {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 100;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ia-control {
+  padding: 9px 16px;
+  background: var(--cp-panel);
+  border: 1px solid var(--cp-border-strong);
+  border-radius: 6px;
+  color: var(--cp-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.ia-control:hover {
+  border-color: var(--cp-accent);
+  color: var(--cp-accent);
+}
+
+.ia-control.theme {
+  min-width: 112px;
+}
+
+.ia-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 72px 36px 96px;
+}
+
+.ia-header {
+  margin-bottom: 48px;
+}
+
+.ia-eyebrow {
+  margin: 0 0 16px;
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.ia-title {
+  margin: 0 0 18px;
+  color: var(--cp-text);
+  font-size: clamp(36px, 5vw, 54px);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.ia-subtitle {
+  max-width: 780px;
+  margin: 0;
+  color: var(--cp-text-muted);
+  font-size: 20px;
+}
+
+.ia-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: center;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--cp-border);
+  color: var(--cp-text-soft);
+  font-size: 14px;
+}
+
+.ia-links a {
+  text-decoration: none;
+}
+
+.ia-links a:hover {
+  text-decoration: underline;
+}
+
+.ia-author-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.ia-author-row .ia-eyebrow {
+  margin: 0;
+}
+
+.ia-avatar {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--cp-border-strong), 0 16px 40px var(--cp-border);
+}
+
+.ia-avatar-small {
+  width: 40px;
+  height: 40px;
+  box-shadow: 0 0 0 1px var(--cp-border-strong), 0 8px 20px var(--cp-border);
+}
+
+.ia-date {
+  margin: 14px 0 0;
+  color: var(--cp-text-soft);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ia-intro-box {
+  max-width: 860px;
+  margin: 0 0 56px;
+  padding: 24px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 12px;
+}
+
+.ia-intro-kicker {
+  margin: 0 0 8px;
+  color: var(--cp-text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ia-intro-box p {
+  margin: 0 0 14px;
+  color: var(--cp-text-muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.ia-intro-box p:last-child {
+  margin-bottom: 0;
+}
+
+.ia-intro-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--cp-border);
+  font-size: 14px;
+}
+
+.ia-intro-links a {
+  text-decoration: none;
+}
+
+.ia-intro-links a:hover {
+  text-decoration: underline;
+}
+
+.ia-toc {
+  margin: 0 0 56px;
+  padding: 20px 24px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 10px;
+}
+
+.ia-toc-title,
+.ia-group-title,
+.summary-title {
+  margin: 0;
+  color: var(--cp-text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.ia-toc-title {
+  margin-bottom: 14px;
+}
+
+.ia-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ia-toc-list a {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 6px 0;
+  color: var(--cp-text-muted);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.ia-toc-list a:hover {
+  color: var(--cp-accent);
+}
+
+.ia-toc-num {
+  min-width: 24px;
+  color: var(--cp-accent);
+  font-family: Consolas, "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ia-group {
+  margin-top: 40px;
+  margin-bottom: 56px;
+}
+
+.ia-group-title {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--cp-border);
+}
+
+.ia-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ia-card {
+  overflow: hidden;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ia-card:hover {
+  border-color: var(--cp-border-strong);
+}
+
+.ia-card.is-open {
+  background: var(--cp-bg-elevated);
+  border-color: var(--cp-accent);
+}
+
+.ia-card-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  background: none;
+  border: 0;
+  color: var(--cp-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.ia-card-num {
+  flex: 0 0 auto;
+  width: 28px;
+  color: var(--cp-text-soft);
+  font-family: Consolas, "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ia-card.is-open .ia-card-num {
+  color: var(--cp-accent);
+}
+
+.ia-card-title {
+  flex: 1;
+  color: var(--cp-text);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.ia-card-title-main,
+.ia-card-subtitle {
+  display: block;
+}
+
+.ia-card-subtitle {
+  margin-top: 3px;
+  color: var(--cp-text-muted);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.ia-card-toggle {
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  transition: color 0.15s, transform 0.2s;
+}
+
+.ia-card.is-open .ia-card-toggle {
+  color: var(--cp-accent);
+  transform: rotate(180deg);
+}
+
+.ia-card-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.25s ease;
+}
+
+.ia-card.is-open .ia-card-body,
+html:not(.ia-js) .ia-card-body {
+  grid-template-rows: 1fr;
+}
+
+.ia-card-body-clip {
+  overflow: hidden;
+}
+
+.ia-card-content {
+  padding: 0 32px 32px 72px;
+  color: var(--cp-text-muted);
+  font-size: 17.5px;
+}
+
+.ia-prose > *:first-child {
+  margin-top: 0;
+}
+
+.ia-prose > *:last-child {
+  margin-bottom: 0;
+}
+
+.ia-prose p {
+  margin: 0 0 12px;
+  color: var(--cp-text);
+}
+
+.ia-prose ul,
+.ia-prose ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  color: var(--cp-text-muted);
+}
+
+.ia-prose li {
+  margin-bottom: 6px;
+}
+
+.ia-prose strong,
+.ia-prose h3 {
+  color: var(--cp-text);
+  font-weight: 650;
+}
+
+.ia-prose h3 {
+  margin: 18px 0 6px;
+  font-size: 18px;
+}
+
+.ia-callout {
+  margin: 18px 0;
+  padding: 18px 22px;
+  background: var(--cp-accent-soft);
+  border-left: 3px solid var(--cp-accent);
+  border-radius: 6px;
+  color: var(--cp-text);
+  font-size: 17px;
+}
+
+.ia-callout-title {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--cp-accent);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ia-closing {
+  margin-top: 40px;
+  padding: 32px 28px;
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.ia-closing .ia-quote {
+  max-width: 720px;
+  margin: 0 auto;
+  color: var(--cp-text);
+  font-size: 23px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  line-height: 1.5;
+}
+
+.ia-footer {
+  margin-top: 48px;
+  padding: 48px 20px 0;
+  border-top: 1px solid var(--cp-border);
+  color: var(--cp-text-soft);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  body {
+    font-size: 17px;
+  }
+
+  .ia-page {
+    padding: 48px 20px 120px;
+  }
+
+  .ia-card-head {
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .ia-card-content {
+    padding: 0 22px 26px 32px;
+  }
+
+  .ia-controls {
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    justify-content: flex-end;
+  }
+
+  .ia-control {
+    padding: 8px 12px;
+  }
+}
+</style>
+</head>
+<body>
+<div class="ia-controls" aria-label="Ovládání článku">
+  <button class="ia-control" type="button" data-expand-all>Rozbalit vše</button>
+  <button class="ia-control" type="button" data-collapse-all>Sbalit vše</button>
+  <button class="ia-control theme" type="button" data-theme-toggle>Tmavý režim</button>
+</div>
+
+<div class="ia-page">
+  <header class="ia-header">
+    <div class="ia-author-row">
+      <img class="ia-avatar ia-avatar-small" src="https://tomaskubica.cz/assets/img/avatar.png" alt="Tomáš Kubica" width="40" height="40" decoding="async">
+      <p class="ia-eyebrow">AI agenti a firemní platforma</p>
+    </div>
+    <h1 class="ia-title">Tahák: cesta k agentům</h1>
+    <p class="ia-subtitle">Interaktivní HTML verze s rozbalovacími boxy ve stylu článků na tomaskubica.cz: rychlé vysvětlení rozdílu mezi modelem, workflow a agentem, proč záleží na kontextu a kam se firmy posouvají.</p>
+    <p class="ia-date"><time datetime="2026-07-05">5. 7. 2026</time></p>
+    <nav class="ia-links" aria-label="Navigace">
+      <a href="#zaklady">Základy</a>
+      <a href="#agenticke-kodovani">Agentické kódování</a>
+      <a href="#enterprise">Enterprise</a>
+      <a href="#platforma">Platforma</a>
+      <a href="README.html">Full story</a>
+    </nav>
+  </header>
+
+  <section class="ia-intro-box" aria-label="Rychlé shrnutí">
+    <p class="ia-intro-kicker">Rychlé shrnutí</p>
+    <p><strong>Agent není lepší chatbot.</strong> Dostane cíl, používá nástroje, ověřuje výsledek a iteruje.</p>
+    <p><strong>Hodnota je v kontextu.</strong> Správný fond, regál, kniha a kapitola jsou důležitější než hromada dat.</p>
+    <p><strong>Firmy potřebují platformu.</strong> Ne jednotky dem, ale governance, katalog, testování, audit a škálování.</p>
+    <nav class="ia-intro-links" aria-label="Rychlé odkazy">
+      <a href="#card-01">Model vs. agent</a>
+      <a href="#card-08">Agentické kódování</a>
+      <a href="#card-12">Microsoft 365</a>
+      <a href="README.html">Full story</a>
+    </nav>
+  </section>
+
+  <nav class="ia-toc" aria-label="Obsah">
+    <p class="ia-toc-title">Obsah</p>
+    <div class="ia-toc-list">
+      <a href="#card-01"><span class="ia-toc-num">01</span><span>Model, agent a automatizace</span></a>
+      <a href="#card-02"><span class="ia-toc-num">02</span><span>LLM jako komprese znalostí</span></a>
+      <a href="#card-03"><span class="ia-toc-num">03</span><span>Pacient bez nové paměti</span></a>
+      <a href="#card-04"><span class="ia-toc-num">04</span><span>Relevance kontextu</span></a>
+      <a href="#card-05"><span class="ia-toc-num">05</span><span>RAG a AI workflow</span></a>
+      <a href="#card-06"><span class="ia-toc-num">06</span><span>Skuteční agenti</span></a>
+      <a href="#card-07"><span class="ia-toc-num">07</span><span>Zlom v kódování</span></a>
+      <a href="#card-08"><span class="ia-toc-num">08</span><span>Agentické kódování</span></a>
+      <a href="#card-09"><span class="ia-toc-num">09</span><span>Ekonomická hodnota</span></a>
+      <a href="#card-10"><span class="ia-toc-num">10</span><span>OpenClaw moment</span></a>
+      <a href="#card-11"><span class="ia-toc-num">11</span><span>Osobní agent</span></a>
+      <a href="#card-12"><span class="ia-toc-num">12</span><span>Microsoft 365 a firma</span></a>
+      <a href="#card-13"><span class="ia-toc-num">13</span><span>Na co se zaměřit</span></a>
+      <a href="#card-14"><span class="ia-toc-num">14</span><span>Agentické nasazení</span></a>
+      <a href="#card-15"><span class="ia-toc-num">15</span><span>Kam firmy směřují</span></a>
+      <a href="#card-16"><span class="ia-toc-num">16</span><span>Co to znamená</span></a>
+    </div>
+  </nav>
+
+  <main id="content">
+    <section class="ia-group" id="zaklady">
+      <h2 class="ia-group-title">Od modelu ke kontextu</h2>
+      <div class="ia-card-list">
+        <article class="ia-card is-open" data-ia-card>
+          <button class="ia-card-head" id="card-01-head" type="button" aria-expanded="true" aria-controls="card-01" data-ia-card-button>
+            <span class="ia-card-num">01</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Co je rozdíl mezi modelem, agentem a automatizací</span><span class="ia-card-subtitle">Model odpovídá, workflow postupuje podle plánu, agent pracuje na cíli.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-01" aria-labelledby="card-01-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li><strong>Model</strong> generuje odpověď.</li>
+                <li><strong>Automatizace</strong> vykonává předem navržený postup.</li>
+                <li><strong>Agent</strong> dostane cíl, sám volí kroky, používá nástroje, kontroluje výsledek a iteruje.</li>
+                <li>Zásadní rozdíl není v tom, že umí psát text, ale že <strong>umí aktivně pracovat na dosažení výsledku</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-02-head" type="button" aria-expanded="false" aria-controls="card-02" data-ia-card-button>
+            <span class="ia-card-num">02</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Jazykový model jako komprimovaná reprezentace znalostí</span><span class="ia-card-subtitle">LLM není databáze ani archiv, ale ztrátový snapshot v čase.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-02" aria-labelledby="card-02-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>LLM je <strong>komprimovaná, ztrátová reprezentace znalostí lidstva</strong>.</li>
+                <li>Není to přesná databáze ani úplný archiv.</li>
+                <li>Je to <strong>snapshot v čase</strong> - model neví, co se změnilo po jeho natrénování.</li>
+                <li>Každý prompt je v principu <strong>nový start</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-03-head" type="button" aria-expanded="false" aria-controls="card-03" data-ia-card-button>
+            <span class="ia-card-num">03</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Analogie: pacient bez nové paměti</span><span class="ia-card-subtitle">Chytrý systém bez lístečků s kontextem odpovídá jen z obecné komprese.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-03" aria-labelledby="card-03-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Model je jako <strong>pacient, který si nedokáže vytvářet nové vzpomínky</strong>.</li>
+                <li>Aby fungoval dobře, musí mít u postele lístečky s kontextem.</li>
+                <li>Bez kontextu je sice chytrý, ale odpovídá <strong>z obecné komprese znalostí</strong>.</li>
+                <li>Proto model potřebuje <strong>dobře připravený kontext</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-04-head" type="button" aria-expanded="false" aria-controls="card-04" data-ia-card-button>
+            <span class="ia-card-num">04</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Proč je kritická relevance kontextu</span><span class="ia-card-subtitle">Nejde o co nejvíc dat, ale o správná, aktuální a přesná data.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-04" aria-labelledby="card-04-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Problém není jen dát modelu data. Kritické je dát mu <strong>správná, relevantní a aktuální data</strong>.</p>
+              <ul>
+                <li>Špatný kontext znamená vyšší cenu, vyšší latenci, větší šum a horší rozhodování.</li>
+                <li>V enterprise nestačí hodit člověka do knihovny.</li>
+                <li>Potřebuje vědět <strong>správný fond, regál, knihu a konkrétní kapitolu</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="ia-group" id="agenticke-kodovani">
+      <h2 class="ia-group-title">Od workflow ke skutečným agentům</h2>
+      <div class="ia-card-list">
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-05-head" type="button" aria-expanded="false" aria-controls="card-05" data-ia-card-button>
+            <span class="ia-card-num">05</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Enterprise vzory před agenty</span><span class="ia-card-subtitle">RAG chat nad obsahem a předem navržený AI workflow.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-05" aria-labelledby="card-05-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Ještě před nástupem skutečných agentů se ve firmách prosadily dva hlavní vzory.</p>
+              <p><strong>RAG chat nad obsahem</strong></p>
+              <ul>
+                <li>model dohledá relevantní obsah,</li>
+                <li>model odpoví nad konkrétními firemními znalostmi,</li>
+                <li>typický pattern je najdi a vysvětli.</li>
+              </ul>
+              <p><strong>AI workflow</strong></p>
+              <ul>
+                <li>úloha je předem navržená a řízená,</li>
+                <li>typicky klasifikace, extrakce, OCR, sumarizace, faktury, skeny nebo hlas.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-06-head" type="button" aria-expanded="false" aria-controls="card-06" data-ia-card-button>
+            <span class="ia-card-num">06</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Od pevných workflow ke skutečným agentům</span><span class="ia-card-subtitle">Agent nejen odpovídá, ale řeší problém a iteruje směrem k výsledku.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-06" aria-labelledby="card-06-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>RAG a AI workflow jsou užitečné, ale stále jde hlavně o <strong>pasivní systém</strong> nebo <strong>pevně orchestrovaný proces</strong>.</p>
+              <ul>
+                <li>Skutečný agent dostane <strong>cíl</strong>.</li>
+                <li>Sám volí další krok, vybírá nástroje, opravuje chyby a ověřuje hypotézy.</li>
+                <li>Iteruje směrem k výsledku.</li>
+                <li>Tedy ne jen odpovídá, ale <strong>řeší problém</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-07-head" type="button" aria-expanded="false" aria-controls="card-07" data-ia-card-button>
+            <span class="ia-card-num">07</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Zlom v kódování: listopad / prosinec 2025</span><span class="ia-card-subtitle">Chat píšící kód se změnil v systém, který spolehlivě dokončuje práci.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-07" aria-labelledby="card-07-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Zlom v agentickém kódování byl vidět někdy kolem <strong>listopadu / prosince 2025</strong>.</li>
+                <li>Výstupy přestaly být jen chat, který napíše kus kódu.</li>
+                <li>Nastal <strong>fázový přechod</strong> - najednou to začalo velmi spolehlivě fungovat.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-08-head" type="button" aria-expanded="false" aria-controls="card-08" data-ia-card-button>
+            <span class="ia-card-num">08</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Agentické kódování</span><span class="ia-card-subtitle">Napsat, spustit, přečíst chybu, opravit, otestovat a nasadit.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-08" aria-labelledby="card-08-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Agent dnes umí napsat kód, spustit ho, přečíst chybu, opravit ji a zkusit další iteraci.</li>
+                <li>Umí otevřít browser, udělat screenshot, proklikat UI, testovat aplikaci a ověřit výsledek.</li>
+                <li>Případně umí i nasadit řešení.</li>
+                <li>Už to nepřipomíná chat. Připomíná to <strong>práci softwarového inženýra</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="ia-group" id="enterprise">
+      <h2 class="ia-group-title">Hodnota a praktické použití</h2>
+      <div class="ia-card-list">
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-09-head" type="button" aria-expanded="false" aria-controls="card-09" data-ia-card-button>
+            <span class="ia-card-num">09</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Ekonomická hodnota agentů</span><span class="ia-card-subtitle">AI akceleruje drahou lidskou práci a rozevírá produktivitu mezi týmy.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-09" aria-labelledby="card-09-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Licence za <strong>20 nebo 40 dolarů</strong> je málo; dobrý inženýr utratí za AI mnohem víc.</li>
+                <li>Hodnota agenta je v tom, že dokáže <strong>akcelerovat drahou lidskou práci</strong>.</li>
+                <li>Jensen Huang popsal, že inženýři mohou spotřebovávat tokeny zhruba ve výši <strong>poloviny své mzdy</strong> a že by byl deeply alarmed, pokud by inženýr s příjmem <strong>500 000 USD</strong> spotřeboval jen zlomek a ne kolem <strong>250 000 USD v tokenech</strong>. <a href="https://www.cnbc.com/2026/03/20/nvidia-ai-agents-tokens-human-workers-engineer-jobs-unemployment-jensen-huang.html">cnbc.com</a>, <a href="https://www.aol.com/articles/jensen-huang-says-deeply-alarmed-040314321.html">aol.com</a></li>
+                <li>AI rozevře nůžky mezi nejlepšími s AI a zbytkem startovního pole.</li>
+                <li>Průměrná produktivita dramaticky naroste, ale medián se může změnit méně.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-10-head" type="button" aria-expanded="false" aria-controls="card-10" data-ia-card-button>
+            <span class="ia-card-num">10</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">OpenClaw jako ChatGPT moment pro agenty</span><span class="ia-card-subtitle">Jednoduchý referenční příklad, na kterém jde vysvětlit agentické chování.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-10" aria-labelledby="card-10-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Pro širší publikum je užitečné mít <strong>jednoduchý, srozumitelný referenční příklad</strong>.</li>
+                <li>OpenClaw je takový aha moment: ne jen model, ale systém, který <strong>pracuje, jedná a dokončuje úkol</strong>.</li>
+                <li>NVIDIA v březnu 2026 zmiňovala OpenClaw jako lokálně běžícího asistenta na Jetsonu pro automatizaci úloh a práci v reálném čase. <a href="https://blogs.nvidia.com/blog/tag/gtc-2026/">blogs.nvidia.com</a>, <a href="https://blogs.nvidia.com/?hashtags=gtc-2026">blogs.nvidia.com</a></li>
+                <li>Jeho autor Peter Steinberger bude keynote speaker na Microsoft Build 2026.</li>
+                <li>Z 0 na 145k hvězdiček na GitHubu za 14 dní, aktuálně 350k hvězdiček - nejvíc ze všech non-aggregator projektů.</li>
+                <li>Pro srovnání: Linux 225k, Kubernetes 121k, VS Code 183k, React 244k.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-11-head" type="button" aria-expanded="false" aria-controls="card-11" data-ia-card-button>
+            <span class="ia-card-num">11</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Osobní agent prakticky, například s Copilot Cowork</span><span class="ia-card-subtitle">Agent projde kontext, upraví demo a připraví další kroky.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-11" aria-labelledby="card-11-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Dobrý příklad agenta v praxi: projde historii callů, Teams kontext a agendu a navrhne úpravu dalšího setkání.</li>
+                <li>Aktivně stáhne demo, upraví kód pro zákazníka, doplní logo a branding, přizpůsobí data a nasadí demo.</li>
+                <li>Připraví screenshoty, doplní prezentaci a navrhne update pozvánky a agendy.</li>
+                <li>To je zásadní rozdíl oproti systému, který jen <strong>poradí</strong>.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-12-head" type="button" aria-expanded="false" aria-controls="card-12" data-ia-card-button>
+            <span class="ia-card-num">12</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Agenti v Microsoft 365 a firmě</span><span class="ia-card-subtitle">Osobní asistent, virtuální kolega nebo pomocník v dokumentu a procesu.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-12" aria-labelledby="card-12-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>V Microsoft 365 firmě lze agenty chápat jako:</p>
+              <ul>
+                <li><strong>osobního asistenta v chatu</strong>,</li>
+                <li><strong>specializovaného virtuálního kolegu</strong>,</li>
+                <li><strong>pomocníka přivolaného do dokumentu nebo procesu</strong>.</li>
+              </ul>
+              <p>Klíčové je, že pracují nad firemním kontextem, daty, nástroji, historií komunikace a dokumentů.</p>
+            </div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="ia-group" id="platforma">
+      <h2 class="ia-group-title">Od use casu k platformě</h2>
+      <div class="ia-card-list">
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-13-head" type="button" aria-expanded="false" aria-controls="card-13" data-ia-card-button>
+            <span class="ia-card-num">13</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Jak najít, na co se zaměřit</span><span class="ia-card-subtitle">Skutečné úzké místo často není finální rozhodnutí, ale tření před ním.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-13" aria-labelledby="card-13-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Příklad z bezpečnosti: automatizace posouzení žádosti o bezpečnostní výjimku, které trvá tři měsíce.</li>
+                <li>Zákazník se často zaměří na samotné posouzení žádosti, tedy to nejtěžší.</li>
+                <li>Unikne mu ale skutečný problém: neúplné podklady, nejasné požadavky, příliš široká oprávnění a dlouhá roztříštěná komunikace.</li>
+                <li>Typický anti-pattern: organizace chce zero-shot systém, ale ignoruje skutečné úzké místo procesu.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-14-head" type="button" aria-expanded="false" aria-controls="card-14" data-ia-card-button>
+            <span class="ia-card-num">14</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Příklad agentického nasazení</span><span class="ia-card-subtitle">Agent nemusí rozhodovat za bezpečáka, ale může odstranit tření v procesu.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-14" aria-labelledby="card-14-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <p>Agent nemusí nahrazovat bezpečáka v rozhodnutí. Může ale zásadně odstranit tření v procesu.</p>
+              <p><strong>Úplnost a komunikace</strong></p>
+              <ul>
+                <li>zkontroluje úplnost žádosti, vyžádá chybějící informace, komunikuje se zadavatelem a technickým týmem,</li>
+                <li>pracuje se směrnicemi a historií.</li>
+              </ul>
+              <p><strong>Kvalita návrhu</strong></p>
+              <ul>
+                <li>dělá <strong>pushback</strong>, navrhuje <strong>least privilege</strong>, menší scope a kratší dobu přístupu,</li>
+                <li>navrhuje <strong>PIM / JIT</strong>, anonymizaci dat a technicky bezpečnější variantu řešení.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-15-head" type="button" aria-expanded="false" aria-controls="card-15" data-ia-card-button>
+            <span class="ia-card-num">15</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Kam firmy směřují</span><span class="ia-card-subtitle">Cíl není mít nějaké AI, ale 10x víc AI během 12 měsíců.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-15" aria-labelledby="card-15-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>Cílem firem není jen mít nějaké AI.</li>
+                <li>Cílem je <strong>10x víc AI v horizontu 12 měsíců</strong>, identifikovat použitelné use casy a nečekat půl roku na každé řešení.</li>
+                <li>Firmy nechtějí řešit každý agentický scénář jako jednorázový projekt.</li>
+                <li>Proto potřebují <strong>platformu</strong>, ne jen demo.</li>
+              </ul>
+              <div class="ia-callout">
+                <span class="ia-callout-title">Platforma musí mít</span>
+                governance, standardizované komponenty, bezpečnost, testovatelnost, observabilitu, katalog agentů, administraci, auditovatelnost a provozní model pro škálování.
+              </div>
+            </div></div>
+          </div>
+        </article>
+
+        <article class="ia-card" data-ia-card>
+          <button class="ia-card-head" id="card-16-head" type="button" aria-expanded="false" aria-controls="card-16" data-ia-card-button>
+            <span class="ia-card-num">16</span>
+            <span class="ia-card-title"><span class="ia-card-title-main">Co to všechno znamená</span><span class="ia-card-subtitle">Agenti jsou coworkeři a autonomní workflow vrstva, ne další chatboti.</span></span>
+            <span class="ia-card-toggle" aria-hidden="true">▾</span>
+          </button>
+          <div class="ia-card-body" id="card-16" aria-labelledby="card-16-head" data-ia-card-panel>
+            <div class="ia-card-body-clip"><div class="ia-card-content ia-prose">
+              <ul>
+                <li>OpenClaw je <strong>ChatGPT moment pro agenty</strong>.</li>
+                <li>Agenti nejsou lepší chatboti, ale systémy, které dostanou cíl, rozhodují se, používají nástroje a <strong>dotahují práci do výsledku</strong>.</li>
+                <li>Mají zásadní hodnotu: bude zaměstnanec spotřebovávat agenty v hodnotě <strong>půlky své mzdy</strong>?</li>
+                <li>Ve firmách budou fungovat jako osobní <strong>coworkeři a autonomní workflow</strong> vrstva.</li>
+                <li>Cílem pro tento rok nejsou jednotky vydřených use casů, ale platforma pro <strong>10x více AI</strong> během 12 měsíců.</li>
+              </ul>
+            </div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="ia-closing" aria-label="Závěr">
+      <div class="ia-quote ia-prose">
+        <p>Agent není odpověď. Agent je pracovník nad cílem, kontextem, nástroji a ověřením výsledku.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="ia-footer">
+    <p>Interaktivní HTML tahák k agentům. <a href="README.html">Pokračovat na full story</a>.</p>
+  </footer>
+</div>
+
+<script>
+(() => {
+  document.documentElement.classList.add("ia-js");
+
+  const root = document.documentElement;
+  const updateThemeButtons = () => {
+    const isDark = root.getAttribute("data-theme") === "dark";
+    document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+      button.textContent = isDark ? "Světlý režim" : "Tmavý režim";
+      button.setAttribute("aria-label", isDark ? "Přepnout na světlý režim" : "Přepnout na tmavý režim");
+    });
+  };
+
+  updateThemeButtons();
+
+  document.querySelectorAll("[data-theme-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      updateThemeButtons();
+    });
+  });
+
+  document.querySelectorAll("[data-ia-card]").forEach((card) => {
+    const button = card.querySelector("[data-ia-card-button]");
+    if (!button) {
+      return;
+    }
+
+    const setOpen = (open) => {
+      card.classList.toggle("is-open", open);
+      button.setAttribute("aria-expanded", String(open));
+    };
+
+    setOpen(button.getAttribute("aria-expanded") === "true" || card.classList.contains("is-open"));
+    button.addEventListener("click", () => setOpen(!card.classList.contains("is-open")));
+  });
+
+  document.querySelectorAll("[data-expand-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-ia-card]").forEach((card) => {
+        const control = card.querySelector("[data-ia-card-button]");
+        card.classList.add("is-open");
+        if (control) {
+          control.setAttribute("aria-expanded", "true");
+        }
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-collapse-all]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-ia-card]").forEach((card) => {
+        const control = card.querySelector("[data-ia-card-button]");
+        card.classList.remove("is-open");
+        if (control) {
+          control.setAttribute("aria-expanded", "false");
+        }
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
