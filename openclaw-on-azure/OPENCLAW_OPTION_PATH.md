@@ -1,4 +1,17 @@
-# Handoff: OpenClaw on Azure toward Teams + Agent 365
+# OpenClaw option path: Teams + Agent 365
+
+## Status and relationship to Autopilots on Azure
+
+This document is the historical and forward option path for the OpenClaw runtime. It records the implementation path that brought the project from an OpenClaw-only Azure demo through Teams collaborative UX and into Agent 365 setup.
+
+The project is now moving toward the `autopilots-on-azure` architecture, where OpenClaw and Hermes are peer runtimes behind a common bridge. Keep completed OpenClaw milestones here as historical baseline rather than rewriting them as if they were originally implemented with the new multi-runtime abstraction.
+
+Current status at the time of rename:
+
+- Milestones through 3.5 are complete for the OpenClaw path.
+- Milestone 4 setup has been partially completed; remaining browser, tenant, license, and instance-validation steps are tracked below.
+- New runtime-neutral architecture decisions live in `docs\adr\0005-autopilots-rename-and-runtime-neutrality.md`, `docs\adr\0006-common-bridge-with-runtime-adapters.md`, `docs\adr\0007-side-by-side-autopilot-deployments.md`, and `docs\adr\0008-hermes-api-server-in-sandbox.md`.
+- Hermes parity and the multi-runtime migration plan live in `HERMES_OPTION_PLAN.md`.
 
 ## Goal
 
@@ -519,7 +532,7 @@ Status: blocked until Agent 365 licensing is available.
 2. Set **Agent Type** to **API Based** and **Notification URL** to the bridge `/api/messages` URL.
 3. Upload `.local\<suffix>\agent365\manifest\manifest.zip` in Microsoft 365 admin center under **Agents > All agents > Upload custom agent**.
 4. Create/request the instance in Teams Apps and approve pending requests at `https://admin.cloud.microsoft/#/agents/all/requested`.
-5. Verify the agent user object ID, display name, UPN, and lifecycle owner; record those non-secret values in `.local\<suffix>\agent365\openclaw-agent365-identifiers.json` and summarize them in the handoff without hard-coding tenant-specific IDs in source.
+5. Verify the agent user object ID, display name, UPN, and lifecycle owner; record those non-secret values in `.local\<suffix>\agent365\openclaw-agent365-identifiers.json` and summarize them in this option path without hard-coding tenant-specific IDs in source.
 
 ### Milestone 5: Agent-owned identity and auth boundary
 

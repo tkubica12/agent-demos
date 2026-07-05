@@ -6,9 +6,9 @@ Accepted.
 
 ## Context
 
-Teams targeted private messages let a user and agent communicate privately inside a shared channel or group chat context. The feature is public developer preview.
+Teams targeted private messages let a user and autopilot communicate privately inside a shared channel or group chat context. The feature is public developer preview.
 
-The runtime bridge can detect targeted messages through `recipient.is_targeted` and can send targeted replies with `MessageActivityInput(...).with_recipient(..., is_targeted=True)`.
+The bridge can detect targeted messages through `recipient.is_targeted` and can send targeted replies with `MessageActivityInput(...).with_recipient(..., is_targeted=True)`.
 
 However, Teams upload validation rejected early attempts to add `supportsTargetedMessages` to the normal manifest because:
 
@@ -29,6 +29,7 @@ Normal package:
 Preview package:
 
 - Is generated explicitly with `scripts.package_teams_app --preview-targeted-messages`.
+- Uses the selected autopilot instance metadata, so OpenClaw and Hermes deployments can generate separate preview packages.
 - Uses manifest version 1.29.
 - Adds `bots[0].supportsTargetedMessages = true`.
 - Adds root `supportsChannelFeatures = "tier1"` because schema 1.25+ requires it for apps with `team` scope.
@@ -37,6 +38,6 @@ Preview package:
 
 - The default demo remains easy to upload in normal tenants.
 - Targeted private messages can be tested only where Teams Public Preview and custom app upload are enabled.
-- Documentation must tell users to type `/` in a channel/group compose box to discover the targeted private agent command.
+- Documentation must tell users to type `/` in a channel/group compose box to discover the targeted private autopilot command.
 - The bridge runtime can support targeted private responses even when the installed package does not expose the receive-targeted UX.
 - Targeted messages remain preview-limited: they expire after 24 hours and do not support replies, forwarding, or reactions.

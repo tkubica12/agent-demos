@@ -243,7 +243,7 @@ The milestone default is the Agent 365 AI teammate flow because it is the path t
 uv run python -m scripts.setup_agent365 --blueprint-agent --run-setup
 ```
 
-After setup succeeds, capture non-secret IDs for handoff and troubleshooting:
+After setup succeeds, capture non-secret IDs for the OpenClaw option path and troubleshooting:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --capture
