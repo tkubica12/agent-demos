@@ -8,7 +8,7 @@ from typing import Any
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 
-from bridge.gateway_client import OpenClawGatewayClient, gateway_http_url_to_ws
+from bridge.gateway_client import OpenClawGatewayClient, OpenClawGatewayError, gateway_http_url_to_ws
 from bridge.runtime.base import AgentRequest, AgentResponse
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
@@ -72,19 +72,24 @@ class OpenClawRuntimeAdapter:
             device_private_key_pem=_env_optional("OPENCLAW_BRIDGE_DEVICE_PRIVATE_KEY_PEM") or None,
         )
         agent_id = _env_optional("OPENCLAW_BRIDGE_AGENT_ID") or None
-        if request.on_delta:
-            result = await gateway.invoke_agent_streaming(
-                message=request.prompt,
-                session_key=request.conversation_id,
-                agent_id=agent_id,
-                on_delta=request.on_delta,
-            )
-        else:
-            result = await gateway.invoke_agent(
-                message=request.prompt,
-                session_key=request.conversation_id,
-                agent_id=agent_id,
-            )
+        try:
+            if request.on_delta:
+                result = await gateway.invoke_agent_streaming(
+                    message=request.prompt,
+                    session_key=request.conversation_id,
+                    agent_id=agent_id,
+                    on_delta=request.on_delta,
+                )
+            else:
+                result = await gateway.invoke_agent(
+                    message=request.prompt,
+                    session_key=request.conversation_id,
+                    agent_id=agent_id,
+                )
+        except OpenClawGatewayError as exc:
+            exc.sandbox_id = sandbox.sandbox_id
+            exc.gateway_url = sandbox.gateway_url
+            raise
         return AgentResponse(
             text=result,
             raw={

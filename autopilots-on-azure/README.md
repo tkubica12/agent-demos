@@ -134,7 +134,7 @@ Set-Location ..\..
 uv run python -m scripts.prepare_control_ui
 ```
 
-Open the printed Gateway URL, paste the printed Gateway token, then approve the printed bridge `deviceId`:
+The helper probes the bridge `/invoke` endpoint and prints the Gateway URL, Gateway token, data volume, and bridge `deviceId`. Open the printed Gateway URL, paste the printed Gateway token, then approve the printed bridge `deviceId`:
 
 ```text
 AGENT -> Nodes and Devices -> find bridge device ID -> approve

@@ -8,6 +8,7 @@ import bridge.app as bridge_app
 import bridge.runtime.factory as runtime_factory
 import bridge.runtime.openclaw as openclaw_runtime
 import scripts.sandbox_runtime as sandbox_runtime
+from bridge.gateway_client import OpenClawGatewayError
 from bridge.runtime.base import AgentRequest
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox, hermes_sandbox_config, openclaw_sandbox_config, runtime_labels
@@ -107,6 +108,48 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(calls["gateway_kwargs"]["token"], "gateway-token")
         self.assertEqual(calls["invoke_kwargs"]["message"], "hello")
         self.assertEqual(calls["invoke_kwargs"]["session_key"], "session-1")
+
+    def test_openclaw_adapter_attaches_sandbox_details_to_pairing_errors(self):
+        class Gateway:
+            def __init__(self, **kwargs):
+                pass
+
+            async def invoke_agent(self, **kwargs):
+                raise OpenClawGatewayError("pairing required: device is not approved yet")
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                gateway_url="https://gateway.example",
+                reused_existing_sandbox=True,
+                data_volume="openclaw-data",
+            )
+
+        previous_gateway = openclaw_runtime.OpenClawGatewayClient
+        openclaw_runtime.OpenClawGatewayClient = Gateway
+        try:
+            adapter = OpenClawRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+            )
+            with self.assertRaises(OpenClawGatewayError) as raised:
+                asyncio.run(
+                    adapter.invoke(
+                        AgentRequest(
+                            prompt="hello",
+                            conversation_id="session-1",
+                            user_id="user-1",
+                            source="invoke",
+                            must_answer=True,
+                        )
+                    )
+                )
+        finally:
+            openclaw_runtime.OpenClawGatewayClient = previous_gateway
+
+        self.assertEqual(raised.exception.sandbox_id, "sandbox-1")
+        self.assertEqual(raised.exception.gateway_url, "https://gateway.example")
 
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(

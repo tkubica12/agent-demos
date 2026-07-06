@@ -571,6 +571,12 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
         return invoke_response_from_agent_response(request.conversation_id, response)
     except Exception as exc:
         detail = {"message": str(exc)}
+        sandbox_id = getattr(exc, "sandbox_id", "")
+        gateway_url = getattr(exc, "gateway_url", "")
+        if sandbox_id:
+            detail["sandboxId"] = sandbox_id
+        if gateway_url:
+            detail["gatewayUrl"] = gateway_url
         if os.getenv("OPENCLAW_BRIDGE_DEBUG", "").lower() in {"1", "true", "yes"}:
             detail["type"] = exc.__class__.__name__
         raise HTTPException(status_code=500, detail=detail) from exc
