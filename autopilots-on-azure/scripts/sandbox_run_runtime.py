@@ -11,6 +11,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
     parser.add_argument("--dry-run", action="store_true", help="Print the resolved sandbox config without creating or starting a sandbox.")
+    parser.add_argument("--subscription-id", default="")
+    parser.add_argument("--resource-group", default="")
+    parser.add_argument("--sandbox-group", default="")
+    parser.add_argument("--region", default="")
     parser.add_argument("--image", help="ACR image, e.g. registry.azurecr.io/openclaw-runtime:latest")
     parser.add_argument("--registry-username", default="")
     parser.add_argument("--registry-password", default="")
@@ -31,7 +35,10 @@ def main() -> None:
     args = parser.parse_args()
 
     config = config_from_environment(
-        subscription_id="dry-run" if args.dry_run else "",
+        subscription_id=args.subscription_id or ("dry-run" if args.dry_run else ""),
+        resource_group=args.resource_group,
+        sandbox_group=args.sandbox_group,
+        region=args.region,
         runtime_kind=args.runtime,
         image_name=args.image,
         registry_username=args.registry_username,

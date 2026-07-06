@@ -1,0 +1,12 @@
+model:
+  provider: ${HERMES_MODEL_PROVIDER}
+  name: ${HERMES_MODEL}
+gateway:
+  platforms:
+    api_server:
+      enabled: true
+      host: 0.0.0.0
+      port: 8642
+mcp_servers:
+  private-incidents:
+    url: ${PRIVATE_INCIDENTS_MCP_URL}

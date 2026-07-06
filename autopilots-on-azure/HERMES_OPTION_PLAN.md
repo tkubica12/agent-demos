@@ -397,6 +397,8 @@ Exit criteria:
 
 ### Milestone A3 - Build Hermes runtime image
 
+Status: implemented. Hermes runtime image builds, starts in ACA Sandbox, exposes `/health` on port 8642, and writes `HERMES_HOME`, `.env`, and `config.yaml` under the data mount. The wrapper starts Hermes gateway and provides the health surface; full bridge `/invoke` integration remains A3.5.
+
 Goal: create a Hermes container that can run inside ACA Sandbox and expose the API server.
 
 Tasks:

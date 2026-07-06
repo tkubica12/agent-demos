@@ -269,7 +269,7 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         port=HERMES_API_PORT,
         health_path="/health",
         command=("python3",),
-        args=("start_hermes.py",),
+        args=("/app/start_hermes.py",),
         data_mount_path="/data",
         environment=hermes_runtime_environment(
             api_server_key=overrides.get("api_server_key") or "",

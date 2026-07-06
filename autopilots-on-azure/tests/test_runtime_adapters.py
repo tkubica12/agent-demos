@@ -189,7 +189,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.port, 8642)
         self.assertEqual(config.health_path, "/health")
         self.assertEqual(config.command, ("python3",))
-        self.assertEqual(config.args, ("start_hermes.py",))
+        self.assertEqual(config.args, ("/app/start_hermes.py",))
         self.assertEqual(config.environment["API_SERVER_ENABLED"], "true")
         self.assertEqual(config.environment["API_SERVER_HOST"], "0.0.0.0")
         self.assertEqual(config.environment["API_SERVER_PORT"], "8642")

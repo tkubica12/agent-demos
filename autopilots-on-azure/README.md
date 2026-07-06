@@ -317,6 +317,36 @@ Check the Hermes sandbox config shape without starting Hermes:
 uv run python -m scripts.sandbox_run_runtime --runtime hermes --dry-run --image registry.example/hermes-runtime@sha256:test --api-server-key test-key
 ```
 
+Build and smoke the Hermes runtime image:
+
+```powershell
+$platform = terraform -chdir=terraform\platform output -json | ConvertFrom-Json
+$apps = terraform -chdir=terraform\apps output -json | ConvertFrom-Json
+$images = Get-Content .\terraform\apps\generated.images.auto.tfvars.json -Raw | ConvertFrom-Json
+$apiKey = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([guid]::NewGuid().ToString('N')))
+uv run python -m scripts.sandbox_run_runtime `
+  --runtime hermes `
+  --subscription-id (az account show --query id -o tsv) `
+  --resource-group $platform.resource_group_name.value `
+  --sandbox-group $platform.sandbox_group_name.value `
+  --region $platform.location.value `
+  --customer-vnet-connection-name $platform.sandbox_vnet_connection_name.value `
+  --registry-username $platform.acr_name.value `
+  --registry-password (az acr credential show --name $platform.acr_name.value --query 'passwords[0].value' -o tsv) `
+  --image $images.hermes_runtime_image `
+  --disk-image-name $images.hermes_runtime_disk_image_name `
+  --data-volume-name hermes-a3-data `
+  --api-server-key $apiKey `
+  --private-incidents-mcp-url $apps.private_mcp_url.value `
+  --private-incidents-mcp-static-key demo-static-key
+```
+
+Then call the returned `endpoint_url`:
+
+```powershell
+Invoke-RestMethod "<endpoint_url>/health"
+```
+
 ## Cleanup
 
 ```powershell
