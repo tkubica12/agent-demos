@@ -125,6 +125,8 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.environment["OPENCLAW_GATEWAY_TOKEN"], "token-1")
         self.assertEqual(config.environment["PRIVATE_INCIDENTS_MCP_URL"], "https://mcp.example/mcp")
         self.assertEqual(runtime_labels(config)["runtime"], "openclaw")
+        self.assertEqual(runtime_labels(config)["kind"], "openclaw")
+        self.assertEqual(runtime_labels(config)["autopilot"], "openclaw")
 
     def test_hermes_sandbox_config_can_be_built_without_starting_runtime(self):
         config = hermes_sandbox_config(
@@ -145,6 +147,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.environment["HERMES_HOME"], "/data/hermes")
         self.assertEqual(config.data_volume_name, "hermes-data")
         self.assertEqual(runtime_labels(config)["runtime"], "hermes")
+        self.assertEqual(runtime_labels(config)["kind"], "hermes")
 
     def test_environment_config_uses_bridge_registry_credentials(self):
         previous = {key: os.environ.get(key) for key in ["AGENT_RUNTIME_REGISTRY_USERNAME", "AGENT_RUNTIME_REGISTRY_PASSWORD"]}
@@ -196,7 +199,18 @@ class RuntimeAdapterTests(unittest.TestCase):
             _group_path = "/groups/test"
 
             def _dp_get(self, path):
-                return [{"id": "sandbox-1", "labels": {"app": "autopilots-on-azure", "runtime": "openclaw"}, "volumes": [{"volumeName": "openclaw-data"}]}]
+                return [
+                    {
+                        "id": "legacy-sandbox",
+                        "labels": {"app": "openclaw-on-azure"},
+                        "volumes": [{"volumeName": "openclaw-data"}],
+                    },
+                    {
+                        "id": "sandbox-1",
+                        "labels": {"app": "autopilots-on-azure", "runtime": "openclaw", "kind": "openclaw", "autopilot": "openclaw"},
+                        "volumes": [{"volumeName": "openclaw-data"}],
+                    },
+                ]
 
             def get_sandbox_client(self, sandbox_id):
                 return SandboxClient()

@@ -134,6 +134,8 @@ def existing_named(items, name: str):
 def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
     labels = {
         "app": "autopilots-on-azure",
+        "autopilot": config.labels.get("autopilot", config.runtime_kind),
+        "kind": config.runtime_kind,
         "runtime": config.runtime_kind,
     }
     labels.update(config.labels)
@@ -145,9 +147,7 @@ def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfi
     for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
         labels = sandbox.get("labels", {})
         volumes = sandbox.get("volumes", [])
-        if labels.get("app") not in {"autopilots-on-azure", "openclaw-on-azure"}:
-            continue
-        if labels.get("runtime", config.runtime_kind) != config.runtime_kind:
+        if any(labels.get(key) != value for key, value in expected_labels.items()):
             continue
         if any(volume.get("volumeName") == config.data_volume_name for volume in volumes):
             return sandbox
@@ -155,17 +155,14 @@ def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfi
 
 
 def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str) -> dict | None:
-    return existing_agent_sandbox(
-        client,
-        AgentSandboxConfig(
-            subscription_id="",
-            resource_group="",
-            sandbox_group="",
-            region="",
-            image_name="",
-            data_volume_name=data_volume_name,
-        ),
-    )
+    for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
+        labels = sandbox.get("labels", {})
+        volumes = sandbox.get("volumes", [])
+        if labels.get("app") not in {"autopilots-on-azure", "openclaw-on-azure"}:
+            continue
+        if any(volume.get("volumeName") == data_volume_name for volume in volumes):
+            return sandbox
+    return None
 
 
 def private_incidents_mcp_server_config(*, url: str, static_key: str) -> dict[str, Any]:

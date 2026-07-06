@@ -48,7 +48,7 @@ def main() -> None:
     previous = existing_app_tfvars()
     gateway_token = args.gateway_token or previous.get("openclaw_gateway_token") or random_token()
     approved_device_token = args.approved_device_token or previous.get("openclaw_bridge_device_token", "")
-    data_volume_name = args.data_volume_name or previous.get("runtime_data_volume_name") or previous.get("openclaw_data_volume_name") or "openclaw-data"
+    data_volume_name = args.data_volume_name or "openclaw-autopilot-data"
     device = load_or_create_device(device_path)
 
     tfvars = {
