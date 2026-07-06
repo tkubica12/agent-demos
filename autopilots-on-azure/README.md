@@ -311,6 +311,12 @@ uv run python -m unittest tests.test_teams_bridge tests.test_agent365_setup
 uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway -q
 ```
 
+Check the Hermes sandbox config shape without starting Hermes:
+
+```powershell
+uv run python -m scripts.sandbox_run_runtime --runtime hermes --dry-run --image registry.example/hermes-runtime@sha256:test --api-server-key test-key
+```
+
 ## Cleanup
 
 ```powershell

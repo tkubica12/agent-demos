@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import asdict
 
-from scripts.sandbox_runtime import config_from_environment, ensure_gateway_sandbox
+from scripts.sandbox_runtime import ensure_agent_sandbox, config_from_environment
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
+    parser.add_argument("--dry-run", action="store_true", help="Print the resolved sandbox config without creating or starting a sandbox.")
     parser.add_argument("--image", help="ACR image, e.g. registry.azurecr.io/openclaw-runtime:latest")
     parser.add_argument("--registry-username", default="")
     parser.add_argument("--registry-password", default="")
@@ -15,8 +18,8 @@ def main() -> None:
     parser.add_argument("--foundry-openai-base-url", default="")
     parser.add_argument("--model-deployment", default="")
     parser.add_argument("--gateway-token", default="")
-    parser.add_argument("--disk-image-name", default="openclaw-gateway-image-with-private-mcp")
-    parser.add_argument("--data-volume-name", default="openclaw-data")
+    parser.add_argument("--disk-image-name", default="")
+    parser.add_argument("--data-volume-name", default="")
     parser.add_argument("--data-volume-size", default="20Gi")
     parser.add_argument("--cpu", default="2000m")
     parser.add_argument("--memory", default="2048Mi")
@@ -24,9 +27,12 @@ def main() -> None:
     parser.add_argument("--customer-vnet-connection-name", default="")
     parser.add_argument("--private-incidents-mcp-url", default="")
     parser.add_argument("--private-incidents-mcp-static-key", default="")
+    parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY for dry-run/runtime config.")
     args = parser.parse_args()
 
     config = config_from_environment(
+        subscription_id="dry-run" if args.dry_run else "",
+        runtime_kind=args.runtime,
         image_name=args.image,
         registry_username=args.registry_username,
         registry_password=args.registry_password,
@@ -43,15 +49,19 @@ def main() -> None:
         customer_vnet_connection_name=args.customer_vnet_connection_name,
         private_incidents_mcp_url=args.private_incidents_mcp_url,
         private_incidents_mcp_static_key=args.private_incidents_mcp_static_key,
+        api_server_key=args.api_server_key,
     )
+    if args.dry_run:
+        print(json.dumps(asdict(config), indent=2))
+        return
 
     if config.disk_image_id:
         print(f"Using provided disk image id {config.disk_image_id}", flush=True)
     elif config.image_name:
         print(f"Ensuring sandbox disk image {config.disk_image_name} from {config.image_name}", flush=True)
 
-    result = ensure_gateway_sandbox(config)
-    print(asdict(result))
+    result = ensure_agent_sandbox(config)
+    print(json.dumps(asdict(result), indent=2))
 
 
 if __name__ == "__main__":

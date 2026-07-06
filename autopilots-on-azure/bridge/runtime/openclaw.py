@@ -10,7 +10,7 @@ from azure.identity import DefaultAzureCredential
 
 from bridge.gateway_client import OpenClawGatewayClient, gateway_http_url_to_ws
 from bridge.runtime.base import AgentRequest, AgentResponse
-from scripts.sandbox_runtime import GatewaySandboxConfig, ensure_gateway_sandbox
+from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
 
 def _configured_env(*names: str) -> str | None:
@@ -33,34 +33,9 @@ def _env_optional(*names: str, default: str = "") -> str:
     return value if value is not None else default
 
 
-def openclaw_sandbox_config_from_env() -> GatewaySandboxConfig:
-    return GatewaySandboxConfig(
-        subscription_id=_env_required("AZURE_SUBSCRIPTION_ID"),
-        resource_group=_env_required("AZURE_RESOURCE_GROUP"),
-        sandbox_group=_env_required("AZURE_SANDBOX_GROUP"),
-        region=_env_required("AZURE_REGION"),
-        foundry_openai_base_url=_env_required("FOUNDRY_OPENAI_BASE_URL"),
-        model_deployment=_env_optional("OPENCLAW_MODEL_ID", default="gpt-5-4-mini"),
-        image_name=_env_required("AGENT_RUNTIME_IMAGE", "OPENCLAW_IMAGE"),
-        customer_vnet_connection_name=_env_optional("SANDBOX_VNET_CONNECTION_NAME"),
-        private_incidents_mcp_url=_env_optional("PRIVATE_INCIDENTS_MCP_URL"),
-        private_incidents_mcp_static_key=_env_optional("PRIVATE_INCIDENTS_MCP_STATIC_KEY", default="demo-static-key"),
-        registry_username=_env_optional("AGENT_RUNTIME_REGISTRY_USERNAME", "OPENCLAW_REGISTRY_USERNAME"),
-        registry_password=_env_optional("AGENT_RUNTIME_REGISTRY_PASSWORD", "OPENCLAW_REGISTRY_PASSWORD"),
-        acr_name=_env_optional("ACR_NAME"),
-        disk_image_id=_env_optional("AGENT_RUNTIME_DISK_IMAGE_ID", "OPENCLAW_DISK_IMAGE_ID"),
-        disk_image_name=_env_optional(
-            "AGENT_RUNTIME_DISK_IMAGE_NAME",
-            "OPENCLAW_DISK_IMAGE_NAME",
-            default="openclaw-gateway-image-with-private-mcp",
-        ),
-        data_volume_name=_env_optional("AGENT_RUNTIME_DATA_VOLUME_NAME", "OPENCLAW_DATA_VOLUME_NAME", default="openclaw-data"),
-        data_volume_size=_env_optional("AGENT_RUNTIME_DATA_VOLUME_SIZE", "OPENCLAW_DATA_VOLUME_SIZE", default="20Gi"),
-        cpu=_env_optional("AGENT_RUNTIME_SANDBOX_CPU", "OPENCLAW_SANDBOX_CPU", default="2000m"),
-        memory=_env_optional("AGENT_RUNTIME_SANDBOX_MEMORY", "OPENCLAW_SANDBOX_MEMORY", default="2048Mi"),
-        root_disk_size=_env_optional("AGENT_RUNTIME_SANDBOX_ROOT_DISK_SIZE", "OPENCLAW_SANDBOX_ROOT_DISK_SIZE", default="20Gi"),
-        gateway_token=_env_required("OPENCLAW_GATEWAY_TOKEN"),
-    )
+def openclaw_sandbox_config_from_env() -> AgentSandboxConfig:
+    _env_required("OPENCLAW_GATEWAY_TOKEN")
+    return config_from_environment(runtime_kind="openclaw")
 
 
 class OpenClawRuntimeAdapter:
@@ -69,8 +44,8 @@ class OpenClawRuntimeAdapter:
         *,
         sandbox_lock: asyncio.Lock | None = None,
         credential_factory: Callable[[], TokenCredential] = DefaultAzureCredential,
-        sandbox_config_factory: Callable[[], GatewaySandboxConfig] = openclaw_sandbox_config_from_env,
-        ensure_sandbox: Callable[..., Any] = ensure_gateway_sandbox,
+        sandbox_config_factory: Callable[[], AgentSandboxConfig] = openclaw_sandbox_config_from_env,
+        ensure_sandbox: Callable[..., Any] = ensure_agent_sandbox,
     ) -> None:
         self._sandbox_lock = sandbox_lock or asyncio.Lock()
         self._credential_factory = credential_factory

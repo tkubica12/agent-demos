@@ -7,13 +7,14 @@ from types import SimpleNamespace
 import bridge.app as bridge_app
 import bridge.runtime.factory as runtime_factory
 import bridge.runtime.openclaw as openclaw_runtime
+import scripts.sandbox_runtime as sandbox_runtime
 from bridge.runtime.base import AgentRequest
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
-from scripts.sandbox_runtime import GatewaySandboxConfig
+from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox, hermes_sandbox_config, openclaw_sandbox_config, runtime_labels
 
 
-def sandbox_config() -> GatewaySandboxConfig:
-    return GatewaySandboxConfig(
+def sandbox_config() -> AgentSandboxConfig:
+    return AgentSandboxConfig(
         subscription_id="sub-1",
         resource_group="rg-1",
         sandbox_group="sandbox-group-1",
@@ -106,6 +107,119 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(calls["gateway_kwargs"]["token"], "gateway-token")
         self.assertEqual(calls["invoke_kwargs"]["message"], "hello")
         self.assertEqual(calls["invoke_kwargs"]["session_key"], "session-1")
+
+    def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
+        config = openclaw_sandbox_config(
+            image_name="registry.example/openclaw-runtime@sha256:test",
+            gateway_token="token-1",
+            foundry_openai_base_url="https://foundry.example/openai/v1",
+            model_deployment="gpt-test",
+            private_incidents_mcp_url="https://mcp.example/mcp",
+        )
+
+        self.assertEqual(config.runtime_kind, "openclaw")
+        self.assertEqual(config.port, 18789)
+        self.assertEqual(config.command, ("python3",))
+        self.assertEqual(config.args, ("-m", "openclaw_gateway.start_gateway"))
+        self.assertEqual(config.data_mount_path, "/data")
+        self.assertEqual(config.environment["OPENCLAW_GATEWAY_TOKEN"], "token-1")
+        self.assertEqual(config.environment["PRIVATE_INCIDENTS_MCP_URL"], "https://mcp.example/mcp")
+        self.assertEqual(runtime_labels(config)["runtime"], "openclaw")
+
+    def test_hermes_sandbox_config_can_be_built_without_starting_runtime(self):
+        config = hermes_sandbox_config(
+            image_name="registry.example/hermes-runtime@sha256:test",
+            api_server_key="api-key-1",
+            private_incidents_mcp_url="https://mcp.example/mcp",
+        )
+
+        self.assertEqual(config.runtime_kind, "hermes")
+        self.assertEqual(config.port, 8642)
+        self.assertEqual(config.health_path, "/health")
+        self.assertEqual(config.command, ("python3",))
+        self.assertEqual(config.args, ("start_hermes.py",))
+        self.assertEqual(config.environment["API_SERVER_ENABLED"], "true")
+        self.assertEqual(config.environment["API_SERVER_HOST"], "0.0.0.0")
+        self.assertEqual(config.environment["API_SERVER_PORT"], "8642")
+        self.assertEqual(config.environment["API_SERVER_KEY"], "api-key-1")
+        self.assertEqual(config.environment["HERMES_HOME"], "/data/hermes")
+        self.assertEqual(config.data_volume_name, "hermes-data")
+        self.assertEqual(runtime_labels(config)["runtime"], "hermes")
+
+    def test_environment_config_uses_bridge_registry_credentials(self):
+        previous = {key: os.environ.get(key) for key in ["AGENT_RUNTIME_REGISTRY_USERNAME", "AGENT_RUNTIME_REGISTRY_PASSWORD"]}
+        os.environ["AGENT_RUNTIME_REGISTRY_USERNAME"] = "registry-user"
+        os.environ["AGENT_RUNTIME_REGISTRY_PASSWORD"] = "registry-pass"
+        try:
+            config = config_from_environment(
+                runtime_kind="openclaw",
+                subscription_id="sub-1",
+                resource_group="rg-1",
+                sandbox_group="sandbox-group-1",
+                region="swedencentral",
+                image_name="registry.example/openclaw-runtime@sha256:test",
+                foundry_openai_base_url="https://foundry.example/openai/v1",
+                gateway_token="token-1",
+            )
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(config.registry_username, "registry-user")
+        self.assertEqual(config.registry_password, "registry-pass")
+
+    def test_existing_sandbox_reuse_does_not_require_registry_credentials(self):
+        config = openclaw_sandbox_config(
+            subscription_id="sub-1",
+            resource_group="rg-1",
+            sandbox_group="sandbox-group-1",
+            region="swedencentral",
+            image_name="",
+            data_volume_name="openclaw-data",
+            gateway_token="token-1",
+        )
+
+        class SandboxClient:
+            def ensure_running(self, timeout):
+                self.timeout = timeout
+
+            def get(self):
+                return SimpleNamespace(ports=[SimpleNamespace(port=18789, url="https://gateway.example")])
+
+            def exec(self, command):
+                return SimpleNamespace(exit_code=0, stdout="", stderr="")
+
+        class Client:
+            _group_path = "/groups/test"
+
+            def _dp_get(self, path):
+                return [{"id": "sandbox-1", "labels": {"app": "autopilots-on-azure", "runtime": "openclaw"}, "volumes": [{"volumeName": "openclaw-data"}]}]
+
+            def get_sandbox_client(self, sandbox_id):
+                return SandboxClient()
+
+            def get_sandbox(self, sandbox_id):
+                return SimpleNamespace(id=sandbox_id)
+
+            def list_disk_images(self):
+                raise AssertionError("Existing sandbox reuse must not inspect disk images.")
+
+            def list_volumes(self):
+                raise AssertionError("Existing sandbox reuse must not inspect volumes.")
+
+        previous_factory = sandbox_runtime.create_sandbox_group_client
+        sandbox_runtime.create_sandbox_group_client = lambda config, credential=None: Client()
+        try:
+            result = ensure_agent_sandbox(config, wait_for_ready_seconds=0)
+        finally:
+            sandbox_runtime.create_sandbox_group_client = previous_factory
+
+        self.assertEqual(result.sandbox_id, "sandbox-1")
+        self.assertEqual(result.gateway_url, "https://gateway.example")
+        self.assertTrue(result.reused_existing_sandbox)
 
 
 if __name__ == "__main__":
