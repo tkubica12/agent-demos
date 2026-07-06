@@ -11,7 +11,14 @@ import scripts.sandbox_runtime as sandbox_runtime
 from bridge.gateway_client import OpenClawGatewayError
 from bridge.runtime.base import AgentRequest
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
-from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox, hermes_sandbox_config, openclaw_sandbox_config, runtime_labels
+from scripts.sandbox_runtime import (
+    AgentSandboxConfig,
+    config_from_environment,
+    ensure_agent_sandbox,
+    hermes_sandbox_config,
+    openclaw_sandbox_config,
+    runtime_labels,
+)
 
 
 def sandbox_config() -> AgentSandboxConfig:
@@ -167,9 +174,9 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.data_mount_path, "/data")
         self.assertEqual(config.environment["OPENCLAW_GATEWAY_TOKEN"], "token-1")
         self.assertEqual(config.environment["PRIVATE_INCIDENTS_MCP_URL"], "https://mcp.example/mcp")
-        self.assertEqual(runtime_labels(config)["runtime"], "openclaw")
+        self.assertNotIn("runtime", runtime_labels(config))
+        self.assertNotIn("autopilot", runtime_labels(config))
         self.assertEqual(runtime_labels(config)["kind"], "openclaw")
-        self.assertEqual(runtime_labels(config)["autopilot"], "openclaw")
 
     def test_hermes_sandbox_config_can_be_built_without_starting_runtime(self):
         config = hermes_sandbox_config(
@@ -189,7 +196,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.environment["API_SERVER_KEY"], "api-key-1")
         self.assertEqual(config.environment["HERMES_HOME"], "/data/hermes")
         self.assertEqual(config.data_volume_name, "hermes-data")
-        self.assertEqual(runtime_labels(config)["runtime"], "hermes")
         self.assertEqual(runtime_labels(config)["kind"], "hermes")
 
     def test_environment_config_uses_bridge_registry_credentials(self):
@@ -250,7 +256,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                     },
                     {
                         "id": "sandbox-1",
-                        "labels": {"app": "autopilots-on-azure", "runtime": "openclaw", "kind": "openclaw", "autopilot": "openclaw"},
+                        "labels": {"app": "autopilots-on-azure", "kind": "openclaw"},
                         "volumes": [{"volumeName": "openclaw-data"}],
                     },
                 ]
@@ -277,7 +283,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(result.sandbox_id, "sandbox-1")
         self.assertEqual(result.gateway_url, "https://gateway.example")
         self.assertTrue(result.reused_existing_sandbox)
-
 
 if __name__ == "__main__":
     unittest.main()

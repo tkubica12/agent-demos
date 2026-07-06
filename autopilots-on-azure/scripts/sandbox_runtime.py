@@ -134,9 +134,7 @@ def existing_named(items, name: str):
 def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
     labels = {
         "app": "autopilots-on-azure",
-        "autopilot": config.labels.get("autopilot", config.runtime_kind),
         "kind": config.runtime_kind,
-        "runtime": config.runtime_kind,
     }
     labels.update(config.labels)
     return labels
@@ -148,6 +146,8 @@ def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfi
         labels = sandbox.get("labels", {})
         volumes = sandbox.get("volumes", [])
         if any(labels.get(key) != value for key, value in expected_labels.items()):
+            continue
+        if "runtime" in labels or "autopilot" in labels:
             continue
         if any(volume.get("volumeName") == config.data_volume_name for volume in volumes):
             return sandbox

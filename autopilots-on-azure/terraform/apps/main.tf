@@ -97,7 +97,7 @@ resource "azapi_resource" "private_mcp_app" {
           external      = true
           targetPort    = 8765
           transport     = "Http"
-          allowInsecure = false
+          allowInsecure = true
         }
         registries = [
           {
@@ -300,7 +300,7 @@ resource "azapi_resource" "bridge_app" {
               },
               {
                 name  = "PRIVATE_INCIDENTS_MCP_URL"
-                value = "https://${azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
+                value = "http://${azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
               },
               {
                 name      = "PRIVATE_INCIDENTS_MCP_STATIC_KEY"
