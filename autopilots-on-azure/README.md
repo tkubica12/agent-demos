@@ -42,7 +42,7 @@ terraform -version
 Run commands from:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
+Set-Location .\autopilots-on-azure
 ```
 
 ## 1. Deploy platform resources
@@ -50,9 +50,10 @@ cd D:\agent-demos\autopilots-on-azure
 Creates the resource group, ACR, networking, ACA environments, SandboxGroup, and Foundry/model resources. It does not deploy containers.
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure\terraform\platform
+Set-Location .\terraform\platform
 terraform init
 terraform apply
+Set-Location ..\..
 ```
 
 Note the generated suffix, for example `ehvw`.
@@ -62,7 +63,6 @@ Note the generated suffix, for example `ehvw`.
 Builds the common bridge, OpenClaw runtime, and private MCP images in ACR and writes digest-pinned app tfvars.
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
 uv run python -m scripts.build_images
 ```
 
@@ -94,7 +94,7 @@ Save the printed `deviceId`; you need it for OpenClaw approval.
 Deploys the private MCP Container App, bridge Container App, app settings/secrets, and image digests.
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure\terraform\apps
+Set-Location .\terraform\apps
 terraform init
 terraform apply
 ```
@@ -105,6 +105,8 @@ Check the bridge:
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod "$bridge/health"
 ```
+
+Keep this shell in `terraform\apps` for the next approval step because it reads the same Terraform outputs.
 
 Expected:
 
@@ -128,7 +130,7 @@ Invoke-RestMethod `
 If you see `pairing required: device is not approved yet`, continue:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
+Set-Location ..\..
 uv run python -m scripts.prepare_control_ui
 ```
 
@@ -151,7 +153,6 @@ Run `/invoke` again. Expected result is an OpenClaw answer, for example:
 Create the Teams bot app registration/tfvars:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
 uv run python -m scripts.setup_teams_tfvars
 ```
 
@@ -159,21 +160,21 @@ Rebuild and apply so Terraform updates the bridge settings plus Azure Bot and Te
 
 ```powershell
 uv run python -m scripts.build_images
-cd D:\agent-demos\autopilots-on-azure\terraform\apps
+Set-Location .\terraform\apps
 terraform apply
+Set-Location ..\..
 ```
 
 Package the Teams app:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
 uv run python -m scripts.package_teams_app
 ```
 
 Upload the printed ZIP to Teams. The default path is:
 
 ```text
-D:\agent-demos\autopilots-on-azure\.local\<suffix>\teams\openclaw-autopilot-teams.zip
+.local\<suffix>\teams\openclaw-autopilot-teams.zip
 ```
 
 Install the app into:
@@ -207,7 +208,6 @@ https://<bridge-fqdn>/api/messages
 Prepare the local Agent 365 workspace and print the exact commands for the current bridge endpoint:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
 uv run python -m scripts.setup_agent365
 ```
 
@@ -240,14 +240,14 @@ Generated files, do not commit:
 If the bridge URL changes later, update only the Agent 365 endpoint registration:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure\.local\<suffix>\agent365
+Set-Location .\.local\<suffix>\agent365
 a365 setup blueprint --update-endpoint https://<new-bridge-fqdn>/api/messages
+Set-Location ..\..\..
 ```
 
 Publish the package and upload it in Microsoft 365 admin center:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
 uv run python -m scripts.setup_agent365 --publish
 ```
 
@@ -280,9 +280,10 @@ Weak-signal channel messages are forwarded as bounded context when enabled. Open
 Check bridge health:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure\terraform\apps
+Set-Location .\terraform\apps
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod "$bridge/health"
+Set-Location ..\..
 ```
 
 Check Teams diagnostics:
@@ -306,7 +307,6 @@ Agent 365 instance is not visible in Teams: confirm the Developer Portal bluepri
 Run targeted tests after bridge/script changes:
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure
 uv run python -m unittest tests.test_teams_bridge tests.test_agent365_setup
 uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway -q
 ```
@@ -320,16 +320,17 @@ uv run python -m scripts.sandbox_run_runtime --runtime hermes --dry-run --image 
 ## Cleanup
 
 ```powershell
-cd D:\agent-demos\autopilots-on-azure\terraform\apps
+Set-Location .\terraform\apps
 terraform destroy
 
-cd D:\agent-demos\autopilots-on-azure\terraform\platform
+Set-Location ..\platform
 terraform destroy
+Set-Location ..\..
 ```
 
 Optional local cleanup:
 
 ```powershell
-Remove-Item D:\agent-demos\autopilots-on-azure\.local -Recurse -Force
-Remove-Item D:\agent-demos\autopilots-on-azure\terraform\apps\generated.*.auto.tfvars.json -Force
+Remove-Item .\.local -Recurse -Force
+Remove-Item .\terraform\apps\generated.*.auto.tfvars.json -Force
 ```
