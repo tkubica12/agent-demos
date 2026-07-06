@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import jwt
 import pytest
 from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
 
+import private_incidents_mcp.server as server_module
 from private_incidents_mcp.server import create_auth_provider
 
 
@@ -21,6 +23,13 @@ async def test_static_key_uses_fastmcp_static_token_verifier(monkeypatch: pytest
     token = await provider.verify_token("local-key")
     assert token is not None
     assert token.client_id == "local-demo-client"
+
+
+def test_http_app_disables_host_origin_protection_for_aca_ingress() -> None:
+    assert server_module.app is not None
+    source = Path(server_module.__file__).read_text(encoding="utf-8")
+    assert source.count("host_origin_protection=False") == 2
+    assert source.count('allowed_hosts=["*"]') == 2
 
 
 @pytest.mark.asyncio

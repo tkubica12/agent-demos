@@ -7,7 +7,7 @@ output "private_mcp_fqdn" {
 }
 
 output "private_mcp_url" {
-  value = "http://${azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
+  value = "https://${azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
 }
 
 output "bridge_app_name" {
