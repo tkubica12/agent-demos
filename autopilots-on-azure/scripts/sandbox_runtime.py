@@ -329,6 +329,8 @@ tools.setdefault("profile", "coding")
 also_allow = tools.setdefault("alsoAllow", [])
 if "group:plugins" not in also_allow:
     also_allow.append("group:plugins")
+if "bundle-mcp" not in also_allow:
+    also_allow.append("bundle-mcp")
 config_path.parent.mkdir(parents=True, exist_ok=True)
 config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 PY

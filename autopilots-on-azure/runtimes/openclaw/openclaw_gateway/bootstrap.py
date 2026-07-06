@@ -95,7 +95,7 @@ def _model_config(gateway: bool = False) -> dict[str, Any]:
             },
         }
         config["mcp"]["servers"]["private-incidents"]["headers"] = {"Authorization": f"Bearer {private_incidents_mcp_static_key}"}
-        config["tools"]["alsoAllow"] = ["group:plugins"]
+        config["tools"]["alsoAllow"] = ["group:plugins", "bundle-mcp"]
     if gateway:
         allowed_origins = [
             "http://localhost:18789",
