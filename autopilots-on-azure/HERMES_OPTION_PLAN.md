@@ -158,7 +158,7 @@ Suggested request fields:
 | --- | --- |
 | `prompt` | User-visible instruction or message text |
 | `conversation_id` | Stable logical conversation key |
-| `user_id` | Stable user key, preferably AAD object ID when available |
+| `user_id` | Stable user key. Use the sender AAD object ID when available; it is the primary key for Hermes memory scoping and future per-user OBO state. Do not use display name, email, or UPN as the primary user key because those can change. |
 | `source` | `invoke`, `teams_personal`, `teams_channel`, `teams_reaction`, or `agent365` |
 | `must_answer` | Whether the runtime should produce an answer |
 | `context` | Bounded Teams/channel/thread context text |
@@ -378,6 +378,8 @@ Exit criteria:
 
 ### Milestone A2 - Generalize sandbox lifecycle
 
+Status: implemented for OpenClaw with a Hermes dry-run config path. Hermes still does not start until the Hermes runtime image exists in A3.
+
 Goal: make ACA Sandbox startup runtime-configurable.
 
 Tasks:
@@ -420,7 +422,11 @@ Goal: reach the current Teams milestone 3.5 behavior with Hermes behind the comm
 Tasks:
 
 - Implement `bridge\runtime\hermes.py`.
-- Map bridge conversation/user identity to Hermes session ID and session key.
+- Map bridge conversation/user identity to Hermes session headers with a deterministic rule:
+  - `X-Hermes-Session-Id`: derive from the Teams thread/conversation ID or `/invoke` conversation ID.
+  - `X-Hermes-Session-Key`: derive from `deployment_name`, `tenant_id`, and sender AAD object ID. If AAD OID is unavailable, fall back to an anonymous key derived from deployment and conversation ID, and log that degraded state.
+  - Do not derive the session key from Teams display name, email, UPN, or conversation ID alone.
+- When a turn arrives through an Agent 365 registration, set `source = agent365` in the `AgentRequest` and include the Agent 365 instance ID / agent user ID in `metadata` when known.
 - Send channel and personal chat prompts to Hermes using a sessionful endpoint.
 - Preserve current Teams signal classification and `must_answer` behavior.
 - Preserve reactions and response parsing in the bridge.
@@ -434,10 +440,14 @@ Exit criteria:
 - Mentioned channel/thread flow works against Hermes.
 - Unmentioned observe-only flow does not spam channels.
 - Existing reaction/status behavior remains bridge-owned.
+- Two different simulated users in the same Teams conversation produce different `X-Hermes-Session-Key` values; the same AAD OID produces the same key across turns.
+- Anonymous/fallback session-key mode is visible in diagnostics so it cannot silently mix user memory.
 
 ### Milestone A4 - Agent 365 parity for Hermes
 
 Goal: make Hermes deployments register through the same Agent 365 setup path as OpenClaw deployments.
+
+Terminology note: Agent 365 docs and internal material may use **AI teammate**, **Autopilot**, **digital worker**, or **virtual employee** for the user-like agent identity pattern. In this plan, those terms mean the same target only when Agent 365 creates an Entra agent user for the Hermes instance. Blueprint-only registration is not a digital worker/Autopilot identity.
 
 Tasks:
 
@@ -447,11 +457,19 @@ Tasks:
 - Keep the same tenant/browser/license prerequisites documented as for OpenClaw.
 - Parameterize package names, display names, icons, and descriptions.
 - Document side-by-side Agent 365 packages for OpenClaw and Hermes.
+- Keep Hermes Agent 365 config independent from Hermes runtime config. The Agent 365 blueprint endpoint belongs under `.local\hermes\agent365`; Hermes API key, `HERMES_HOME`, and runtime secrets belong to the Hermes runtime config.
+- Reuse the OpenClaw M4 distinction between AI teammate/Autopilot mode and blueprint-only mode. If Frontier/AI teammate is unavailable, document that Hermes is blueprint-only and does not have a user-like digital-worker identity.
+
+Architecture note:
+
+This milestone uses the **autopilots bridge path**: the common Python ACA bridge owns Bot Framework auth, Teams routing, and Agent 365 registration, then forwards turns to the Hermes sandbox. A separate Foundry-direct Hermes path exists in the broader research/planning material, where Hermes runs as a Foundry Hosted Agent and a generated M365 bridge handles the Bot Framework path. Do not mix the Foundry-direct components with this bridge-path milestone.
 
 Exit criteria:
 
 - OpenClaw and Hermes can have separate Agent 365 package artifacts.
-- Agent 365 setup does not care which runtime is behind the bridge.
+- Agent 365 setup does not care which runtime is behind the bridge, but each runtime has its own `.local\<runtime>\agent365` config and bridge endpoint.
+- Hermes Agent 365 blueprint points to the Hermes bridge endpoint, not the OpenClaw endpoint.
+- Running Agent 365 setup/capture for Hermes does not overwrite OpenClaw's local Agent 365 config or identifiers.
 
 ### Milestone A5 - Side-by-side app deployments
 
@@ -492,14 +510,15 @@ Exit criteria:
 
 Do not implement these until the current OpenClaw path is proven through the validation in `OPENCLAW_OPTION_PATH.md`:
 
-- Agent identity refinements beyond the current bridge/Agent 365 setup.
-- Work IQ integration.
+- Agent identity refinements beyond the current bridge/Agent 365 setup. Defer these until OpenClaw Milestone 5 proves the prompt-envelope identity block, per-user OBO state keyed by AAD object ID, blueprint-only degraded mode, and consent/error behavior.
+- Work IQ integration. Defer this until OpenClaw Milestone 6 proves explicit identity selection for Work IQ MCP calls, including no app-only auth, per-user OBO, admin consent for MCP scopes, and no token passthrough to custom MCP servers.
 - Multi-user profile isolation beyond separate deployment instances.
 - Hermes native Teams adapter mode.
 - Hermes dashboard exposure.
 - Hermes cron/job management through Teams.
 - Full Terraform `for_each` multi-autopilot deployment model.
 - Deeper memory/profile integration across OpenClaw and Hermes.
+- Foundry-direct Hermes as a Hosted Agent / AI teammate / Autopilot path. Treat it as a separate architecture track and revisit after the bridge-path Agent 365 parity is stable.
 
 ## Key risks
 

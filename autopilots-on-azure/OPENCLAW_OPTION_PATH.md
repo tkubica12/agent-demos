@@ -454,6 +454,8 @@ Definition of done:
 
 Purpose: turn the working Teams bridge experience into a governed Agent 365 identity. Do not revisit Teams channel UX here; mentions, RSC observation, quoted/threaded replies, reactions, targeted-message preview packaging, and the OpenClaw reaction control channel are already implemented and documented.
 
+Terminology note: Microsoft material may use **AI teammate**, **Autopilot**, **digital worker**, or **virtual employee** for the same intended pattern: an Agent 365 agent instance with a user-like Entra **agent user** identity. In this option path, treat those terms as aliases only when they mean the AI teammate/Autopilot path that creates an agent user. Do not use them for blueprint-only registration, which creates no user-like agent principal.
+
 Deliverables:
 
 - Create an Agent 365 blueprint for OpenClaw that points at the existing bridge `/api/messages` endpoint.
@@ -492,6 +494,21 @@ Implementation status:
 - The script captures non-secret generated values from `.local\<suffix>\agent365\a365.generated.config.json` into `.local\<suffix>\agent365\openclaw-agent365-identifiers.json`; do not commit any `.local` output.
 - Existing Teams app packaging remains the fallback/demo path. Agent 365 owns blueprint, instance, agent user lifecycle, admin-center publishing, and the Developer Portal API-based endpoint configuration.
 
+Identity modes to record after setup:
+
+| Mode | What Agent 365 creates | Runtime implication |
+| --- | --- | --- |
+| AI teammate / Autopilot / digital worker | Agent blueprint, agent instance, and an Entra **agent user** with object ID, display name, UPN, lifecycle owner, and license-dependent mailbox/Teams presence | Required for the agent to act as a user-like Microsoft 365 participant. Capture the agent user identifiers in `.local\<suffix>\agent365\openclaw-agent365-identifiers.json`. |
+| Blueprint-only | Agent blueprint and app/service-principal-backed instance, but **no** Entra agent user | Useful for registration and bot-shaped demos when Frontier/AI teammate is unavailable. It is not equivalent to a digital worker and cannot be treated as a user-like Work IQ identity. |
+
+Keep these identity concerns separate:
+
+| Concern | Identity type | Purpose |
+| --- | --- | --- |
+| Bridge Azure API calls | User-assigned managed identity on the bridge Container App | ACA wakeup, Azure control-plane calls, ACR pull; never used as the Microsoft 365/Work IQ identity. |
+| Agent 365 setup commands | `Agent 365 CLI` Entra client app with delegated permissions and admin consent | Used by `setup_agent365.py` and interactive setup/capture flows; do not put CLI app credentials in bridge settings or Terraform state. |
+| AI teammate / Autopilot identity | Entra agent user created by Agent 365 | User-like Microsoft 365 participant for Teams presence and agent-owned M365/Work IQ scenarios. |
+
 Authoritative commands for the current approach:
 
 ```powershell
@@ -528,6 +545,17 @@ Manual Agent 365 browser steps:
 
 Status: blocked until Agent 365 licensing is available.
 
+Before opening browser-based setup, write down which account is used for each role:
+
+| Role | Account requirement | Why it matters |
+| --- | --- | --- |
+| Azure / Terraform operator | Account with access to the Azure subscription and deployed bridge resources | Reads Terraform outputs and manages ACA/ACR/Foundry resources. |
+| Microsoft 365 publisher/admin | Global Admin, or an account with the required app catalog/admin permissions and a valid M365 license | Uploads and approves the Agent 365 package and pending instance requests. |
+| Test user | Licensed user in the target tenant | Installs/tests the app and validates Teams/Agent 365 behavior. |
+| Agent user | License-capable Entra agent user created by the AI teammate/Autopilot path | Needed for mailbox/OneDrive/Teams presence and user-like digital-worker behavior. |
+
+Browser-based flows are sensitive to cached identities. If multiple accounts are signed in, prefer explicit device-code/CLI auth for setup steps and use a clean browser profile for admin-center validation.
+
 1. Configure the blueprint in Teams Developer Portal. Use `developerPortalConfigurationUrl` from `.local\<suffix>\agent365\openclaw-agent365-identifiers.json`.
 2. Set **Agent Type** to **API Based** and **Notification URL** to the bridge `/api/messages` URL.
 3. Upload `.local\<suffix>\agent365\manifest\manifest.zip` in Microsoft 365 admin center under **Agents > All agents > Upload custom agent**.
@@ -545,14 +573,17 @@ Questions to answer and implement:
 - Which flows require OBO for the invoking user, especially private mail/calendar/files/chats?
 - How should a Teams activity map to identity context in the OpenClaw prompt: sender, tenant, conversation, targeted/private flag, and agent identity?
 - How should consent be requested and cached per user without assuming a group chat grants access to every participant?
+- How should the bridge acquire and refresh a user OBO token in Teams context? The intended path is Teams SSO / Bot Framework token exchange, followed by Entra OBO for the downstream resource scope. The resulting token is for the invoking user only.
 
 Required bridge changes:
 
 - Add an identity context block to the Teams/Agent prompt envelope:
   - agent instance ID / agent user ID when known
-  - incoming human sender ID and display name
+  - incoming human sender AAD object ID, Teams user ID, and display name
   - auth mode available for this turn: `agent_identity`, `obo_user`, `none`, or `unknown`
   - privacy boundary: public channel/group, targeted private message, or 1:1
+  - OBO token status for this turn: available, missing, expired, consent_required, or blocked_by_policy
+- Add a per-user OBO token/consent state store keyed by the sender's Entra AAD object ID. Do not key OBO state by Teams conversation ID, group chat ID, channel ID, display name, email, or UPN.
 - Add diagnostics that show chosen auth mode without logging tokens or private data.
 - Keep OpenClaw Gateway approval/device identity separate from Microsoft 365/Agent 365 identity; they are different trust boundaries.
 
@@ -567,10 +598,21 @@ Identity rules:
 | Agent schedules on behalf of user | OBO of invoking user |
 | Agent needs another participant's private data | That participant must invoke/consent, or use another governed/admin-approved pattern |
 
+Auth constraints:
+
+- OBO consent is per Entra user object ID, not per Teams chat, group, channel, or conversation. In a group chat or channel, only the invoking/consenting user's private data may be accessed. Other participants must invoke and consent separately.
+- Do not fall back from missing/expired/blocked OBO to agent identity. Ask the invoking user to authenticate/consent or explain that the requested private data cannot be accessed.
+- Teams SSO/OBO behavior differs by scope. Personal and group-chat flows are the first validation target; channel scenarios must have an explicit consent/error path before any private-data feature is enabled there.
+- Conditional Access policies can block OBO token acquisition or produce claims challenges that a bot turn cannot satisfy inline. Surface those cases as explicit user-visible auth requirements and log the policy-blocked status without logging tokens.
+- In blueprint-only mode, `agent_identity` is not a user-like digital-worker identity. Work IQ/user-data scenarios must use `obo_user` or fail clearly.
+
 Definition of done:
 
 - Prompt envelope and diagnostics make the identity boundary explicit for every Teams/Agent turn.
-- At least one agent-identity action and one OBO-required scenario are documented with expected behavior.
+- At least one agent-identity action and one OBO-required scenario are validated end to end.
+- A missing, expired, or policy-blocked OBO token produces a user-visible consent/authentication path, not silent fallback to agent identity.
+- OBO token/consent state is keyed by individual AAD object ID and two users in the same chat cannot share token state.
+- Blueprint-only degraded mode is documented with its identity limitations.
 - No feature assumes group/channel membership implies access to all participants' private data.
 
 Docs:
@@ -578,6 +620,7 @@ Docs:
 - Agent 365 identity: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/identity
 - Agent 365 get started: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/get-started
 - Teams SSO/OBO overview: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/authentication/bot-sso-overview
+- Entra OBO flow: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-on-behalf-of-flow
 
 ### Milestone 6: Work IQ MCP with explicit identity selection
 
@@ -600,11 +643,21 @@ Bridge/OpenClaw requirements:
 - Tool calls must carry the selected identity mode explicitly.
 - If a requested tool requires OBO and no user token/consent exists, OpenClaw must ask that user to authenticate rather than silently failing or using agent identity.
 - If a requested tool would expose private user data in a public thread, prefer targeted private response or ask before sharing publicly.
+- Work IQ does not support application-only authentication. A bridge managed identity, service principal client-credentials token, or blueprint-only app token must not be used for Work IQ MCP calls.
+- Each Work IQ tool call must use either an OBO token for the invoking user or an AI teammate/Autopilot agent-user context. If neither is available, the call must fail with an explicit authentication/consent message.
+- Admin consent for Work IQ MCP permissions is a separate gate from blueprint setup. Track the exact MCP servers and scopes in `ToolingManifest.json`, and record whether the tenant uses the legacy shared-audience model or newer per-server scope model.
+- Start with the minimum Work IQ scope set needed for read-only Mail/Calendar validation; defer broader SharePoint, OneDrive, Word, and write actions until the identity mode is proven.
+- MCP tokens must be audience-bound to the MCP server/resource they are sent to. Do not pass Microsoft-issued Work IQ/Graph tokens to custom or third-party MCP servers.
+- Custom MCP servers must validate token audience and acquire their own downstream token for upstream APIs. They must not relay the token received from the MCP client.
+- Never put access tokens in prompt text, OpenClaw instructions, logs, or diagnostics. If the runtime needs to choose a tool, pass only the selected identity mode and non-secret token status; token injection belongs at the bridge/tool-call boundary.
 
 Docs:
 
 - Work IQ MCP overview: https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview
 - Work IQ Teams reference: https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-teams-work-iq
+- Agent 365 tooling: https://learn.microsoft.com/en-us/microsoft-agent-365/developer/tooling
+- MCP authorization spec: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
+- Entra OBO flow: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-on-behalf-of-flow
 
 ## Risks and limitations
 
@@ -631,6 +684,18 @@ If OpenClaw sandbox wake-up is slow:
 ### OBO in group chat
 
 Do not assume group chat gives access to every participant's private data. OBO is tied to the invoking/consenting user. Use agent identity for agent-owned actions and OBO for the current human user's private context.
+
+### Agent 365 publish and tenant clarity
+
+Agent 365 setup spans Azure, Entra, Microsoft 365 admin center, Teams app catalog, and tenant policy surfaces. The browser account used for Azure/Foundry may not be licensed or privileged for M365 publishing. Confirm the Azure operator, M365 publisher/admin, test user, and agent-user licensing before resuming Milestone 4.
+
+A package can be generated and uploaded successfully but still fail at install time if Teams app permission policies block private/custom apps. Include an explicit Teams app policy check in the Milestone 4 runbook.
+
+### Conditional Access, Purview, and Defender
+
+AI teammate / Autopilot / digital-worker agent users are user-like Entra principals. They can be subject to user-scoped Conditional Access, but they cannot complete traditional MFA challenges because they have no password/passkey/MFA factors. Validate CA policies in report-only mode before assuming agent-user sign-ins will work.
+
+Purview/DLP and Defender coverage depend on the agent being registered and governable through Agent 365 / Entra Agent ID. Before moving beyond read-only Work IQ tests, verify that agent-to-tool activity appears in the expected audit/Defender surfaces and that DLP/sensitivity-label behavior is understood for agent-owned access.
 
 ## Immediate next step for future work
 
