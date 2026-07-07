@@ -39,4 +39,4 @@ Milestone order:
 - Work IQ tool calls must carry an explicit identity mode.
 - If a tool requires OBO and no user token/consent exists, the selected runtime must ask that user to authenticate rather than silently using agent identity.
 - If a tool result contains private user data in a public thread, the selected runtime should prefer targeted private response or ask before sharing publicly.
-- The existing Teams bot package remains a fallback/demo path until the Agent 365 instance is validated.
+- Agent 365 is the active Microsoft 365 packaging path; direct Teams sideload packages are no longer part of the operator flow.

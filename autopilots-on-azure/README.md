@@ -1,13 +1,24 @@
 # Autopilots on Azure
 
-Host autopilot runtimes in Azure Container Apps Sandboxes behind a small standard Azure Container Apps bridge. The bridge receives direct HTTP, Teams, and Agent 365 traffic, wakes or reuses the selected runtime sandbox, forwards the turn, and sends the response back.
+Host OpenClaw and Hermes autopilot runtimes in Azure Container Apps Sandboxes behind a common bridge. The bridge receives `/invoke` and Agent 365 `/api/messages` traffic, wakes or reuses the selected runtime sandbox, forwards the turn, and returns the response.
 
-The current deployment model uses one bridge app that can run either **OpenClaw Autopilot** or **Hermes Autopilot**. Until the side-by-side milestone, switching runtime changes what the existing bridge, Teams app, and Agent 365 endpoint talk to.
+The active plan and specification is in `AUTOPILOTS_SPEC.md`.
+
+## Current deployment model
+
+One bridge app is deployed today. It can run either runtime:
+
+| Runtime | Bridge setting | Sandbox port | Notes |
+| --- | --- | --- | --- |
+| OpenClaw | `AGENT_RUNTIME=openclaw` | `18789` | Requires OpenClaw Gateway device approval. |
+| Hermes | `AGENT_RUNTIME=hermes` | `8642` | Uses Hermes API server and `API_SERVER_KEY`. |
+
+Before the side-by-side milestone, switching the bridge runtime changes what the same bridge URL, Agent 365 endpoint, and previously installed Teams entry point talk to.
 
 ## Architecture
 
 ```text
-Teams / Agent 365 / /invoke
+Agent 365 / /invoke
   -> common bridge Container App
   -> ACA Sandbox runtime
        -> OpenClaw Gateway
@@ -19,13 +30,13 @@ Key folders:
 
 ```text
 terraform\platform\       shared Azure substrate
-terraform\apps\           bridge, private MCP, Teams bot/channel
+terraform\apps\           bridge and private MCP app resources
 runtimes\openclaw\        OpenClaw Gateway sandbox image
+runtimes\hermes\          Hermes API server sandbox image
 bridge\                   FastAPI bridge: /health, /invoke, /api/messages
-bridge\runtime\           runtime adapter contract: OpenClaw and Hermes
+bridge\runtime\           runtime adapters: OpenClaw and Hermes
 private-incidents-mcp\    mock private MCP server
-scripts\                  setup, build, packaging helpers
-teams\                    Teams manifest template
+scripts\                  setup, build, Agent 365, sandbox helpers
 docs\adr\                 architecture decision records
 ```
 
@@ -37,7 +48,7 @@ uv sync
 terraform -version
 ```
 
-Run commands from:
+Run commands from the project root:
 
 ```powershell
 Set-Location .\autopilots-on-azure
@@ -54,8 +65,6 @@ terraform apply
 Set-Location ..\..
 ```
 
-Note the generated suffix, for example `ehvw`.
-
 ## 2. Build container images
 
 Builds the common bridge, OpenClaw runtime, and private MCP images in ACR and writes digest-pinned app tfvars.
@@ -70,9 +79,11 @@ Generated file, do not commit:
 terraform\apps\generated.images.auto.tfvars.json
 ```
 
+Hermes runtime images are built separately while A5 side-by-side deployment is still in progress. See `AUTOPILOTS_SPEC.md` for the current Hermes image build/smoke command.
+
 ## 3. Generate app bootstrap values
 
-Creates the OpenClaw Gateway token and stable bridge device key. The bridge uses managed identity for Azure API calls.
+Creates the OpenClaw Gateway token and stable bridge device key. This is only needed when the bridge is in OpenClaw mode.
 
 ```powershell
 uv run python -m scripts.setup_app_tfvars
@@ -84,8 +95,6 @@ Generated files, do not commit:
 terraform\apps\generated.app.auto.tfvars.json
 .local\<suffix>\openclaw-bridge-device.json
 ```
-
-Save the printed `deviceId`; you need it for OpenClaw approval.
 
 ## 4. Deploy apps
 
@@ -102,9 +111,8 @@ Check the bridge:
 ```powershell
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod "$bridge/health"
+Set-Location ..\..
 ```
-
-Keep this shell in `terraform\apps` for the next approval step because it reads the same Terraform outputs.
 
 Expected:
 
@@ -112,96 +120,72 @@ Expected:
 {"status":"ok"}
 ```
 
-## 5. Approve the OpenClaw bridge device
+## 5. OpenClaw-only device approval
 
-This step is **OpenClaw runtime only**. Hermes does not use OpenClaw Gateway device approval.
+Skip this step when `AGENT_RUNTIME=hermes`.
 
-When the bridge is in OpenClaw mode, the first invoke usually reaches the sandbox and stops on bridge device approval.
+When the bridge is in OpenClaw mode, the first invoke usually reaches the sandbox and stops on bridge device approval:
 
 ```powershell
+Set-Location .\terraform\apps
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod `
   -Method Post `
   -Uri "$bridge/invoke" `
   -ContentType application/json `
-  -Body '{"conversationId":"smoke","message":"List services from private incidents MCP"}'
+  -Body '{"conversationId":"openclaw-smoke","message":"List services from private incidents MCP"}'
+Set-Location ..\..
 ```
 
-If you see `pairing required: device is not approved yet`, continue:
+If you see `pairing required: device is not approved yet`, run:
 
 ```powershell
-Set-Location ..\..
 uv run python -m scripts.prepare_control_ui
 ```
 
-The helper probes the bridge `/invoke` endpoint and prints the Gateway URL, Gateway token, data volume, and bridge `deviceId`. Open the printed Gateway URL, paste the printed Gateway token, then approve the printed bridge `deviceId`:
+Open the printed Gateway URL, paste the printed Gateway token, and approve the printed bridge `deviceId`.
 
-```text
-AGENT -> Nodes and Devices -> find bridge device ID -> approve
-```
+## 6. Validate selected runtime with `/invoke`
 
-Run `/invoke` again. Expected result is an OpenClaw answer, for example:
-
-```json
-{
-  "response": "- core_banking\n- card_payments\n- digital_onboarding\n- fraud_detection\n- wealth_portfolio"
-}
-```
-
-## 6. Add Teams app support
-
-Before A5 there is only one Teams bot/app registration for the single bridge endpoint. The packaged manifest is still OpenClaw-branded today; if you switch the bridge to Hermes mode, the same installed Teams app talks to Hermes even though the app branding has not split yet.
-
-Create the Teams bot app registration/tfvars:
+OpenClaw expected response:
 
 ```powershell
-uv run python -m scripts.setup_teams_tfvars
-```
-
-Rebuild and apply so Terraform updates the bridge settings plus Azure Bot and Teams channel resources:
-
-```powershell
-uv run python -m scripts.build_images
 Set-Location .\terraform\apps
-terraform apply
+$bridge = terraform output -raw bridge_url
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "$bridge/invoke" `
+  -ContentType application/json `
+  -Body '{"conversationId":"openclaw-smoke","message":"List services from private incidents MCP"}'
 Set-Location ..\..
 ```
 
-Package the Teams app:
-
-```powershell
-uv run python -m scripts.package_teams_app
-```
-
-Upload the printed ZIP to Teams. The default path is:
+Expected services:
 
 ```text
-.local\<suffix>\teams\openclaw-autopilot-teams.zip
+core_banking
+card_payments
+digital_onboarding
+fraud_detection
+wealth_portfolio
 ```
 
-`<suffix>` is the Azure platform suffix, for example `ehvw`. Teams sideload packages and OpenClaw bridge device identity are still deployment-suffix scoped. Agent 365 workspaces later in this guide are runtime-scoped under `.local\openclaw\...` and `.local\hermes\...`.
-
-Install the app into:
-
-1. A 1:1 chat with OpenClaw Autopilot.
-2. A team/channel where you want to test collaborative behavior.
-
-Approve the Teams consent prompt for RSC permissions if shown:
-
-```text
-ChannelMessage.Read.Group
-ChatMessage.Read.Chat
-```
-
-Optional targeted private messages preview:
+Hermes expected response when the bridge is switched to `AGENT_RUNTIME=hermes`:
 
 ```powershell
-uv run python -m scripts.package_teams_app --preview-targeted-messages --output .local\<suffix>\teams\openclaw-autopilot-teams-targeted-preview.zip
+Set-Location .\terraform\apps
+$bridge = terraform output -raw bridge_url
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "$bridge/invoke" `
+  -ContentType application/json `
+  -Body '{"conversationId":"hermes-smoke","message":"Reply with exactly: Hermes bridge OK"}'
+Set-Location ..\..
 ```
-
-If Teams validation rejects the preview package, use the normal package. The rest of the demo does not require targeted private messages.
 
 ## 7. Register Agent 365 identity
+
+Agent 365 is the primary Microsoft 365 installation path for both runtimes. Teams sideloading is not part of the active operator flow.
 
 The deployed bridge is an externally hosted Agent 365 messaging endpoint:
 
@@ -209,21 +193,21 @@ The deployed bridge is an externally hosted Agent 365 messaging endpoint:
 https://<bridge-fqdn>/api/messages
 ```
 
-Prepare the local Agent 365 workspace and print the exact commands for the current bridge endpoint. Choose the runtime that is currently behind the bridge:
+Prepare runtime-specific Agent 365 workspaces:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw
 uv run python -m scripts.setup_agent365 --runtime hermes
 ```
 
-Run setup when you are ready to create/update tenant resources:
+Run setup when you are ready to create or update tenant resources:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw --run-setup
 uv run python -m scripts.setup_agent365 --runtime hermes --run-setup
 ```
 
-The default is the Agent 365 AI teammate flow. If your tenant is not in the Frontier preview or you only want a blueprint-backed M365 agent without an Entra user, use:
+If AI teammate / Frontier is unavailable and you only want a blueprint-backed agent:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw --blueprint-agent --run-setup
@@ -248,14 +232,6 @@ Generated files, do not commit:
 .local\hermes\agent365\hermes-agent365-identifiers.json
 ```
 
-If the bridge URL changes later, update only the Agent 365 endpoint registration:
-
-```powershell
-Set-Location .\.local\<runtime>\agent365
-a365 setup blueprint --update-endpoint https://<new-bridge-fqdn>/api/messages
-Set-Location ..\..\..
-```
-
 Publish the package and upload it in Microsoft 365 admin center:
 
 ```powershell
@@ -263,118 +239,41 @@ uv run python -m scripts.setup_agent365 --runtime openclaw --publish
 uv run python -m scripts.setup_agent365 --runtime hermes --publish
 ```
 
-## Demo script
+## Runtime switching
 
-In 1:1 chat:
+Until A5 creates side-by-side deployments, runtime switching is done by updating bridge app environment variables. The most recently validated state can be inspected with:
 
-```text
-List services from private incidents MCP
+```powershell
+az containerapp show `
+  --resource-group <resource-group> `
+  --name <bridge-app-name> `
+  --query "properties.template.containers[0].env[?name=='AGENT_RUNTIME']"
 ```
 
-Expected: OpenClaw Autopilot answers in the 1:1 chat. The bridge can use Teams streaming here.
-
-In a channel where OpenClaw Autopilot is installed:
-
-```text
-@OpenClaw Autopilot Hi, can you hear me? Who am I?
-```
-
-Expected: the bridge adds a temporary eyes reaction if Teams accepts bot reactions, removes it when the runtime is done, and sends the response in the same thread. OpenClaw can also request final semantic reactions with:
-
-```text
-TEAMS_REACTION: eyes | like | heart | smile | surprised | check
-```
-
-Weak-signal channel messages are forwarded as bounded context when enabled. OpenClaw may stay silent by returning exactly `NO_RESPONSE`.
+Use `AUTOPILOTS_SPEC.md` for the current required OpenClaw and Hermes environment variables.
 
 ## Troubleshooting
-
-Check bridge health:
-
-```powershell
-Set-Location .\terraform\apps
-$bridge = terraform output -raw bridge_url
-Invoke-RestMethod "$bridge/health"
-Set-Location ..\..
-```
-
-Check Teams diagnostics:
-
-```powershell
-Invoke-RestMethod "$bridge/diag/teams" | ConvertTo-Json -Depth 12
-```
 
 Common fixes:
 
 ```text
-No channel messages: reinstall/update the Teams app and approve RSC permissions.
-No channel answer: check /diag/teams for responseSent or backgroundException.
-No bot reactions: reactionSendFailed means Teams rejected reaction writes in that scope; text answers still work.
-Preview package rejected: use the normal package; targeted messages require preview schema support.
-Agent 365 instance is not visible in Teams: confirm the Developer Portal blueprint uses API Based and the deployed bridge /api/messages URL, then wait 5-10 minutes.
+OpenClaw pairing required: run scripts.prepare_control_ui and approve the bridge device.
+Hermes /health works but /invoke fails: check Hermes logs and model provider env vars.
+Private MCP unavailable: verify private-incidents-mcp image includes FastMCP host-origin protection disabled on both app and run paths.
+Agent 365 instance not visible: confirm the Agent 365 package/blueprint endpoint uses the bridge /api/messages URL and wait for propagation.
+Azure azapi token failures: refresh az login and retry, or use az containerapp update for one-off image/env updates during development.
 ```
 
 ## Local validation
 
-Run targeted tests after bridge/script changes:
-
 ```powershell
-uv run python -m unittest tests.test_teams_bridge tests.test_agent365_setup
-uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway -q
+uv run python -m unittest tests.test_agent365_setup tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
+uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
+Set-Location .\private-incidents-mcp
+uv run --with pytest --with pytest-asyncio --with-editable . pytest -q
+Set-Location ..
+terraform -chdir=terraform\apps validate
 ```
-
-Check the Hermes sandbox config shape without starting Hermes:
-
-```powershell
-uv run python -m scripts.sandbox_run_runtime --runtime hermes --dry-run --image registry.example/hermes-runtime@sha256:test --api-server-key test-key
-```
-
-Build and smoke the Hermes runtime image:
-
-```powershell
-$platform = terraform -chdir=terraform\platform output -json | ConvertFrom-Json
-$apps = terraform -chdir=terraform\apps output -json | ConvertFrom-Json
-$images = Get-Content .\terraform\apps\generated.images.auto.tfvars.json -Raw | ConvertFrom-Json
-$apiKey = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([guid]::NewGuid().ToString('N')))
-uv run python -m scripts.sandbox_run_runtime `
-  --runtime hermes `
-  --subscription-id (az account show --query id -o tsv) `
-  --resource-group $platform.resource_group_name.value `
-  --sandbox-group $platform.sandbox_group_name.value `
-  --region $platform.location.value `
-  --customer-vnet-connection-name $platform.sandbox_vnet_connection_name.value `
-  --registry-username $platform.acr_name.value `
-  --registry-password (az acr credential show --name $platform.acr_name.value --query 'passwords[0].value' -o tsv) `
-  --image $images.hermes_runtime_image `
-  --disk-image-name $images.hermes_runtime_disk_image_name `
-  --data-volume-name hermes-a3-data `
-  --api-server-key $apiKey `
-  --private-incidents-mcp-url $apps.private_mcp_url.value `
-  --private-incidents-mcp-static-key demo-static-key
-```
-
-Then call the returned `endpoint_url`:
-
-```powershell
-Invoke-RestMethod "<endpoint_url>/health"
-```
-
-## Hermes bridge mode
-
-A3.5 can switch the existing bridge deployment to Hermes mode. This reuses the same bridge URL and therefore the same Teams bot/app registration; side-by-side OpenClaw and Hermes Teams apps are a later milestone.
-
-After setting the bridge app environment to `AGENT_RUNTIME=hermes`, smoke `/invoke` from `terraform\apps`:
-
-```powershell
-$bridge = terraform output -raw bridge_url
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "$bridge/invoke" `
-  -ContentType application/json `
-  -Body '{"conversationId":"hermes-smoke","message":"Reply with exactly: Hermes bridge OK"}'
-```
-
-The same installed Teams app will now talk to Hermes until the bridge is switched back to `AGENT_RUNTIME=openclaw`.
 
 ## Cleanup
 

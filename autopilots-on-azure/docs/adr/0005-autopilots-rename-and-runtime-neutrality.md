@@ -10,7 +10,7 @@ The project started as OpenClaw-on-Azure and initially used OpenClaw-specific na
 
 The next implementation track adds Nous Research Hermes as a second runtime. Hermes should not be treated as a fork of the project or as a separate Azure hosting stack. Most Azure infrastructure, Teams/Agent 365 integration, bridge routing, and private MCP plumbing should be common.
 
-Keeping OpenClaw as the project-level name would create the wrong abstraction: it implies that Azure resources, bridge code, and Teams packages are OpenClaw-owned even when the selected runtime is Hermes.
+Keeping OpenClaw as the project-level name would create the wrong abstraction: it implies that Azure resources, bridge code, and Microsoft 365 packages are OpenClaw-owned even when the selected runtime is Hermes.
 
 ## Decision
 
