@@ -10,6 +10,7 @@ COPY requirements.txt .
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt
 
 COPY start_hermes.py .
+COPY foundry_token_proxy.py .
 
 ENV API_SERVER_ENABLED=true
 ENV API_SERVER_HOST=0.0.0.0

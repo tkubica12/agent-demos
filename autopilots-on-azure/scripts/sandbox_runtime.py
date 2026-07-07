@@ -194,13 +194,26 @@ def openclaw_runtime_environment(*, token: str, foundry_openai_base_url: str, mo
     }
 
 
-def hermes_runtime_environment(*, api_server_key: str = "", private_incidents_mcp_url: str = "", private_incidents_mcp_static_key: str = "demo-static-key") -> dict[str, str]:
+def hermes_runtime_environment(
+    *,
+    api_server_key: str = "",
+    private_incidents_mcp_url: str = "",
+    private_incidents_mcp_static_key: str = "demo-static-key",
+    foundry_openai_base_url: str = "",
+    model_deployment: str = "",
+) -> dict[str, str]:
     environment = {
         "API_SERVER_ENABLED": "true",
         "API_SERVER_HOST": "0.0.0.0",
         "API_SERVER_PORT": str(HERMES_API_PORT),
         "HERMES_HOME": "/data/hermes",
     }
+    if foundry_openai_base_url:
+        environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
+        environment["HERMES_MODEL_PROVIDER"] = "azure-foundry"
+        environment["HERMES_MODEL"] = model_deployment or "gpt-5-4-mini"
+        environment["HERMES_INFERENCE_MODEL"] = model_deployment or "gpt-5-4-mini"
+        environment["OPENCLAW_MODEL_ID"] = model_deployment or "gpt-5-4-mini"
     if api_server_key:
         environment["API_SERVER_KEY"] = api_server_key
     if private_incidents_mcp_url:
@@ -275,8 +288,12 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
             api_server_key=overrides.get("api_server_key") or "",
             private_incidents_mcp_url=overrides.get("private_incidents_mcp_url") or "",
             private_incidents_mcp_static_key=overrides.get("private_incidents_mcp_static_key") or "demo-static-key",
+            foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
+            model_deployment=overrides.get("model_deployment") or "",
         ),
         labels=overrides.get("labels") or {},
+        foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
+        model_deployment=overrides.get("model_deployment") or "",
         customer_vnet_connection_name=overrides.get("customer_vnet_connection_name") or "",
         private_incidents_mcp_url=overrides.get("private_incidents_mcp_url") or "",
         private_incidents_mcp_static_key=overrides.get("private_incidents_mcp_static_key") or "demo-static-key",
@@ -560,9 +577,14 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "root_disk_size": overrides.get("root_disk_size") or get_config("AGENT_RUNTIME_SANDBOX_ROOT_DISK_SIZE", get_config("OPENCLAW_SANDBOX_ROOT_DISK_SIZE", "20Gi")),
     }
     if runtime_kind == "hermes":
-        common["disk_image_name"] = overrides.get("disk_image_name") or "hermes-api-server-image"
-        common["data_volume_name"] = overrides.get("data_volume_name") or "hermes-data"
-        return hermes_sandbox_config(**common, api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"))
+        common["disk_image_name"] = overrides.get("disk_image_name") or common["disk_image_name"] or "hermes-api-server-image"
+        common["data_volume_name"] = overrides.get("data_volume_name") or common["data_volume_name"] or "hermes-data"
+        return hermes_sandbox_config(
+            **common,
+            foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
+            model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-4-mini"),
+            api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
+        )
     if runtime_kind != "openclaw":
         raise ValueError(f"Unsupported AGENT_RUNTIME '{runtime_kind}'.")
     common["image_name"] = common["image_name"] or get_config("OPENCLAW_IMAGE")

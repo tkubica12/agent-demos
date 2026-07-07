@@ -347,6 +347,23 @@ Then call the returned `endpoint_url`:
 Invoke-RestMethod "<endpoint_url>/health"
 ```
 
+## Hermes bridge mode
+
+A3.5 can switch the existing bridge deployment to Hermes mode. This reuses the same bridge URL and therefore the same Teams bot/app registration; side-by-side OpenClaw and Hermes Teams apps are a later milestone.
+
+After setting the bridge app environment to `AGENT_RUNTIME=hermes`, smoke `/invoke` from `terraform\apps`:
+
+```powershell
+$bridge = terraform output -raw bridge_url
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "$bridge/invoke" `
+  -ContentType application/json `
+  -Body '{"conversationId":"hermes-smoke","message":"Reply with exactly: Hermes bridge OK"}'
+```
+
+The same installed Teams app will now talk to Hermes until the bridge is switched back to `AGENT_RUNTIME=openclaw`.
+
 ## Cleanup
 
 ```powershell

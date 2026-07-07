@@ -10,6 +10,7 @@ import bridge.runtime.openclaw as openclaw_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.gateway_client import OpenClawGatewayError
 from bridge.runtime.base import AgentRequest
+from bridge.runtime.hermes import HermesRuntimeAdapter
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import (
     AgentSandboxConfig,
@@ -53,11 +54,24 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(adapter.runtime_kind, "openclaw")
 
-    def test_runtime_factory_rejects_unsupported_runtime_until_later_milestones(self):
+    def test_runtime_factory_creates_hermes_adapter(self):
         previous = os.environ.get("AGENT_RUNTIME")
         os.environ["AGENT_RUNTIME"] = "hermes"
         try:
-            with self.assertRaisesRegex(ValueError, "Hermes support starts in later milestones"):
+            adapter = runtime_factory.create_runtime_adapter()
+        finally:
+            if previous is None:
+                os.environ.pop("AGENT_RUNTIME", None)
+            else:
+                os.environ["AGENT_RUNTIME"] = previous
+
+        self.assertEqual(adapter.runtime_kind, "hermes")
+
+    def test_runtime_factory_rejects_unknown_runtime(self):
+        previous = os.environ.get("AGENT_RUNTIME")
+        os.environ["AGENT_RUNTIME"] = "bogus"
+        try:
+            with self.assertRaisesRegex(ValueError, "Unsupported AGENT_RUNTIME 'bogus'"):
                 runtime_factory.create_runtime_adapter()
         finally:
             if previous is None:
@@ -183,6 +197,8 @@ class RuntimeAdapterTests(unittest.TestCase):
             image_name="registry.example/hermes-runtime@sha256:test",
             api_server_key="api-key-1",
             private_incidents_mcp_url="https://mcp.example/mcp",
+            foundry_openai_base_url="https://foundry.example/openai/v1",
+            model_deployment="gpt-test",
         )
 
         self.assertEqual(config.runtime_kind, "hermes")
@@ -195,6 +211,9 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.environment["API_SERVER_PORT"], "8642")
         self.assertEqual(config.environment["API_SERVER_KEY"], "api-key-1")
         self.assertEqual(config.environment["HERMES_HOME"], "/data/hermes")
+        self.assertEqual(config.environment["FOUNDRY_OPENAI_BASE_URL"], "https://foundry.example/openai/v1")
+        self.assertEqual(config.environment["HERMES_MODEL"], "gpt-test")
+        self.assertEqual(config.environment["OPENCLAW_MODEL_ID"], "gpt-test")
         self.assertEqual(config.data_volume_name, "hermes-data")
         self.assertEqual(runtime_labels(config)["kind"], "hermes")
 
@@ -222,6 +241,27 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(config.registry_username, "registry-user")
         self.assertEqual(config.registry_password, "registry-pass")
+
+    def test_hermes_environment_config_uses_runtime_volume_env(self):
+        previous = os.environ.get("AGENT_RUNTIME_DATA_VOLUME_NAME")
+        os.environ["AGENT_RUNTIME_DATA_VOLUME_NAME"] = "hermes-env-data"
+        try:
+            config = config_from_environment(
+                runtime_kind="hermes",
+                subscription_id="sub-1",
+                resource_group="rg-1",
+                sandbox_group="sandbox-group-1",
+                region="swedencentral",
+                image_name="registry.example/hermes-runtime@sha256:test",
+                api_server_key="api-key-1",
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AGENT_RUNTIME_DATA_VOLUME_NAME", None)
+            else:
+                os.environ["AGENT_RUNTIME_DATA_VOLUME_NAME"] = previous
+
+        self.assertEqual(config.data_volume_name, "hermes-env-data")
 
     def test_existing_sandbox_reuse_does_not_require_registry_credentials(self):
         config = openclaw_sandbox_config(
@@ -283,6 +323,11 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(result.sandbox_id, "sandbox-1")
         self.assertEqual(result.gateway_url, "https://gateway.example")
         self.assertTrue(result.reused_existing_sandbox)
+
+    def test_hermes_response_text_parses_chat_completions(self):
+        text = HermesRuntimeAdapter._response_text({"choices": [{"message": {"content": " hello from Hermes "}}]})
+
+        self.assertEqual(text, "hello from Hermes")
 
 if __name__ == "__main__":
     unittest.main()

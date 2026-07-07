@@ -397,7 +397,7 @@ Exit criteria:
 
 ### Milestone A3 - Build Hermes runtime image
 
-Status: implemented. Hermes runtime image builds, starts in ACA Sandbox, exposes `/health` on port 8642, and writes `HERMES_HOME`, `.env`, and `config.yaml` under the data mount. The wrapper starts Hermes gateway and provides the health surface; full bridge `/invoke` integration remains A3.5.
+Status: implemented. Hermes runtime image builds, starts in ACA Sandbox, exposes Hermes Gateway `/health` on port 8642, and writes `HERMES_HOME`, `.env`, and `config.yaml` under the data mount. Full bridge `/invoke` integration is handled in A3.5.
 
 Goal: create a Hermes container that can run inside ACA Sandbox and expose the API server.
 
@@ -418,6 +418,8 @@ Exit criteria:
 - Hermes persistent state lands under the runtime data mount.
 
 ### Milestone A3.5 - Hermes through common Teams bridge
+
+Status: implemented. `AGENT_RUNTIME=hermes` selects `HermesRuntimeAdapter`; `/invoke` works through Hermes, and the same bridge endpoint can be used by the existing Teams app while the deployment is switched to Hermes mode. Side-by-side separate Teams apps remain A5.
 
 Goal: reach the current Teams milestone 3.5 behavior with Hermes behind the common bridge.
 

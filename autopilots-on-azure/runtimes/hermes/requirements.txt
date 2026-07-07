@@ -1,5 +1,8 @@
 hermes-agent==0.18.0
+mcp>=1.23.0
 PyYAML>=6.0.3
+azure-identity>=1.25.0
+aiohttp>=3.14.0
 fastapi>=0.139.0
 uvicorn[standard]>=0.50.0
 httpx>=0.28.1
