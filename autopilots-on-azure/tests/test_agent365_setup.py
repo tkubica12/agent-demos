@@ -4,10 +4,14 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from scripts.setup_agent365 import (
+    Agent365Branding,
     agent365_config_payload,
+    agent365_workspace,
     build_metadata,
     customize_manifest,
+    default_branding,
     developer_portal_url,
+    metadata_file_name,
     merge_config,
     non_secret_generated_fields,
     publish_command,
@@ -19,6 +23,8 @@ from scripts.setup_agent365 import (
 class Agent365SetupTests(unittest.TestCase):
     def test_config_payload_marks_external_hosting(self):
         payload = agent365_config_payload(
+            autopilot_name="openclaw",
+            runtime_kind="openclaw",
             agent_name="OpenClaw",
             tenant_id="tenant-1",
             messaging_endpoint="https://bridge.example/api/messages",
@@ -28,6 +34,8 @@ class Agent365SetupTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["agentName"], "OpenClaw")
+        self.assertEqual(payload["autopilotName"], "openclaw")
+        self.assertEqual(payload["agentRuntime"], "openclaw")
         self.assertEqual(payload["agentIdentityDisplayName"], "OpenClaw Agent")
         self.assertEqual(payload["agentBlueprintDisplayName"], "OpenClaw Blueprint")
         self.assertEqual(payload["messagingEndpoint"], "https://bridge.example/api/messages")
@@ -61,11 +69,19 @@ class Agent365SetupTests(unittest.TestCase):
 
     def test_metadata_includes_portal_links_and_endpoint(self):
         metadata = build_metadata(
-            {"agentName": "OpenClaw", "tenantId": "tenant-1", "messagingEndpoint": "https://from-config/api/messages"},
+            {
+                "agentName": "OpenClaw",
+                "autopilotName": "openclaw",
+                "agentRuntime": "openclaw",
+                "tenantId": "tenant-1",
+                "messagingEndpoint": "https://from-config/api/messages",
+            },
             {"agentBlueprintId": "blueprint-1", "messagingEndpoint": "https://from-generated/api/messages"},
         )
 
         self.assertEqual(metadata["agentName"], "OpenClaw")
+        self.assertEqual(metadata["autopilotName"], "openclaw")
+        self.assertEqual(metadata["agentRuntime"], "openclaw")
         self.assertEqual(metadata["tenantId"], "tenant-1")
         self.assertEqual(metadata["messagingEndpoint"], "https://from-generated/api/messages")
         self.assertEqual(
@@ -116,7 +132,7 @@ class Agent365SetupTests(unittest.TestCase):
             (manifest_dir / "color.png").write_bytes(b"color")
             (manifest_dir / "outline.png").write_bytes(b"outline")
 
-            package_path = customize_manifest(Path(temp_dir))
+            package_path = customize_manifest(Path(temp_dir), default_branding("openclaw"))
 
             self.assertTrue(package_path.exists())
             manifest = (manifest_dir / "manifest.json").read_text(encoding="utf-8")
@@ -125,6 +141,31 @@ class Agent365SetupTests(unittest.TestCase):
             with ZipFile(package_path) as archive:
                 self.assertIn("manifest.json", archive.namelist())
                 self.assertIn("color.png", archive.namelist())
+
+    def test_hermes_defaults_use_separate_branding_and_metadata(self):
+        branding = default_branding("hermes")
+
+        self.assertEqual(branding.autopilot_name, "hermes")
+        self.assertEqual(branding.agent_name, "Hermes Autopilot")
+        self.assertEqual(branding.manifest_short_name, "Hermes Autopilot")
+        self.assertEqual(metadata_file_name("hermes"), "hermes-agent365-identifiers.json")
+        self.assertEqual(agent365_workspace("hermes"), Path.cwd() / ".local" / "hermes" / "agent365")
+
+    def test_customize_manifest_uses_hermes_branding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_dir = Path(temp_dir) / "manifest"
+            manifest_dir.mkdir()
+            (manifest_dir / "manifest.json").write_text(
+                '{"name":{"short":"Old","full":"Old Full"},"description":{"short":"x","full":"y"},"developer":{}}',
+                encoding="utf-8",
+            )
+            (manifest_dir / "color.png").write_bytes(b"color")
+
+            customize_manifest(Path(temp_dir), default_branding("hermes"))
+
+            manifest = (manifest_dir / "manifest.json").read_text(encoding="utf-8")
+            self.assertIn('"short": "Hermes Autopilot"', manifest)
+            self.assertIn('"full": "Hermes Autopilot on Azure"', manifest)
 
 
 if __name__ == "__main__":

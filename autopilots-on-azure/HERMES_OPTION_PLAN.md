@@ -449,6 +449,8 @@ Exit criteria:
 
 ### Milestone A4 - Agent 365 parity for Hermes
 
+Status: implemented. `setup_agent365.py` accepts `--runtime openclaw|hermes`, writes separate `.local\<runtime>\agent365` workspaces, and customizes Agent 365 manifest branding per runtime. Side-by-side Azure bridge/bot deployments remain A5.
+
 Goal: make Hermes deployments register through the same Agent 365 setup path as OpenClaw deployments.
 
 Terminology note: Agent 365 docs and internal material may use **AI teammate**, **Autopilot**, **digital worker**, or **virtual employee** for the user-like agent identity pattern. In this plan, those terms mean the same target only when Agent 365 creates an Entra agent user for the Hermes instance. Blueprint-only registration is not a digital worker/Autopilot identity.

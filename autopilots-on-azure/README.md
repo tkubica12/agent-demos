@@ -205,42 +205,49 @@ The deployed bridge is an externally hosted Agent 365 messaging endpoint:
 https://<bridge-fqdn>/api/messages
 ```
 
-Prepare the local Agent 365 workspace and print the exact commands for the current bridge endpoint:
+Prepare the local Agent 365 workspace and print the exact commands for the current bridge endpoint. Choose the runtime that is currently behind the bridge:
 
 ```powershell
-uv run python -m scripts.setup_agent365
+uv run python -m scripts.setup_agent365 --runtime openclaw
+uv run python -m scripts.setup_agent365 --runtime hermes
 ```
 
 Run setup when you are ready to create/update tenant resources:
 
 ```powershell
-uv run python -m scripts.setup_agent365 --run-setup
+uv run python -m scripts.setup_agent365 --runtime openclaw --run-setup
+uv run python -m scripts.setup_agent365 --runtime hermes --run-setup
 ```
 
 The default is the Agent 365 AI teammate flow. If your tenant is not in the Frontier preview or you only want a blueprint-backed M365 agent without an Entra user, use:
 
 ```powershell
-uv run python -m scripts.setup_agent365 --blueprint-agent --run-setup
+uv run python -m scripts.setup_agent365 --runtime openclaw --blueprint-agent --run-setup
+uv run python -m scripts.setup_agent365 --runtime hermes --blueprint-agent --run-setup
 ```
 
 Capture non-secret IDs after setup:
 
 ```powershell
-uv run python -m scripts.setup_agent365 --capture
+uv run python -m scripts.setup_agent365 --runtime openclaw --capture
+uv run python -m scripts.setup_agent365 --runtime hermes --capture
 ```
 
 Generated files, do not commit:
 
 ```text
-.local\<suffix>\agent365\a365.config.json
-.local\<suffix>\agent365\a365.generated.config.json
-.local\<suffix>\agent365\openclaw-autopilot-agent365-identifiers.json
+.local\openclaw\agent365\a365.config.json
+.local\openclaw\agent365\a365.generated.config.json
+.local\openclaw\agent365\openclaw-agent365-identifiers.json
+.local\hermes\agent365\a365.config.json
+.local\hermes\agent365\a365.generated.config.json
+.local\hermes\agent365\hermes-agent365-identifiers.json
 ```
 
 If the bridge URL changes later, update only the Agent 365 endpoint registration:
 
 ```powershell
-Set-Location .\.local\<suffix>\agent365
+Set-Location .\.local\<runtime>\agent365
 a365 setup blueprint --update-endpoint https://<new-bridge-fqdn>/api/messages
 Set-Location ..\..\..
 ```
@@ -248,7 +255,8 @@ Set-Location ..\..\..
 Publish the package and upload it in Microsoft 365 admin center:
 
 ```powershell
-uv run python -m scripts.setup_agent365 --publish
+uv run python -m scripts.setup_agent365 --runtime openclaw --publish
+uv run python -m scripts.setup_agent365 --runtime hermes --publish
 ```
 
 ## Demo script

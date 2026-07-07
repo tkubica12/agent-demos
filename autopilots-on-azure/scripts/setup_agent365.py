@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -10,7 +11,6 @@ from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, output, run, t
 
 
 GENERATED_CONFIG = "a365.generated.config.json"
-LOCAL_METADATA = "openclaw-autopilot-agent365-identifiers.json"
 MANIFEST_DIR = "manifest"
 MANIFEST_FILE = "manifest.json"
 MANIFEST_PACKAGE = "manifest.zip"
@@ -20,6 +20,57 @@ SECRET_KEYS = {
     "clientSecret",
     "secret",
 }
+
+
+@dataclass(frozen=True)
+class Agent365Branding:
+    autopilot_name: str
+    runtime_kind: str
+    agent_name: str
+    manifest_short_name: str
+    manifest_full_name: str
+    description_short: str
+    description_full: str
+    developer_name: str = "Autopilots on Azure demo"
+
+
+def default_branding(runtime_kind: str, autopilot_name: str = "") -> Agent365Branding:
+    runtime_kind = runtime_kind.strip().lower()
+    if runtime_kind == "hermes":
+        autopilot_name = autopilot_name or "hermes"
+        return Agent365Branding(
+            autopilot_name=autopilot_name,
+            runtime_kind=runtime_kind,
+            agent_name="Hermes Autopilot",
+            manifest_short_name="Hermes Autopilot",
+            manifest_full_name="Hermes Autopilot on Azure",
+            description_short="Chat with the Hermes autopilot running in ACA Sandboxes.",
+            description_full=(
+                "Autopilots on Azure exposes Hermes Agent through a governed Agent 365 identity. "
+                "It receives Microsoft 365 messages through the bridge /api/messages endpoint, wakes or reuses "
+                "the ACA Sandbox Hermes runtime, and returns Hermes responses."
+            ),
+        )
+    if runtime_kind == "openclaw":
+        autopilot_name = autopilot_name or "openclaw"
+        return Agent365Branding(
+            autopilot_name=autopilot_name,
+            runtime_kind=runtime_kind,
+            agent_name="OpenClaw Autopilot",
+            manifest_short_name="OpenClaw Autopilot",
+            manifest_full_name="OpenClaw Autopilot on Azure",
+            description_short="Chat with the OpenClaw autopilot running in ACA Sandboxes.",
+            description_full=(
+                "Autopilots on Azure exposes the OpenClaw Gateway through a governed Agent 365 identity. "
+                "It receives Microsoft 365 messages through the bridge /api/messages endpoint, wakes or reuses "
+                "the ACA Sandbox Gateway, and returns OpenClaw responses."
+            ),
+        )
+    raise ValueError(f"Unsupported runtime kind '{runtime_kind}'.")
+
+
+def metadata_file_name(autopilot_name: str) -> str:
+    return f"{autopilot_name}-agent365-identifiers.json"
 
 
 def current_tenant_id() -> str:
@@ -32,12 +83,14 @@ def bridge_messaging_endpoint() -> str:
     return f"{bridge_url}/api/messages"
 
 
-def agent365_workspace(suffix: str) -> Path:
-    return REPO_ROOT / ".local" / suffix / "agent365"
+def agent365_workspace(autopilot_name: str) -> Path:
+    return REPO_ROOT / ".local" / autopilot_name / "agent365"
 
 
 def agent365_config_payload(
     *,
+    autopilot_name: str,
+    runtime_kind: str,
     agent_name: str,
     tenant_id: str,
     messaging_endpoint: str,
@@ -47,6 +100,8 @@ def agent365_config_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "agentName": agent_name,
+        "autopilotName": autopilot_name,
+        "agentRuntime": runtime_kind,
         "agentIdentityDisplayName": f"{agent_name} Agent",
         "agentBlueprintDisplayName": f"{agent_name} Blueprint",
         "tenantId": tenant_id,
@@ -85,6 +140,8 @@ def build_metadata(config: dict[str, Any], generated: dict[str, Any]) -> dict[st
     clean_generated = non_secret_generated_fields(generated)
     return {
         "agentName": config.get("agentName", ""),
+        "autopilotName": config.get("autopilotName", ""),
+        "agentRuntime": config.get("agentRuntime", ""),
         "tenantId": config.get("tenantId", ""),
         "messagingEndpoint": generated.get("messagingEndpoint") or config.get("messagingEndpoint", ""),
         "developerPortalConfigurationUrl": developer_portal_url(str(generated.get("agentBlueprintId", ""))),
@@ -137,7 +194,7 @@ def update_endpoint_command(messaging_endpoint: str) -> list[str]:
     return ["a365", "setup", "blueprint", "--update-endpoint", messaging_endpoint]
 
 
-def customize_manifest(workspace: Path) -> Path:
+def customize_manifest(workspace: Path, branding: Agent365Branding) -> Path:
     manifest_dir = workspace / MANIFEST_DIR
     manifest_path = manifest_dir / MANIFEST_FILE
     package_path = manifest_dir / MANIFEST_PACKAGE
@@ -146,19 +203,15 @@ def customize_manifest(workspace: Path) -> Path:
 
     manifest = load_json(manifest_path)
     manifest["name"] = {
-        "short": "OpenClaw Autopilot",
-        "full": "OpenClaw Autopilot on Azure",
+        "short": branding.manifest_short_name,
+        "full": branding.manifest_full_name,
     }
     manifest["description"] = {
-        "short": "Chat with the OpenClaw autopilot running in ACA Sandboxes.",
-        "full": (
-            "Autopilots on Azure exposes the OpenClaw Gateway through a governed Agent 365 identity. "
-            "It receives Microsoft 365 messages through the bridge /api/messages endpoint, wakes or reuses "
-            "the ACA Sandbox Gateway, and returns OpenClaw responses."
-        ),
+        "short": branding.description_short,
+        "full": branding.description_full,
     }
     manifest["developer"] = {
-        "name": "Autopilots on Azure demo",
+        "name": branding.developer_name,
         "mpnId": "",
         "websiteUrl": "https://github.com/tkubica12/agent-demos",
         "privacyUrl": "https://github.com/tkubica12/agent-demos",
@@ -187,9 +240,15 @@ def maybe_run(command: list[str], *, cwd: Path, enabled: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare and optionally run Agent 365 registration for the deployed OpenClaw Autopilot bridge endpoint."
+        description="Prepare and optionally run Agent 365 registration for an Autopilots on Azure bridge endpoint."
     )
-    parser.add_argument("--agent-name", default="OpenClaw Autopilot")
+    parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
+    parser.add_argument("--autopilot-name", default="")
+    parser.add_argument("--agent-name", default="")
+    parser.add_argument("--manifest-short-name", default="")
+    parser.add_argument("--manifest-full-name", default="")
+    parser.add_argument("--description-short", default="")
+    parser.add_argument("--description-full", default="")
     parser.add_argument("--tenant-id", default="")
     parser.add_argument("--manager-email", default="", help="Optional manager email for AI teammate setup.")
     parser.add_argument("--agent-user-principal-name", default="", help="Optional desired AI teammate user principal name.")
@@ -205,16 +264,27 @@ def main() -> None:
     parser.add_argument("--capture", action="store_true", help="Write non-secret Agent 365 identifiers from generated config.")
     args = parser.parse_args()
 
-    platform = terraform_output(PLATFORM_DIR)
-    suffix = str(platform["suffix"])
-    workspace = agent365_workspace(suffix)
+    branding_defaults = default_branding(args.runtime, args.autopilot_name)
+    branding = Agent365Branding(
+        autopilot_name=branding_defaults.autopilot_name,
+        runtime_kind=args.runtime,
+        agent_name=args.agent_name or branding_defaults.agent_name,
+        manifest_short_name=args.manifest_short_name or branding_defaults.manifest_short_name,
+        manifest_full_name=args.manifest_full_name or branding_defaults.manifest_full_name,
+        description_short=args.description_short or branding_defaults.description_short,
+        description_full=args.description_full or branding_defaults.description_full,
+        developer_name=branding_defaults.developer_name,
+    )
+    workspace = agent365_workspace(branding.autopilot_name)
     workspace.mkdir(parents=True, exist_ok=True)
 
     tenant_id = args.tenant_id or current_tenant_id()
     messaging_endpoint = bridge_messaging_endpoint()
     ai_teammate = not args.blueprint_agent
     config = agent365_config_payload(
-        agent_name=args.agent_name,
+        autopilot_name=branding.autopilot_name,
+        runtime_kind=branding.runtime_kind,
+        agent_name=branding.agent_name,
         tenant_id=tenant_id,
         messaging_endpoint=messaging_endpoint,
         ai_teammate=ai_teammate,
@@ -227,13 +297,13 @@ def main() -> None:
     write_json(config_path, config)
 
     setup = setup_command(
-        agent_name=args.agent_name,
+        agent_name=branding.agent_name,
         messaging_endpoint=messaging_endpoint,
         ai_teammate=ai_teammate,
         authmode=args.authmode,
     )
     endpoint_update = update_endpoint_command(messaging_endpoint)
-    publish = publish_command(agent_name=args.agent_name, ai_teammate=ai_teammate)
+    publish = publish_command(agent_name=branding.agent_name, ai_teammate=ai_teammate)
 
     print_command("Setup command", setup, cwd=workspace)
     print_command("Endpoint update command", endpoint_update, cwd=workspace)
@@ -243,14 +313,14 @@ def main() -> None:
     maybe_run(endpoint_update, cwd=workspace, enabled=args.update_endpoint)
     maybe_run(publish, cwd=workspace, enabled=args.publish)
     if args.publish:
-        customize_manifest(workspace)
+        customize_manifest(workspace, branding)
 
     generated_path = workspace / GENERATED_CONFIG
     if args.capture or generated_path.exists():
         if not generated_path.exists():
             raise FileNotFoundError(f"{generated_path} does not exist yet. Run Agent 365 setup first.")
         metadata = build_metadata(config, load_json(generated_path))
-        metadata_path = workspace / LOCAL_METADATA
+        metadata_path = workspace / metadata_file_name(branding.autopilot_name)
         write_json(metadata_path, metadata)
         portal_url = metadata["developerPortalConfigurationUrl"]
         if portal_url:
