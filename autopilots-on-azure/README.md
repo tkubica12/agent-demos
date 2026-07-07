@@ -2,7 +2,7 @@
 
 Host autopilot runtimes in Azure Container Apps Sandboxes behind a small standard Azure Container Apps bridge. The bridge receives direct HTTP, Teams, and Agent 365 traffic, wakes or reuses the selected runtime sandbox, forwards the turn, and sends the response back.
 
-The current implemented runtime is **OpenClaw Autopilot**. Hermes is planned as a peer runtime behind the same bridge after the rename/neutralization milestone.
+The current deployment model uses one bridge app that can run either **OpenClaw Autopilot** or **Hermes Autopilot**. Until the side-by-side milestone, switching runtime changes what the existing bridge, Teams app, and Agent 365 endpoint talk to.
 
 ## Architecture
 
@@ -10,8 +10,8 @@ The current implemented runtime is **OpenClaw Autopilot**. Hermes is planned as 
 Teams / Agent 365 / /invoke
   -> common bridge Container App
   -> ACA Sandbox runtime
-       -> OpenClaw Gateway today
-       -> Hermes API server later
+       -> OpenClaw Gateway
+       -> Hermes API server
   -> private incidents MCP Container App
 ```
 
@@ -22,14 +22,12 @@ terraform\platform\       shared Azure substrate
 terraform\apps\           bridge, private MCP, Teams bot/channel
 runtimes\openclaw\        OpenClaw Gateway sandbox image
 bridge\                   FastAPI bridge: /health, /invoke, /api/messages
-bridge\runtime\           runtime adapter contract and OpenClaw adapter
+bridge\runtime\           runtime adapter contract: OpenClaw and Hermes
 private-incidents-mcp\    mock private MCP server
 scripts\                  setup, build, packaging helpers
 teams\                    Teams manifest template
 docs\adr\                 architecture decision records
 ```
-
-`OPENCLAW_OPTION_PATH.md` remains the historical and forward option path for the OpenClaw runtime. `HERMES_OPTION_PLAN.md` tracks the multi-runtime migration and Hermes milestones.
 
 ## Prerequisites
 
@@ -116,7 +114,9 @@ Expected:
 
 ## 5. Approve the OpenClaw bridge device
 
-First invoke usually reaches the sandbox and stops on bridge device approval.
+This step is **OpenClaw runtime only**. Hermes does not use OpenClaw Gateway device approval.
+
+When the bridge is in OpenClaw mode, the first invoke usually reaches the sandbox and stops on bridge device approval.
 
 ```powershell
 $bridge = terraform output -raw bridge_url
@@ -150,6 +150,8 @@ Run `/invoke` again. Expected result is an OpenClaw answer, for example:
 
 ## 6. Add Teams app support
 
+Before A5 there is only one Teams bot/app registration for the single bridge endpoint. The packaged manifest is still OpenClaw-branded today; if you switch the bridge to Hermes mode, the same installed Teams app talks to Hermes even though the app branding has not split yet.
+
 Create the Teams bot app registration/tfvars:
 
 ```powershell
@@ -176,6 +178,8 @@ Upload the printed ZIP to Teams. The default path is:
 ```text
 .local\<suffix>\teams\openclaw-autopilot-teams.zip
 ```
+
+`<suffix>` is the Azure platform suffix, for example `ehvw`. Teams sideload packages and OpenClaw bridge device identity are still deployment-suffix scoped. Agent 365 workspaces later in this guide are runtime-scoped under `.local\openclaw\...` and `.local\hermes\...`.
 
 Install the app into:
 
