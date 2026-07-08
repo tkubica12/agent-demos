@@ -225,6 +225,266 @@ Exit criteria:
 
 - A new operator can deploy, switch, package, and validate either runtime without reading historical planning docs.
 
+## Future track: Hermes digital worker evolution
+
+This track starts after Agent 365 packaging, side-by-side deployments, and operator polish are stable. It turns the Hermes runtime from a single demo autopilot into a repeatable digital-worker pattern where one reviewed blueprint can be instantiated many times, adapted privately to a senior person or team, and periodically improved from fleet experience.
+
+Do not use Azure Container Apps Dynamic Sessions for this track. Dynamic Sessions are a different Azure primitive with ephemeral session-pool lifecycle. Digital workers need Azure Container Apps Sandboxes because they provide explicit lifecycle control, suspend/resume, snapshots, and persistent volumes.
+
+Related decisions:
+
+- `docs\adr\0009-hermes-blueprints-on-sandbox-state.md`
+- `docs\adr\0010-learning-packets-and-github-consolidation.md`
+- `docs\adr\0011-dreaming-scheduler-through-bridge.md`
+
+### Digital worker vocabulary
+
+| Term | Meaning |
+| --- | --- |
+| Digital worker blueprint | Reviewed, releasable Hermes profile distribution for a role such as junior project manager. Contains `SOUL.md`, base skills, MCP configuration, and optional cron/job templates. |
+| Digital worker instance | One running Hermes profile in one ACA Sandbox, assigned to a senior person, team, or workstream. Keeps private state across blueprint upgrades. |
+| Private adaptation | Instance-local personal/team memory, preferences, session history, private workspace artifacts, and any sensitive customer/team facts. |
+| Transferable learning | Generalized on-the-job procedural/domain learning that may improve future blueprint versions for other instances. |
+| Learning packet | Exportable, redacted package containing allowed skill file changes, a why/rationale journal, evidence summaries, source instance metadata, and classification/confidence. |
+
+### State and storage model
+
+Hermes-native state is the default. Do not add a database for Hermes core memory until native files and Hermes SQLite state prove insufficient.
+
+| State category | Storage | Lifecycle |
+| --- | --- | --- |
+| Active Hermes profile state | ACA Sandbox Data Disk mounted as `HERMES_HOME`, currently `/data/hermes` | Preserved across suspend/resume, sandbox restart, and blueprint upgrade. Single-writer per worker instance. |
+| Personal/team memory | Hermes `memories\USER.md`, `memories\MEMORY.md`, optional external Hermes memory provider state, and `state.db` | Private to the assigned person/team. Never exported into shared blueprint consolidation. |
+| Session history and search | Hermes `state.db` with built-in SQLite/FTS5 session storage | Private operational state. Used by the instance for recall and by local dreaming, not by shared consolidation unless explicitly summarized and redacted. |
+| Blueprint-owned files | Git-backed Hermes profile distribution: `SOUL.md`, `skills\`, `mcp.json`, selected `config.yaml` defaults, and optional cron templates | Replaced or updated from reviewed blueprint versions. Canonical source is Git, not the sandbox disk. |
+| Candidate transferable learnings | Local `learning\records.jsonl` plus changed allowed skill files under a designated skills namespace | Exported by central extractor into a learning packet. Reviewed before promotion. |
+| Policy documents and business data | External systems exposed through MCP/data agents/RAG, not Hermes core storage | Queried as tools. Governed by the owning system. |
+
+This deliberately avoids a central database in v1. A database may be added later for fleet administration, proposal tracking, dashboards, or audit search, but it must not become the source of truth for blueprint skills.
+
+### Blueprint distribution and upgrade lifecycle
+
+Use Hermes profile distributions as the blueprint packaging mechanism. A blueprint repository should contain:
+
+```text
+distribution.yaml
+SOUL.md
+config.yaml
+mcp.json
+skills\
+cron\
+README.md
+```
+
+The blueprint repository must not contain:
+
+```text
+.env
+auth.json
+memories\
+state.db*
+sessions\
+logs\
+workspace\
+plans\
+home\
+local\
+```
+
+Each digital worker instance stores its installed blueprint source and base commit in an instance manifest, for example:
+
+```json
+{
+  "blueprintName": "junior-project-manager",
+  "blueprintSource": "git@github.com:org/junior-project-manager-blueprint.git",
+  "blueprintVersion": "v1.0.0",
+  "blueprintCommit": "<git-sha>",
+  "instanceId": "<worker-instance-id>",
+  "assigneeScope": "person-or-team"
+}
+```
+
+Upgrade flow:
+
+1. Pause or drain the worker instance.
+2. Run learning export for allowed paths and `learning\records.jsonl`.
+3. Preserve private state on the sandbox Data Disk.
+4. Update blueprint-owned files from the new profile distribution version.
+5. Restart or resume Hermes with the same `HERMES_HOME`.
+6. Validate health and a stateful session smoke.
+
+Private memory and session state must survive every blueprint upgrade. Deleting and reinstalling a profile is not an acceptable upgrade path for assigned workers unless the operator explicitly chooses to discard private state.
+
+### Self-improvement inside one worker
+
+Hermes may continue to self-improve locally:
+
+- Built-in memory writes can update `USER.md` and `MEMORY.md`.
+- Hermes can create or patch skills through `skill_manage`.
+- Hermes background review and curator can improve or prune agent-created skills.
+- A worker can record on-the-job rationale in `learning\records.jsonl`.
+
+For this track, allow local writes freely. Do not require every local memory or skill write to be approved before it takes effect. The safety boundary is promotion, not local adaptation: nothing becomes part of the shared blueprint until the central consolidation flow opens a reviewed GitHub pull request.
+
+Hermes must be instructed to classify learnings before persisting them:
+
+| Classification | Store | Examples |
+| --- | --- | --- |
+| Private personal/team | `USER.md`, `MEMORY.md`, local session state, private workspace files | Senior person's communication preferences, team structure, customer names, internal stakeholder preferences. |
+| Private cache | Local memory/session/workspace only | Reusable facts for this assignment that are too specific for other workers. |
+| Candidate transferable procedural learning | Blueprint skill candidate or `learning\records.jsonl` | Better meeting-prep procedure, issue triage checklist, risk escalation heuristic. |
+| Candidate domain knowledge | Skill reference or external knowledge proposal | Generalizable project-management concept or policy interpretation, with sources. |
+| Do not store | Nowhere durable | Secrets, raw customer data, trivial facts, one-off noise, low-confidence speculation. |
+
+Transferable candidates should be generalized. Prefer variables, conditions, and decision rules over named people, named customers, or one-off anecdotes.
+
+### Dreaming / reflection
+
+Dreaming is the offline reflection stage for one worker instance. It analyzes recent sessions in batches and can produce:
+
+- Private memory consolidation.
+- Skill patches or new skill candidates.
+- `learning\records.jsonl` entries with rationale and evidence.
+- Redaction warnings when a potentially transferable learning contains private details.
+
+Dreaming is distinct from normal turn-time self-improvement:
+
+| Stage | Trigger | Output |
+| --- | --- | --- |
+| Hot-path learning | During or right after a user turn | Immediate local memory/skill updates. |
+| Dreaming | Scheduled or manual offline run | Batch reflection over sessions and evidence; local consolidation and learning packets. |
+| Fleet consolidation | Periodic central process across many instances | Reviewed blueprint PR for the next blueprint version. |
+
+For hosted Azure workers, dreaming should be submitted through the bridge to a stateful Hermes endpoint. The bridge must wake or reuse the ACA Sandbox, pass stable session identity, and keep the run isolated from user-facing conversation threads.
+
+### Fleet consolidation and shared blueprint evolution
+
+The consolidation flow is central and GitHub-based:
+
+1. Enumerate worker instances for a blueprint version.
+2. For each instance, export allowed paths and `learning\records.jsonl`; do not export private memory, raw sessions, `.env`, auth files, logs, or workspace secrets.
+3. Check out the recorded `blueprintCommit`.
+4. Compute diffs centrally between base blueprint files and exported current files.
+5. Build learning packets with:
+   - instance metadata,
+   - exact file diffs,
+   - why/rationale records,
+   - evidence summaries,
+   - classification,
+   - redaction status,
+   - confidence and support count.
+6. Run a merger/judge LLM over packets from multiple instances.
+7. The judge proposes changes to the blueprint distribution in a Git branch.
+8. Open a draft pull request with summary, conflict analysis, outliers, rejected candidates, and evidence references.
+9. Require human expert review before merge.
+10. Tag or otherwise mark the next blueprint version.
+11. Roll workers forward while preserving private state.
+
+Do not make worker instances create Git diffs themselves in v1. They only need to produce rationale and keep local files. Central extraction owns diffing and PR creation.
+
+Conflict handling rules:
+
+- Repeated independent patterns across workers are stronger promotion candidates.
+- Outliers are not automatically discarded; the judge should decide whether they represent a valuable edge case, a local-only condition, or a mistake.
+- Natural contextual conflicts can remain conditional in a skill: "If X, do A; if Y, do B."
+- Conflicts caused by low evidence, obvious mistakes, or private-only context should be rejected or kept local.
+
+### GitHub governance model
+
+GitHub is the v1 review and release surface:
+
+- Blueprint repositories contain the releasable profile distribution.
+- Consolidation opens branches and pull requests.
+- `CODEOWNERS`, branch rules/rulesets, and required reviews protect blueprint files.
+- GitHub Actions validates packaging, redaction checks, and structural skill rules.
+- GitHub Copilot cloud agent may assist with PR implementation or review, but Copilot review does not replace required human approval.
+
+An admin app may be added later, but it should write GitHub issues/branches/PRs rather than becoming a parallel source of truth.
+
+### Scheduling options for dreaming
+
+ACA Sandboxes do not provide a documented native timer trigger. They provide stateful lifecycle, autosuspend, snapshots, volumes, ports, and data-plane management. Azure scheduling should live outside the sandbox.
+
+Supported options:
+
+| Option | Use when | Notes |
+| --- | --- | --- |
+| Bridge-owned cron/timer | v1 demo or when the bridge has minimum replicas and can stay alive | Simple. The bridge calls `ensure_agent_sandbox` and submits a dream run. |
+| Azure Container Apps scheduled Job | Production-friendly scale-to-zero scheduler | Put in Bicep where possible. The job calls the bridge; the bridge wakes the sandbox. |
+| Azure Container Apps event-driven Job | Later event fan-out from Service Bus/Queue/Event Hub | Useful for queue-based learning exports, not required for simple periodic dreaming. |
+| Service Connector | Service wiring only | Helps configure app-to-service connectivity; it is not the scheduling primitive. |
+| Hermes gateway cron | Local/pure-Hermes deployments | Less suitable as primary hosted scheduler because it depends on Hermes gateway ticking and fresh cron sessions have different behavior than user sessions. |
+
+Initial implementation should support bridge-owned cron for simplicity, with a clear path to an ACA scheduled Job.
+
+### Future milestones after A6
+
+#### A7 - Hermes blueprint distribution support
+
+Goal: install and update a Hermes digital-worker blueprint from Git while preserving instance-local state.
+
+Tasks:
+
+- Define `junior-project-manager` blueprint distribution layout.
+- Add instance manifest with blueprint source, version, and commit.
+- Update Hermes sandbox startup so it does not overwrite distribution-owned files or private state unexpectedly.
+- Ensure `HERMES_HOME` remains on the sandbox Data Disk.
+- Add stateful Hermes invocation through `/api/sessions/{id}/chat`, `/v1/responses`, or `/v1/runs`.
+- Preserve and pass stable `X-Hermes-Session-Key`.
+
+Exit criteria:
+
+- A worker instance can install v1, chat, write local memory/skills, update to v2, and keep private memory/session state.
+
+#### A8 - Local learning and dreaming
+
+Goal: let one worker adapt locally and produce learning packets without central consolidation.
+
+Tasks:
+
+- Add digital-worker instructions for learning classification.
+- Add `learning\records.jsonl` schema.
+- Add dream-run prompt/skill.
+- Add bridge endpoint or internal operation to submit a dream run.
+- Add redaction checks for learning packets.
+
+Exit criteria:
+
+- A worker can produce private memory updates and candidate transferable learning records from recent sessions.
+- No private memory is exported by default.
+
+#### A9 - Fleet consolidation to GitHub PR
+
+Goal: promote transferable learnings from multiple workers into a reviewed blueprint version.
+
+Tasks:
+
+- Export allowed files and learning records from multiple workers.
+- Compute diffs centrally against each worker's recorded blueprint commit.
+- Build learning packets.
+- Run merger/judge LLM.
+- Open a draft PR against the blueprint repository.
+- Validate redaction, skill structure, and packaging.
+
+Exit criteria:
+
+- Human reviewers can approve a blueprint v2 PR with traceable evidence and rejected-candidate notes.
+
+#### A10 - Scheduled dreaming and fleet automation
+
+Goal: automate recurring dream and consolidation cycles.
+
+Tasks:
+
+- Implement bridge-owned cron or ACA scheduled Job for dreaming.
+- Add operator controls for cadence, per-worker enablement, and backoff.
+- Add optional event-driven queue trigger for large fleets.
+- Add status reporting for last dream, last export, and last blueprint version.
+
+Exit criteria:
+
+- Workers can be periodically reflected and fleet learnings can be proposed without manual sandbox access.
+
 ## Deferred
 
 Do not implement until the Agent 365 and side-by-side paths are stable:
@@ -233,4 +493,4 @@ Do not implement until the Agent 365 and side-by-side paths are stable:
 - Deeper user identity/profile isolation.
 - Hermes native Teams mode.
 - Hermes dashboard exposure.
-- Full multi-user memory/profile policy.
+- Full multi-user memory/profile policy outside the Hermes-first digital-worker track.
