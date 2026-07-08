@@ -4,6 +4,8 @@ import os
 import unittest
 from types import SimpleNamespace
 
+import httpx
+
 import bridge.app as bridge_app
 import bridge.runtime.factory as runtime_factory
 import bridge.runtime.openclaw as openclaw_runtime
@@ -172,6 +174,94 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(raised.exception.sandbox_id, "sandbox-1")
         self.assertEqual(raised.exception.gateway_url, "https://gateway.example")
 
+    def test_hermes_adapter_prefers_stateful_session_chat(self):
+        calls: list[dict] = []
+        post_responses = [(200, {"output": " stateful OK "})]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "HERMES_BRIDGE_ENDPOINT_MODE", "AUTOPILOT_NAME"]}
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        os.environ.pop("HERMES_BRIDGE_ENDPOINT_MODE", None)
+        os.environ["AUTOPILOT_NAME"] = "hermes-worker"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
+            )
+            response = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="hello",
+                        conversation_id="teams:thread:1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            restore_env(previous_env)
+
+        post = next(call for call in calls if call["method"] == "POST")
+        self.assertEqual(response.text, "stateful OK")
+        self.assertEqual(response.raw["hermesEndpoint"], "sessions")
+        self.assertEqual(post["url"], "https://hermes.example/api/sessions/teams%3Athread%3A1/chat")
+        self.assertEqual(post["headers"]["Authorization"], "Bearer api-key-1")
+        self.assertEqual(post["headers"]["X-Hermes-Session-Id"], "teams:thread:1")
+        self.assertEqual(post["headers"]["X-Hermes-Session-Key"], "hermes-worker:teams_personal:user-1")
+        self.assertEqual(post["json"]["input"], "hello")
+
+    def test_hermes_adapter_falls_back_to_responses_api_when_session_chat_is_unavailable(self):
+        calls: list[dict] = []
+        post_responses = [(404, {"error": "not found"}), (200, {"output_text": "responses OK"})]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "HERMES_BRIDGE_ENDPOINT_MODE", "AUTOPILOT_NAME"]}
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        os.environ["HERMES_BRIDGE_ENDPOINT_MODE"] = "auto"
+        os.environ["AUTOPILOT_NAME"] = "hermes-worker"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
+            )
+            response = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="hello",
+                        conversation_id="teams:thread:1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            restore_env(previous_env)
+
+        post_urls = [call["url"] for call in calls if call["method"] == "POST"]
+        self.assertEqual(response.text, "responses OK")
+        self.assertEqual(response.raw["hermesEndpoint"], "responses")
+        self.assertEqual(post_urls, ["https://hermes.example/api/sessions/teams%3Athread%3A1/chat", "https://hermes.example/v1/responses"])
+
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(
             image_name="registry.example/openclaw-runtime@sha256:test",
@@ -328,6 +418,37 @@ class RuntimeAdapterTests(unittest.TestCase):
         text = HermesRuntimeAdapter._response_text({"choices": [{"message": {"content": " hello from Hermes "}}]})
 
         self.assertEqual(text, "hello from Hermes")
+
+
+class FakeHermesClient:
+    def __init__(self, calls: list[dict], post_responses: list[tuple[int, dict]], **kwargs):
+        self.calls = calls
+        self.post_responses = post_responses
+        self.kwargs = kwargs
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url: str):
+        self.calls.append({"method": "GET", "url": url})
+        return httpx.Response(200, json={"status": "ok"}, request=httpx.Request("GET", url))
+
+    async def post(self, url: str, *, headers: dict, json: dict):
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
+        status_code, payload = self.post_responses.pop(0)
+        return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
+
+
+def restore_env(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
 
 if __name__ == "__main__":
     unittest.main()

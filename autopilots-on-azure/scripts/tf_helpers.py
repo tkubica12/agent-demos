@@ -60,5 +60,6 @@ def terraform_output(root: Path) -> dict[str, Any]:
 
 
 def write_tfvars(path: Path, values: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {path}", flush=True)

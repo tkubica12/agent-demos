@@ -59,6 +59,12 @@ variable "openclaw_bridge_device_token" {
   sensitive = true
 }
 
+variable "api_server_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
 variable "runtime_data_volume_name" {
   type    = string
   default = "openclaw-data"

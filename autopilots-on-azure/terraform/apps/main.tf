@@ -191,6 +191,10 @@ resource "azapi_resource" "bridge_app" {
             value = var.openclaw_bridge_device_private_key_pem == "" ? "not-configured" : var.openclaw_bridge_device_private_key_pem
           },
           {
+            name  = "api-server-key"
+            value = var.api_server_key == "" ? "not-configured" : var.api_server_key
+          },
+          {
             name  = "openclaw-registry-password"
             value = data.azurerm_container_registry.acr.admin_password
           },
@@ -213,6 +217,10 @@ resource "azapi_resource" "bridge_app" {
               {
                 name  = "AGENT_RUNTIME"
                 value = var.agent_runtime
+              },
+              {
+                name  = "AUTOPILOT_NAME"
+                value = var.autopilot_name
               },
               {
                 name  = "AZURE_TENANT_ID"
@@ -245,6 +253,14 @@ resource "azapi_resource" "bridge_app" {
               {
                 name      = "OPENCLAW_BRIDGE_DEVICE_PRIVATE_KEY_PEM"
                 secretRef = "openclaw-bridge-device-private-key-pem"
+              },
+              {
+                name      = "API_SERVER_KEY"
+                secretRef = "api-server-key"
+              },
+              {
+                name      = "HERMES_API_SERVER_KEY"
+                secretRef = "api-server-key"
               },
               {
                 name  = "AZURE_SANDBOX_GROUP"

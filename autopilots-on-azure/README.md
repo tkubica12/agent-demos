@@ -83,18 +83,37 @@ Hermes runtime images are built separately while A5 side-by-side deployment is s
 
 ## 3. Generate app bootstrap values
 
-Creates the OpenClaw Gateway token and stable bridge device key. This is only needed when the bridge is in OpenClaw mode.
+Creates runtime-specific app bootstrap values. The script writes the active Terraform tfvars file and a runtime-scoped copy under `.local\<runtime>\apps\` so OpenClaw and Hermes values do not collide while A5 side-by-side deployment work is in progress.
 
 ```powershell
-uv run python -m scripts.setup_app_tfvars
+uv run python -m scripts.setup_app_tfvars --runtime openclaw
 ```
 
 Generated files, do not commit:
 
 ```text
 terraform\apps\generated.app.auto.tfvars.json
-.local\<suffix>\openclaw-bridge-device.json
+terraform\apps\generated.runtime.auto.tfvars.json
+.local\openclaw\apps\generated.app.auto.tfvars.json
+.local\openclaw\apps\openclaw-bridge-device.json
 ```
+
+Hermes mode does not need OpenClaw device approval. It generates an `API_SERVER_KEY` for the bridge-to-Hermes API server call path:
+
+```powershell
+uv run python -m scripts.setup_app_tfvars `
+  --runtime hermes `
+  --runtime-image "<acr>.azurecr.io/hermes-runtime@sha256:<digest>"
+```
+
+Generated Hermes file, do not commit:
+
+```text
+terraform\apps\generated.runtime.auto.tfvars.json
+.local\hermes\apps\generated.app.auto.tfvars.json
+```
+
+`generated.runtime.auto.tfvars.json` intentionally loads after `generated.images.auto.tfvars.json` so runtime selection and Hermes image settings do not get overwritten by an older OpenClaw image build file.
 
 ## 4. Deploy apps
 
