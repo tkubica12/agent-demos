@@ -40,7 +40,7 @@ def existing_app_tfvars(runtime: str) -> dict[str, Any]:
         if not candidate.exists():
             continue
         payload = json.loads(candidate.read_text(encoding="utf-8"))
-        if candidate == path and payload.get("agent_runtime") not in {None, "", runtime}:
+        if candidate in {path, precedence_path} and payload.get("agent_runtime") not in {None, "", runtime}:
             continue
         return payload
     return {}
@@ -60,6 +60,15 @@ def default_data_volume_name(runtime: str) -> str:
     if runtime == "hermes":
         return "hermes-data"
     return "openclaw-kind-data"
+
+
+def reusable_data_volume_name(runtime: str, value: str) -> str:
+    if not value:
+        return ""
+    other_defaults = {default_data_volume_name(candidate) for candidate in ("openclaw", "hermes") if candidate != runtime}
+    if value in other_defaults:
+        return ""
+    return value
 
 
 def default_device_identity_path(*, runtime: str, suffix: str) -> Path:
@@ -134,7 +143,7 @@ def main() -> None:
     bot_display_name = args.bot_display_name or default_bot_display_name(runtime)
 
     previous = existing_app_tfvars(runtime)
-    data_volume_name = args.data_volume_name or previous.get("runtime_data_volume_name") or default_data_volume_name(runtime)
+    data_volume_name = args.data_volume_name or reusable_data_volume_name(runtime, previous.get("runtime_data_volume_name") or "") or default_data_volume_name(runtime)
     device: dict[str, str] | None = None
     device_path: Path | None = None
     if runtime == "openclaw":

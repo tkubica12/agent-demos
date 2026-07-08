@@ -1,10 +1,15 @@
 import unittest
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
+import scripts.setup_app_tfvars as setup_app_tfvars
 from scripts.setup_app_tfvars import (
     build_tfvars,
     default_bot_display_name,
     default_data_volume_name,
+    existing_app_tfvars,
+    reusable_data_volume_name,
     runtime_workspace,
 )
 
@@ -59,6 +64,26 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(default_data_volume_name("hermes"), "hermes-data")
         self.assertEqual(runtime_workspace("openclaw"), Path.cwd() / ".local" / "openclaw" / "apps")
         self.assertEqual(runtime_workspace("hermes"), Path.cwd() / ".local" / "hermes" / "apps")
+
+    def test_hermes_existing_tfvars_ignore_active_openclaw_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            apps_dir = root / "terraform" / "apps"
+            apps_dir.mkdir(parents=True)
+            (apps_dir / "generated.runtime.auto.tfvars.json").write_text(
+                '{"agent_runtime":"openclaw","runtime_data_volume_name":"openclaw-kind-data"}',
+                encoding="utf-8",
+            )
+            hermes_dir = root / ".local" / "hermes" / "apps"
+            hermes_dir.mkdir(parents=True)
+
+            with patch.object(setup_app_tfvars, "REPO_ROOT", root), patch.object(setup_app_tfvars, "APPS_DIR", apps_dir):
+                self.assertEqual(existing_app_tfvars("hermes"), {})
+
+    def test_runtime_does_not_reuse_other_runtime_default_volume(self):
+        self.assertEqual(reusable_data_volume_name("hermes", "openclaw-kind-data"), "")
+        self.assertEqual(reusable_data_volume_name("openclaw", "hermes-data"), "")
+        self.assertEqual(reusable_data_volume_name("hermes", "hermes-custom-data"), "hermes-custom-data")
 
 
 if __name__ == "__main__":
