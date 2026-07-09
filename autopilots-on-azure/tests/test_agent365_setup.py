@@ -13,8 +13,11 @@ from scripts.setup_agent365 import (
     developer_portal_url,
     metadata_file_name,
     merge_config,
+    messaging_endpoint_from_outputs,
     non_secret_generated_fields,
+    normalize_messaging_endpoint,
     publish_command,
+    resolve_messaging_endpoint,
     setup_command,
     update_endpoint_command,
 )
@@ -93,17 +96,31 @@ class Agent365SetupTests(unittest.TestCase):
         endpoint = "https://bridge.example/api/messages"
 
         self.assertEqual(
-            setup_command(agent_name="OpenClaw", messaging_endpoint=endpoint, ai_teammate=True, authmode="obo"),
-            ["a365", "setup", "all", "--agent-name", "OpenClaw", "--aiteammate", "--m365", "--messaging-endpoint", endpoint],
-        )
-        self.assertEqual(
-            setup_command(agent_name="OpenClaw", messaging_endpoint=endpoint, ai_teammate=False, authmode="both"),
+            setup_command(agent_name="OpenClaw", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=True, authmode="obo"),
             [
                 "a365",
                 "setup",
                 "all",
                 "--agent-name",
                 "OpenClaw",
+                "--tenant-id",
+                "tenant-1",
+                "--aiteammate",
+                "--m365",
+                "--messaging-endpoint",
+                endpoint,
+            ],
+        )
+        self.assertEqual(
+            setup_command(agent_name="OpenClaw", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=False, authmode="both"),
+            [
+                "a365",
+                "setup",
+                "all",
+                "--agent-name",
+                "OpenClaw",
+                "--tenant-id",
+                "tenant-1",
                 "--m365",
                 "--messaging-endpoint",
                 endpoint,
@@ -117,6 +134,55 @@ class Agent365SetupTests(unittest.TestCase):
             publish_command(agent_name="OpenClaw", ai_teammate=False),
             ["a365", "publish", "--agent-name", "OpenClaw", "--use-blueprint"],
         )
+
+    def test_setup_command_supports_safe_execution_flags(self):
+        self.assertEqual(
+            setup_command(
+                agent_name="OpenClaw",
+                tenant_id="tenant-1",
+                messaging_endpoint="https://bridge.example/api/messages",
+                ai_teammate=False,
+                authmode="obo",
+                dry_run=True,
+                skip_requirements=True,
+                skip_sp_provisioning=True,
+            )[-3:],
+            ["--dry-run", "--skip-requirements", "--skip-sp-provisioning"],
+        )
+
+    def test_messaging_endpoint_normalization_accepts_bridge_base_url(self):
+        self.assertEqual(
+            normalize_messaging_endpoint("https://bridge.example"),
+            "https://bridge.example/api/messages",
+        )
+        self.assertEqual(
+            normalize_messaging_endpoint("https://bridge.example/api/messages"),
+            "https://bridge.example/api/messages",
+        )
+
+    def test_messaging_endpoint_from_runtime_outputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            outputs_path = Path(temp_dir) / "terraform-outputs.json"
+            outputs_path.write_text('{"bridge_url":"https://runtime-bridge.example"}', encoding="utf-8")
+
+            self.assertEqual(
+                messaging_endpoint_from_outputs(outputs_path),
+                "https://runtime-bridge.example/api/messages",
+            )
+
+    def test_explicit_messaging_endpoint_wins_over_outputs_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            outputs_path = Path(temp_dir) / "terraform-outputs.json"
+            outputs_path.write_text('{"bridge_url":"https://runtime-bridge.example"}', encoding="utf-8")
+
+            self.assertEqual(
+                resolve_messaging_endpoint(
+                    runtime_kind="openclaw",
+                    explicit_endpoint="https://explicit.example/api/messages",
+                    outputs_file=str(outputs_path),
+                ),
+                "https://explicit.example/api/messages",
+            )
 
     def test_developer_portal_url_is_empty_without_blueprint_id(self):
         self.assertEqual(developer_portal_url(""), "")

@@ -83,6 +83,36 @@ def bridge_messaging_endpoint() -> str:
     return f"{bridge_url}/api/messages"
 
 
+def runtime_outputs_path(runtime_kind: str) -> Path:
+    return REPO_ROOT / ".local" / runtime_kind / "apps" / "terraform-outputs.json"
+
+
+def normalize_messaging_endpoint(value: str) -> str:
+    endpoint = value.strip().rstrip("/")
+    if not endpoint:
+        raise ValueError("Messaging endpoint cannot be empty.")
+    if endpoint.endswith("/api/messages"):
+        return endpoint
+    return f"{endpoint}/api/messages"
+
+
+def messaging_endpoint_from_outputs(path: Path) -> str:
+    payload = load_json(path)
+    bridge_url = str(payload.get("bridge_url", "")).strip()
+    if not bridge_url:
+        raise KeyError(f"{path} does not contain bridge_url.")
+    return normalize_messaging_endpoint(bridge_url)
+
+
+def resolve_messaging_endpoint(*, runtime_kind: str, explicit_endpoint: str, outputs_file: str) -> str:
+    if explicit_endpoint:
+        return normalize_messaging_endpoint(explicit_endpoint)
+    path = Path(outputs_file) if outputs_file else runtime_outputs_path(runtime_kind)
+    if path.exists():
+        return messaging_endpoint_from_outputs(path)
+    return bridge_messaging_endpoint()
+
+
 def agent365_workspace(autopilot_name: str) -> Path:
     return REPO_ROOT / ".local" / autopilot_name / "agent365"
 
@@ -157,31 +187,53 @@ def developer_portal_url(agent_blueprint_id: str) -> str:
     return f"https://dev.teams.microsoft.com/tools/agent-blueprint/{agent_blueprint_id}/configuration"
 
 
-def setup_command(*, agent_name: str, messaging_endpoint: str, ai_teammate: bool, authmode: str) -> list[str]:
+def setup_command(
+    *,
+    agent_name: str,
+    tenant_id: str,
+    messaging_endpoint: str,
+    ai_teammate: bool,
+    authmode: str,
+    dry_run: bool = False,
+    skip_requirements: bool = False,
+    skip_sp_provisioning: bool = False,
+) -> list[str]:
     if ai_teammate:
-        return [
+        command = [
             "a365",
             "setup",
             "all",
             "--agent-name",
             agent_name,
+            "--tenant-id",
+            tenant_id,
             "--aiteammate",
             "--m365",
             "--messaging-endpoint",
             messaging_endpoint,
         ]
-    return [
-        "a365",
-        "setup",
-        "all",
-        "--agent-name",
-        agent_name,
-        "--m365",
-        "--messaging-endpoint",
-        messaging_endpoint,
-        "--authmode",
-        authmode,
-    ]
+    else:
+        command = [
+            "a365",
+            "setup",
+            "all",
+            "--agent-name",
+            agent_name,
+            "--tenant-id",
+            tenant_id,
+            "--m365",
+            "--messaging-endpoint",
+            messaging_endpoint,
+            "--authmode",
+            authmode,
+        ]
+    if dry_run:
+        command.append("--dry-run")
+    if skip_requirements:
+        command.append("--skip-requirements")
+    if skip_sp_provisioning:
+        command.append("--skip-sp-provisioning")
+    return command
 
 
 def publish_command(*, agent_name: str, ai_teammate: bool) -> list[str]:
@@ -250,6 +302,16 @@ def main() -> None:
     parser.add_argument("--description-short", default="")
     parser.add_argument("--description-full", default="")
     parser.add_argument("--tenant-id", default="")
+    parser.add_argument(
+        "--messaging-endpoint",
+        default="",
+        help="Explicit Agent 365 messaging endpoint. A bridge base URL is accepted and /api/messages is appended.",
+    )
+    parser.add_argument(
+        "--runtime-outputs-file",
+        default="",
+        help="Terraform output JSON captured by scripts.deploy_apps_runtime. Defaults to .local/<runtime>/apps/terraform-outputs.json.",
+    )
     parser.add_argument("--manager-email", default="", help="Optional manager email for AI teammate setup.")
     parser.add_argument("--agent-user-principal-name", default="", help="Optional desired AI teammate user principal name.")
     parser.add_argument("--authmode", choices=["obo", "s2s", "both"], default="obo")
@@ -259,6 +321,13 @@ def main() -> None:
         help="Use blueprint-agent mode instead of the AI teammate flow. AI teammate is the milestone 4 default.",
     )
     parser.add_argument("--run-setup", action="store_true", help="Run `a365 setup all` after preparing the local workspace.")
+    parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to `a365 setup all`.")
+    parser.add_argument("--skip-requirements", action="store_true", help="Pass --skip-requirements to `a365 setup all`.")
+    parser.add_argument(
+        "--skip-sp-provisioning",
+        action="store_true",
+        help="Pass --skip-sp-provisioning to `a365 setup all`.",
+    )
     parser.add_argument("--update-endpoint", action="store_true", help="Run `a365 setup blueprint --update-endpoint`.")
     parser.add_argument("--publish", action="store_true", help="Run `a365 publish`.")
     parser.add_argument("--capture", action="store_true", help="Write non-secret Agent 365 identifiers from generated config.")
@@ -279,7 +348,11 @@ def main() -> None:
     workspace.mkdir(parents=True, exist_ok=True)
 
     tenant_id = args.tenant_id or current_tenant_id()
-    messaging_endpoint = bridge_messaging_endpoint()
+    messaging_endpoint = resolve_messaging_endpoint(
+        runtime_kind=branding.runtime_kind,
+        explicit_endpoint=args.messaging_endpoint,
+        outputs_file=args.runtime_outputs_file,
+    )
     ai_teammate = not args.blueprint_agent
     config = agent365_config_payload(
         autopilot_name=branding.autopilot_name,
@@ -298,9 +371,13 @@ def main() -> None:
 
     setup = setup_command(
         agent_name=branding.agent_name,
+        tenant_id=tenant_id,
         messaging_endpoint=messaging_endpoint,
         ai_teammate=ai_teammate,
         authmode=args.authmode,
+        dry_run=args.dry_run,
+        skip_requirements=args.skip_requirements,
+        skip_sp_provisioning=args.skip_sp_provisioning,
     )
     endpoint_update = update_endpoint_command(messaging_endpoint)
     publish = publish_command(agent_name=branding.agent_name, ai_teammate=ai_teammate)

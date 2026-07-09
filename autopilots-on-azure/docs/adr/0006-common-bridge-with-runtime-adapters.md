@@ -9,7 +9,7 @@ Accepted.
 The bridge already owns the project-specific Microsoft 365 behavior:
 
 - Teams `/api/messages` ingress.
-- Bot Framework and Teams activity handling.
+- Agent 365 Activity Protocol handling through the Microsoft 365 Agents SDK.
 - Teams signal classification for mentions, 1:1 messages, targeted private messages, thread replies, reactions, and unmentioned RSC-observed messages.
 - Bounded Teams context construction.
 - Temporary status reactions and semantic `TEAMS_REACTION:` control lines.
@@ -27,7 +27,7 @@ Move runtime-specific protocol details behind bridge-side runtime adapters:
 - `OpenClawRuntimeAdapter` wakes ACA Sandbox and calls the OpenClaw Gateway websocket protocol.
 - `HermesRuntimeAdapter` wakes ACA Sandbox and calls the Hermes API server over HTTP.
 
-The bridge owns transport behavior, Teams UX, prompt envelope construction, response shaping, reaction execution, and Agent 365 ingress. The selected runtime owns semantic reasoning, whether to answer, and what response/reaction content to return.
+The bridge owns transport behavior, Teams UX, prompt envelope construction, response shaping, and Agent 365 ingress. The selected runtime owns semantic reasoning, whether to answer, and what response text to return. Teams reactions are not part of the current Agent 365 path because agentic applications do not use Bot Framework app-only outbound tokens.
 
 Hermes native Teams support is deferred as an optional future mode for pure-Hermes deployments. It is not the initial integration path.
 

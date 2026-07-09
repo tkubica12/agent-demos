@@ -12,31 +12,39 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from microsoft_teams.api import MessageActivity, MessageActivityInput, MessageReactionActivity, TypingActivityInput
-from microsoft_teams.apps import ActivityContext, App, FastAPIAdapter
+from microsoft_agents.activity import Activity, load_configuration_from_env
+from microsoft_agents.authentication.msal import MsalConnectionManager
+from microsoft_agents.hosting.core import AgentApplication, Authorization, MemoryStorage, TurnContext, TurnState
+from microsoft_agents.hosting.fastapi import CloudAdapter, start_agent_process
 from pydantic import BaseModel, Field
 
 from bridge.runtime.base import AgentRequest, AgentResponse
 from bridge.runtime.factory import create_runtime_adapter
 
 
-def configured_env(*names: str) -> str | None:
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value and value != "not-configured":
-            return value
-    return None
-
-
 app = FastAPI(title="Autopilot Azure Container Apps bridge")
-teams_adapter = FastAPIAdapter(app=app)
-teams_app = App(
-    http_server_adapter=teams_adapter,
-    client_id=configured_env("OPENCLAW_TEAMS_BOT_ID", "CLIENT_ID"),
-    client_secret=configured_env("OPENCLAW_TEAMS_BOT_SECRET", "CLIENT_SECRET"),
-    tenant_id=configured_env("OPENCLAW_TEAMS_BOT_TENANT_ID", "TENANT_ID"),
-    skip_auth=(os.getenv("OPENCLAW_TEAMS_SKIP_AUTH") or "").lower() in {"1", "true", "yes"},
-)
+
+
+def agent365_auth_configured() -> bool:
+    return (os.getenv("USE_AGENTIC_AUTH") or "").lower() in {"1", "true", "yes"}
+
+
+def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
+    storage = MemoryStorage()
+    if agent365_auth_configured():
+        configuration = load_configuration_from_env(os.environ)
+        connection_manager = MsalConnectionManager(**configuration)
+        adapter = CloudAdapter(connection_manager=connection_manager)
+        authorization = Authorization(storage, connection_manager, **configuration)
+        agent = AgentApplication[TurnState](storage=storage, adapter=adapter, authorization=authorization, **configuration)
+        return agent, adapter
+
+    adapter = CloudAdapter()
+    agent = AgentApplication[TurnState](storage=storage, adapter=adapter)
+    return agent, adapter
+
+
+agent365_app, agent365_adapter = create_agent365_app()
 
 
 class InvokeRequest(BaseModel):
@@ -102,11 +110,11 @@ def field_value(value: Any, *names: str) -> Any:
     return current
 
 
-def teams_conversation_type(activity: MessageActivity) -> str:
+def teams_conversation_type(activity: Activity) -> str:
     return str(field_value(activity, "conversation", "conversation_type") or "").lower()
 
 
-def teams_conversation_id(activity: MessageActivity) -> str:
+def teams_conversation_id(activity: Activity) -> str:
     return str(field_value(activity, "conversation", "id") or "")
 
 
@@ -119,7 +127,7 @@ def normalize_teams_text(text: str) -> str:
     return re.sub(r"[ \t\r\f\v]+", " ", text).strip()
 
 
-def bot_mention_texts(activity: MessageActivity) -> list[str]:
+def bot_mention_texts(activity: Activity) -> list[str]:
     recipient_id = field_value(activity, "recipient", "id")
     recipient_name = field_value(activity, "recipient", "name")
     texts: list[str] = []
@@ -147,15 +155,15 @@ def bot_mention_texts(activity: MessageActivity) -> list[str]:
     return list(dict.fromkeys(texts))
 
 
-def bot_is_mentioned(activity: MessageActivity) -> bool:
+def bot_is_mentioned(activity: Activity) -> bool:
     return bool(bot_mention_texts(activity))
 
 
-def teams_is_targeted(activity: MessageActivity) -> bool:
+def teams_is_targeted(activity: Activity) -> bool:
     return bool(field_value(activity, "recipient", "is_targeted") or field_value(activity, "recipient", "isTargeted"))
 
 
-def teams_prompt_text(activity: MessageActivity) -> str:
+def teams_prompt_text(activity: Activity) -> str:
     message = field_value(activity, "text")
     if not isinstance(message, str):
         return ""
@@ -166,7 +174,7 @@ def teams_prompt_text(activity: MessageActivity) -> str:
     return normalize_teams_text(message)
 
 
-def teams_session_key(activity: MessageActivity) -> str:
+def teams_session_key(activity: Activity) -> str:
     conversation_type = teams_conversation_type(activity) or "unknown"
     conversation_id = teams_conversation_id(activity)
     if conversation_type not in _CHANNEL_TEAMS_CONVERSATION_TYPES:
@@ -196,7 +204,7 @@ def should_quote_group_responses() -> bool:
     return env_optional("AUTOPILOT_TEAMS_QUOTED_REPLIES", "OPENCLAW_TEAMS_QUOTED_REPLIES", default="true").lower() in {"1", "true", "yes"}
 
 
-def should_add_status_reaction(activity: MessageActivity) -> bool:
+def should_add_status_reaction(activity: Activity) -> bool:
     return should_add_processing_reaction() and teams_conversation_type(activity) != "personal" and not teams_is_targeted(activity) and bool(field_value(activity, "id"))
 
 
@@ -239,13 +247,16 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
-def user_display_name(activity: MessageActivity) -> str:
-    return str(field_value(activity, "from_", "name") or field_value(activity, "from", "name") or "unknown user")
+def user_display_name(activity: Activity) -> str:
+    return str(field_value(activity, "from_property", "name") or field_value(activity, "from_", "name") or field_value(activity, "from", "name") or "unknown user")
 
 
-def user_id(activity: MessageActivity) -> str:
+def user_id(activity: Activity) -> str:
     return str(
-        field_value(activity, "from_", "aad_object_id")
+        field_value(activity, "from_property", "aad_object_id")
+        or field_value(activity, "from_property", "aadObjectId")
+        or field_value(activity, "from_property", "id")
+        or field_value(activity, "from_", "aad_object_id")
         or field_value(activity, "from_", "aadObjectId")
         or field_value(activity, "from_", "id")
         or field_value(activity, "from", "aad_object_id")
@@ -255,7 +266,7 @@ def user_id(activity: MessageActivity) -> str:
     )
 
 
-def teams_runtime_source(activity: MessageActivity) -> str:
+def teams_runtime_source(activity: Activity) -> str:
     conversation_type = teams_conversation_type(activity)
     if conversation_type == "personal":
         return "teams_personal"
@@ -264,7 +275,7 @@ def teams_runtime_source(activity: MessageActivity) -> str:
     return "teams_group"
 
 
-def message_mentions_bot_name(activity: MessageActivity, message: str | None = None) -> bool:
+def message_mentions_bot_name(activity: Activity, message: str | None = None) -> bool:
     text = normalize_teams_text(message if message is not None else str(field_value(activity, "text") or ""))
     if not text:
         return False
@@ -277,13 +288,13 @@ def message_mentions_bot_name(activity: MessageActivity, message: str | None = N
     return any(alias and re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases)
 
 
-def channel_thread_root_id(activity: MessageActivity) -> str:
+def channel_thread_root_id(activity: Activity) -> str:
     conversation_id = teams_conversation_id(activity)
     match = re.search(r";messageid=([^;]+)", conversation_id)
     return match.group(1) if match else ""
 
 
-def activity_is_channel_thread_reply(activity: MessageActivity) -> bool:
+def activity_is_channel_thread_reply(activity: Activity) -> bool:
     root_id = channel_thread_root_id(activity)
     activity_id = str(field_value(activity, "id") or "")
     return bool(root_id and activity_id and activity_id != root_id)
@@ -305,7 +316,7 @@ def reacted_message_id(activity: MessageReactionActivity) -> str:
     return str(field_value(activity, "reply_to_id") or field_value(activity, "replyToId") or "")
 
 
-def teams_signal_type(activity: MessageActivity, *, message: str | None = None, reactions: list[str] | None = None) -> str:
+def teams_signal_type(activity: Activity, *, message: str | None = None, reactions: list[str] | None = None) -> str:
     if reactions:
         return "reaction_to_message"
     if teams_is_targeted(activity):
@@ -319,7 +330,7 @@ def teams_signal_type(activity: MessageActivity, *, message: str | None = None, 
     return "undirected_message"
 
 
-def teams_response_contract(activity: MessageActivity, signal_type: str, *, session_key: str | None = None) -> str:
+def teams_response_contract(activity: Activity, signal_type: str, *, session_key: str | None = None) -> str:
     if signal_type in {"explicit_bot_mention", "targeted_private_message", "textual_bot_name_mention"} or teams_conversation_type(activity) == "personal":
         return "must_answer"
     if signal_type == "reply_in_thread_without_bot_mention" and memory_has_openclaw_response(session_key):
@@ -420,7 +431,7 @@ def format_teams_context(
 
 
 def teams_event_memory_record(
-    activity: MessageActivity,
+    activity: Activity,
     *,
     event: str,
     message: str,
@@ -457,7 +468,7 @@ def openclaw_memory_record(response: str, activity_id: str | None = None) -> dic
 
 
 def format_teams_event_prompt(
-    activity: MessageActivity,
+    activity: Activity,
     message: str,
     *,
     event: str,
@@ -508,14 +519,14 @@ def runtime_adapter():
     return create_runtime_adapter()
 
 
-@app.on_event("startup")
-async def initialize_teams_app() -> None:
-    await teams_app.initialize()
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/messages")
+async def agent365_messages(request: Request):
+    return await start_agent_process(request, agent365_app, agent365_adapter)
 
 
 @app.middleware("http")
@@ -552,7 +563,7 @@ def teams_diag() -> JSONResponse:
     return JSONResponse(
         {
             "events": list(_teams_diag),
-            "teamsConfigured": bool(configured_env("OPENCLAW_TEAMS_BOT_ID", "CLIENT_ID")),
+            "agent365Endpoint": "/api/messages",
         }
     )
 
@@ -582,8 +593,8 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
         raise HTTPException(status_code=500, detail=detail) from exc
 
 
-@teams_app.on_message
-async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
+@agent365_app.activity("message")
+async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
     conversation_type = teams_conversation_type(ctx.activity)
     conversation_id = teams_conversation_id(ctx.activity)
     mentioned = bot_is_mentioned(ctx.activity)
@@ -601,7 +612,7 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
         }
     )
     if conversation_type not in _SUPPORTED_TEAMS_CONVERSATION_TYPES:
-        await ctx.send(f"OpenClaw does not support Teams conversation type '{conversation_type or 'unknown'}' yet.")
+        await ctx.send_activity(f"OpenClaw does not support Teams conversation type '{conversation_type or 'unknown'}' yet.")
         return
 
     if conversation_type != "personal" and not mentioned and not targeted and not should_observe_unmentioned_messages():
@@ -611,9 +622,9 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
     message = teams_prompt_text(ctx.activity)
     if not message:
         if conversation_type == "personal":
-            await ctx.send("Send a text prompt for OpenClaw.")
+            await ctx.send_activity("Send a text prompt for OpenClaw.")
         else:
-            await ctx.send("Mention OpenClaw with a text prompt, for example: @OpenClaw list services from private incidents MCP.")
+            await ctx.send_activity("Mention OpenClaw with a text prompt, for example: @OpenClaw list services from private incidents MCP.")
         return
 
     session_key = teams_session_key(ctx.activity)
@@ -661,23 +672,20 @@ async def handle_teams_message(ctx: ActivityContext[MessageActivity]) -> None:
     status_reaction_message_id = field_value(ctx.activity, "id") if should_add_status_reaction(ctx.activity) else None
     if status_reaction_message_id:
         await send_message_reaction(ctx, status_reaction_message_id, "1f440_eyes")
-    await send_typing_indicator(ctx, conversation_id)
-    asyncio.create_task(
-        run_agent_runtime_for_teams(
-            ctx,
-            conversation_id=conversation_id,
-            session_key=session_key,
-            message=prompt,
-            targeted_response=targeted,
-            memory_session_key=session_key,
-            suppress_no_response=not must_answer,
-            status_reaction_message_id=status_reaction_message_id,
-        )
+    await run_agent_runtime_for_teams(
+        ctx,
+        conversation_id=conversation_id,
+        session_key=session_key,
+        message=prompt,
+        targeted_response=targeted,
+        memory_session_key=session_key,
+        suppress_no_response=not must_answer,
+        status_reaction_message_id=status_reaction_message_id,
     )
 
 
-@teams_app.on_message_reaction
-async def handle_teams_message_reaction(ctx: ActivityContext[MessageReactionActivity]) -> None:
+@agent365_app.activity("messageReaction")
+async def handle_teams_message_reaction(ctx: TurnContext, _state: TurnState) -> None:
     conversation_id = teams_conversation_id(ctx.activity)
     added = [reaction.type for reaction in (ctx.activity.reactions_added or [])]
     removed = [reaction.type for reaction in (ctx.activity.reactions_removed or [])]
@@ -741,8 +749,8 @@ async def handle_teams_message_reaction(ctx: ActivityContext[MessageReactionActi
     )
 
 
-@teams_app.on_message_update
-async def handle_teams_message_update(ctx: ActivityContext[MessageActivity]) -> None:
+@agent365_app.activity("messageUpdate")
+async def handle_teams_message_update(ctx: TurnContext, _state: TurnState) -> None:
     record_teams_diag(
         {
             "event": "messageUpdate",
@@ -755,55 +763,20 @@ async def handle_teams_message_update(ctx: ActivityContext[MessageActivity]) -> 
     )
 
 
-async def send_typing_indicator(ctx: ActivityContext[MessageActivity], conversation_id: str) -> None:
-    try:
-        await ctx.send(TypingActivityInput())
-        record_teams_diag({"event": "typingSent", "conversationId": conversation_id})
-    except Exception as exc:
-        record_teams_diag(
-            {
-                "event": "typingFailed",
-                "conversationId": conversation_id,
-                "type": exc.__class__.__name__,
-                "message": str(exc),
-            }
-        )
+async def send_typing_indicator(ctx: TurnContext, conversation_id: str) -> None:
+    record_teams_diag({"event": "typingSkipped", "conversationId": conversation_id, "reason": "agent365"})
 
 
-async def send_message_reaction(ctx: ActivityContext, message_id: str | None, reaction_type: str) -> None:
+async def send_message_reaction(ctx: TurnContext, message_id: str | None, reaction_type: str) -> None:
     if not message_id:
         return
-    try:
-        await ctx.api.reactions.add(teams_conversation_id(ctx.activity), message_id, reaction_type)
-        record_teams_diag({"event": "reactionSent", "method": "api.reactions.add", "messageId": message_id, "reactionType": reaction_type})
-    except Exception as exc:
-        record_teams_diag(
-            {
-                "event": "reactionSendFailed",
-                "messageId": message_id,
-                "reactionType": reaction_type,
-                "type": exc.__class__.__name__,
-                "message": str(exc),
-            }
-        )
+    record_teams_diag({"event": "reactionSkipped", "messageId": message_id, "reactionType": reaction_type, "reason": "agent365"})
 
 
-async def delete_message_reaction(ctx: ActivityContext, message_id: str | None, reaction_type: str) -> None:
+async def delete_message_reaction(ctx: TurnContext, message_id: str | None, reaction_type: str) -> None:
     if not message_id:
         return
-    try:
-        await ctx.api.reactions.delete(teams_conversation_id(ctx.activity), message_id, reaction_type)
-        record_teams_diag({"event": "reactionDeleted", "method": "api.reactions.delete", "messageId": message_id, "reactionType": reaction_type})
-    except Exception as exc:
-        record_teams_diag(
-            {
-                "event": "reactionDeleteFailed",
-                "messageId": message_id,
-                "reactionType": reaction_type,
-                "type": exc.__class__.__name__,
-                "message": str(exc),
-            }
-        )
+    record_teams_diag({"event": "reactionDeleteSkipped", "messageId": message_id, "reactionType": reaction_type, "reason": "agent365"})
 
 
 def response_should_be_suppressed(response: str) -> bool:
@@ -816,31 +789,18 @@ def response_has_visible_text(response: str) -> bool:
     return bool(visible_response and visible_response.strip().upper() != _NO_RESPONSE)
 
 
-async def send_teams_response(ctx: ActivityContext, response: str, *, targeted_response: bool = False) -> str | None:
-    if targeted_response and field_value(ctx.activity, "from_"):
-        sent = await ctx.send(MessageActivityInput(text=response).with_recipient(ctx.activity.from_, is_targeted=True))
-        record_teams_diag({"event": "responseSent", "method": "targeted"})
-        return field_value(sent, "id")
-    if teams_conversation_type(ctx.activity) != "personal":
-        if should_quote_group_responses():
-            sent = await ctx.reply(response)
-            record_teams_diag({"event": "responseSent", "method": "reply", "conversationType": teams_conversation_type(ctx.activity)})
-        else:
-            sent = await ctx.send(response)
-            record_teams_diag({"event": "responseSent", "method": "send", "conversationType": teams_conversation_type(ctx.activity)})
-        return field_value(sent, "id")
-    ctx.stream.emit(response)
-    await ctx.stream.close()
-    record_teams_diag({"event": "responseSent", "method": "stream", "conversationType": teams_conversation_type(ctx.activity)})
-    return None
+async def send_teams_response(ctx: TurnContext, response: str, *, targeted_response: bool = False) -> str | None:
+    sent = await ctx.send_activity(response)
+    record_teams_diag({"event": "responseSent", "method": "agent365SendActivity", "conversationType": teams_conversation_type(ctx.activity)})
+    return field_value(sent, "id")
 
 
-def supports_streaming_response(ctx: ActivityContext) -> bool:
-    return teams_conversation_type(ctx.activity) == "personal"
+def supports_streaming_response(ctx: TurnContext) -> bool:
+    return False
 
 
 async def run_agent_runtime_for_teams(
-    ctx: ActivityContext,
+    ctx: TurnContext,
     *,
     conversation_id: str,
     session_key: str,
@@ -860,8 +820,7 @@ async def run_agent_runtime_for_teams(
         if not delta:
             return
         streamed = True
-        ctx.stream.emit(delta)
-        record_teams_diag({"event": "streamDeltaQueued", "conversationId": conversation_id, "length": len(delta)})
+        record_teams_diag({"event": "streamDeltaSkipped", "conversationId": conversation_id, "length": len(delta), "reason": "agent365"})
 
     try:
         record_teams_diag({"event": "backgroundStart", "conversationId": conversation_id})
@@ -888,7 +847,7 @@ async def run_agent_runtime_for_teams(
             if memory_session_key:
                 remember_teams_event(memory_session_key, openclaw_memory_record(visible_response, sent_activity_id))
         else:
-            await ctx.stream.close()
+            record_teams_diag({"event": "streamCloseSkipped", "conversationId": conversation_id, "reason": "agent365"})
             if memory_session_key:
                 remember_teams_event(memory_session_key, openclaw_memory_record(visible_response or _NO_RESPONSE))
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
@@ -904,11 +863,7 @@ async def run_agent_runtime_for_teams(
             }
         )
         try:
-            if supports_streaming_response(ctx):
-                ctx.stream.emit(f"OpenClaw could not complete this request: {exc}")
-                await ctx.stream.close()
-            else:
-                await ctx.send(f"OpenClaw could not complete this request: {exc}")
+            await ctx.send_activity(f"OpenClaw could not complete this request: {exc}")
         except Exception as send_exc:
             record_teams_diag(
                 {
@@ -925,14 +880,12 @@ async def run_agent_runtime_for_teams(
             await asyncio.gather(progress_task, return_exceptions=True)
 
 
-async def send_stream_progress_updates(ctx: ActivityContext[MessageActivity], conversation_id: str, done: asyncio.Event) -> None:
+async def send_stream_progress_updates(ctx: TurnContext, conversation_id: str, done: asyncio.Event) -> None:
     try:
-        ctx.stream.update("Waking OpenClaw sandbox...")
-        record_teams_diag({"event": "streamInformativeQueued", "conversationId": conversation_id, "message": "Waking OpenClaw sandbox..."})
+        record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": "Waking OpenClaw sandbox..."})
         await asyncio.wait_for(done.wait(), timeout=int(env_optional("AUTOPILOT_TEAMS_PROGRESS_DELAY_SECONDS", "OPENCLAW_TEAMS_PROGRESS_DELAY_SECONDS", default="10")))
     except asyncio.TimeoutError:
-        ctx.stream.update("OpenClaw is still working...")
-        record_teams_diag({"event": "streamInformativeQueued", "conversationId": conversation_id, "message": "OpenClaw is still working..."})
+        record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": "OpenClaw is still working..."})
     except asyncio.CancelledError:
         raise
     except Exception as exc:

@@ -8,11 +8,6 @@ variable "agent_runtime" {
   default = "openclaw"
 }
 
-variable "bot_display_name" {
-  type    = string
-  default = "OpenClaw Autopilot"
-}
-
 variable "runtime_image" {
   type    = string
   default = ""
@@ -65,6 +60,22 @@ variable "api_server_key" {
   sensitive = true
 }
 
+variable "agent365_client_id" {
+  type    = string
+  default = ""
+}
+
+variable "agent365_client_secret" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "agent365_tenant_id" {
+  type    = string
+  default = ""
+}
+
 variable "runtime_data_volume_name" {
   type    = string
   default = "openclaw-data"
@@ -79,25 +90,4 @@ variable "private_incidents_mcp_static_key" {
   type      = string
   default   = "demo-static-key"
   sensitive = true
-}
-
-variable "teams_bot_app_id" {
-  type    = string
-  default = ""
-}
-
-variable "teams_bot_app_secret" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "teams_bot_tenant_id" {
-  type    = string
-  default = ""
-}
-
-variable "teams_bot_app_type" {
-  type    = string
-  default = "SingleTenant"
 }

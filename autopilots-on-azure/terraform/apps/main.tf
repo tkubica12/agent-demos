@@ -26,10 +26,8 @@ locals {
     layer         = "apps"
   }
 
-  private_mcp_app_name = "apmcp-${local.suffix}"
+  private_mcp_app_name = "apmcp-${var.autopilot_name}-${local.suffix}"
   bridge_app_name      = "autopilot-bridge-${var.autopilot_name}-${local.suffix}"
-  teams_bot_name       = "${var.autopilot_name}-teams-${local.suffix}"
-  teams_bot_tenant_id  = var.teams_bot_tenant_id == "" ? data.azurerm_client_config.current.tenant_id : var.teams_bot_tenant_id
   runtime_image        = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
   runtime_disk_image_name = (
     var.runtime_disk_image_name != "openclaw-gateway-image-with-private-mcp" || var.openclaw_disk_image_name == ""
@@ -42,7 +40,7 @@ locals {
 }
 
 resource "azurerm_user_assigned_identity" "private_mcp" {
-  name                = "id-apmcp-${local.suffix}"
+  name                = "id-apmcp-${var.autopilot_name}-${local.suffix}"
   location            = local.location
   resource_group_name = local.resource_group_name
   tags                = local.tags
@@ -195,16 +193,16 @@ resource "azapi_resource" "bridge_app" {
             value = var.api_server_key == "" ? "not-configured" : var.api_server_key
           },
           {
+            name  = "agent365-client-secret"
+            value = var.agent365_client_secret == "" ? "not-configured" : var.agent365_client_secret
+          },
+          {
             name  = "openclaw-registry-password"
             value = data.azurerm_container_registry.acr.admin_password
           },
           {
             name  = "private-incidents-mcp-static-key"
             value = var.private_incidents_mcp_static_key
-          },
-          {
-            name  = "openclaw-teams-bot-secret"
-            value = var.teams_bot_app_secret == "" ? "not-configured" : var.teams_bot_app_secret
           }
         ]
       }
@@ -261,6 +259,26 @@ resource "azapi_resource" "bridge_app" {
               {
                 name      = "HERMES_API_SERVER_KEY"
                 secretRef = "api-server-key"
+              },
+              {
+                name  = "USE_AGENTIC_AUTH"
+                value = var.agent365_client_id != "" && var.agent365_client_secret != "" ? "true" : "false"
+              },
+              {
+                name  = "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID"
+                value = var.agent365_client_id
+              },
+              {
+                name      = "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTSECRET"
+                secretRef = "agent365-client-secret"
+              },
+              {
+                name  = "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID"
+                value = var.agent365_tenant_id != "" ? var.agent365_tenant_id : data.azurerm_client_config.current.tenant_id
+              },
+              {
+                name  = "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE"
+                value = "ClientSecret"
               },
               {
                 name  = "AZURE_SANDBOX_GROUP"
@@ -333,30 +351,6 @@ resource "azapi_resource" "bridge_app" {
               {
                 name  = "OPENCLAW_BRIDGE_DEBUG"
                 value = "true"
-              },
-              {
-                name  = "OPENCLAW_TEAMS_BOT_ID"
-                value = var.teams_bot_app_id == "" ? "not-configured" : var.teams_bot_app_id
-              },
-              {
-                name      = "OPENCLAW_TEAMS_BOT_SECRET"
-                secretRef = "openclaw-teams-bot-secret"
-              },
-              {
-                name  = "OPENCLAW_TEAMS_BOT_TENANT_ID"
-                value = var.teams_bot_app_id == "" ? "not-configured" : local.teams_bot_tenant_id
-              },
-              {
-                name  = "CLIENT_ID"
-                value = var.teams_bot_app_id == "" ? "not-configured" : var.teams_bot_app_id
-              },
-              {
-                name      = "CLIENT_SECRET"
-                secretRef = "openclaw-teams-bot-secret"
-              },
-              {
-                name  = "TENANT_ID"
-                value = var.teams_bot_app_id == "" ? "not-configured" : local.teams_bot_tenant_id
               }
             ]
           }
@@ -378,57 +372,4 @@ resource "azapi_resource" "bridge_app" {
     azurerm_role_assignment.bridge_sandbox_data_owner,
     azapi_resource.private_mcp_app
   ]
-}
-
-resource "azapi_resource" "teams_bot" {
-  count     = var.teams_bot_app_id == "" ? 0 : 1
-  type      = "Microsoft.BotService/botServices@2023-09-15-preview"
-  name      = local.teams_bot_name
-  parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
-  location  = "global"
-  tags      = local.tags
-
-  body = {
-    kind = "azurebot"
-    sku = {
-      name = "F0"
-    }
-    properties = {
-      displayName         = var.bot_display_name
-      description         = "Autopilot ACA Sandbox bridge for Teams chats and channel threads."
-      endpoint            = "https://${azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn}/api/messages"
-      msaAppId            = var.teams_bot_app_id
-      msaAppTenantId      = local.teams_bot_tenant_id
-      msaAppType          = var.teams_bot_app_type
-      publicNetworkAccess = "Enabled"
-    }
-  }
-
-  schema_validation_enabled = false
-  response_export_values    = ["properties.endpoint"]
-
-  depends_on = [
-    azapi_resource.bridge_app
-  ]
-}
-
-resource "azapi_resource" "teams_channel" {
-  count     = var.teams_bot_app_id == "" ? 0 : 1
-  type      = "Microsoft.BotService/botServices/channels@2021-03-01"
-  name      = "MsTeamsChannel"
-  parent_id = azapi_resource.teams_bot[0].id
-  location  = "global"
-
-  body = {
-    properties = {
-      channelName = "MsTeamsChannel"
-      properties = {
-        deploymentEnvironment = "CommercialDeployment"
-        enableCalling         = false
-        isEnabled             = true
-      }
-    }
-  }
-
-  schema_validation_enabled = false
 }

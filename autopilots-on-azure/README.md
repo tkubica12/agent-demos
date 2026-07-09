@@ -1,26 +1,61 @@
 # Autopilots on Azure
 
-Host OpenClaw and Hermes autopilot runtimes in Azure Container Apps Sandboxes behind a common bridge. The bridge receives `/invoke` and Agent 365 `/api/messages` traffic, wakes or reuses the selected runtime sandbox, forwards the turn, and returns the response.
+Host OpenClaw and Hermes autopilot runtimes in Azure Container Apps Sandboxes behind runtime-specific bridge apps. Each bridge receives `/invoke` and Agent 365 `/api/messages` traffic, wakes or reuses its runtime sandbox, forwards the turn, and returns the response.
 
 The active plan and specification is in `AUTOPILOTS_SPEC.md`.
 
 ## Current deployment model
 
-One bridge app is deployed today. It can run either runtime:
+OpenClaw and Hermes run side by side:
 
-| Runtime | Bridge setting | Sandbox port | Notes |
-| --- | --- | --- | --- |
-| OpenClaw | `AGENT_RUNTIME=openclaw` | `18789` | Requires OpenClaw Gateway device approval. |
-| Hermes | `AGENT_RUNTIME=hermes` | `8642` | Uses Hermes API server and `API_SERVER_KEY`. |
+| Runtime | Terraform workspace | Bridge app | Sandbox port | Notes |
+| --- | --- | --- | --- | --- |
+| OpenClaw | `autopilot-openclaw` | `autopilot-bridge-openclaw-*` | `18789` | Requires OpenClaw Gateway device approval. |
+| Hermes | `autopilot-hermes` | `autopilot-bridge-hermes-*` | `8642` | Uses Hermes API server and `API_SERVER_KEY`. |
 
-Before the side-by-side milestone, switching the bridge runtime changes what the same bridge URL, Agent 365 endpoint, and previously installed Teams entry point talk to.
+Microsoft 365 app installation is **Agent 365 only**:
+
+- Do not use Teams sideloading.
+- Do not create Azure Bot Service resources.
+- Do use Agent 365 blueprint setup plus the Microsoft 365 admin center **Upload custom agent** flow.
+
+Teams channel participation is still the goal. For Agent 365 AI teammates, Teams availability comes after package upload through Developer Portal blueprint configuration and Teams agent-instance creation. Do not fall back to Teams sideloading or Azure Bot Service.
+
+## Fast path from the current checked-out demo
+
+If platform/apps were already deployed and packages were already generated, start here:
+
+```powershell
+Set-Location .\autopilots-on-azure
+
+Invoke-RestMethod "https://autopilot-bridge-openclaw-ehvw.icymeadow-c517d14c.swedencentral.azurecontainerapps.io/health"
+Invoke-RestMethod "https://autopilot-bridge-hermes-ehvw.icymeadow-c517d14c.swedencentral.azurecontainerapps.io/health"
+```
+
+Then open Microsoft 365 admin center and upload the Agent 365 packages:
+
+```text
+https://admin.microsoft.com
+  -> Agents
+  -> All agents
+  -> Upload custom agent
+```
+
+Upload one or both packages:
+
+```text
+.local\openclaw\agent365\manifest\manifest.zip
+.local\hermes\agent365\manifest\manifest.zip
+```
+
+This is tenant/admin-center publishing, not Teams sideloading. If the upload page shows **Host products: Copilot**, continue; the Teams step is creating the Agent 365 instance from Teams Apps after Developer Portal blueprint configuration.
 
 ## Architecture
 
 ```text
 Agent 365 / /invoke
-  -> common bridge Container App
-  -> ACA Sandbox runtime
+  -> runtime-specific bridge Container App
+  -> runtime-specific ACA Sandbox
        -> OpenClaw Gateway
        -> Hermes API server
   -> private incidents MCP Container App
@@ -43,7 +78,7 @@ docs\adr\                 architecture decision records
 ## Prerequisites
 
 ```powershell
-az login
+az login --use-device-code
 uv sync
 terraform -version
 ```
@@ -79,11 +114,11 @@ Generated file, do not commit:
 terraform\apps\generated.images.auto.tfvars.json
 ```
 
-Hermes runtime images are built separately while A5 side-by-side deployment is still in progress. See `AUTOPILOTS_SPEC.md` for the current Hermes image build/smoke command.
+Hermes runtime images are built separately until `scripts.build_images` grows Hermes build support.
 
 ## 3. Generate app bootstrap values
 
-Creates runtime-specific app bootstrap values. The script writes the active Terraform tfvars file and a runtime-scoped copy under `.local\<runtime>\apps\` so OpenClaw and Hermes values do not collide while A5 side-by-side deployment work is in progress.
+Creates runtime-specific app bootstrap values. The script writes the active Terraform tfvars file and a runtime-scoped copy under `.local\<runtime>\apps\` so OpenClaw and Hermes values do not collide.
 
 ```powershell
 uv run python -m scripts.setup_app_tfvars --runtime openclaw
@@ -117,17 +152,25 @@ terraform\apps\generated.runtime.auto.tfvars.json
 
 ## 4. Deploy apps
 
-Deploys the private MCP Container App, bridge Container App, app settings/secrets, and image digests.
+Deploys the private MCP Container App, bridge Container App, app settings/secrets, and image digests. A5 uses one Terraform workspace per runtime so OpenClaw and Hermes stay live side by side instead of replacing each other in one state file.
 
 ```powershell
-Set-Location .\terraform\apps
-terraform init
-terraform apply
+uv run python -m scripts.deploy_apps_runtime --runtime openclaw --apply
+uv run python -m scripts.deploy_apps_runtime --runtime hermes --apply
+```
+
+Use `--plan` instead of `--apply` when you only want to inspect changes. Each apply captures runtime outputs for Agent 365:
+
+```text
+.local\openclaw\apps\terraform-outputs.json
+.local\hermes\apps\terraform-outputs.json
 ```
 
 Check the bridge:
 
 ```powershell
+Set-Location .\terraform\apps
+terraform workspace select autopilot-openclaw
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod "$bridge/health"
 Set-Location ..\..
@@ -143,10 +186,11 @@ Expected:
 
 Skip this step when `AGENT_RUNTIME=hermes`.
 
-When the bridge is in OpenClaw mode, the first invoke usually reaches the sandbox and stops on bridge device approval:
+When the OpenClaw bridge first invokes its sandbox, it usually stops on bridge device approval:
 
 ```powershell
 Set-Location .\terraform\apps
+terraform workspace select autopilot-openclaw
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod `
   -Method Post `
@@ -170,6 +214,7 @@ OpenClaw expected response:
 
 ```powershell
 Set-Location .\terraform\apps
+terraform workspace select autopilot-openclaw
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod `
   -Method Post `
@@ -189,10 +234,11 @@ fraud_detection
 wealth_portfolio
 ```
 
-Hermes expected response when the bridge is switched to `AGENT_RUNTIME=hermes`:
+Hermes expected response:
 
 ```powershell
 Set-Location .\terraform\apps
+terraform workspace select autopilot-hermes
 $bridge = terraform output -raw bridge_url
 Invoke-RestMethod `
   -Method Post `
@@ -202,9 +248,9 @@ Invoke-RestMethod `
 Set-Location ..\..
 ```
 
-## 7. Register Agent 365 identity
+## 7. Register and publish Agent 365
 
-Agent 365 is the primary Microsoft 365 installation path for both runtimes. Teams sideloading is not part of the active operator flow.
+Agent 365 is the Microsoft 365 installation path for both runtimes.
 
 The deployed bridge is an externally hosted Agent 365 messaging endpoint:
 
@@ -212,14 +258,16 @@ The deployed bridge is an externally hosted Agent 365 messaging endpoint:
 https://<bridge-fqdn>/api/messages
 ```
 
-Prepare runtime-specific Agent 365 workspaces:
+Prepare runtime-specific Agent 365 workspaces. This writes local config and prints the exact `a365` commands:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw
 uv run python -m scripts.setup_agent365 --runtime hermes
 ```
 
-Run setup when you are ready to create or update tenant resources:
+When `.local\<runtime>\apps\terraform-outputs.json` exists, `setup_agent365` uses that runtime's captured bridge URL automatically. You can override it with `--messaging-endpoint https://<bridge-fqdn>/api/messages`.
+
+Run setup when you are ready to create or update tenant resources. Use an admin-capable account if blueprint creation or consent needs it:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw --run-setup
@@ -240,6 +288,20 @@ uv run python -m scripts.setup_agent365 --runtime openclaw --capture
 uv run python -m scripts.setup_agent365 --runtime hermes --capture
 ```
 
+After `a365.generated.config.json` exists, push the Agent 365 SDK auth settings into the runtime app tfvars and re-apply the runtime apps stack. This decrypts the locally protected blueprint secret only into ignored Terraform tfvars so the bridge can use the Microsoft Agents SDK, not the old Bot Framework send path:
+
+```powershell
+uv run python -m scripts.setup_app_tfvars --runtime hermes --agent365-from-generated --runtime-only
+uv run python -m scripts.deploy_apps_runtime --runtime hermes --apply --auto-approve --capture
+```
+
+Repeat for OpenClaw when validating its Agent 365 instance:
+
+```powershell
+uv run python -m scripts.setup_app_tfvars --runtime openclaw --agent365-from-generated --runtime-only
+uv run python -m scripts.deploy_apps_runtime --runtime openclaw --apply --auto-approve --capture
+```
+
 Generated files, do not commit:
 
 ```text
@@ -251,42 +313,270 @@ Generated files, do not commit:
 .local\hermes\agent365\hermes-agent365-identifiers.json
 ```
 
-Publish the package and upload it in Microsoft 365 admin center:
+Build the upload package:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw --publish
 uv run python -m scripts.setup_agent365 --runtime hermes --publish
 ```
 
-## Runtime switching
+The generated packages are:
 
-Until A5 creates side-by-side deployments, runtime switching is done by updating bridge app environment variables. The most recently validated state can be inspected with:
-
-```powershell
-az containerapp show `
-  --resource-group <resource-group> `
-  --name <bridge-app-name> `
-  --query "properties.template.containers[0].env[?name=='AGENT_RUNTIME']"
+```text
+.local\openclaw\agent365\manifest\manifest.zip
+.local\hermes\agent365\manifest\manifest.zip
 ```
 
-Use `AUTOPILOTS_SPEC.md` for the current required OpenClaw and Hermes environment variables.
+Upload them through Microsoft 365 admin center:
+
+```text
+https://admin.microsoft.com
+  -> Agents
+  -> All agents
+  -> Upload custom agent
+```
+
+Do not use Teams app sideloading or Azure Bot Service. Those paths were removed.
+
+Configure each Agent 365 blueprint in Teams Developer Portal:
+
+```text
+https://dev.teams.microsoft.com/tools/agent-blueprint/<agentBlueprintId>/configuration
+```
+
+Use values from `.local\<runtime>\agent365\a365.generated.config.json`:
+
+```text
+Agent Type: API Based
+Notification URL: <messagingEndpoint>
+```
+
+Prefer the scripted instance path. It creates the Entra Agent ID identity, linked agent user, usage location, licenses, and then tries the Agent 365 registration API:
+
+```powershell
+# One-time per tenant: create an app-only Graph client for beta /copilot/agentRegistrations.
+# Requires the current az login admin to have application/app-role assignment rights.
+uv run python -m scripts.provision_agent365_instance bootstrap-registration-app
+
+# Hermes instance. Use the tenant *.onmicrosoft.com domain for Teams-capable agent users.
+uv run python -m scripts.provision_agent365_instance provision `
+  --runtime hermes `
+  --owner-upn tomas@tomasonline.net `
+  --display-name hermes1 `
+  --mail-nickname hermes1 `
+  --agent-upn hermes1@MngEnvMCAP058702.onmicrosoft.com `
+  --register
+
+# OpenClaw instance, same pattern.
+uv run python -m scripts.provision_agent365_instance provision `
+  --runtime openclaw `
+  --owner-upn tomas@tomasonline.net `
+  --display-name openclaw1 `
+  --mail-nickname openclaw1 `
+  --agent-upn openclaw1@MngEnvMCAP058702.onmicrosoft.com `
+  --register
+```
+
+Local state is written under `.local\<runtime>\agent365\instance.<mailNickname>.json`. The app-only registration client is written to `.local\agent365-registration-app.json`; it contains a client secret and must stay local.
+
+If a scripted instance must be removed, delete it from its local state file. This removes the Agent 365 registration, agent user, and agent identity only when `--instance` is explicit:
+
+```powershell
+uv run python -m scripts.provision_agent365_instance cleanup `
+  --runtime hermes `
+  --mail-nickname hermes1 `
+  --instance `
+  --remove-state `
+  --purge-deleted
+```
+
+If previous portal/uploads left stale entries in **Microsoft 365 admin center -> Agents -> All agents**, they might be tenant Teams app-catalog uploads. Delete those through the tenant app catalog. This uses delegated Graph `AppCatalog.ReadWrite.All`. Azure CLI's built-in public client cannot request that scope in this tenant, so bootstrap a tenant-local public client once, then use device-code login through that app:
+
+```powershell
+uv run python -m scripts.provision_agent365_instance bootstrap-catalog-app
+
+uv run python -m scripts.provision_agent365_instance cleanup-catalog `
+  --delete-display-names "Hermes Autopilot,hermes-foundry-a365dev" `
+  --keep-display-names "Hermes Autopilot Blueprint"
+```
+
+Do not delete the current runtime blueprint unless you are intentionally rebuilding it. For the active Hermes run, keep `Hermes Autopilot Blueprint` with `agentBlueprintId` from `.local\hermes\agent365\a365.generated.config.json`.
+
+If the stale row is only present in Agent 365 package inventory, Microsoft Graph exposes block/unblock/update but no delete API. Use package cleanup to list exact matches and block any that are not already blocked:
+
+```powershell
+uv run python -m scripts.provision_agent365_instance bootstrap-catalog-app `
+  --display-name "Autopilots Agent 365 Package Cleanup" `
+  --scopes CopilotPackages.ReadWrite.All `
+  --output .local\agent365-package-cleanup-app.json
+
+uv run python -m scripts.provision_agent365_instance cleanup-packages `
+  --delete-display-names "Hermes Autopilot,hermes-foundry-a365dev" `
+  --keep-display-names "Hermes Autopilot Blueprint,hermes1" `
+  --block
+
+uv run python -m scripts.provision_agent365_instance cleanup `
+  --runtime hermes `
+  --mail-nickname hermes1 `
+  --package-app `
+  --purge-deleted
+```
+
+The output `.local\agent365-package-cleanup.json` records matching package IDs. As of the current Agent 365 Package Management API, stale package rows can remain visible in **All agents** after backing blueprints/users are deleted; the supported cleanup action is to keep them blocked.
+
+If the registration API is not rolled out or returns 403/404, rerun without `--register`. That still creates the Entra-backed agent identity/user and assigns licenses, which is the repeatable part of the portal **Add Instance** flow:
+
+```powershell
+uv run python -m scripts.provision_agent365_instance provision `
+  --runtime hermes `
+  --owner-upn tomas@tomasonline.net `
+  --display-name hermes1 `
+  --mail-nickname hermes1 `
+  --agent-upn hermes1@MngEnvMCAP058702.onmicrosoft.com
+```
+
+Use Microsoft 365 admin center **Add Instance** only as a fallback when the Graph registration API is blocked:
+
+```text
+Microsoft 365 admin center -> Agents -> All agents -> <agent>
+  -> Instances -> Add Instance
+  -> set display name, alias, domain, and owner
+  -> use a domain that supports Teams/OfficeCommunicationsOnline, typically the tenant *.onmicrosoft.com domain
+  -> wait for the created agent user to appear in Microsoft 365/Teams
+  -> add the created agent user to the target team/channel
+```
+
+This is the Agent 365 AI teammate path for Teams chats and channels.
+
+Agent 365 AI teammate replies use the Microsoft 365 Agents SDK. Do not use Bot Framework or `microsoft-teams-apps` reply paths for Agent 365 blueprints: agentic applications are not allowed to request Bot Framework app-only tokens. Temporary typing indicators and Teams reactions are skipped in the Agent 365 path for now; channel message replies work.
+
+If **Add instance** shows **You have run out of licenses** but the button is still usable, continue and submit the instance form. Treat the banner as blocking only if submit fails. The instance is a real Entra-backed agent user and consumes its associated licenses, not just the uploaded template. For the full Teams AI teammate scenario, expect Agent 365 plus Microsoft 365, Teams Enterprise, and Copilot-related licenses to be involved depending on the associated-license list.
+
+The template might not appear in the normal Teams **Apps -> Add apps** catalog before an instance exists. After instance creation, search Teams for the created agent user's display name and add that user to chats, teams, and channels.
+
+If instance submit fails with **Request failed with status 500**, check these before retrying:
+
+```text
+Users -> Active users -> <owner>
+  -> Licenses: Agent 365, Microsoft 365 Copilot, Microsoft 365 E5 or equivalent, Teams Enterprise
+  -> Usage location: set, for example CZ
+
+Agents -> All agents -> <agent> -> View associated licenses
+  -> every listed SKU has unassigned capacity
+
+Tenant enrollment
+  -> Microsoft Agent 365 Frontier must be enabled for the tenant
+  -> Microsoft 365 admin center -> Copilot -> Settings -> View all
+  -> search for Frontier -> Copilot Frontier
+  -> set access to All users or a group containing the owner/admin users
+  -> allow up to 3 hours for propagation
+```
+
+The Agent 365 CLI can verify most blueprint and permission setup, but it cannot automatically verify Frontier tenant enrollment.
+
+If the agent is **Available** in Microsoft 365 admin center and Developer Portal already has **Agent Type: API Based** plus the correct notification URL, but the agent does not appear in Teams Apps:
+
+```text
+Microsoft 365 admin center -> Agents -> All agents -> <agent>
+  -> confirm the activation scope includes the user who is searching in Teams
+  -> confirm the agent is not blocked
+
+Teams admin center -> Teams apps -> Manage apps
+  -> search for the agent
+  -> allow it if it is blocked or restricted by app policy
+```
+
+After changing activation scope, licenses, or app policy, wait 5-10 minutes and restart Teams before searching again.
+
+## 8. Validate from Teams
+
+After the agent instance is approved and visible in Teams, test first in 1:1 chat, then add it to a team/channel and @mention it with these smoke prompts:
+
+| Runtime | Agent | Prompt | Expected |
+| --- | --- | --- | --- |
+| OpenClaw | OpenClaw Autopilot | `List services from private incidents MCP` | `core_banking`, `card_payments`, `digital_onboarding`, `fraud_detection`, `wealth_portfolio` |
+| Hermes | Hermes Autopilot | `Reply with exactly: Hermes bridge OK` | `Hermes bridge OK` |
+
+If Teams chat fails, first confirm the direct bridge smokes in step 6 still pass. Then verify Developer Portal has **Agent Type: API Based** and the runtime-specific `/api/messages` notification URL.
 
 ## Troubleshooting
 
 Common fixes:
 
 ```text
+Azure login needed: prefer az login --use-device-code.
 OpenClaw pairing required: run scripts.prepare_control_ui and approve the bridge device.
 Hermes /health works but /invoke fails: check Hermes logs and model provider env vars.
 Private MCP unavailable: verify private-incidents-mcp image includes FastMCP host-origin protection disabled on both app and run paths.
-Agent 365 instance not visible: confirm the Agent 365 package/blueprint endpoint uses the bridge /api/messages URL and wait for propagation.
+Agent 365 endpoint wrong: confirm setup_agent365 used .local\<runtime>\apps\terraform-outputs.json or pass --messaging-endpoint.
+Agent 365 instance not visible: confirm Developer Portal, activation scope, Teams app policy, and wait for propagation.
+Agent 365 says run out of licenses: if Add Instance is usable, submit the instance form first. If submit fails, open View associated licenses on the agent template, then verify Billing -> Licenses has unassigned capacity for every listed SKU. If the instance exists but license assignment failed, go to Users -> Active users, find the agent user, and assign the missing license manually.
+Agent 365 Add Instance returns 500: use `scripts.provision_agent365_instance` first. It automates the direct Graph Agent ID identity/user/license creation path and can call the beta Agent 365 registration API with app-only `AgentRegistration.ReadWrite.All`. If `--register` returns 403/404, the registration API is blocked by permission or tenant rollout; retry without `--register`, then use portal Add Instance only for the remaining registration step.
+Agent 365 Add Instance returns 500 after submitting a custom UPN domain: retry with the tenant *.onmicrosoft.com domain if the custom domain does not show OfficeCommunicationsOnline in Microsoft Graph domain supportedServices.
 Azure azapi token failures: refresh az login and retry, or use az containerapp update for one-off image/env updates during development.
+```
+
+Clean template recovery for repeatable Agent 365 Add Instance 500:
+
+```powershell
+Set-Location .local\hermes\agent365
+a365 cleanup instance --dry-run
+a365 cleanup blueprint --dry-run
+
+# If dry-run only shows the intended Hermes resources, delete the broken blueprint/template backing objects.
+a365 cleanup instance
+a365 cleanup blueprint
+
+Set-Location ..\..\..
+uv run python -m scripts.setup_agent365 --runtime hermes --run-setup
+
+# Optional diagnostic: upload the unmodified a365-generated package first.
+Set-Location .local\hermes\agent365
+a365 publish --aiteammate
+```
+
+After setup, upload the regenerated package, confirm Developer Portal still shows **Agent Type: API Based** and the Hermes `/api/messages` URL, then retry **Add Instance** with the `*.onmicrosoft.com` domain.
+
+## System snapshot
+
+After major Agent 365 or Azure changes, capture a redacted snapshot of the live system. This is diagnostic state for future diffing; it is not a secret backup and cannot recreate credentials.
+
+```powershell
+uv run python -m scripts.snapshot_system
+```
+
+The script writes timestamped JSON under:
+
+```text
+.local\snapshots\<utc-timestamp>\
+```
+
+Captured surfaces include:
+
+| Surface | Examples |
+| --- | --- |
+| Local ignored state | runtime Terraform outputs, Agent 365 generated config, instance state, package cleanup output |
+| Azure | account context, resource groups, Container App definitions, active revisions |
+| Microsoft Graph / Entra | domains, subscribed SKUs, Agent 365 blueprint application/SP, agent identity, agent user |
+| Agent 365 | agent registration by ID when `.local\agent365-registration-app.json` exists |
+
+Values whose key names contain `secret`, `password`, `token`, `credential`, `privateKey`, or `apiKey` are replaced with `<redacted>`. To compare a later rebuild against the known-good state, capture another snapshot and diff the JSON directories:
+
+```powershell
+uv run python -m scripts.snapshot_system
+git --no-pager diff --no-index .local\snapshots\<old> .local\snapshots\<new>
+```
+
+The first Hermes Teams-working snapshot in this session was written to:
+
+```text
+.local\snapshots\20260709-121747Z
 ```
 
 ## Local validation
 
 ```powershell
-uv run python -m unittest tests.test_agent365_setup tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
+uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_provision_agent365_instance tests.test_snapshot_system tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
 uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
 Set-Location .\private-incidents-mcp
 uv run --with pytest --with pytest-asyncio --with-editable . pytest -q

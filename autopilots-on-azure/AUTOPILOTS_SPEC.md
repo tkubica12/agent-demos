@@ -4,11 +4,11 @@ This is the active specification for the project from the current implementation
 
 ## Current baseline
 
-The repository has one shared Azure hosting pattern:
+The repository has one shared Azure hosting pattern with runtime-specific app deployments:
 
 ```text
-Agent 365 / Teams / /invoke
-  -> common bridge Container App
+Agent 365 / /invoke
+  -> runtime-specific bridge Container App
   -> ACA Sandbox runtime selected by AGENT_RUNTIME
        -> OpenClaw Gateway on port 18789
        -> Hermes API server on port 8642
@@ -25,30 +25,47 @@ Implemented and verified:
 - OpenClaw runtime image under `runtimes\openclaw`.
 - Hermes runtime image under `runtimes\hermes`.
 - Private incidents MCP works from both OpenClaw and Hermes.
+- Side-by-side app deployments use separate Terraform workspaces:
+  - `autopilot-openclaw`
+  - `autopilot-hermes`
+- Azure Bot Service resources are removed; Agent 365 is the only Microsoft 365 app path.
 - Agent 365 setup script supports both runtimes:
   - `uv run python -m scripts.setup_agent365 --runtime openclaw`
   - `uv run python -m scripts.setup_agent365 --runtime hermes`
+- OpenClaw and Hermes Agent 365 blueprints, endpoint registration, manifest packages, and non-secret identifier captures have been generated.
+- `scripts.provision_agent365_instance` automates the Graph-based Agent 365 AI teammate instance path:
+  - app-only helper for `beta/copilot/agentRegistrations`
+  - Entra Agent ID identity creation
+  - linked `microsoft.graph.agentUser` creation
+  - usage location and license assignment
+  - Agent 365 registration creation
+- Hermes has a clean scripted instance:
+  - agent user `hermes1@MngEnvMCAP058702.onmicrosoft.com`
+  - registration `T_4d76e01d-2b3f-671e-fd3f-80ea7e3aa3f7`
+  - blueprint `86759724-ff11-45f4-9f8e-265d4f2fa1ef`
+- `/api/messages` is handled by Microsoft 365 Agents SDK for Agent 365. The old `microsoft-teams-apps` Bot Framework send path is removed because Agent 365 agentic applications cannot request Bot Framework app-only tokens.
+- Hermes replied successfully in a Teams channel mention after switching the bridge to Microsoft 365 Agents SDK and Agent 365 blueprint credentials.
+- `scripts.snapshot_system` captures redacted local, Azure, Entra, Graph, and Agent 365 JSON state under `.local\snapshots\<timestamp>` for future clean-state diffs.
 
 Current limitation:
 
-- Before side-by-side deployment support, one bridge deployment is switched between runtimes with `AGENT_RUNTIME=openclaw` or `AGENT_RUNTIME=hermes`.
-- Separate OpenClaw and Hermes Agent 365 packages can be generated, but they currently point to whichever single bridge endpoint is deployed.
+- OpenClaw Teams channel validation still needs the same Microsoft 365 Agents SDK auth re-apply and live mention test.
+- Old package inventory rows can remain in Microsoft 365 admin center **All agents** after backing objects are deleted. Microsoft Graph Package Management currently exposes block/unblock/update, not delete; stale Hermes rows are blocked.
 
 ## Product direction
 
 Agent 365 is the primary install and user-facing Microsoft 365 path.
 
-Removed from the active path:
+Removed from the path:
 
 - Teams sideload package generation.
+- Azure Bot Service resources.
 - Separate Teams manifest preview packages.
 - Runtime-specific Teams sideload quickstarts.
 
-The bridge still owns Teams-compatible `/api/messages` behavior, but operators should package and publish through Agent 365 rather than sideloading Teams apps.
+The bridge still owns the Agent 365 `/api/messages` behavior.
 
-## Runtime switching before side-by-side deployments
-
-Until A5, there is one bridge app. Switch it by changing bridge app environment variables and image/runtime settings.
+## Side-by-side app deployments
 
 OpenClaw mode requires:
 
@@ -72,11 +89,11 @@ Hermes mode requires:
   - `HERMES_MODEL`
   - `HERMES_INFERENCE_MODEL`
 
-Both modes use:
+Both runtimes use:
 
 - Private incidents MCP URL and static key.
 - `app=autopilots-on-azure` and `kind=<runtime>` sandbox labels.
-- The common bridge `/api/messages` endpoint.
+- A runtime-specific bridge `/api/messages` endpoint.
 
 ## Agent 365 packaging specification
 
@@ -112,7 +129,7 @@ The generated Agent 365 config must include:
 - `messagingEndpoint`
 - AI teammate mode when available.
 
-If AI teammate / Frontier is unavailable, blueprint-only mode is acceptable, but it should be described as blueprint-backed Agent 365, not as a user-like digital worker identity.
+AI teammate creation should prefer `scripts.provision_agent365_instance provision --register` over portal **Add Instance**. Portal **Add Instance** is fallback only when Graph registration APIs are unavailable.
 
 ## Validation baseline
 
@@ -137,6 +154,14 @@ fraud_detection
 wealth_portfolio
 ```
 
+System snapshot baseline:
+
+```powershell
+uv run python -m scripts.snapshot_system
+```
+
+The known-good Hermes Teams snapshot captured during Agent 365 validation is `.local\snapshots\20260709-121747Z`.
+
 Hermes bridge smoke:
 
 ```powershell
@@ -153,7 +178,7 @@ Hermes private MCP smoke should return the same service list as OpenClaw.
 Local validation:
 
 ```powershell
-uv run python -m unittest tests.test_agent365_setup tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
+uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
 uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
 Set-Location .\private-incidents-mcp
 uv run --with pytest --with pytest-asyncio --with-editable . pytest -q
@@ -171,17 +196,17 @@ Tasks:
 
 - Run `scripts.setup_agent365 --runtime openclaw --run-setup`.
 - Publish/capture OpenClaw Agent 365 artifacts.
-- Switch the bridge to OpenClaw and validate Agent 365 messages.
+- Validate OpenClaw Agent 365 messages against the OpenClaw bridge endpoint.
 - Run `scripts.setup_agent365 --runtime hermes --run-setup`.
 - Publish/capture Hermes Agent 365 artifacts.
-- Switch the bridge to Hermes and validate Agent 365 messages.
+- Validate Hermes Agent 365 messages against the Hermes bridge endpoint.
 - Record any tenant/Frontier/AI teammate limitations.
 
 Exit criteria:
 
 - OpenClaw and Hermes each have runtime-specific Agent 365 config and metadata artifacts.
-- At least one Agent 365 package reaches the bridge `/api/messages` endpoint successfully.
-- Any blocker is explicit and reproducible.
+- OpenClaw and Hermes each have Agent 365 blueprint setup, endpoint registration, manifest package, and captured non-secret identifiers.
+- Remaining Microsoft 365 install/chat validation blocker is explicit and reproducible.
 
 ### A5 - Side-by-side app deployments and Agent 365 publishing
 
@@ -192,15 +217,21 @@ Tasks:
 - Generate separate runtime app tfvars:
   - `.local\openclaw\apps`
   - `.local\hermes\apps`
+- Deploy `terraform\apps` once per runtime using dedicated Terraform workspaces:
+  - `autopilot-openclaw`
+  - `autopilot-hermes`
+- Capture per-runtime Terraform outputs:
+  - `.local\openclaw\apps\terraform-outputs.json`
+  - `.local\hermes\apps\terraform-outputs.json`
 - Create separate bridge app names.
-- Create separate bridge identities/secrets.
+- Create separate bridge and private MCP identities/secrets.
 - Use separate runtime images, disk image names, and data volumes.
 - Use separate Agent 365 package/config directories.
 - Generate, publish, and capture separate Agent 365 artifacts for both runtimes.
-- Validate that Teams / Agent 365 messages reach the correct runtime endpoint.
+- Validate that Agent 365 messages reach the correct runtime endpoint.
 - Validate runtime-specific identities, secrets, sandbox labels, data volumes, logs, generated identifiers, and diagnostics do not collide.
 - Ensure logs, diagnostics, and outputs include runtime kind.
-- Decide whether Terraform `apps` remains one-run-per-runtime or moves to `for_each`.
+- Keep Terraform `apps` as one-run-per-runtime with workspaces for now; defer `for_each` until both runtimes are stable.
 - Record any Frontier, AI teammate, blueprint-only, admin approval, or tenant limitations.
 
 Exit criteria:

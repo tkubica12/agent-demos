@@ -2,6 +2,14 @@ output "private_mcp_app_name" {
   value = local.private_mcp_app_name
 }
 
+output "autopilot_name" {
+  value = var.autopilot_name
+}
+
+output "agent_runtime" {
+  value = var.agent_runtime
+}
+
 output "private_mcp_fqdn" {
   value = azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn
 }
@@ -14,6 +22,14 @@ output "bridge_app_name" {
   value = local.bridge_app_name
 }
 
+output "bridge_identity_client_id" {
+  value = azurerm_user_assigned_identity.bridge.client_id
+}
+
+output "bridge_identity_principal_id" {
+  value = azurerm_user_assigned_identity.bridge.principal_id
+}
+
 output "bridge_fqdn" {
   value = azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn
 }
@@ -22,14 +38,10 @@ output "bridge_url" {
   value = "https://${azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn}"
 }
 
-output "teams_bot_name" {
-  value = var.teams_bot_app_id == "" ? "" : local.teams_bot_name
+output "runtime_data_volume_name" {
+  value = local.runtime_data_volume_name
 }
 
-output "teams_bot_endpoint" {
-  value = var.teams_bot_app_id == "" ? "" : azapi_resource.teams_bot[0].output.properties.endpoint
-}
-
-output "teams_bot_app_id" {
-  value = var.teams_bot_app_id
+output "runtime_disk_image_name" {
+  value = local.runtime_disk_image_name
 }
