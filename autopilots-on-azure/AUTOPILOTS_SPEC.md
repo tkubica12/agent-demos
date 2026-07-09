@@ -183,9 +183,9 @@ Exit criteria:
 - At least one Agent 365 package reaches the bridge `/api/messages` endpoint successfully.
 - Any blocker is explicit and reproducible.
 
-### A5 - Side-by-side app deployments
+### A5 - Side-by-side app deployments and Agent 365 publishing
 
-Goal: run OpenClaw and Hermes at the same time instead of switching one bridge.
+Goal: run OpenClaw and Hermes at the same time instead of switching one bridge, and publish both as separate Agent 365 autopilots with independent endpoints, identities, configuration, and runtime state.
 
 Tasks:
 
@@ -196,13 +196,19 @@ Tasks:
 - Create separate bridge identities/secrets.
 - Use separate runtime images, disk image names, and data volumes.
 - Use separate Agent 365 package/config directories.
+- Generate, publish, and capture separate Agent 365 artifacts for both runtimes.
+- Validate that Teams / Agent 365 messages reach the correct runtime endpoint.
+- Validate runtime-specific identities, secrets, sandbox labels, data volumes, logs, generated identifiers, and diagnostics do not collide.
 - Ensure logs, diagnostics, and outputs include runtime kind.
 - Decide whether Terraform `apps` remains one-run-per-runtime or moves to `for_each`.
+- Record any Frontier, AI teammate, blueprint-only, admin approval, or tenant limitations.
 
 Exit criteria:
 
 - OpenClaw and Hermes bridge endpoints are both live.
-- OpenClaw and Hermes can be packaged/published through Agent 365 independently.
+- OpenClaw and Hermes can be installed or published independently through Agent 365.
+- Each runtime has its own endpoint, identity metadata, and runtime state.
+- A smoke prompt reaches each runtime through Agent 365 and returns the expected response.
 - Runtime state and sandbox volumes do not collide.
 
 ### A6 - Operator polish
@@ -419,9 +425,34 @@ Initial implementation should support bridge-owned cron for simplicity, with a c
 
 ### Future milestones after A6
 
-#### A7 - Hermes blueprint distribution support
+#### A7 - MCP and Agent 365 identity model
 
-Goal: install and update a Hermes digital-worker blueprint from Git while preserving instance-local state.
+Goal: prove how sandbox-hosted OpenClaw and Hermes workers access private and Microsoft 365 tools using the correct Agent 365 identities.
+
+Tasks:
+
+- Define supported identity modes:
+  - Agent / workload identity for private MCP and service-to-service access.
+  - Agent User identity for digital-worker-owned Microsoft 365 resources such as mailbox, calendar, OneDrive, and documents.
+  - User-delegated / OBO identity only for explicit user-owned-resource requests.
+- Replace or complement the private demo MCP static-key path with Entra-backed authorization for the Agent 365 agent identity.
+- Validate that both OpenClaw and Hermes can call the private MCP using the agent identity and receive authorization based on that identity.
+- Build one Agent User Microsoft 365 scenario, preferably sending email from the agent's own mailbox or creating a document in the agent's own OneDrive.
+- Evaluate Microsoft 365 / Work IQ MCP tools, including Word, Excel, Mail, Calendar, OneDrive/SharePoint, Teams, and any Work IQ-specific surfaces.
+- Document which tools can be used directly from bridge / sandbox runtimes and which require Microsoft 365 Agents SDK, Agent 365 notification handlers, or Foundry Hosted Agent execution.
+- Evaluate OBO for private 1:1 user requests, including consent, token acquisition, prompt boundaries, and why it is not the default for autonomous group/chat work.
+- Define least-privilege blueprint or inheritable permission setup for adopted MCP tools.
+
+Exit criteria:
+
+- Private MCP authorization works with a real Agent 365 identity instead of only a static demo key.
+- At least one Agent User Microsoft 365 action works end to end.
+- OBO is either proven with clear guardrails or explicitly deferred with blockers.
+- OpenClaw and Hermes use the same bridge-level identity and tooling contract.
+
+#### A8 - Blueprint distribution and local state
+
+Goal: install and update digital-worker blueprints from Git while preserving instance-local state, with Hermes as the first full implementation and OpenClaw evaluated against the same lifecycle contract.
 
 Tasks:
 
@@ -431,12 +462,14 @@ Tasks:
 - Ensure `HERMES_HOME` remains on the sandbox Data Disk.
 - Add stateful Hermes invocation through `/api/sessions/{id}/chat`, `/v1/responses`, or `/v1/runs`.
 - Preserve and pass stable `X-Hermes-Session-Key`.
+- Evaluate what the equivalent OpenClaw profile/package/state boundary should be, or document why OpenClaw stays on a lighter runtime-package model.
 
 Exit criteria:
 
-- A worker instance can install v1, chat, write local memory/skills, update to v2, and keep private memory/session state.
+- A Hermes worker instance can install v1, chat, write local memory/skills, update to v2, and keep private memory/session state.
+- OpenClaw has either an equivalent tested packaging/state story or an explicit documented exception.
 
-#### A8 - Local learning and dreaming
+#### A9 - Local learning and dreaming
 
 Goal: let one worker adapt locally and produce learning packets without central consolidation.
 
@@ -453,7 +486,7 @@ Exit criteria:
 - A worker can produce private memory updates and candidate transferable learning records from recent sessions.
 - No private memory is exported by default.
 
-#### A9 - Fleet consolidation to GitHub PR
+#### A10 - Fleet consolidation to GitHub PR
 
 Goal: promote transferable learnings from multiple workers into a reviewed blueprint version.
 
@@ -470,7 +503,7 @@ Exit criteria:
 
 - Human reviewers can approve a blueprint v2 PR with traceable evidence and rejected-candidate notes.
 
-#### A10 - Scheduled dreaming and fleet automation
+#### A11 - Scheduled dreaming and fleet automation
 
 Goal: automate recurring dream and consolidation cycles.
 
@@ -485,11 +518,33 @@ Exit criteria:
 
 - Workers can be periodically reflected and fleet learnings can be proposed without manual sandbox access.
 
+#### A12 - Agent 365 workload notifications
+
+Goal: add optional non-Teams Microsoft 365 notification inputs while keeping Teams chat on the existing `/api/messages` activity path.
+
+Tasks:
+
+- Validate Agent 365 notification delivery for Email and Word first; Excel and PowerPoint can follow.
+- Treat notifications as new bridge sources such as `a365_email`, `a365_word_comment`, `a365_excel_comment`, and `a365_powerpoint_comment`.
+- Map notification payloads into `AgentRequest` with stable session keys based on message, document, thread, or comment identifiers.
+- Decide response behavior per workload:
+  - Email responses should use mail / Microsoft 365 tooling, not Teams chat.
+  - Word, Excel, and PowerPoint comment responses should reply to the document comment thread when tooling supports it.
+  - Lifecycle notifications should initialize or clean up worker state only when useful.
+- Ensure notification handling does not bypass existing runtime selection, identity boundaries, redaction rules, or private-state rules.
+- Add minimal end-to-end smoke tests with synthetic notification payloads before using live Microsoft 365 events.
+
+Exit criteria:
+
+- Email and Word notifications can reach the bridge and be routed to the selected runtime.
+- The runtime can produce an appropriate action plan or response for the notification.
+- Any required Microsoft MCP/tool permissions are documented and least-privilege.
+
 ## Deferred
 
 Do not implement until the Agent 365 and side-by-side paths are stable:
 
-- Work IQ integration.
+- Foundry Hosted Agents as a possible thin adapter only, not as the default OpenClaw or Hermes runtime host.
 - Deeper user identity/profile isolation.
 - Hermes native Teams mode.
 - Hermes dashboard exposure.
