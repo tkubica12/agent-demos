@@ -114,6 +114,8 @@ def build_tfvars(
     api_server_key: str = "",
     runtime_image: str = "",
     runtime_disk_image_name: str = "",
+    bridge_image: str = "",
+    private_mcp_image: str = "",
     agent365_client_id: str = "",
     agent365_client_secret: str = "",
     agent365_tenant_id: str = "",
@@ -152,6 +154,12 @@ def build_tfvars(
         tfvars["agent365_client_secret"] = resolved_agent365_client_secret
     if resolved_agent365_tenant_id:
         tfvars["agent365_tenant_id"] = resolved_agent365_tenant_id
+    resolved_bridge_image = bridge_image or previous.get("bridge_image", "")
+    resolved_private_mcp_image = private_mcp_image or previous.get("private_mcp_image", "")
+    if resolved_bridge_image:
+        tfvars["bridge_image"] = resolved_bridge_image
+    if resolved_private_mcp_image:
+        tfvars["private_mcp_image"] = resolved_private_mcp_image
     return tfvars
 
 
@@ -166,6 +174,8 @@ def main() -> None:
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY. Generated when omitted.")
     parser.add_argument("--runtime-image", default="", help="Runtime image digest. Recommended for Hermes to avoid reusing an OpenClaw image tfvars value.")
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
+    parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
+    parser.add_argument("--private-mcp-image", default="", help="Private incidents MCP image digest.")
     parser.add_argument("--agent365-client-id", default="", help="Agent 365 blueprint app ID for Microsoft Agents SDK auth.")
     parser.add_argument("--agent365-client-secret", default="", help="Agent 365 blueprint client secret for Microsoft Agents SDK auth.")
     parser.add_argument("--agent365-tenant-id", default="", help="Tenant ID for Microsoft Agents SDK auth. Defaults to tenant if omitted by Terraform.")
@@ -201,6 +211,8 @@ def main() -> None:
         api_server_key=args.api_server_key,
         runtime_image=args.runtime_image,
         runtime_disk_image_name=args.runtime_disk_image_name,
+        bridge_image=args.bridge_image,
+        private_mcp_image=args.private_mcp_image,
         agent365_client_id=args.agent365_client_id or agent365_auth.get("client_id", ""),
         agent365_client_secret=args.agent365_client_secret or agent365_auth.get("client_secret", ""),
         agent365_tenant_id=args.agent365_tenant_id,

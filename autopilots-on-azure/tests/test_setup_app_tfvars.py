@@ -43,6 +43,8 @@ class SetupAppTfvarsTests(unittest.TestCase):
             previous={},
             api_server_key="api-key",
             runtime_image="registry.example/hermes-runtime@sha256:test",
+            bridge_image="registry.example/bridge@sha256:test",
+            private_mcp_image="registry.example/mcp@sha256:test",
             agent365_client_id="blueprint-id",
             agent365_client_secret="blueprint-secret",
             agent365_tenant_id="tenant-id",
@@ -53,6 +55,8 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["runtime_data_volume_name"], "hermes-data")
         self.assertEqual(tfvars["api_server_key"], "api-key")
         self.assertEqual(tfvars["runtime_image"], "registry.example/hermes-runtime@sha256:test")
+        self.assertEqual(tfvars["bridge_image"], "registry.example/bridge@sha256:test")
+        self.assertEqual(tfvars["private_mcp_image"], "registry.example/mcp@sha256:test")
         self.assertEqual(tfvars["runtime_disk_image_name"], "hermes-api-server-image")
         self.assertEqual(tfvars["agent365_client_id"], "blueprint-id")
         self.assertEqual(tfvars["agent365_client_secret"], "blueprint-secret")

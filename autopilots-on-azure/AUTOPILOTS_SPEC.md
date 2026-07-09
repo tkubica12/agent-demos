@@ -43,13 +43,19 @@ Implemented and verified:
   - agent user `hermes1@MngEnvMCAP058702.onmicrosoft.com`
   - registration `T_4d76e01d-2b3f-671e-fd3f-80ea7e3aa3f7`
   - blueprint `86759724-ff11-45f4-9f8e-265d4f2fa1ef`
+- OpenClaw has a clean scripted instance:
+  - agent user `openclaw1@MngEnvMCAP058702.onmicrosoft.com`
+  - registration `T_75259b23-1388-35fe-0e49-9b092a4813f4`
+  - blueprint `916c51a6-d55e-430b-af30-7755df3a09c8`
 - `/api/messages` is handled by Microsoft 365 Agents SDK for Agent 365. The old `microsoft-teams-apps` Bot Framework send path is removed because Agent 365 agentic applications cannot request Bot Framework app-only tokens.
 - Hermes replied successfully in a Teams channel mention after switching the bridge to Microsoft 365 Agents SDK and Agent 365 blueprint credentials.
+- OpenClaw replied successfully in Teams 1:1 chat and a Teams channel mention after applying the same Microsoft 365 Agents SDK bridge path.
 - `scripts.snapshot_system` captures redacted local, Azure, Entra, Graph, and Agent 365 JSON state under `.local\snapshots\<timestamp>` for future clean-state diffs.
 
 Current limitation:
 
-- OpenClaw Teams channel validation still needs the same Microsoft 365 Agents SDK auth re-apply and live mention test.
+- Full Teams thread history retrieval is not implemented; the bridge sees delivered activities plus bridge-local in-process memory.
+- Teams typing indicators and reactions are intentionally skipped in the Agent 365 path.
 - Old package inventory rows can remain in Microsoft 365 admin center **All agents** after backing objects are deleted. Microsoft Graph Package Management currently exposes block/unblock/update, not delete; stale Hermes rows are blocked.
 
 ## Product direction

@@ -573,6 +573,8 @@ The first Hermes Teams-working snapshot in this session was written to:
 .local\snapshots\20260709-121747Z
 ```
 
+After OpenClaw Agent 365 also passed Teams 1:1 and channel mention validation, the latest both-runtimes baseline snapshot is `.local\snapshots\20260709-144738Z`.
+
 ## Local validation
 
 ```powershell
