@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path

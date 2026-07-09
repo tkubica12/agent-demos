@@ -51,6 +51,8 @@ Implemented and verified:
 - Hermes replied successfully in a Teams channel mention after switching the bridge to Microsoft 365 Agents SDK and Agent 365 blueprint credentials.
 - OpenClaw replied successfully in Teams 1:1 chat and a Teams channel mention after applying the same Microsoft 365 Agents SDK bridge path.
 - `scripts.snapshot_system` captures redacted local, Azure, Entra, Graph, and Agent 365 JSON state under `.local\snapshots\<timestamp>` for future clean-state diffs.
+- `scripts.demo_ops` provides A6 operator commands for side-by-side health checks, direct `/invoke` smoke validation, active runtime tfvars switching, and Azure Container Apps log triage.
+- Latest post-A6 baseline snapshot: `.local\snapshots\20260709-170709Z`.
 
 Current limitation:
 
@@ -184,7 +186,7 @@ Hermes private MCP smoke should return the same service list as OpenClaw.
 Local validation:
 
 ```powershell
-uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
+uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_demo_ops tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
 uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
 Set-Location .\private-incidents-mcp
 uv run --with pytest --with pytest-asyncio --with-editable . pytest -q
@@ -257,6 +259,12 @@ Tasks:
 - Update README around Agent 365-first operation.
 - Add explicit runtime switch commands.
 - Add side-by-side deployment guide after A5.
+- Add `scripts.demo_ops` as the A6 operator entry point:
+  - `status --runtime both --invoke` checks both bridge endpoints and direct runtime smokes.
+  - `activate --runtime <runtime>` makes the selected runtime tfvars active before Terraform plan/apply.
+  - `logs --runtime <runtime> --app bridge` prints or runs the Azure Container Apps log command.
+  - `grant-sandbox-access` grants the current operator user **Container Apps SandboxGroup Data Owner** when the active Azure login differs from the original platform deployer.
+  - `reset-sandbox --runtime <runtime>` dry-runs sandbox deletion for stale runtime sandboxes while preserving data volumes; it requires ACA Sandbox data-plane access to `https://dynamicsessions.io`.
 - Add troubleshooting for:
   - OpenClaw device approval.
   - Hermes API server health.

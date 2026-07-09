@@ -75,6 +75,48 @@ scripts\                  setup, build, Agent 365, sandbox helpers
 docs\adr\                 architecture decision records
 ```
 
+## Operator console
+
+A6 adds a single operator helper for day-two demo work. Use it before opening Teams or the portal:
+
+```powershell
+uv run python -m scripts.demo_ops status --runtime both
+uv run python -m scripts.demo_ops status --runtime both --invoke
+```
+
+`status` checks the captured runtime bridge URLs under `.local\<runtime>\apps\terraform-outputs.json`. With `--invoke`, it also runs the direct bridge smoke prompt and checks expected markers.
+
+Switch the active Terraform tfvars to one runtime without guessing which generated file is live:
+
+```powershell
+uv run python -m scripts.demo_ops activate --runtime openclaw
+terraform -chdir=terraform\apps workspace select autopilot-openclaw
+terraform -chdir=terraform\apps plan
+
+uv run python -m scripts.demo_ops activate --runtime hermes
+terraform -chdir=terraform\apps workspace select autopilot-hermes
+terraform -chdir=terraform\apps plan
+```
+
+For log triage, print the exact Azure Container Apps log command first. Add `--execute` only when you want the script to run it:
+
+```powershell
+uv run python -m scripts.demo_ops logs --runtime openclaw --app bridge
+uv run python -m scripts.demo_ops logs --runtime hermes --app bridge --tail 120 --execute
+```
+
+If a runtime sandbox is running but its service port no longer answers, delete only that sandbox and keep the data volume. Dry-run first:
+
+```powershell
+uv run python -m scripts.demo_ops grant-sandbox-access
+uv run python -m scripts.demo_ops grant-sandbox-access --execute
+uv run python -m scripts.demo_ops reset-sandbox --runtime hermes
+uv run python -m scripts.demo_ops reset-sandbox --runtime hermes --execute
+uv run python -m scripts.demo_ops smoke --runtime hermes
+```
+
+`reset-sandbox` uses the ACA Sandbox data-plane resource `https://dynamicsessions.io`. If it returns `ERROR: Forbidden`, the current Azure login can still operate normal Azure resources but cannot list/delete sandboxes through the sandbox data plane. Run `grant-sandbox-access --execute` with an identity allowed to create role assignments, or use an identity that already has **Container Apps SandboxGroup Data Owner** on the sandbox group.
+
 ## Prerequisites
 
 ```powershell
@@ -507,8 +549,11 @@ Common fixes:
 Azure login needed: prefer az login --use-device-code.
 OpenClaw pairing required: run scripts.prepare_control_ui and approve the bridge device.
 Hermes /health works but /invoke fails: check Hermes logs and model provider env vars.
+Hermes sandbox proxy says Failed to forward request: run `scripts.demo_ops reset-sandbox --runtime hermes`, then rerun with `--execute` if the dry-run points at the stale Hermes sandbox. If dry-run returns `ERROR: Forbidden`, run `scripts.demo_ops grant-sandbox-access --execute` or switch to an Azure identity with ACA Sandbox data-plane access.
 Private MCP unavailable: verify private-incidents-mcp image includes FastMCP host-origin protection disabled on both app and run paths.
 Agent 365 endpoint wrong: confirm setup_agent365 used .local\<runtime>\apps\terraform-outputs.json or pass --messaging-endpoint.
+Runtime confusion: run `uv run python -m scripts.demo_ops status --runtime both --invoke`, then `scripts.demo_ops activate --runtime <runtime>` before Terraform plan/apply.
+Teams delivery delay: run `scripts.demo_ops logs --runtime <runtime> --app bridge --execute`; if OPENCLAW_BRIDGE_DEBUG is enabled, also run `scripts.demo_ops status --runtime <runtime> --diag`.
 Agent 365 instance not visible: confirm Developer Portal, activation scope, Teams app policy, and wait for propagation.
 Agent 365 says run out of licenses: if Add Instance is usable, submit the instance form first. If submit fails, open View associated licenses on the agent template, then verify Billing -> Licenses has unassigned capacity for every listed SKU. If the instance exists but license assignment failed, go to Users -> Active users, find the agent user, and assign the missing license manually.
 Agent 365 Add Instance returns 500: use `scripts.provision_agent365_instance` first. It automates the direct Graph Agent ID identity/user/license creation path and can call the beta Agent 365 registration API with app-only `AgentRegistration.ReadWrite.All`. If `--register` returns 403/404, the registration API is blocked by permission or tenant rollout; retry without `--register`, then use portal Add Instance only for the remaining registration step.
@@ -573,12 +618,12 @@ The first Hermes Teams-working snapshot in this session was written to:
 .local\snapshots\20260709-121747Z
 ```
 
-After OpenClaw Agent 365 also passed Teams 1:1 and channel mention validation, the latest both-runtimes baseline snapshot is `.local\snapshots\20260709-144738Z`.
+After A6 operator validation and Hermes sandbox reset, the latest both-runtimes baseline snapshot is `.local\snapshots\20260709-170709Z`.
 
 ## Local validation
 
 ```powershell
-uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_provision_agent365_instance tests.test_snapshot_system tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
+uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_demo_ops tests.test_provision_agent365_instance tests.test_snapshot_system tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
 uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
 Set-Location .\private-incidents-mcp
 uv run --with pytest --with pytest-asyncio --with-editable . pytest -q
