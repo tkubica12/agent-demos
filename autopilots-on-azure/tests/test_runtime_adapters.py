@@ -269,6 +269,10 @@ class RuntimeAdapterTests(unittest.TestCase):
             foundry_openai_base_url="https://foundry.example/openai/v1",
             model_deployment="gpt-test",
             private_incidents_mcp_url="https://mcp.example/mcp",
+            private_incidents_mcp_scope="api://private/.default",
+            agent365_tenant_id="tenant-1",
+            agent365_blueprint_client_id="blueprint-1",
+            agent365_agent_identity_client_id="agent-1",
         )
 
         self.assertEqual(config.runtime_kind, "openclaw")
@@ -277,7 +281,8 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.args, ("-m", "openclaw_gateway.start_gateway"))
         self.assertEqual(config.data_mount_path, "/data")
         self.assertEqual(config.environment["OPENCLAW_GATEWAY_TOKEN"], "token-1")
-        self.assertEqual(config.environment["PRIVATE_INCIDENTS_MCP_URL"], "https://mcp.example/mcp")
+        self.assertEqual(config.environment["PRIVATE_INCIDENTS_MCP_URL"], "http://127.0.0.1:18081/servers/private-incidents")
+        self.assertIn("https://mcp.example/mcp", config.environment["AGENT_MCP_SERVERS_JSON"])
         self.assertNotIn("runtime", runtime_labels(config))
         self.assertNotIn("autopilot", runtime_labels(config))
         self.assertEqual(runtime_labels(config)["kind"], "openclaw")
@@ -287,6 +292,10 @@ class RuntimeAdapterTests(unittest.TestCase):
             image_name="registry.example/hermes-runtime@sha256:test",
             api_server_key="api-key-1",
             private_incidents_mcp_url="https://mcp.example/mcp",
+            private_incidents_mcp_scope="api://private/.default",
+            agent365_tenant_id="tenant-1",
+            agent365_blueprint_client_id="blueprint-1",
+            agent365_agent_identity_client_id="agent-1",
             foundry_openai_base_url="https://foundry.example/openai/v1",
             model_deployment="gpt-test",
         )
@@ -386,7 +395,11 @@ class RuntimeAdapterTests(unittest.TestCase):
                     },
                     {
                         "id": "sandbox-1",
-                        "labels": {"app": "autopilots-on-azure", "kind": "openclaw"},
+                        "labels": {
+                            "app": "autopilots-on-azure",
+                            "kind": "openclaw",
+                            "identityArchitecture": "agent-federation-v1",
+                        },
                         "volumes": [{"volumeName": "openclaw-data"}],
                     },
                 ]

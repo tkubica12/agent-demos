@@ -1,7 +1,7 @@
 [project]
-name = "private-incidents-mcp"
+name = "public-shipments-mcp"
 version = "0.1.0"
-description = "Mock private FSI incidents MCP server for OpenClaw VNet demos."
+description = "Public shipment tracking MCP server for Agent 365 BYO demonstrations."
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastmcp",
@@ -11,7 +11,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["private_incidents_mcp*"]
+include = ["public_shipments_mcp*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

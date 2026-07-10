@@ -7,10 +7,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g openclaw@latest
 
-COPY requirements.txt .
+COPY runtimes/openclaw/requirements.txt .
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt
 
-COPY openclaw_gateway ./openclaw_gateway
+COPY runtimes/openclaw/openclaw_gateway ./openclaw_gateway
+COPY autopilots_identity ./autopilots_identity
 
 ENV PORT=18789
 ENV PERSISTENCE_BACKEND=file

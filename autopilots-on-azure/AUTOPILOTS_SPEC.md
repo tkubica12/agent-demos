@@ -1,8 +1,17 @@
-# Autopilots on Azure: current plan and specification
+# Autopilots on Azure product specification and roadmap
+
+## Document role
+
+This document defines product requirements, the implemented capability baseline, future design, milestones, and exit criteria.
+
+- Current system architecture and trust boundaries: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Deployment and operator guidance: [README.md](README.md)
+- Detailed multi-step procedures: [docs/runbooks](docs/runbooks)
+- Consequential design rationale: [docs/adr](docs/adr)
 
 This is the active specification for the project from the current implementation point forward. OpenClaw and Hermes are peer runtimes behind one Microsoft 365 bridge pattern. Agent 365 is the primary Microsoft 365 packaging and installation path.
 
-## Current baseline
+## Implemented capability baseline
 
 The repository has one shared Azure hosting pattern with runtime-specific app deployments:
 
@@ -12,7 +21,10 @@ Agent 365 / /invoke
   -> ACA Sandbox runtime selected by AGENT_RUNTIME
        -> OpenClaw Gateway on port 18789
        -> Hermes API server on port 8642
-  -> private incidents MCP Container App
+       -> loopback Agent Identity MCP adapter
+            -> private incidents MCP through the Sandbox VNet connection
+            -> public shipments MCP through HTTPS
+            -> Agent 365 Work IQ Mail MCP
 ```
 
 Implemented; live-verified items are called out explicitly:
@@ -25,6 +37,10 @@ Implemented; live-verified items are called out explicitly:
 - OpenClaw runtime image under `runtimes\openclaw`.
 - Hermes runtime image under `runtimes\hermes`.
 - Private incidents MCP works from both OpenClaw and Hermes.
+- Private incidents MCP uses Agent Identity tokens carrying `Incidents.Read.All`; the old static key and bridge relay are removed.
+- Public shipments MCP runs as an Entra-protected, scale-to-zero ACA endpoint and works from both runtimes with `Shipments.Read.All`.
+- Work IQ Mail works from both runtimes with the runtime's Agent User and `Tools.ListInvoke.All`.
+- The public shipments endpoint is registered and approved as Agent 365 BYO MCP `ext_Shipments` for Tooling Gateway and Defender telemetry demonstration.
 - Side-by-side app deployments use separate Terraform workspaces:
   - `autopilot-openclaw`
   - `autopilot-hermes`
@@ -497,7 +513,7 @@ Initial implementation should support bridge-owned cron for simplicity, with a c
 
 Goal: prove how sandbox-hosted OpenClaw and Hermes workers access private and Microsoft 365 tools using the correct Agent 365 identities.
 
-Status: Next. Blueprint, Agent Identity, Agent User, licensing, and registration provisioning are complete. Tool authorization and explicit runtime identity selection are not.
+Status: Complete for Agent Identity, Agent User, private/custom MCP, and Work IQ Mail. Human OBO remains intentionally separate and deferred pending a user-consent route.
 
 Tasks:
 
@@ -506,20 +522,21 @@ Tasks:
   - Agent User identity for resources owned by the digital worker, such as its mailbox, calendar, OneDrive, and documents.
   - User-delegated / OBO identity only for explicit user-owned-resource requests.
 - Add explicit auth-boundary metadata to the bridge/runtime request contract, aligned with ADR 0004: selected auth mode, Agent User/instance identifiers when known, invoking human identity, and public/private conversation boundary.
-- Replace the private demo MCP static-key path with Entra-backed application authorization issued to the blueprint/Agent Identity or runtime workload identity. Do not use Agent User delegated identity for unattended service-to-service calls.
-- Validate that both OpenClaw and Hermes can call the private MCP through the same bridge-level token/tooling contract and receive authorization based on the selected workload identity.
-- Build one Agent User Microsoft 365 scenario, preferably sending email from the agent's own mailbox or creating a document in the agent's own OneDrive.
-- Evaluate Microsoft 365 / Work IQ MCP tools, including Word, Excel, Mail, Calendar, OneDrive/SharePoint, Teams, and any Work IQ-specific surfaces.
+- Replace the private demo MCP static-key path with Entra-backed Agent Identity application authorization. Do not use Agent User delegated identity for unattended service-to-service calls.
+- Validate that both OpenClaw and Hermes call private and public custom MCP servers through the same Sandbox-local identity adapter.
+- Build one Agent User Microsoft 365 scenario through Agent 365 Work IQ Mail.
+- Evaluate Microsoft 365 / Work IQ MCP tools and adopt Mail as the first live scenario.
 - Document which tools can be used directly from bridge / sandbox runtimes and which require Microsoft 365 Agents SDK, Agent 365 notification handlers, or Foundry Hosted Agent execution.
 - Evaluate OBO for private 1:1 user requests, including consent, token acquisition, prompt boundaries, and why it is not the default for autonomous group/chat work.
-- Define least-privilege blueprint or inheritable permission setup for adopted MCP tools.
+- Define least-privilege blueprint, Agent Identity app-role, Agent User delegated grant, and Agent 365 Tooling setup.
 
 Exit criteria:
 
-- Private MCP authorization works with an approved Entra workload identity associated with the Agent 365 deployment instead of only a static demo key.
-- At least one Agent User Microsoft 365 action works end to end.
-- OBO is either proven with clear guardrails or explicitly deferred with blockers.
-- OpenClaw and Hermes use the same bridge-level identity and tooling contract.
+- Private MCP authorization works with Agent Identity `Incidents.Read.All` tokens federated from the Sandbox Group managed identity.
+- Public custom MCP authorization works with Agent Identity `Shipments.Read.All`; its public endpoint is registered as Agent 365 BYO MCP.
+- Agent User email works end to end through Work IQ Mail for OpenClaw and Hermes.
+- OBO is deferred to a per-turn user consent implementation; it is not used for autonomous or shared-conversation work.
+- OpenClaw and Hermes use the same Sandbox-local identity and tooling contract.
 
 #### A8 - Blueprint distribution and local state
 

@@ -52,25 +52,33 @@ This is tenant/admin-center publishing, not Teams sideloading. If the upload pag
 
 ## Architecture
 
+The durable architecture, trust boundaries, identity flows, networking, state ownership, and component responsibilities are documented in [ARCHITECTURE.md](ARCHITECTURE.md). This section is only the operator-oriented summary.
+
 ```text
 Agent 365 / /invoke
   -> runtime-specific bridge Container App
   -> runtime-specific ACA Sandbox
        -> OpenClaw Gateway
        -> Hermes API server
-  -> private incidents MCP Container App
+       -> loopback Agent Identity MCP adapter
+            -> private incidents MCP over Sandbox VNet connection
+            -> public shipments MCP over HTTPS
+            -> Agent 365 Work IQ Mail MCP
 ```
 
 Key folders:
 
 ```text
 terraform\platform\       shared Azure substrate
-terraform\apps\           bridge and private MCP app resources
+terraform\apps\           bridge, private MCP, and public BYO MCP app resources
 runtimes\openclaw\        OpenClaw Gateway sandbox image
 runtimes\hermes\          Hermes API server sandbox image
 bridge\                   FastAPI bridge: /health, /invoke, /api/messages
 bridge\runtime\           runtime adapters: OpenClaw and Hermes
 private-incidents-mcp\    mock private MCP server
+public-shipments-mcp\     public scale-to-zero MCP server for Agent 365 BYO
+autopilots_identity\      Agent Identity/Agent User token exchange and MCP adapter
+agent365\                 committed Agent 365 Tooling manifest
 scripts\                  setup, build, Agent 365, sandbox helpers
 docs\adr\                 architecture decision records
 ```
@@ -144,19 +152,20 @@ Set-Location ..\..
 
 ## 2. Build container images
 
-Builds the common bridge, OpenClaw runtime, and private MCP images in ACR and writes digest-pinned app tfvars.
+Builds one runtime plus the common bridge, private MCP, and public shipments MCP images in ACR. The script updates that runtime's scoped tfvars and the active Terraform tfvars together.
 
 ```powershell
-uv run python -m scripts.build_images
+uv run python -m scripts.build_images --runtime openclaw
+uv run python -m scripts.build_images --runtime hermes
 ```
 
-Generated file, do not commit:
+Generated files, do not commit:
 
 ```text
-terraform\apps\generated.images.auto.tfvars.json
+.local\<runtime>\apps\generated.app.auto.tfvars.json
+terraform\apps\generated.app.auto.tfvars.json
+terraform\apps\generated.runtime.auto.tfvars.json
 ```
-
-Hermes runtime images are built separately until `scripts.build_images` grows Hermes build support.
 
 ## 3. Generate app bootstrap values
 
@@ -190,11 +199,9 @@ terraform\apps\generated.runtime.auto.tfvars.json
 .local\hermes\apps\generated.app.auto.tfvars.json
 ```
 
-`generated.runtime.auto.tfvars.json` intentionally loads after `generated.images.auto.tfvars.json` so runtime selection and Hermes image settings do not get overwritten by an older OpenClaw image build file.
-
 ## 4. Deploy apps
 
-Deploys the private MCP Container App, bridge Container App, app settings/secrets, and image digests. A5 uses one Terraform workspace per runtime so OpenClaw and Hermes stay live side by side instead of replacing each other in one state file.
+Deploys the private MCP Container App, public scale-to-zero shipments MCP, bridge Container App, app settings/secrets, and image digests. A5 uses one Terraform workspace per runtime so OpenClaw and Hermes stay live side by side instead of replacing each other in one state file.
 
 ```powershell
 uv run python -m scripts.deploy_apps_runtime --runtime openclaw --apply
@@ -224,7 +231,58 @@ Expected:
 {"status":"ok"}
 ```
 
-## 5. OpenClaw-only device approval
+## 5. Configure A7 identity and MCP permissions
+
+The Sandbox Group managed identity is only the workload credential. A federated identity credential on each Agent 365 blueprint exchanges it into the runtime's Agent Identity; Agent User tokens are used only for worker-owned Microsoft 365 resources.
+
+```text
+Sandbox Group managed identity
+  -> blueprint federated identity credential
+  -> Agent Identity token
+       -> private incidents app role: Incidents.Read.All
+       -> public shipments app role: Shipments.Read.All
+  -> Agent User token
+       -> Work IQ Mail delegated scope: Tools.ListInvoke.All
+```
+
+Configure each runtime:
+
+```powershell
+uv run python -m scripts.setup_a7_identity --runtime openclaw
+uv run python -m scripts.setup_a7_identity --runtime hermes
+```
+
+The script creates or reuses the two MCP Entra resource applications, assigns application roles to the Agent Identity, grants the existing Agent User the Work IQ Mail scope, copies `agent365\ToolingManifest.json`, and applies Agent 365 MCP permissions.
+
+The private server remains VNet-only. `Microsoft.App/sandboxGroups/vnetConnections` provides private DNS and network reachability; it does not perform MCP authentication. The runtime-local adapter on `127.0.0.1:18081` performs the documented blueprint/Agent Identity exchanges and streams MCP traffic directly to the upstream server. No MCP relay or shared API key exists in the public bridge.
+
+The public shipments server is a separate external ACA MCP endpoint with Entra OAuth and scale-to-zero. Register it as Agent 365 BYO MCP:
+
+```powershell
+terraform -chdir=terraform\apps workspace select autopilot-openclaw
+uv run python -m scripts.register_a7_byo_mcp --runtime openclaw --dry-run
+uv run python -m scripts.register_a7_byo_mcp --runtime openclaw
+```
+
+BYO registration is preview and requires a public endpoint. Approval remains in Microsoft 365 admin center under **Agents -> Tools -> Requests**. Current supported BYO invocation surfaces do not include OpenClaw or Hermes, so those runtimes call the same public endpoint directly with their Agent Identity; the BYO registration separately demonstrates Agent 365 registry, approval, gateway, policy, and Defender telemetry.
+
+The current `ext_Shipments` registration is approved. During preview, the CLI-generated backing applications can require consent repair before portal approval:
+
+```powershell
+uv run python -m scripts.register_a7_byo_mcp --runtime openclaw --repair-consent
+```
+
+This idempotently creates missing service principals, enables the generated public client, grants the permissions declared by each backing application, and assigns the approving admin. After approval:
+
+```powershell
+uv run python -m scripts.register_a7_byo_mcp --runtime openclaw --mark-approved
+```
+
+If the consent popup repeatedly uses an account from the wrong tenant, use an isolated/InPrivate browser profile and sign in explicitly with the tenant administrator.
+
+Live validation confirmed that the approved `ext_Shipments` endpoint accepts the generated public-client token and initializes through the Agent 365 gateway. A raw MCP client receives an empty tool catalog because it does not perform the supported-client connection/OAuth handshake. Complete BYO tool invocation from Copilot Studio, Visual Studio Code, Claude Code, or GitHub Copilot CLI; do not treat the gateway URL as a generic custom-runtime endpoint.
+
+## 6. OpenClaw-only device approval
 
 Skip this step when `AGENT_RUNTIME=hermes`.
 
@@ -250,7 +308,7 @@ uv run python -m scripts.prepare_control_ui
 
 Open the printed Gateway URL, paste the printed Gateway token, and approve the printed bridge `deviceId`.
 
-## 6. Validate selected runtime with `/invoke`
+## 7. Validate selected runtime with `/invoke`
 
 OpenClaw expected response:
 
@@ -290,7 +348,7 @@ Invoke-RestMethod `
 Set-Location ..\..
 ```
 
-## 7. Register and publish Agent 365
+## 8. Register and publish Agent 365
 
 Agent 365 is the Microsoft 365 installation path for both runtimes.
 
@@ -561,7 +619,7 @@ Teams admin center -> Teams apps -> Manage apps
 
 After changing activation scope, licenses, or app policy, wait 5-10 minutes and restart Teams before searching again.
 
-## 8. Validate from Teams
+## 9. Validate from Teams
 
 After the agent instance is approved and visible in Teams, test first in 1:1 chat, then add it to a team/channel and @mention it with these smoke prompts:
 
@@ -570,7 +628,7 @@ After the agent instance is approved and visible in Teams, test first in 1:1 cha
 | OpenClaw | OpenClaw Autopilot | `List services from private incidents MCP` | `core_banking`, `card_payments`, `digital_onboarding`, `fraud_detection`, `wealth_portfolio` |
 | Hermes | Hermes Autopilot | `Reply with exactly: Hermes bridge OK` | `Hermes bridge OK` |
 
-If Teams chat fails, first confirm the direct bridge smokes in step 6 still pass. Then verify Developer Portal has **Agent Type: API Based** and the runtime-specific `/api/messages` notification URL.
+If Teams chat fails, first confirm the direct bridge smokes in step 7 still pass. Then verify Developer Portal has **Agent Type: API Based** and the runtime-specific `/api/messages` notification URL.
 
 ## Troubleshooting
 
@@ -654,10 +712,13 @@ After A6 operator validation and Hermes sandbox reset, the latest both-runtimes 
 ## Local validation
 
 ```powershell
-uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_demo_ops tests.test_provision_agent365_instance tests.test_snapshot_system tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
-uv run python -m compileall bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
+uv run python -m unittest tests.test_agent365_setup tests.test_setup_app_tfvars tests.test_deploy_apps_runtime tests.test_demo_ops tests.test_provision_agent365_instance tests.test_snapshot_system tests.test_a7_setup tests.test_agent_identity_tokens tests.test_identity_mcp_proxy tests.test_hermes_runtime tests.test_runtime_adapters tests.test_teams_bridge
+uv run python -m compileall autopilots_identity bridge scripts tests runtimes\openclaw\openclaw_gateway runtimes\hermes -q
 Set-Location .\private-incidents-mcp
 uv run --with pytest --with pytest-asyncio --with-editable . pytest -q
+Set-Location ..
+Set-Location .\public-shipments-mcp
+uv run --with pytest --with-editable . pytest -q
 Set-Location ..
 terraform -chdir=terraform\apps validate
 ```

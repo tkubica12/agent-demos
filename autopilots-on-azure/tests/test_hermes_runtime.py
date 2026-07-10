@@ -23,7 +23,7 @@ class HermesRuntimeTests(unittest.TestCase):
             for key in [
                 "API_SERVER_KEY",
                 "PRIVATE_INCIDENTS_MCP_URL",
-                "PRIVATE_INCIDENTS_MCP_STATIC_KEY",
+                "WORKIQ_MAIL_MCP_URL",
                 "FOUNDRY_OPENAI_BASE_URL",
                 "OPENAI_BASE_URL",
                 "OPENAI_API_KEY",
@@ -32,7 +32,7 @@ class HermesRuntimeTests(unittest.TestCase):
         }
         os.environ["API_SERVER_KEY"] = "api-key-1"
         os.environ["PRIVATE_INCIDENTS_MCP_URL"] = "http://mcp.example/mcp"
-        os.environ["PRIVATE_INCIDENTS_MCP_STATIC_KEY"] = "mcp-key-1"
+        os.environ["WORKIQ_MAIL_MCP_URL"] = "http://mail.example/mcp"
         os.environ["FOUNDRY_OPENAI_BASE_URL"] = "https://foundry.example/openai/v1"
         os.environ["HERMES_MODEL"] = "gpt-test"
         try:
@@ -53,7 +53,8 @@ class HermesRuntimeTests(unittest.TestCase):
         self.assertEqual(config["gateway"]["platforms"]["api_server"]["port"], 8642)
         self.assertEqual(config["gateway"]["platforms"]["api_server"]["api_key"], "api-key-1")
         self.assertEqual(config["mcp_servers"]["private-incidents"]["url"], "http://mcp.example/mcp")
-        self.assertEqual(config["mcp_servers"]["private-incidents"]["headers"]["Authorization"], "Bearer mcp-key-1")
+        self.assertNotIn("headers", config["mcp_servers"]["private-incidents"])
+        self.assertEqual(config["mcp_servers"]["workiq-mail"]["url"], "http://mail.example/mcp")
         self.assertEqual(openai_base_url, "http://127.0.0.1:18080/v1")
         self.assertEqual(openai_api_key, "unused-managed-identity-token-proxy")
         self.assertEqual(config["model"]["provider"], "azure-foundry")

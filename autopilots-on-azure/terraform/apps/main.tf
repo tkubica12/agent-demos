@@ -27,6 +27,7 @@ locals {
   }
 
   private_mcp_app_name = "apmcp-${var.autopilot_name}-${local.suffix}"
+  public_mcp_app_name  = "apshipmcp-${var.autopilot_name}-${local.suffix}"
   bridge_app_name      = "autopilot-bridge-${var.autopilot_name}-${local.suffix}"
   runtime_image        = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
   runtime_disk_image_name = (
@@ -50,6 +51,20 @@ resource "azurerm_role_assignment" "private_mcp_acr_pull" {
   scope                = data.terraform_remote_state.platform.outputs.acr_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.private_mcp.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_user_assigned_identity" "public_shipments_mcp" {
+  name                = "id-apshipmcp-${var.autopilot_name}-${local.suffix}"
+  location            = local.bridge_location
+  resource_group_name = local.resource_group_name
+  tags                = local.tags
+}
+
+resource "azurerm_role_assignment" "public_shipments_mcp_acr_pull" {
+  scope                = data.terraform_remote_state.platform.outputs.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.public_shipments_mcp.principal_id
   principal_type       = "ServicePrincipal"
 }
 
@@ -103,12 +118,7 @@ resource "azapi_resource" "private_mcp_app" {
             identity = azurerm_user_assigned_identity.private_mcp.id
           }
         ]
-        secrets = [
-          {
-            name  = "mcp-static-key"
-            value = var.private_incidents_mcp_static_key
-          }
-        ]
+        secrets = []
       }
       template = {
         containers = [
@@ -118,11 +128,31 @@ resource "azapi_resource" "private_mcp_app" {
             env = [
               {
                 name  = "MCP_AUTH_MODE"
-                value = "static_key"
+                value = "entra_agent_identity"
               },
               {
-                name      = "MCP_STATIC_KEY"
-                secretRef = "mcp-static-key"
+                name  = "MCP_JWKS_URL"
+                value = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/discovery/v2.0/keys"
+              },
+              {
+                name  = "MCP_JWT_ISSUER"
+                value = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
+              },
+              {
+                name  = "MCP_JWT_AUDIENCE"
+                value = trimprefix(var.private_mcp_api_audience, "api://")
+              },
+              {
+                name  = "MCP_REQUIRED_ROLES"
+                value = "Incidents.Read.All"
+              },
+              {
+                name  = "MCP_ALLOWED_CLIENT_IDS"
+                value = var.agent365_agent_identity_client_id
+              },
+              {
+                name  = "MCP_ALLOWED_OBJECT_IDS"
+                value = var.agent365_agent_identity_object_id
               }
             ]
             resources = {
@@ -143,6 +173,89 @@ resource "azapi_resource" "private_mcp_app" {
 
   depends_on = [
     azurerm_role_assignment.private_mcp_acr_pull
+  ]
+}
+
+resource "azapi_resource" "public_shipments_mcp_app" {
+  type      = "Microsoft.App/containerApps@2025-07-01"
+  name      = local.public_mcp_app_name
+  parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
+  location  = local.bridge_location
+  tags      = local.tags
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.public_shipments_mcp.id]
+  }
+
+  body = {
+    properties = {
+      managedEnvironmentId = data.terraform_remote_state.platform.outputs.bridge_env_id
+      configuration = {
+        activeRevisionsMode = "Single"
+        ingress = {
+          external      = true
+          targetPort    = 8765
+          transport     = "Http"
+          allowInsecure = false
+        }
+        registries = [
+          {
+            server   = local.acr_login_server
+            identity = azurerm_user_assigned_identity.public_shipments_mcp.id
+          }
+        ]
+        secrets = []
+      }
+      template = {
+        containers = [
+          {
+            name  = "public-shipments-mcp"
+            image = var.public_shipments_mcp_image
+            env = [
+              {
+                name  = "MCP_AUTH_MODE"
+                value = "entra"
+              },
+              {
+                name  = "MCP_JWKS_URL"
+                value = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/discovery/v2.0/keys"
+              },
+              {
+                name  = "MCP_JWT_ISSUER"
+                value = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
+              },
+              {
+                name  = "MCP_JWT_AUDIENCE"
+                value = trimprefix(var.public_shipments_mcp_api_audience, "api://")
+              },
+              {
+                name  = "MCP_ALLOWED_SCOPES"
+                value = "Shipments.Read"
+              },
+              {
+                name  = "MCP_ALLOWED_ROLES"
+                value = "Shipments.Read.All"
+              }
+            ]
+            resources = {
+              cpu    = 0.25
+              memory = "0.5Gi"
+            }
+          }
+        ]
+        scale = {
+          minReplicas = 0
+          maxReplicas = 1
+        }
+      }
+    }
+  }
+
+  response_export_values = ["properties.configuration.ingress.fqdn"]
+
+  depends_on = [
+    azurerm_role_assignment.public_shipments_mcp_acr_pull
   ]
 }
 
@@ -199,10 +312,6 @@ resource "azapi_resource" "bridge_app" {
           {
             name  = "openclaw-registry-password"
             value = data.azurerm_container_registry.acr.admin_password
-          },
-          {
-            name  = "private-incidents-mcp-static-key"
-            value = var.private_incidents_mcp_static_key
           }
         ]
       }
@@ -337,8 +446,44 @@ resource "azapi_resource" "bridge_app" {
                 value = "https://${azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
               },
               {
-                name      = "PRIVATE_INCIDENTS_MCP_STATIC_KEY"
-                secretRef = "private-incidents-mcp-static-key"
+                name  = "PRIVATE_INCIDENTS_MCP_SCOPE"
+                value = "${var.private_mcp_api_audience}/.default"
+              },
+              {
+                name  = "WORKIQ_MAIL_MCP_UPSTREAM_URL"
+                value = var.workiq_mail_mcp_url
+              },
+              {
+                name  = "WORKIQ_MAIL_MCP_SCOPE"
+                value = var.workiq_mail_mcp_scope
+              },
+              {
+                name  = "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL"
+                value = "https://${azapi_resource.public_shipments_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
+              },
+              {
+                name  = "PUBLIC_SHIPMENTS_MCP_SCOPE"
+                value = "${var.public_shipments_mcp_api_audience}/.default"
+              },
+              {
+                name  = "AGENT365_TENANT_ID"
+                value = var.agent365_tenant_id != "" ? var.agent365_tenant_id : data.azurerm_client_config.current.tenant_id
+              },
+              {
+                name  = "AGENT365_BLUEPRINT_CLIENT_ID"
+                value = var.agent365_client_id
+              },
+              {
+                name  = "AGENT365_AGENT_IDENTITY_CLIENT_ID"
+                value = var.agent365_agent_identity_client_id
+              },
+              {
+                name  = "AGENT365_AGENT_USER_ID"
+                value = var.agent365_agent_user_id
+              },
+              {
+                name  = "AGENT365_AGENT_USER_PRINCIPAL_NAME"
+                value = var.agent365_agent_user_principal_name
               },
               {
                 name  = "OPENCLAW_DATA_VOLUME_NAME"

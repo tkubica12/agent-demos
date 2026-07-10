@@ -6,11 +6,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-pip python3-venv git ca-certificates curl ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY runtimes/hermes/requirements.txt .
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt
 
-COPY start_hermes.py .
-COPY foundry_token_proxy.py .
+COPY runtimes/hermes/start_hermes.py .
+COPY runtimes/hermes/foundry_token_proxy.py .
+COPY autopilots_identity ./autopilots_identity
 
 ENV API_SERVER_ENABLED=true
 ENV API_SERVER_HOST=0.0.0.0

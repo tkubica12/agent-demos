@@ -455,11 +455,11 @@ class TeamsBridgeTests(unittest.TestCase):
 
         self.assertEqual(existing_gateway_sandbox(Client(), "openclaw-data")["id"], "sandbox-1")
 
-    def test_private_incidents_mcp_config_uses_static_key_bearer_token(self):
-        config = private_incidents_mcp_server_config(url="https://mcp.example/mcp", static_key="test-key")
+    def test_private_incidents_mcp_config_uses_local_identity_adapter(self):
+        config = private_incidents_mcp_server_config(url="http://127.0.0.1:18081/servers/private-incidents")
 
-        self.assertEqual(config["url"], "https://mcp.example/mcp")
-        self.assertEqual(config["headers"]["Authorization"], "Bearer test-key")
+        self.assertEqual(config["url"], "http://127.0.0.1:18081/servers/private-incidents")
+        self.assertNotIn("headers", config)
 
 
 if __name__ == "__main__":

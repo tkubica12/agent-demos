@@ -6,7 +6,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.exceptions import AuthorizationError
 from fastmcp.server.auth.auth import AuthProvider
-from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.middleware.authorization import AuthContext, AuthMiddleware
 from starlette.responses import JSONResponse
 
@@ -20,26 +20,14 @@ def split_csv(value: str | None) -> list[str]:
 
 
 def auth_mode() -> str:
-    return os.getenv("MCP_AUTH_MODE", "static_key").strip().lower()
+    return os.getenv("MCP_AUTH_MODE", "entra_agent_identity").strip().lower()
 
 
 def create_auth_provider() -> AuthProvider | None:
     mode = auth_mode()
     if mode in {"none", "disabled"}:
         return None
-    if mode == "static_key":
-        token = os.getenv("MCP_STATIC_KEY", "demo-static-key")
-        required_scopes = split_csv(os.getenv("MCP_REQUIRED_SCOPES"))
-        return StaticTokenVerifier(
-            tokens={
-                token: {
-                    "client_id": os.getenv("MCP_STATIC_CLIENT_ID", "local-demo-client"),
-                    "scopes": required_scopes or ["Incidents.Read"],
-                }
-            },
-            required_scopes=required_scopes or None,
-        )
-    if mode in {"jwt_managed_identity", "jwt_user_obo"}:
+    if mode in {"entra_agent_identity", "jwt_user_obo"}:
         public_key = os.getenv("MCP_JWT_PUBLIC_KEY") or os.getenv("MCP_JWT_SECRET")
         jwks_uri = os.getenv("MCP_JWKS_URL")
         if not public_key and not jwks_uri:
@@ -57,23 +45,28 @@ def create_auth_provider() -> AuthProvider | None:
 
 def create_auth_checks():
     mode = auth_mode()
-    if mode == "jwt_managed_identity":
+    if mode == "entra_agent_identity":
         allowed_client_ids = set(split_csv(os.getenv("MCP_ALLOWED_CLIENT_IDS", os.getenv("MCP_ALLOWED_CLIENT_ID", ""))))
         allowed_object_ids = set(split_csv(os.getenv("MCP_ALLOWED_OBJECT_IDS", os.getenv("MCP_ALLOWED_OBJECT_ID", ""))))
+        required_roles = set(split_csv(os.getenv("MCP_REQUIRED_ROLES", "Incidents.Read.All")))
 
-        def require_managed_identity(ctx: AuthContext) -> bool:
+        def require_agent_identity(ctx: AuthContext) -> bool:
             if ctx.token is None:
                 return False
             claims = ctx.token.claims
             client_id = str(claims.get("appid") or claims.get("azp") or claims.get("client_id") or "")
             object_id = str(claims.get("oid") or "")
+            roles_claim = claims.get("roles") or []
+            roles = {str(roles_claim)} if isinstance(roles_claim, str) else {str(role) for role in roles_claim}
             if allowed_client_ids and client_id not in allowed_client_ids:
-                raise AuthorizationError("Managed identity client id is not allowed.")
+                raise AuthorizationError("Agent identity client id is not allowed.")
             if allowed_object_ids and object_id not in allowed_object_ids:
-                raise AuthorizationError("Managed identity object id is not allowed.")
+                raise AuthorizationError("Agent identity object id is not allowed.")
+            if required_roles and not required_roles.issubset(roles):
+                raise AuthorizationError("Agent identity token is missing the required application role.")
             return bool(client_id or object_id)
 
-        return require_managed_identity
+        return require_agent_identity
     if mode == "jwt_user_obo":
         def require_user_token(ctx: AuthContext) -> bool:
             if ctx.token is None:
@@ -88,7 +81,7 @@ def create_auth_checks():
 auth_checks = create_auth_checks()
 mcp = FastMCP(
     name="private-fsi-incidents",
-    instructions="Mock private FSI incident data reachable only from the OpenClaw VNet demo.",
+    instructions="Private operational tools authorized with the Agent 365 Agent Identity.",
     auth=create_auth_provider(),
     middleware=[AuthMiddleware(auth_checks)] if auth_checks else None,
 )

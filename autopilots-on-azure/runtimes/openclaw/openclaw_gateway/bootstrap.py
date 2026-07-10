@@ -40,7 +40,8 @@ def _model_config(gateway: bool = False) -> dict[str, Any]:
     api_key_env = os.getenv("OPENCLAW_MODEL_API_KEY_ENV", "OPENCLAW_MODEL_API_KEY")
     auth_header_name = os.getenv("OPENCLAW_MODEL_AUTH_HEADER_NAME", "Authorization")
     private_incidents_mcp_url = os.getenv("PRIVATE_INCIDENTS_MCP_URL", "").strip()
-    private_incidents_mcp_static_key = os.getenv("PRIVATE_INCIDENTS_MCP_STATIC_KEY", "demo-static-key")
+    public_shipments_mcp_url = os.getenv("PUBLIC_SHIPMENTS_MCP_URL", "").strip()
+    workiq_mail_mcp_url = os.getenv("WORKIQ_MAIL_MCP_URL", "").strip()
 
     provider: dict[str, Any] = {
         "api": os.getenv("OPENCLAW_MODEL_API", "openai-completions"),
@@ -79,22 +80,33 @@ def _model_config(gateway: bool = False) -> dict[str, Any]:
         "tools": {"profile": "coding"},
         "session": {"dmScope": "per-channel-peer"},
     }
+    mcp_servers: dict[str, Any] = {}
     if private_incidents_mcp_url:
-        config["mcp"] = {
-            "servers": {
-                "private-incidents": {
-                    "url": private_incidents_mcp_url,
-                    "transport": "streamable-http",
-                    "connectTimeout": 5,
-                    "timeout": 20,
-                    "supportsParallelToolCalls": True,
-                    "headers": {
-                        "Authorization": "Bearer ${PRIVATE_INCIDENTS_MCP_STATIC_KEY}",
-                    },
-                },
-            },
+        mcp_servers["private-incidents"] = {
+            "url": private_incidents_mcp_url,
+            "transport": "streamable-http",
+            "connectTimeout": 5,
+            "timeout": 60,
+            "supportsParallelToolCalls": True,
         }
-        config["mcp"]["servers"]["private-incidents"]["headers"] = {"Authorization": f"Bearer {private_incidents_mcp_static_key}"}
+    if public_shipments_mcp_url:
+        mcp_servers["public-shipments"] = {
+            "url": public_shipments_mcp_url,
+            "transport": "streamable-http",
+            "connectTimeout": 10,
+            "timeout": 60,
+            "supportsParallelToolCalls": True,
+        }
+    if workiq_mail_mcp_url:
+        mcp_servers["workiq-mail"] = {
+            "url": workiq_mail_mcp_url,
+            "transport": "streamable-http",
+            "connectTimeout": 10,
+            "timeout": 60,
+            "supportsParallelToolCalls": False,
+        }
+    if mcp_servers:
+        config["mcp"] = {"servers": mcp_servers}
         config["tools"]["alsoAllow"] = ["group:plugins", "bundle-mcp"]
     if gateway:
         allowed_origins = [

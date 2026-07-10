@@ -3,3 +3,14 @@
 !bridge/**
 !scripts/
 !scripts/**
+!autopilots_identity/
+!autopilots_identity/**
+!private-incidents-mcp/
+!private-incidents-mcp/**
+!public-shipments-mcp/
+!public-shipments-mcp/**
+!runtimes/
+!runtimes/openclaw/
+!runtimes/openclaw/**
+!runtimes/hermes/
+!runtimes/hermes/**

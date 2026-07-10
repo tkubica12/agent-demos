@@ -18,6 +18,22 @@ output "private_mcp_url" {
   value = "https://${azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
 }
 
+output "private_mcp_identity_client_id" {
+  value = azurerm_user_assigned_identity.private_mcp.client_id
+}
+
+output "private_mcp_identity_principal_id" {
+  value = azurerm_user_assigned_identity.private_mcp.principal_id
+}
+
+output "public_shipments_mcp_url" {
+  value = "https://${azapi_resource.public_shipments_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
+}
+
+output "public_shipments_mcp_fqdn" {
+  value = azapi_resource.public_shipments_mcp_app.output.properties.configuration.ingress.fqdn
+}
+
 output "bridge_app_name" {
   value = local.bridge_app_name
 }

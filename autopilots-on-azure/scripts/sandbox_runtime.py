@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import shutil
@@ -22,6 +23,10 @@ from azure.identity import DefaultAzureCredential
 
 OPENCLAW_GATEWAY_PORT = 18789
 HERMES_API_PORT = 8642
+AGENT_MCP_PROXY_PORT = 18081
+PRIVATE_MCP_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/private-incidents"
+PUBLIC_SHIPMENTS_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/public-shipments"
+WORKIQ_MAIL_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/workiq-mail"
 
 
 @dataclass(frozen=True)
@@ -43,7 +48,15 @@ class AgentSandboxConfig:
     model_deployment: str = ""
     customer_vnet_connection_name: str = ""
     private_incidents_mcp_url: str = ""
-    private_incidents_mcp_static_key: str = "demo-static-key"
+    private_incidents_mcp_scope: str = ""
+    public_shipments_mcp_url: str = ""
+    public_shipments_mcp_scope: str = ""
+    workiq_mail_mcp_url: str = ""
+    workiq_mail_mcp_scope: str = ""
+    agent365_tenant_id: str = ""
+    agent365_blueprint_client_id: str = ""
+    agent365_agent_identity_client_id: str = ""
+    agent365_agent_user_id: str = ""
     registry_username: str = ""
     registry_password: str = ""
     acr_name: str = ""
@@ -135,6 +148,7 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
     labels = {
         "app": "autopilots-on-azure",
         "kind": config.runtime_kind,
+        "identityArchitecture": "agent-federation-v1",
     }
     labels.update(config.labels)
     return labels
@@ -154,6 +168,23 @@ def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfi
     return None
 
 
+def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig) -> list[dict]:
+    expected_labels = runtime_labels(config)
+    stale = []
+    for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
+        labels = sandbox.get("labels", {})
+        volumes = sandbox.get("volumes", [])
+        if labels.get("app") not in {"autopilots-on-azure", "openclaw-on-azure"}:
+            continue
+        if labels.get("kind") != config.runtime_kind:
+            continue
+        if not any(volume.get("volumeName") == config.data_volume_name for volume in volumes):
+            continue
+        if any(labels.get(key) != value for key, value in expected_labels.items()):
+            stale.append(sandbox)
+    return stale
+
+
 def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str) -> dict | None:
     for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
         labels = sandbox.get("labels", {})
@@ -165,17 +196,59 @@ def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str) 
     return None
 
 
-def private_incidents_mcp_server_config(*, url: str, static_key: str) -> dict[str, Any]:
+def private_incidents_mcp_server_config(*, url: str = PRIVATE_MCP_LOCAL_URL) -> dict[str, Any]:
     return {
         "url": url,
         "transport": "streamable-http",
         "connectTimeout": 5,
-        "timeout": 20,
+        "timeout": 60,
         "supportsParallelToolCalls": True,
-        "headers": {
-            "Authorization": f"Bearer {static_key}",
-        },
     }
+
+
+def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
+    servers: dict[str, dict[str, str]] = {}
+    environment = {
+        "AGENT_MCP_PROXY_PORT": str(AGENT_MCP_PROXY_PORT),
+        "AGENT365_TENANT_ID": config.agent365_tenant_id,
+        "AGENT365_BLUEPRINT_CLIENT_ID": config.agent365_blueprint_client_id,
+        "AGENT365_AGENT_IDENTITY_CLIENT_ID": config.agent365_agent_identity_client_id,
+        "AGENT365_AGENT_USER_ID": config.agent365_agent_user_id,
+    }
+    if config.private_incidents_mcp_url and config.private_incidents_mcp_scope:
+        servers["private-incidents"] = {
+            "upstreamUrl": config.private_incidents_mcp_url,
+            "scope": config.private_incidents_mcp_scope,
+            "identityMode": "agent",
+        }
+        environment["PRIVATE_INCIDENTS_MCP_URL"] = PRIVATE_MCP_LOCAL_URL
+    if config.public_shipments_mcp_url and config.public_shipments_mcp_scope:
+        servers["public-shipments"] = {
+            "upstreamUrl": config.public_shipments_mcp_url,
+            "scope": config.public_shipments_mcp_scope,
+            "identityMode": "agent",
+        }
+        environment["PUBLIC_SHIPMENTS_MCP_URL"] = PUBLIC_SHIPMENTS_LOCAL_URL
+    if config.workiq_mail_mcp_url and config.workiq_mail_mcp_scope:
+        servers["workiq-mail"] = {
+            "upstreamUrl": config.workiq_mail_mcp_url,
+            "scope": config.workiq_mail_mcp_scope,
+            "identityMode": "agent_user",
+        }
+        environment["WORKIQ_MAIL_MCP_URL"] = WORKIQ_MAIL_LOCAL_URL
+    if servers:
+        required = {
+            "AGENT365_TENANT_ID": config.agent365_tenant_id,
+            "AGENT365_BLUEPRINT_CLIENT_ID": config.agent365_blueprint_client_id,
+            "AGENT365_AGENT_IDENTITY_CLIENT_ID": config.agent365_agent_identity_client_id,
+        }
+        if "workiq-mail" in servers:
+            required["AGENT365_AGENT_USER_ID"] = config.agent365_agent_user_id
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError(f"Agent Identity MCP configuration requires: {', '.join(missing)}.")
+        environment["AGENT_MCP_SERVERS_JSON"] = json.dumps(servers, separators=(",", ":"))
+    return {key: value for key, value in environment.items() if value}
 
 
 def openclaw_runtime_environment(*, token: str, foundry_openai_base_url: str, model_deployment: str) -> dict[str, str]:
@@ -197,8 +270,6 @@ def openclaw_runtime_environment(*, token: str, foundry_openai_base_url: str, mo
 def hermes_runtime_environment(
     *,
     api_server_key: str = "",
-    private_incidents_mcp_url: str = "",
-    private_incidents_mcp_static_key: str = "demo-static-key",
     foundry_openai_base_url: str = "",
     model_deployment: str = "",
 ) -> dict[str, str]:
@@ -216,9 +287,6 @@ def hermes_runtime_environment(
         environment["OPENCLAW_MODEL_ID"] = model_deployment or "gpt-5-4-mini"
     if api_server_key:
         environment["API_SERVER_KEY"] = api_server_key
-    if private_incidents_mcp_url:
-        environment["PRIVATE_INCIDENTS_MCP_URL"] = private_incidents_mcp_url
-        environment["PRIVATE_INCIDENTS_MCP_STATIC_KEY"] = private_incidents_mcp_static_key
     return environment
 
 
@@ -227,16 +295,12 @@ def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
     foundry_openai_base_url = overrides.get("foundry_openai_base_url") or ""
     model_deployment = overrides.get("model_deployment") or "gpt-5-4-mini"
     private_incidents_mcp_url = overrides.get("private_incidents_mcp_url") or ""
-    private_incidents_mcp_static_key = overrides.get("private_incidents_mcp_static_key") or "demo-static-key"
     environment = openclaw_runtime_environment(
         token=token,
         foundry_openai_base_url=foundry_openai_base_url,
         model_deployment=model_deployment,
     )
-    if private_incidents_mcp_url:
-        environment["PRIVATE_INCIDENTS_MCP_URL"] = private_incidents_mcp_url
-        environment["PRIVATE_INCIDENTS_MCP_STATIC_KEY"] = private_incidents_mcp_static_key
-    return AgentSandboxConfig(
+    config = AgentSandboxConfig(
         subscription_id=overrides.get("subscription_id") or "",
         resource_group=overrides.get("resource_group") or "",
         sandbox_group=overrides.get("sandbox_group") or "",
@@ -254,7 +318,15 @@ def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         model_deployment=model_deployment,
         customer_vnet_connection_name=overrides.get("customer_vnet_connection_name") or "",
         private_incidents_mcp_url=private_incidents_mcp_url,
-        private_incidents_mcp_static_key=private_incidents_mcp_static_key,
+        private_incidents_mcp_scope=overrides.get("private_incidents_mcp_scope") or "",
+        public_shipments_mcp_url=overrides.get("public_shipments_mcp_url") or "",
+        public_shipments_mcp_scope=overrides.get("public_shipments_mcp_scope") or "",
+        workiq_mail_mcp_url=overrides.get("workiq_mail_mcp_url") or "",
+        workiq_mail_mcp_scope=overrides.get("workiq_mail_mcp_scope") or "",
+        agent365_tenant_id=overrides.get("agent365_tenant_id") or "",
+        agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
+        agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
+        agent365_agent_user_id=overrides.get("agent365_agent_user_id") or "",
         registry_username=overrides.get("registry_username") or "",
         registry_password=overrides.get("registry_password") or "",
         acr_name=overrides.get("acr_name") or "",
@@ -269,10 +341,17 @@ def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         runtime_home="/data/home",
         runtime_workspace="/data/workspace",
     )
+    environment.update(agent_mcp_environment(config))
+    return config
 
 
 def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
-    return AgentSandboxConfig(
+    environment = hermes_runtime_environment(
+        api_server_key=overrides.get("api_server_key") or "",
+        foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
+        model_deployment=overrides.get("model_deployment") or "",
+    )
+    config = AgentSandboxConfig(
         subscription_id=overrides.get("subscription_id") or "",
         resource_group=overrides.get("resource_group") or "",
         sandbox_group=overrides.get("sandbox_group") or "",
@@ -284,19 +363,21 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         command=("python3",),
         args=("/app/start_hermes.py",),
         data_mount_path="/data",
-        environment=hermes_runtime_environment(
-            api_server_key=overrides.get("api_server_key") or "",
-            private_incidents_mcp_url=overrides.get("private_incidents_mcp_url") or "",
-            private_incidents_mcp_static_key=overrides.get("private_incidents_mcp_static_key") or "demo-static-key",
-            foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
-            model_deployment=overrides.get("model_deployment") or "",
-        ),
+        environment=environment,
         labels=overrides.get("labels") or {},
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
         model_deployment=overrides.get("model_deployment") or "",
         customer_vnet_connection_name=overrides.get("customer_vnet_connection_name") or "",
         private_incidents_mcp_url=overrides.get("private_incidents_mcp_url") or "",
-        private_incidents_mcp_static_key=overrides.get("private_incidents_mcp_static_key") or "demo-static-key",
+        private_incidents_mcp_scope=overrides.get("private_incidents_mcp_scope") or "",
+        public_shipments_mcp_url=overrides.get("public_shipments_mcp_url") or "",
+        public_shipments_mcp_scope=overrides.get("public_shipments_mcp_scope") or "",
+        workiq_mail_mcp_url=overrides.get("workiq_mail_mcp_url") or "",
+        workiq_mail_mcp_scope=overrides.get("workiq_mail_mcp_scope") or "",
+        agent365_tenant_id=overrides.get("agent365_tenant_id") or "",
+        agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
+        agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
+        agent365_agent_user_id=overrides.get("agent365_agent_user_id") or "",
         registry_username=overrides.get("registry_username") or "",
         registry_password=overrides.get("registry_password") or "",
         acr_name=overrides.get("acr_name") or "",
@@ -310,51 +391,8 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         runtime_home="/data/hermes",
         runtime_workspace="/data/hermes/workspace",
     )
-
-
-def configure_existing_sandbox_mcp(
-    sandbox_client,
-    *,
-    private_incidents_mcp_url: str,
-    private_incidents_mcp_static_key: str,
-) -> None:
-    if not private_incidents_mcp_url:
-        return
-    server = {
-        "url": private_incidents_mcp_url,
-        "transport": "streamable-http",
-        "connectTimeout": 5,
-        "timeout": 20,
-        "supportsParallelToolCalls": True,
-        "headers": {
-            "Authorization": f"Bearer {private_incidents_mcp_static_key}",
-        },
-    }
-    server = private_incidents_mcp_server_config(url=private_incidents_mcp_url, static_key=private_incidents_mcp_static_key)
-    import json
-
-    command = f"""
-python3 - <<'PY'
-from pathlib import Path
-import json
-
-config_path = Path("/data/home/.openclaw/openclaw.json")
-config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {{}}
-config.setdefault("mcp", {{}}).setdefault("servers", {{}})["private-incidents"] = json.loads({json.dumps(json.dumps(server))})
-tools = config.setdefault("tools", {{}})
-tools.setdefault("profile", "coding")
-also_allow = tools.setdefault("alsoAllow", [])
-if "group:plugins" not in also_allow:
-    also_allow.append("group:plugins")
-if "bundle-mcp" not in also_allow:
-    also_allow.append("bundle-mcp")
-config_path.parent.mkdir(parents=True, exist_ok=True)
-config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
-PY
-"""
-    result = sandbox_client.exec(command)
-    if result.exit_code != 0:
-        raise RuntimeError(f"Failed to configure private MCP in existing sandbox: {result.stderr or result.stdout}")
+    environment.update(agent_mcp_environment(config))
+    return config
 
 
 def create_agent_sandbox(
@@ -365,11 +403,10 @@ def create_agent_sandbox(
     token: str,
 ):
     environment = dict(config.environment)
+    environment.setdefault("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+    environment.setdefault("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
     if config.gateway_token:
         environment.setdefault("OPENCLAW_GATEWAY_TOKEN", token)
-    if config.private_incidents_mcp_url:
-        environment.setdefault("PRIVATE_INCIDENTS_MCP_URL", config.private_incidents_mcp_url)
-        environment.setdefault("PRIVATE_INCIDENTS_MCP_STATIC_KEY", config.private_incidents_mcp_static_key)
 
     body = {
         "sourcesRef": {
@@ -399,7 +436,7 @@ def create_agent_sandbox(
         ],
         "command": list(config.command),
         "args": list(config.args),
-        "skipEgressProxy": True,
+        "skipEgressProxy": False,
     }
     if config.customer_vnet_connection_name:
         body["customerVnetConnectionName"] = config.customer_vnet_connection_name
@@ -428,7 +465,15 @@ def create_gateway_sandbox(client: SandboxGroupClient, **kwargs):
         model_deployment=kwargs.get("model_deployment", ""),
         customer_vnet_connection_name=kwargs.get("customer_vnet_connection_name", ""),
         private_incidents_mcp_url=kwargs.get("private_incidents_mcp_url", ""),
-        private_incidents_mcp_static_key=kwargs.get("private_incidents_mcp_static_key", "demo-static-key"),
+        private_incidents_mcp_scope=kwargs.get("private_incidents_mcp_scope", ""),
+        public_shipments_mcp_url=kwargs.get("public_shipments_mcp_url", ""),
+        public_shipments_mcp_scope=kwargs.get("public_shipments_mcp_scope", ""),
+        workiq_mail_mcp_url=kwargs.get("workiq_mail_mcp_url", ""),
+        workiq_mail_mcp_scope=kwargs.get("workiq_mail_mcp_scope", ""),
+        agent365_tenant_id=kwargs.get("agent365_tenant_id", ""),
+        agent365_blueprint_client_id=kwargs.get("agent365_blueprint_client_id", ""),
+        agent365_agent_identity_client_id=kwargs.get("agent365_agent_identity_client_id", ""),
+        agent365_agent_user_id=kwargs.get("agent365_agent_user_id", ""),
         data_volume_name=kwargs.get("data_volume_name", "openclaw-data"),
         cpu=kwargs.get("cpu", "2000m"),
         memory=kwargs.get("memory", "2048Mi"),
@@ -471,53 +516,50 @@ def ensure_agent_sandbox(
         raise ValueError("AZURE_REGION was not found. Run azd up first or set it explicitly.")
     client = create_sandbox_group_client(config, credential)
 
+    for stale in stale_agent_sandboxes(client, config):
+        client.begin_delete_sandbox(stale["id"], polling_timeout=600).result()
+
     existing_sandbox = existing_agent_sandbox(client, config)
     reused_existing_sandbox = existing_sandbox is not None
     if existing_sandbox:
         sandbox_id = existing_sandbox["id"]
         sandbox_client = client.get_sandbox_client(sandbox_id)
         sandbox_client.ensure_running(timeout=600)
-        if config.runtime_kind == "openclaw":
-            configure_existing_sandbox_mcp(
-                sandbox_client,
-                private_incidents_mcp_url=config.private_incidents_mcp_url,
-                private_incidents_mcp_static_key=config.private_incidents_mcp_static_key,
-            )
         current = client.get_sandbox(sandbox_id)
     else:
-            if config.disk_image_id:
-                disk_id = config.disk_image_id
-            else:
-                if not registry_username or not registry_password:
-                    if not config.acr_name:
-                        raise ValueError("ACR_NAME was not found. Run azd up first or pass registry credentials.")
-                    registry_username = registry_username or run_text(["az", "acr", "credential", "show", "--name", config.acr_name, "--query", "username", "-o", "tsv"])
-                    registry_password = registry_password or run_text(["az", "acr", "credential", "show", "--name", config.acr_name, "--query", "passwords[0].value", "-o", "tsv"])
-                if not config.image_name or not registry_username or not registry_password:
-                    raise ValueError("image_name, registry_username, and registry_password are required when disk_image_id is not provided.")
-                image = existing_named(client.list_disk_images(), config.disk_image_name)
-                if image is None:
-                    image = client.begin_create_disk_image(
-                        config.image_name,
-                        name=config.disk_image_name,
-                        entrypoint=list(config.command),
-                        cmd=list(config.args),
-                        registry_credentials=RegistryCredentials(registry_username, registry_password),
-                        polling_timeout=900,
-                    ).result()
-                disk_id = getattr(image, "id", None) or getattr(image, "name", None) or config.disk_image_name
+        if config.disk_image_id:
+            disk_id = config.disk_image_id
+        else:
+            if not registry_username or not registry_password:
+                if not config.acr_name:
+                    raise ValueError("ACR_NAME was not found. Run azd up first or pass registry credentials.")
+                registry_username = registry_username or run_text(["az", "acr", "credential", "show", "--name", config.acr_name, "--query", "username", "-o", "tsv"])
+                registry_password = registry_password or run_text(["az", "acr", "credential", "show", "--name", config.acr_name, "--query", "passwords[0].value", "-o", "tsv"])
+            if not config.image_name or not registry_username or not registry_password:
+                raise ValueError("image_name, registry_username, and registry_password are required when disk_image_id is not provided.")
+            image = existing_named(client.list_disk_images(), config.disk_image_name)
+            if image is None:
+                image = client.begin_create_disk_image(
+                    config.image_name,
+                    name=config.disk_image_name,
+                    entrypoint=list(config.command),
+                    cmd=list(config.args),
+                    registry_credentials=RegistryCredentials(registry_username, registry_password),
+                    polling_timeout=900,
+                ).result()
+            disk_id = getattr(image, "id", None) or getattr(image, "name", None) or config.disk_image_name
 
-            volume = existing_named(client.list_volumes(), config.data_volume_name)
-            if volume is None:
-                client.create_volume(
-                    config.data_volume_name,
-                    type="DataDisk",
-                    size=config.data_volume_size,
-                    labels=runtime_labels(config),
-                )
-            sandbox_client, current = create_agent_sandbox(
-                client,
-                config=config,
+        volume = existing_named(client.list_volumes(), config.data_volume_name)
+        if volume is None:
+            client.create_volume(
+                config.data_volume_name,
+                type="DataDisk",
+                size=config.data_volume_size,
+                labels=runtime_labels(config),
+            )
+        sandbox_client, current = create_agent_sandbox(
+            client,
+            config=config,
             disk_id=disk_id,
             token=token,
         )
@@ -564,7 +606,15 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "image_name": overrides.get("image_name") or get_config("AGENT_RUNTIME_IMAGE"),
         "customer_vnet_connection_name": overrides.get("customer_vnet_connection_name") or get_config("SANDBOX_VNET_CONNECTION_NAME"),
         "private_incidents_mcp_url": overrides.get("private_incidents_mcp_url") or get_config("PRIVATE_INCIDENTS_MCP_URL"),
-        "private_incidents_mcp_static_key": overrides.get("private_incidents_mcp_static_key") or get_config("PRIVATE_INCIDENTS_MCP_STATIC_KEY", "demo-static-key"),
+        "private_incidents_mcp_scope": overrides.get("private_incidents_mcp_scope") or get_config("PRIVATE_INCIDENTS_MCP_SCOPE"),
+        "public_shipments_mcp_url": overrides.get("public_shipments_mcp_url") or get_config("PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL"),
+        "public_shipments_mcp_scope": overrides.get("public_shipments_mcp_scope") or get_config("PUBLIC_SHIPMENTS_MCP_SCOPE"),
+        "workiq_mail_mcp_url": overrides.get("workiq_mail_mcp_url") or get_config("WORKIQ_MAIL_MCP_UPSTREAM_URL"),
+        "workiq_mail_mcp_scope": overrides.get("workiq_mail_mcp_scope") or get_config("WORKIQ_MAIL_MCP_SCOPE"),
+        "agent365_tenant_id": overrides.get("agent365_tenant_id") or get_config("AGENT365_TENANT_ID"),
+        "agent365_blueprint_client_id": overrides.get("agent365_blueprint_client_id") or get_config("AGENT365_BLUEPRINT_CLIENT_ID", get_config("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID")),
+        "agent365_agent_identity_client_id": overrides.get("agent365_agent_identity_client_id") or get_config("AGENT365_AGENT_IDENTITY_CLIENT_ID"),
+        "agent365_agent_user_id": overrides.get("agent365_agent_user_id") or get_config("AGENT365_AGENT_USER_ID"),
         "registry_username": overrides.get("registry_username") or get_config("AGENT_RUNTIME_REGISTRY_USERNAME", get_config("OPENCLAW_REGISTRY_USERNAME")),
         "registry_password": overrides.get("registry_password") or get_config("AGENT_RUNTIME_REGISTRY_PASSWORD", get_config("OPENCLAW_REGISTRY_PASSWORD")),
         "acr_name": overrides.get("acr_name") or get_config("ACR_NAME"),

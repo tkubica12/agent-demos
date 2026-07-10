@@ -19,7 +19,7 @@ from microsoft_agents.hosting.core import AgentApplication, Authorization, Memor
 from microsoft_agents.hosting.fastapi import CloudAdapter, start_agent_process
 from pydantic import BaseModel, Field
 
-from bridge.runtime.base import AgentRequest, AgentResponse
+from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse
 from bridge.runtime.factory import create_runtime_adapter
 
 
@@ -277,6 +277,65 @@ def teams_runtime_source(activity: Activity) -> str:
     return "teams_group"
 
 
+def teams_conversation_boundary(activity: Activity) -> str:
+    if teams_is_targeted(activity):
+        return "targeted_private"
+    conversation_type = teams_conversation_type(activity)
+    if conversation_type == "personal":
+        return "one_to_one"
+    if conversation_type == "groupchat":
+        return "shared_group"
+    if conversation_type in _CHANNEL_TEAMS_CONVERSATION_TYPES:
+        return "public_channel"
+    return "unknown"
+
+
+def agent_auth_context(activity: Activity) -> AgentAuthContext:
+    get_instance_id = getattr(activity, "get_agentic_instance_id", None)
+    get_agent_user = getattr(activity, "get_agentic_user", None)
+    instance_id = str((get_instance_id() if callable(get_instance_id) else "") or env_optional("AGENT365_AGENT_IDENTITY_CLIENT_ID"))
+    agent_user = get_agent_user() if callable(get_agent_user) else None
+    agent_user_id = str(
+        field_value(agent_user, "id")
+        or field_value(agent_user, "aad_object_id")
+        or env_optional("AGENT365_AGENT_USER_ID")
+    )
+    agent_user_principal_name = env_optional("AGENT365_AGENT_USER_PRINCIPAL_NAME")
+    modes = []
+    if instance_id:
+        modes.append("agent_identity")
+    if agent_user_id:
+        modes.append("agent_user")
+    return AgentAuthContext(
+        selected_mode="agent_identity" if instance_id else "none",
+        available_modes=tuple(modes),
+        conversation_boundary=teams_conversation_boundary(activity),
+        invoking_user_id=user_id(activity),
+        invoking_user_name=user_display_name(activity),
+        agent_instance_id=instance_id,
+        agent_user_id=agent_user_id,
+        agent_user_principal_name=agent_user_principal_name,
+        obo_available=False,
+    )
+
+
+def format_auth_boundary(context: AgentAuthContext) -> str:
+    available = ", ".join(context.available_modes) or "none"
+    return (
+        "Authorization boundary:\n"
+        f"- Selected default mode: {context.selected_mode}\n"
+        f"- Available modes: {available}\n"
+        f"- Conversation boundary: {context.conversation_boundary}\n"
+        f"- Invoking human: {context.invoking_user_name} ({context.invoking_user_id})\n"
+        f"- Agent instance: {context.agent_instance_id or 'unknown'}\n"
+        f"- Agent User: {context.agent_user_principal_name or context.agent_user_id or 'not configured'}\n"
+        f"- Human OBO available for this turn: {context.obo_available}\n"
+        "- Use agent_identity for unattended private services, agent_user only for resources owned by the digital worker, "
+        "and never claim user-delegated access when OBO is unavailable.\n"
+        "- In shared_group or public_channel conversations, do not reveal private user data in the public response."
+    )
+
+
 def message_mentions_bot_name(activity: Activity, message: str | None = None) -> bool:
     text = normalize_teams_text(message if message is not None else str(field_value(activity, "text") or ""))
     if not text:
@@ -524,6 +583,7 @@ def format_teams_event_prompt(
     targeted = teams_is_targeted(activity)
     mention = bot_is_mentioned(activity)
     thread_id = field_value(activity, "reply_to_id") or field_value(activity, "id") or "root"
+    auth_context = agent_auth_context(activity)
     reaction_line = f"\nReaction types: {', '.join(reactions)}" if reactions else ""
     return (
         "You are OpenClaw participating in a Microsoft Teams group conversation.\n"
@@ -538,6 +598,7 @@ def format_teams_event_prompt(
         f"Sender: {sender}\n"
         f"Targeted private message to you: {targeted}\n"
         f"Bot explicitly mentioned: {mention}{reaction_line}\n\n"
+        f"{format_auth_boundary(auth_context)}\n\n"
         f"Context available to you:\n{context or 'No prior context was provided.'}\n\n"
         f"Message text:\n{message}\n\n"
         "Decision policy:\n"
@@ -931,7 +992,18 @@ async def run_agent_runtime_for_teams(
         record_teams_diag({"event": "streamDeltaSkipped", "conversationId": conversation_id, "length": len(delta), "reason": "agent365"})
 
     try:
+        auth_context = agent_auth_context(ctx.activity)
         record_teams_diag({"event": "backgroundStart", "conversationId": conversation_id})
+        record_teams_diag(
+            {
+                "event": "authBoundary",
+                "conversationId": conversation_id,
+                "selectedAuthMode": auth_context.selected_mode,
+                "availableAuthModes": list(auth_context.available_modes),
+                "conversationBoundary": auth_context.conversation_boundary,
+                "oboAvailable": auth_context.obo_available,
+            }
+        )
         result = await invoke_agent_runtime(
             conversation_id=conversation_id,
             session_key=session_key,
@@ -939,6 +1011,7 @@ async def run_agent_runtime_for_teams(
             source=teams_runtime_source(ctx.activity),
             user_id=user_id(ctx.activity),
             must_answer=not suppress_no_response,
+            auth_context=auth_context,
             on_delta=emit_delta if show_public_progress else None,
         )
         visible_response, requested_reaction = split_teams_response_instructions(result.text)
@@ -1018,6 +1091,7 @@ async def invoke_agent_runtime(
     must_answer: bool,
     context: str = "",
     metadata: dict[str, Any] | None = None,
+    auth_context: AgentAuthContext | None = None,
     on_delta=None,
 ) -> AgentResponse:
     request = AgentRequest(
@@ -1027,7 +1101,12 @@ async def invoke_agent_runtime(
         source=source,
         must_answer=must_answer,
         context=context,
-        metadata={"conversationId": conversation_id, **(metadata or {})},
+        metadata={
+            "conversationId": conversation_id,
+            **(auth_context.as_metadata() if auth_context else {}),
+            **(metadata or {}),
+        },
+        auth=auth_context,
         on_delta=on_delta,
     )
     return await runtime_adapter().invoke(request)

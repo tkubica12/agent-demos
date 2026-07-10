@@ -1,28 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 
 import jwt
 import pytest
-from fastmcp.server.auth.providers.jwt import JWTVerifier, StaticTokenVerifier
+from fastmcp.server.auth.providers.jwt import JWTVerifier
+
+os.environ.setdefault("MCP_AUTH_MODE", "none")
 
 import private_incidents_mcp.server as server_module
 from private_incidents_mcp.server import create_auth_provider
-
-
-@pytest.mark.asyncio
-async def test_static_key_uses_fastmcp_static_token_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MCP_AUTH_MODE", "static_key")
-    monkeypatch.setenv("MCP_STATIC_KEY", "local-key")
-
-    provider = create_auth_provider()
-
-    assert isinstance(provider, StaticTokenVerifier)
-    assert await provider.verify_token("wrong") is None
-    token = await provider.verify_token("local-key")
-    assert token is not None
-    assert token.client_id == "local-demo-client"
 
 
 def test_http_app_disables_host_origin_protection_for_aca_ingress() -> None:
@@ -33,8 +22,8 @@ def test_http_app_disables_host_origin_protection_for_aca_ingress() -> None:
 
 
 @pytest.mark.asyncio
-async def test_jwt_managed_identity_uses_fastmcp_jwt_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MCP_AUTH_MODE", "jwt_managed_identity")
+async def test_entra_agent_identity_uses_fastmcp_jwt_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_AUTH_MODE", "entra_agent_identity")
     monkeypatch.setenv("MCP_JWT_SECRET", "test-secret")
     monkeypatch.setenv("MCP_JWT_ALGORITHM", "HS256")
     monkeypatch.setenv("MCP_JWT_ISSUER", "https://sts.windows.net/demo/")
@@ -44,8 +33,9 @@ async def test_jwt_managed_identity_uses_fastmcp_jwt_verifier(monkeypatch: pytes
         {
             "aud": "api://private-incidents-mcp",
             "iss": "https://sts.windows.net/demo/",
-            "azp": "agent-managed-identity-client-id",
-            "oid": "agent-managed-identity-object-id",
+            "azp": "agent-identity-client-id",
+            "oid": "agent-identity-object-id",
+            "roles": ["Incidents.Read.All"],
             "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
         },
         "test-secret",
@@ -55,7 +45,7 @@ async def test_jwt_managed_identity_uses_fastmcp_jwt_verifier(monkeypatch: pytes
     assert isinstance(provider, JWTVerifier)
     access_token = await provider.verify_token(token)
     assert access_token is not None
-    assert access_token.claims["oid"] == "agent-managed-identity-object-id"
+    assert access_token.claims["oid"] == "agent-identity-object-id"
 
 
 @pytest.mark.asyncio

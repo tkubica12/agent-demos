@@ -54,6 +54,10 @@ output "sandbox_group_id" {
   value = azapi_resource.sandbox_group.id
 }
 
+output "sandbox_group_principal_id" {
+  value = azapi_resource.sandbox_group.output.identity.principalId
+}
+
 output "sandbox_vnet_connection_name" {
   value = azapi_resource.sandbox_vnet_connection.name
 }

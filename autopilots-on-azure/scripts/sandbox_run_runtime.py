@@ -30,7 +30,15 @@ def main() -> None:
     parser.add_argument("--root-disk-size", default="20Gi")
     parser.add_argument("--customer-vnet-connection-name", default="")
     parser.add_argument("--private-incidents-mcp-url", default="")
-    parser.add_argument("--private-incidents-mcp-static-key", default="")
+    parser.add_argument("--private-incidents-mcp-scope", default="")
+    parser.add_argument("--public-shipments-mcp-url", default="")
+    parser.add_argument("--public-shipments-mcp-scope", default="")
+    parser.add_argument("--workiq-mail-mcp-url", default="")
+    parser.add_argument("--workiq-mail-mcp-scope", default="")
+    parser.add_argument("--agent365-tenant-id", default="")
+    parser.add_argument("--agent365-blueprint-client-id", default="")
+    parser.add_argument("--agent365-agent-identity-client-id", default="")
+    parser.add_argument("--agent365-agent-user-id", default="")
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY for dry-run/runtime config.")
     args = parser.parse_args()
 
@@ -55,7 +63,15 @@ def main() -> None:
         root_disk_size=args.root_disk_size,
         customer_vnet_connection_name=args.customer_vnet_connection_name,
         private_incidents_mcp_url=args.private_incidents_mcp_url,
-        private_incidents_mcp_static_key=args.private_incidents_mcp_static_key,
+        private_incidents_mcp_scope=args.private_incidents_mcp_scope,
+        public_shipments_mcp_url=args.public_shipments_mcp_url,
+        public_shipments_mcp_scope=args.public_shipments_mcp_scope,
+        workiq_mail_mcp_url=args.workiq_mail_mcp_url,
+        workiq_mail_mcp_scope=args.workiq_mail_mcp_scope,
+        agent365_tenant_id=args.agent365_tenant_id,
+        agent365_blueprint_client_id=args.agent365_blueprint_client_id,
+        agent365_agent_identity_client_id=args.agent365_agent_identity_client_id,
+        agent365_agent_user_id=args.agent365_agent_user_id,
         api_server_key=args.api_server_key,
     )
     if args.dry_run:

@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 DEFAULT_HERMES_HOME = "/data/hermes"
 DEFAULT_GATEWAY_PORT = 9119
 DEFAULT_FOUNDRY_PROXY_PORT = 18080
+DEFAULT_AGENT_MCP_PROXY_PORT = 18081
 
 
 def bool_env(name: str, default: bool = False) -> bool:
@@ -56,7 +57,8 @@ def write_env_file(home: Path) -> Path:
         "HERMES_MODEL_PROVIDER": os.getenv("HERMES_MODEL_PROVIDER", ""),
         "HERMES_MODEL": os.getenv("HERMES_MODEL", ""),
         "PRIVATE_INCIDENTS_MCP_URL": os.getenv("PRIVATE_INCIDENTS_MCP_URL", ""),
-        "PRIVATE_INCIDENTS_MCP_STATIC_KEY": os.getenv("PRIVATE_INCIDENTS_MCP_STATIC_KEY", ""),
+        "PUBLIC_SHIPMENTS_MCP_URL": os.getenv("PUBLIC_SHIPMENTS_MCP_URL", ""),
+        "WORKIQ_MAIL_MCP_URL": os.getenv("WORKIQ_MAIL_MCP_URL", ""),
     }
     env_path.write_text("\n".join(f"{key}={value}" for key, value in values.items() if value) + "\n", encoding="utf-8")
     return env_path
@@ -85,14 +87,18 @@ def hermes_config(home: Path) -> dict[str, Any]:
             "workspace": str(home / "workspace"),
         },
     }
+    mcp_servers: dict[str, Any] = {}
     private_mcp_url = os.getenv("PRIVATE_INCIDENTS_MCP_URL", "").strip()
+    public_shipments_mcp_url = os.getenv("PUBLIC_SHIPMENTS_MCP_URL", "").strip()
+    workiq_mail_mcp_url = os.getenv("WORKIQ_MAIL_MCP_URL", "").strip()
     if private_mcp_url:
-        config["mcp_servers"] = {
-            "private-incidents": {
-                "url": private_mcp_url,
-                "headers": {"Authorization": f"Bearer {os.getenv('PRIVATE_INCIDENTS_MCP_STATIC_KEY', 'demo-static-key')}"},
-            }
-        }
+        mcp_servers["private-incidents"] = {"url": private_mcp_url}
+    if public_shipments_mcp_url:
+        mcp_servers["public-shipments"] = {"url": public_shipments_mcp_url}
+    if workiq_mail_mcp_url:
+        mcp_servers["workiq-mail"] = {"url": workiq_mail_mcp_url}
+    if mcp_servers:
+        config["mcp_servers"] = mcp_servers
     return config
 
 
@@ -125,6 +131,27 @@ def start_foundry_proxy() -> subprocess.Popen | None:
             "-m",
             "uvicorn",
             "foundry_token_proxy:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            port,
+        ],
+        env=os.environ.copy(),
+    )
+
+
+def start_agent_mcp_proxy() -> subprocess.Popen | None:
+    if not os.getenv("AGENT_MCP_SERVERS_JSON"):
+        print("AGENT_MCP_SERVERS_JSON is not set; Agent Identity MCP adapter is disabled.", flush=True)
+        return None
+    port = os.getenv("AGENT_MCP_PROXY_PORT", str(DEFAULT_AGENT_MCP_PROXY_PORT))
+    print(f"Starting Agent Identity MCP adapter on 127.0.0.1:{port}", flush=True)
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "autopilots_identity.mcp_proxy:app",
             "--host",
             "127.0.0.1",
             "--port",
@@ -201,7 +228,8 @@ def main() -> None:
     print(f"Hermes config: {config_path}", flush=True)
 
     foundry_proxy = start_foundry_proxy()
-    if foundry_proxy:
+    mcp_proxy = start_agent_mcp_proxy()
+    if foundry_proxy or mcp_proxy:
         time.sleep(2)
     gateway = None
     if bool_env("HERMES_START_GATEWAY", True):
@@ -212,17 +240,22 @@ def main() -> None:
         except Exception as exc:
             print(f"Failed to start Hermes gateway: {exc}", file=sys.stderr, flush=True)
 
-    if bool_env("HERMES_HEALTH_WRAPPER", False):
-        app = create_health_app(home, gateway)
-        uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
-        return
+    try:
+        if bool_env("HERMES_HEALTH_WRAPPER", False):
+            app = create_health_app(home, gateway)
+            uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
+            return
 
-    if gateway is None:
-        app = create_health_app(home, gateway)
-        uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
-        return
+        if gateway is None:
+            app = create_health_app(home, gateway)
+            uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
+            return
 
-    raise SystemExit(gateway.wait())
+        raise SystemExit(gateway.wait())
+    finally:
+        for process in (mcp_proxy, foundry_proxy):
+            if process and process.poll() is None:
+                process.terminate()
 
 
 if __name__ == "__main__":

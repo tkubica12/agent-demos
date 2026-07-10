@@ -10,6 +10,27 @@ import time
 from openclaw_gateway.bootstrap import ensure_openclaw_files, openclaw_env
 
 
+def start_agent_mcp_proxy(env: dict[str, str]) -> subprocess.Popen | None:
+    if not env.get("AGENT_MCP_SERVERS_JSON"):
+        print("AGENT_MCP_SERVERS_JSON is not set; Agent Identity MCP adapter is disabled.", flush=True)
+        return None
+    proxy_port = env.get("AGENT_MCP_PROXY_PORT", "18081")
+    print(f"Starting Agent Identity MCP adapter on 127.0.0.1:{proxy_port}", flush=True)
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "autopilots_identity.mcp_proxy:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            proxy_port,
+        ],
+        env=env,
+    )
+
+
 def start_foundry_proxy(env: dict[str, str]) -> subprocess.Popen | None:
     if not env.get("FOUNDRY_OPENAI_BASE_URL"):
         print("FOUNDRY_OPENAI_BASE_URL is not set; Foundry managed-identity proxy is disabled.", flush=True)
@@ -51,14 +72,16 @@ def main() -> None:
     openclaw = shutil.which("openclaw") or shutil.which("openclaw.cmd")
     if not openclaw:
         raise RuntimeError("OpenClaw CLI was not found. Install it with: npm install -g openclaw@latest")
-    proxy = start_foundry_proxy(env)
+    foundry_proxy = start_foundry_proxy(env)
+    mcp_proxy = start_agent_mcp_proxy(env)
     try:
-        if proxy:
+        if foundry_proxy or mcp_proxy:
             time.sleep(2)
         subprocess.run([openclaw, "gateway", "--port", env["PORT"], "--verbose"], env=env, check=True)
     finally:
-        if proxy and proxy.poll() is None:
-            proxy.terminate()
+        for process in (mcp_proxy, foundry_proxy):
+            if process and process.poll() is None:
+                process.terminate()
 
 
 if __name__ == "__main__":
