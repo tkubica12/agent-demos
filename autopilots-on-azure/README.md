@@ -32,7 +32,7 @@ Invoke-RestMethod "https://autopilot-bridge-openclaw-ehvw.icymeadow-c517d14c.swe
 Invoke-RestMethod "https://autopilot-bridge-hermes-ehvw.icymeadow-c517d14c.swedencentral.azurecontainerapps.io/health"
 ```
 
-Then open Microsoft 365 admin center and upload the Agent 365 packages:
+Then open Microsoft 365 admin center and upload the Agent 365 packages. This step is still manual: `uv run python -m scripts.setup_agent365 --runtime <runtime> --publish` calls `a365 publish`, but the Agent 365 CLI only creates a ZIP package for admin-center upload.
 
 ```text
 https://admin.microsoft.com
@@ -48,7 +48,7 @@ Upload one or both packages:
 .local\hermes\agent365\manifest\manifest.zip
 ```
 
-This is tenant/admin-center publishing, not Teams sideloading. If the upload page shows **Host products: Copilot**, continue; the Teams step is creating the Agent 365 instance from Teams Apps after Developer Portal blueprint configuration.
+This is tenant/admin-center publishing, not Teams sideloading. If the upload page shows **Host products: Copilot**, continue; the Teams step is creating the Agent 365 instance from Teams Apps after Developer Portal blueprint configuration. There is no repository script or current `a365` command that uploads this package for us; existing package scripts only create the ZIP and clean/block stale catalog rows.
 
 ## Architecture
 
@@ -355,7 +355,7 @@ Generated files, do not commit:
 .local\hermes\agent365\hermes-agent365-identifiers.json
 ```
 
-Build the upload package:
+Build the upload package. This command name mirrors the Agent 365 CLI, but it does **not** upload to Microsoft 365 admin center; it updates manifest IDs and creates/repackages the local ZIP:
 
 ```powershell
 uv run python -m scripts.setup_agent365 --runtime openclaw --publish
@@ -378,7 +378,38 @@ https://admin.microsoft.com
   -> Upload custom agent
 ```
 
+No script currently replaces this upload step. `a365 publish --help` describes the command as "create a package for upload to Microsoft 365 Admin Center", and the repository's package-management helper only lists/blocks stale package catalog rows.
+
+Automation boundary:
+
+| Operation | Automated? | Command or location |
+| --- | --- | --- |
+| Create/update the Agent 365 blueprint and permissions | Yes | `scripts.setup_agent365 --run-setup` |
+| Generate/repackage `manifest.zip` | Yes | `scripts.setup_agent365 --publish` |
+| Upload or upgrade the package in the tenant catalog | No | Microsoft 365 admin center **Agents -> All agents -> Upload custom agent** |
+| Create Agent identity, Agent user, assign licenses, and register the instance | Yes | `scripts.provision_agent365_instance provision --register` |
+| Remove scripted identity/user/registration state | Yes | `scripts.provision_agent365_instance cleanup --instance` |
+| List/block stale Agent 365 package rows | Yes | `scripts.provision_agent365_instance cleanup-packages --block` |
+
+This distinction explains the earlier mostly automated flow: the package was uploaded manually once, then `scripts.provision_agent365_instance` replaced the failing portal **Add Instance** orchestration. It did not upload the package itself.
+
 Do not use Teams app sideloading or Azure Bot Service. Those paths were removed.
+
+Agent 365 AI teammates are Agent Users added as members of Teams. They use the same Activity Protocol envelope and connector family as Teams bots, but they are not installed Teams app/bot instances. The different installation and consent lifecycle matters: the current Agent User path receives direct messages, explicit mentions, and targeted activities, but it does not receive every unmentioned channel message or automatically follow a thread after one mention.
+
+| Teams activity | Current Agent 365 AI teammate behavior |
+| --- | --- |
+| 1:1 message | Delivered and live-verified |
+| Explicit channel mention | Delivered and live-verified |
+| Unmentioned channel message | Not delivered |
+| Unmentioned reply after the agent participated in the thread | Not delivered in the live test |
+| Outbound reactions | Public developer preview; temporary `eyes` and semantic `heart` live-verified |
+| Inbound reaction to an agent-authored message | Public developer preview; handler implemented, not yet live-verified |
+| Typing indicator | Sent for 1:1 and small group chats; Teams does not show it in channels |
+
+Adding Teams RSC fields to an `agenticUserTemplates` package does not change channel delivery: the tenant catalogs the package, but no Teams app is installed in the Team and no resource-specific consent grant is created. RSC all-message delivery requires a Teams app manifest with a `bots` capability and installation in the target Team. That is a separate Teams app/bot lifecycle and is outside this Agent 365-only architecture.
+
+The Agent 365 Notifications SDK is not an ambient Teams subscription API. Its current notification types cover email, Word/Excel/PowerPoint comments, and Agent User lifecycle events. Full Teams thread history requires a separate pull through Microsoft Graph or Work IQ MCP; the bridge currently uses only delivered activities plus local in-process memory. See [ADR 0002](docs/adr/0002-teams-event-routing-and-reactions.md) for evidence, consequences, and review triggers.
 
 Configure each Agent 365 blueprint in Teams Developer Portal:
 
@@ -490,7 +521,7 @@ Microsoft 365 admin center -> Agents -> All agents -> <agent>
 
 This is the Agent 365 AI teammate path for Teams chats and channels.
 
-Agent 365 AI teammate replies use the Microsoft 365 Agents SDK. Do not use Bot Framework or `microsoft-teams-apps` reply paths for Agent 365 blueprints: agentic applications are not allowed to request Bot Framework app-only tokens. Temporary typing indicators and Teams reactions are skipped in the Agent 365 path for now; channel message replies work.
+Agent 365 AI teammate replies use the Microsoft 365 Agents SDK. Do not use Bot Framework or `microsoft-teams-apps` reply paths for Agent 365 blueprints: agentic applications are not allowed to request Bot Framework app-only tokens. Teams status and semantic reactions use the Agent 365-authenticated connector client against the Teams preview reaction endpoint. The bridge refreshes typing indicators in 1:1 and small group chats; Teams does not display them in channels.
 
 If **Add instance** shows **You have run out of licenses** but the button is still usable, continue and submit the instance form. Treat the banner as blocking only if submit fails. The instance is a real Entra-backed agent user and consumes its associated licenses, not just the uploaded template. For the full Teams AI teammate scenario, expect Agent 365 plus Microsoft 365, Teams Enterprise, and Copilot-related licenses to be involved depending on the associated-license list.
 

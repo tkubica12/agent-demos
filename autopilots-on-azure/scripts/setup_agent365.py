@@ -329,7 +329,11 @@ def main() -> None:
         help="Pass --skip-sp-provisioning to `a365 setup all`.",
     )
     parser.add_argument("--update-endpoint", action="store_true", help="Run `a365 setup blueprint --update-endpoint`.")
-    parser.add_argument("--publish", action="store_true", help="Run `a365 publish`.")
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Run `a365 publish` to create the local package ZIP. Upload to Microsoft 365 admin center is still manual.",
+    )
     parser.add_argument("--capture", action="store_true", help="Write non-secret Agent 365 identifiers from generated config.")
     args = parser.parse_args()
 
@@ -390,7 +394,12 @@ def main() -> None:
     maybe_run(endpoint_update, cwd=workspace, enabled=args.update_endpoint)
     maybe_run(publish, cwd=workspace, enabled=args.publish)
     if args.publish:
-        customize_manifest(workspace, branding)
+        package_path = customize_manifest(workspace, branding)
+        print(
+            "Upload remains manual: use Microsoft 365 admin center -> Agents -> All agents -> Upload custom agent "
+            f"with {package_path}.",
+            flush=True,
+        )
 
     generated_path = workspace / GENERATED_CONFIG
     if args.capture or generated_path.exists():

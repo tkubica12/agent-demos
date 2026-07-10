@@ -1,9 +1,12 @@
+import asyncio
 from types import SimpleNamespace
 import unittest
 
 from bridge.app import (
     _teams_memory,
+    _teams_diag,
     bot_is_mentioned,
+    delete_message_reaction,
     format_teams_context,
     format_teams_event_prompt,
     memory_has_openclaw_message_id,
@@ -12,12 +15,16 @@ from bridge.app import (
     response_has_visible_text,
     remember_teams_event,
     response_should_be_suppressed,
+    send_typing_indicators,
+    send_message_reaction,
+    teams_reaction_path,
     should_acknowledge_with_reaction,
     should_add_processing_reaction,
     should_add_status_reaction,
     should_quote_group_responses,
     split_teams_response_instructions,
     supports_streaming_response,
+    supports_typing_indicators,
     teams_event_memory_record,
     teams_is_targeted,
     teams_prompt_text,
@@ -33,9 +40,44 @@ def ns(**values):
     return SimpleNamespace(**values)
 
 
+class FakeReactionResponse:
+    status = 200
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeReactionSession:
+    def __init__(self):
+        self.calls = []
+
+    def put(self, path):
+        self.calls.append(("PUT", path))
+        return FakeReactionResponse()
+
+    def delete(self, path):
+        self.calls.append(("DELETE", path))
+        return FakeReactionResponse()
+
+
+class FakeTypingContext:
+    def __init__(self, conversation_type, done):
+        self.activity = ns(conversation=ns(conversation_type=conversation_type))
+        self.done = done
+        self.activities = []
+
+    async def send_activity(self, activity):
+        self.activities.append(activity)
+        self.done.set()
+
+
 class TeamsBridgeTests(unittest.TestCase):
     def tearDown(self):
         _teams_memory.clear()
+        _teams_diag.clear()
 
     def test_groupchat_prompt_strips_bot_mention(self):
         activity = ns(
@@ -157,9 +199,39 @@ class TeamsBridgeTests(unittest.TestCase):
 
         self.assertIn("Context available to you:\nrecent context", prompt)
 
-    def test_streaming_is_personal_chat_only(self):
-        self.assertTrue(supports_streaming_response(ns(activity=ns(conversation=ns(conversation_type="personal")))))
+    def test_streaming_is_disabled_for_agent365(self):
+        self.assertFalse(supports_streaming_response(ns(activity=ns(conversation=ns(conversation_type="personal")))))
         self.assertFalse(supports_streaming_response(ns(activity=ns(conversation=ns(conversation_type="channel")))))
+
+    def test_typing_is_supported_only_in_personal_and_group_chats(self):
+        self.assertTrue(supports_typing_indicators(ns(activity=ns(conversation=ns(conversation_type="personal")))))
+        self.assertTrue(supports_typing_indicators(ns(activity=ns(conversation=ns(conversation_type="groupchat")))))
+        self.assertFalse(supports_typing_indicators(ns(activity=ns(conversation=ns(conversation_type="channel")))))
+
+    def test_typing_indicator_is_sent_for_personal_chat(self):
+        async def run():
+            done = asyncio.Event()
+            ctx = FakeTypingContext("personal", done)
+            await send_typing_indicators(ctx, "conversation-1", done)
+            return ctx
+
+        ctx = asyncio.run(run())
+
+        self.assertEqual(len(ctx.activities), 1)
+        self.assertEqual(ctx.activities[0].type, "typing")
+        self.assertEqual(_teams_diag[0]["event"], "typingSent")
+
+    def test_typing_indicator_is_skipped_for_channels(self):
+        async def run():
+            done = asyncio.Event()
+            ctx = FakeTypingContext("channel", done)
+            await send_typing_indicators(ctx, "conversation-1", done)
+            return ctx
+
+        ctx = asyncio.run(run())
+
+        self.assertEqual(ctx.activities, [])
+        self.assertEqual(_teams_diag[0]["event"], "typingSkipped")
 
     def test_processing_reactions_and_quoted_replies_default_on(self):
         self.assertTrue(should_add_processing_reaction())
@@ -317,6 +389,32 @@ class TeamsBridgeTests(unittest.TestCase):
         activity = ns(reply_to_id="bot-message-1")
 
         self.assertEqual(reacted_message_id(activity), "bot-message-1")
+
+    def test_reaction_path_uses_preview_connector_endpoint(self):
+        self.assertEqual(
+            teams_reaction_path("conversation-1", "message-1", "1f440_eyes"),
+            "v3/conversations/conversation-1/activities/message-1/reactions/1f440_eyes",
+        )
+
+    def test_send_and_delete_message_reaction_use_connector_client(self):
+        session = FakeReactionSession()
+        ctx = ns(
+            activity=ns(conversation=ns(id="conversation-1")),
+            turn_state={"ConnectorClient": ns(client=session)},
+        )
+
+        asyncio.run(send_message_reaction(ctx, "message-1", "1f440_eyes"))
+        asyncio.run(delete_message_reaction(ctx, "message-1", "1f440_eyes"))
+
+        self.assertEqual(
+            session.calls,
+            [
+                ("PUT", "v3/conversations/conversation-1/activities/message-1/reactions/1f440_eyes"),
+                ("DELETE", "v3/conversations/conversation-1/activities/message-1/reactions/1f440_eyes"),
+            ],
+        )
+        self.assertEqual(_teams_diag[1]["event"], "reactionSent")
+        self.assertEqual(_teams_diag[0]["event"], "reactionDeleted")
 
     def test_channel_reaction_session_key_prefers_thread_root_over_reacted_message(self):
         activity = ns(

@@ -15,7 +15,7 @@ Agent 365 / /invoke
   -> private incidents MCP Container App
 ```
 
-Implemented and verified:
+Implemented; live-verified items are called out explicitly:
 
 - `autopilots-on-azure` project layout.
 - `bridge\runtime\AgentRuntimeAdapter` abstraction.
@@ -28,7 +28,7 @@ Implemented and verified:
 - Side-by-side app deployments use separate Terraform workspaces:
   - `autopilot-openclaw`
   - `autopilot-hermes`
-- Azure Bot Service resources are removed; Agent 365 is the only Microsoft 365 app path.
+- Separately managed Azure Bot Service resources and classic Teams app installations are removed; Agent 365 is the only Microsoft 365 app lifecycle. Agent 365 still uses Microsoft 365 Agents SDK Activity Protocol and connector infrastructure.
 - Agent 365 setup script supports both runtimes:
   - `uv run python -m scripts.setup_agent365 --runtime openclaw`
   - `uv run python -m scripts.setup_agent365 --runtime hermes`
@@ -47,22 +47,31 @@ Implemented and verified:
   - agent user `openclaw1@MngEnvMCAP058702.onmicrosoft.com`
   - registration `T_75259b23-1388-35fe-0e49-9b092a4813f4`
   - blueprint `916c51a6-d55e-430b-af30-7755df3a09c8`
-- `/api/messages` is handled by Microsoft 365 Agents SDK for Agent 365. The old `microsoft-teams-apps` Bot Framework send path is removed because Agent 365 agentic applications cannot request Bot Framework app-only tokens.
+- `/api/messages` is handled by Microsoft 365 Agents SDK for Agent 365. The old `microsoft-teams-apps` reply implementation and its direct Bot Framework app-only token acquisition are removed because Agent 365 agentic applications cannot request those tokens. Replies and reactions use the Agent 365-authenticated connector client supplied by the SDK.
 - Hermes replied successfully in a Teams channel mention after switching the bridge to Microsoft 365 Agents SDK and Agent 365 blueprint credentials.
 - OpenClaw replied successfully in Teams 1:1 chat and a Teams channel mention after applying the same Microsoft 365 Agents SDK bridge path.
 - `scripts.snapshot_system` captures redacted local, Azure, Entra, Graph, and Agent 365 JSON state under `.local\snapshots\<timestamp>` for future clean-state diffs.
 - `scripts.demo_ops` provides A6 operator commands for side-by-side health checks, direct `/invoke` smoke validation, active runtime tfvars switching, and Azure Container Apps log triage.
-- Latest post-A6 baseline snapshot: `.local\snapshots\20260709-170709Z`.
+- Agent 365 Teams reactions work through the authenticated connector client: both runtimes add/remove temporary `eyes`, and Hermes validated semantic `heart` from runtime `TEAMS_REACTION` output.
+- `scripts.setup_agent365 --publish` creates/repackages `.local\<runtime>\agent365\manifest\manifest.zip`; it does not upload the package. Upload or upgrade in Microsoft 365 admin center remains manual because the current `a365` CLI exposes package creation, not package upload.
+- Live API inspection confirmed the Agent User registration and blueprint are healthy, but Agent 365 `agenticUserTemplates` packages are cataloged for Copilot rather than installed as Teams bot apps. The target Team has no RSC grants, so unmentioned channel messages are not delivered to the bridge.
+- Typing-indicator source logic and unit coverage exist for 1:1 and small group chats, matching current Agent 365 SDK guidance. Teams does not display typing indicators in channels. Live validation requires the next bridge image deployment.
+- Latest post-Teams-routing investigation snapshot: `.local\snapshots\20260709-192121Z`.
 
 Current limitation:
 
 - Full Teams thread history retrieval is not implemented; the bridge sees delivered activities plus bridge-local in-process memory.
-- Teams typing indicators and reactions are intentionally skipped in the Agent 365 path.
+- Live verification covers Agent User 1:1 messages and explicit channel mentions. The current path does not deliver every unmentioned channel message; an unmentioned reply is not delivered merely because the agent previously participated in that thread.
+- Teams RSC all-message delivery requires a separately installed Teams app with a `bots` capability and is outside the Agent 365-only architecture. Adding RSC fields to `agenticUserTemplates` does not create an app installation or grant.
+- The Agent 365 Notifications SDK currently covers email, Office document comments, and Agent User lifecycle events; it does not provide a Teams thread-follow subscription.
+- No public Agent 365 roadmap commitment was found for unmentioned Agent User delivery or conversation-follow subscriptions. Review [ADR 0002](docs/adr/0002-teams-event-routing-and-reactions.md) when its documented triggers change.
 - Old package inventory rows can remain in Microsoft 365 admin center **All agents** after backing objects are deleted. Microsoft Graph Package Management currently exposes block/unblock/update, not delete; stale Hermes rows are blocked.
 
 ## Product direction
 
 Agent 365 is the primary install and user-facing Microsoft 365 path.
+
+Agent 365 AI teammates and classic Teams app/bots share Activity Protocol concepts, but they do not share the same installation and consent lifecycle. An AI teammate is provisioned as an Agent User from an Agent 365 blueprint. It is not an installed Teams app with a `bots` capability, so Teams app RSC grants do not automatically apply.
 
 Removed from the path:
 
@@ -99,7 +108,7 @@ Hermes mode requires:
 
 Both runtimes use:
 
-- Private incidents MCP URL and static key.
+- Private incidents MCP URL and a temporary static key. Replacing this demo credential with Entra-backed workload authorization is the first implementation slice of A7.
 - `app=autopilots-on-azure` and `kind=<runtime>` sandbox labels.
 - A runtime-specific bridge `/api/messages` endpoint.
 
@@ -194,9 +203,19 @@ Set-Location ..
 terraform -chdir=terraform\apps validate
 ```
 
-## Next milestones
+## Milestone status and roadmap
+
+| Milestone | Status | Outcome |
+| --- | --- | --- |
+| A4.5 - Agent 365 packages | Complete | Runtime-specific blueprints, endpoints, packages, identifiers, and Teams message validation exist for OpenClaw and Hermes. |
+| A5 - Side-by-side deployments | Complete | Both runtimes are live with independent app state, endpoints, identities, and sandbox storage. |
+| A6 - Operator polish | Complete | `scripts.demo_ops`, runbooks, diagnostics, snapshots, and recovery commands provide the supported operator path. |
+| Teams routing and reaction follow-up | Complete | Reactions work; unmentioned-message and active-thread delivery limits are documented in ADR 0002. This work is not the A7 identity milestone. |
+| A7 - MCP and Agent 365 identity model | Next | Replace the private MCP static key, prove Agent User-owned Microsoft 365 actions, and define OBO boundaries. |
 
 ### A4.5 - Test Agent 365 packages for both runtimes
+
+Status: Complete.
 
 Goal: prove the Agent 365 path works for OpenClaw and Hermes with the runtime-aware setup script.
 
@@ -214,9 +233,11 @@ Exit criteria:
 
 - OpenClaw and Hermes each have runtime-specific Agent 365 config and metadata artifacts.
 - OpenClaw and Hermes each have Agent 365 blueprint setup, endpoint registration, manifest package, and captured non-secret identifiers.
-- Remaining Microsoft 365 install/chat validation blocker is explicit and reproducible.
+- Both Agent Users respond in Teams 1:1 and explicit channel-mention scenarios; remaining unmentioned-message behavior is a documented platform limitation rather than an installation blocker.
 
 ### A5 - Side-by-side app deployments and Agent 365 publishing
+
+Status: Complete.
 
 Goal: run OpenClaw and Hermes at the same time instead of switching one bridge, and publish both as separate Agent 365 autopilots with independent endpoints, identities, configuration, and runtime state.
 
@@ -245,12 +266,14 @@ Tasks:
 Exit criteria:
 
 - OpenClaw and Hermes bridge endpoints are both live.
-- OpenClaw and Hermes can be installed or published independently through Agent 365.
+- OpenClaw and Hermes packages can be uploaded and activated independently, and their Agent User instances can be provisioned independently.
 - Each runtime has its own endpoint, identity metadata, and runtime state.
 - A smoke prompt reaches each runtime through Agent 365 and returns the expected response.
 - Runtime state and sandbox volumes do not collide.
 
 ### A6 - Operator polish
+
+Status: Complete.
 
 Goal: make the repository easy to run as a demo.
 
@@ -276,9 +299,9 @@ Exit criteria:
 
 - A new operator can deploy, switch, package, and validate either runtime without reading historical planning docs.
 
-## Future track: Hermes digital worker evolution
+## Planned track: Hermes digital worker evolution
 
-This track starts after Agent 365 packaging, side-by-side deployments, and operator polish are stable. It turns the Hermes runtime from a single demo autopilot into a repeatable digital-worker pattern where one reviewed blueprint can be instantiated many times, adapted privately to a senior person or team, and periodically improved from fleet experience.
+The A4.5-A6 prerequisites are complete. This track now proceeds from A7 onward. It turns the Hermes runtime from a single demo autopilot into a repeatable digital-worker pattern where one reviewed blueprint can be instantiated many times, adapted privately to a senior person or team, and periodically improved from fleet experience.
 
 Do not use Azure Container Apps Dynamic Sessions for this track. Dynamic Sessions are a different Azure primitive with ephemeral session-pool lifecycle. Digital workers need Azure Container Apps Sandboxes because they provide explicit lifecycle control, suspend/resume, snapshots, and persistent volumes.
 
@@ -468,20 +491,23 @@ Supported options:
 
 Initial implementation should support bridge-owned cron for simplicity, with a clear path to an ACA scheduled Job.
 
-### Future milestones after A6
+### Roadmap from A7
 
 #### A7 - MCP and Agent 365 identity model
 
 Goal: prove how sandbox-hosted OpenClaw and Hermes workers access private and Microsoft 365 tools using the correct Agent 365 identities.
 
+Status: Next. Blueprint, Agent Identity, Agent User, licensing, and registration provisioning are complete. Tool authorization and explicit runtime identity selection are not.
+
 Tasks:
 
 - Define supported identity modes:
-  - Agent / workload identity for private MCP and service-to-service access.
-  - Agent User identity for digital-worker-owned Microsoft 365 resources such as mailbox, calendar, OneDrive, and documents.
+  - Agent Identity or runtime workload identity for unattended private MCP and service-to-service access.
+  - Agent User identity for resources owned by the digital worker, such as its mailbox, calendar, OneDrive, and documents.
   - User-delegated / OBO identity only for explicit user-owned-resource requests.
-- Replace or complement the private demo MCP static-key path with Entra-backed authorization for the Agent 365 agent identity.
-- Validate that both OpenClaw and Hermes can call the private MCP using the agent identity and receive authorization based on that identity.
+- Add explicit auth-boundary metadata to the bridge/runtime request contract, aligned with ADR 0004: selected auth mode, Agent User/instance identifiers when known, invoking human identity, and public/private conversation boundary.
+- Replace the private demo MCP static-key path with Entra-backed application authorization issued to the blueprint/Agent Identity or runtime workload identity. Do not use Agent User delegated identity for unattended service-to-service calls.
+- Validate that both OpenClaw and Hermes can call the private MCP through the same bridge-level token/tooling contract and receive authorization based on the selected workload identity.
 - Build one Agent User Microsoft 365 scenario, preferably sending email from the agent's own mailbox or creating a document in the agent's own OneDrive.
 - Evaluate Microsoft 365 / Work IQ MCP tools, including Word, Excel, Mail, Calendar, OneDrive/SharePoint, Teams, and any Work IQ-specific surfaces.
 - Document which tools can be used directly from bridge / sandbox runtimes and which require Microsoft 365 Agents SDK, Agent 365 notification handlers, or Foundry Hosted Agent execution.
@@ -490,7 +516,7 @@ Tasks:
 
 Exit criteria:
 
-- Private MCP authorization works with a real Agent 365 identity instead of only a static demo key.
+- Private MCP authorization works with an approved Entra workload identity associated with the Agent 365 deployment instead of only a static demo key.
 - At least one Agent User Microsoft 365 action works end to end.
 - OBO is either proven with clear guardrails or explicitly deferred with blockers.
 - OpenClaw and Hermes use the same bridge-level identity and tooling contract.
@@ -566,6 +592,8 @@ Exit criteria:
 #### A12 - Agent 365 workload notifications
 
 Goal: add optional non-Teams Microsoft 365 notification inputs while keeping Teams chat on the existing `/api/messages` activity path.
+
+Status: Planned after the A7 identity and permission model. The notification SDK and payload types have been researched, but no Email or Office comment notification route is implemented yet.
 
 Tasks:
 

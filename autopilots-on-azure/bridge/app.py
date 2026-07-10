@@ -10,6 +10,7 @@ from collections import deque
 from functools import cache
 from typing import Any
 
+from aiohttp import ClientResponseError
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from microsoft_agents.activity import Activity, load_configuration_from_env
@@ -64,6 +65,7 @@ _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
 _teams_memory: dict[str, deque[dict[str, Any]]] = {}
 _SUPPORTED_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat", "channel", "team"}
 _CHANNEL_TEAMS_CONVERSATION_TYPES = {"channel", "team"}
+_TYPING_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat"}
 _NO_RESPONSE = "NO_RESPONSE"
 _TEAMS_REACTION_PREFIX = "TEAMS_REACTION:"
 _TEAMS_REACTION_ALIASES = {
@@ -314,6 +316,44 @@ def memory_has_openclaw_message_id(session_key: str | None, message_id: str | No
 
 def reacted_message_id(activity: MessageReactionActivity) -> str:
     return str(field_value(activity, "reply_to_id") or field_value(activity, "replyToId") or "")
+
+
+def teams_reaction_path(conversation_id: str, message_id: str, reaction_type: str) -> str:
+    if not conversation_id:
+        raise ValueError("Teams reaction requires conversation id.")
+    if not message_id:
+        raise ValueError("Teams reaction requires message id.")
+    if not reaction_type:
+        raise ValueError("Teams reaction requires reaction type.")
+    return f"v3/conversations/{conversation_id}/activities/{message_id}/reactions/{reaction_type}"
+
+
+def connector_client_from_context(ctx: TurnContext) -> Any:
+    connector_client = ctx.turn_state.get("ConnectorClient") if hasattr(ctx, "turn_state") else None
+    if not connector_client or not getattr(connector_client, "client", None):
+        raise RuntimeError("Teams connector client is not available in turn state.")
+    return connector_client
+
+
+async def apply_message_reaction(ctx: TurnContext, message_id: str, reaction_type: str, *, remove: bool = False) -> None:
+    conversation_id = teams_conversation_id(ctx.activity)
+    path = teams_reaction_path(conversation_id, message_id, reaction_type)
+    connector_client = connector_client_from_context(ctx)
+    method = connector_client.client.delete if remove else connector_client.client.put
+    async with method(path) as response:
+        if response.status >= 300:
+            body = await response.text()
+            record_teams_diag(
+                {
+                    "event": "reactionFailed",
+                    "messageId": message_id,
+                    "reactionType": reaction_type,
+                    "operation": "delete" if remove else "add",
+                    "statusCode": response.status,
+                    "body": truncate_text(body, 500),
+                }
+            )
+            response.raise_for_status()
 
 
 def teams_signal_type(activity: Activity, *, message: str | None = None, reactions: list[str] | None = None) -> str:
@@ -763,20 +803,87 @@ async def handle_teams_message_update(ctx: TurnContext, _state: TurnState) -> No
     )
 
 
-async def send_typing_indicator(ctx: TurnContext, conversation_id: str) -> None:
-    record_teams_diag({"event": "typingSkipped", "conversationId": conversation_id, "reason": "agent365"})
+def supports_typing_indicators(ctx: TurnContext) -> bool:
+    return teams_conversation_type(ctx.activity) in _TYPING_TEAMS_CONVERSATION_TYPES
+
+
+async def send_typing_indicators(ctx: TurnContext, conversation_id: str, done: asyncio.Event) -> None:
+    conversation_type = teams_conversation_type(ctx.activity)
+    if not supports_typing_indicators(ctx):
+        record_teams_diag(
+            {
+                "event": "typingSkipped",
+                "conversationId": conversation_id,
+                "conversationType": conversation_type,
+                "reason": "unsupportedConversationType",
+            }
+        )
+        return
+
+    try:
+        while not done.is_set():
+            await ctx.send_activity(Activity(type="typing"))
+            record_teams_diag(
+                {
+                    "event": "typingSent",
+                    "conversationId": conversation_id,
+                    "conversationType": conversation_type,
+                }
+            )
+            try:
+                await asyncio.wait_for(done.wait(), timeout=4)
+            except asyncio.TimeoutError:
+                continue
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "typingFailed",
+                "conversationId": conversation_id,
+                "conversationType": conversation_type,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
 
 
 async def send_message_reaction(ctx: TurnContext, message_id: str | None, reaction_type: str) -> None:
     if not message_id:
         return
-    record_teams_diag({"event": "reactionSkipped", "messageId": message_id, "reactionType": reaction_type, "reason": "agent365"})
+    try:
+        await apply_message_reaction(ctx, message_id, reaction_type)
+        record_teams_diag({"event": "reactionSent", "messageId": message_id, "reactionType": reaction_type})
+    except (ClientResponseError, TimeoutError, OSError, RuntimeError, ValueError) as exc:
+        record_teams_diag(
+            {
+                "event": "reactionFailed",
+                "messageId": message_id,
+                "reactionType": reaction_type,
+                "operation": "add",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
 
 
 async def delete_message_reaction(ctx: TurnContext, message_id: str | None, reaction_type: str) -> None:
     if not message_id:
         return
-    record_teams_diag({"event": "reactionDeleteSkipped", "messageId": message_id, "reactionType": reaction_type, "reason": "agent365"})
+    try:
+        await apply_message_reaction(ctx, message_id, reaction_type, remove=True)
+        record_teams_diag({"event": "reactionDeleted", "messageId": message_id, "reactionType": reaction_type})
+    except (ClientResponseError, TimeoutError, OSError, RuntimeError, ValueError) as exc:
+        record_teams_diag(
+            {
+                "event": "reactionFailed",
+                "messageId": message_id,
+                "reactionType": reaction_type,
+                "operation": "delete",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
 
 
 def response_should_be_suppressed(response: str) -> bool:
@@ -813,6 +920,7 @@ async def run_agent_runtime_for_teams(
     done = asyncio.Event()
     show_public_progress = supports_streaming_response(ctx) and not targeted_response and not suppress_no_response
     progress_task = asyncio.create_task(send_stream_progress_updates(ctx, conversation_id, done)) if show_public_progress else None
+    typing_task = asyncio.create_task(send_typing_indicators(ctx, conversation_id, done))
     streamed = False
 
     async def emit_delta(delta: str) -> None:
@@ -875,9 +983,10 @@ async def run_agent_runtime_for_teams(
             )
     finally:
         done.set()
-        if progress_task:
-            progress_task.cancel()
-            await asyncio.gather(progress_task, return_exceptions=True)
+        background_tasks = [task for task in (progress_task, typing_task) if task]
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 async def send_stream_progress_updates(ctx: TurnContext, conversation_id: str, done: asyncio.Event) -> None:

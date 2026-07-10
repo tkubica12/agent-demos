@@ -192,7 +192,10 @@ class Agent365SetupTests(unittest.TestCase):
             manifest_dir = Path(temp_dir) / "manifest"
             manifest_dir.mkdir()
             (manifest_dir / "manifest.json").write_text(
-                '{"name":{"short":"OpenClaw Blueprint","full":"OpenClaw Blueprint"},"description":{"short":"x","full":"y"},"developer":{}}',
+                (
+                    '{"id":"blueprint-1","name":{"short":"OpenClaw Blueprint","full":"OpenClaw Blueprint"},'
+                    '"description":{"short":"x","full":"y"},"developer":{}}'
+                ),
                 encoding="utf-8",
             )
             (manifest_dir / "color.png").write_bytes(b"color")
