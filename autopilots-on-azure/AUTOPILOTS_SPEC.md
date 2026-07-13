@@ -542,7 +542,17 @@ Exit criteria:
 
 Goal: install and update digital-worker blueprints from Git while preserving instance-local state, with Hermes as the first full implementation and OpenClaw evaluated against the same lifecycle contract.
 
-Status: In progress. The commit-pinned Git lifecycle, instance manifest, persistent named profile, sandbox replacement labels, state-preservation unit proof, and OpenClaw exception are implemented. A live ACA Sandbox v1-to-v2 upgrade remains before completion.
+Status: Complete. The commit-pinned Git lifecycle, instance manifest, persistent named profile, sandbox replacement labels, state-preservation proof, and OpenClaw exception are implemented and live-validated.
+
+Live evidence from 2026-07-13:
+
+- Installed `junior-project-manager` v1.0.0 from commit `ecc07fad92122d6ae6d4e44bd145c1814a746071`.
+- Chatted through `/api/sessions/{id}/chat` with the stable bridge session headers.
+- Wrote private memory, session, instance-local skill, and `local\` markers while Hermes maintained its native `state.db`.
+- Upgraded to v2.0.0 at commit `50342bd359a3f0fce9669a43b1d6eeb4fa690900`.
+- Replaced sandbox `c5aed5f2-eb12-4330-bb86-c582723f273d` with `827fdced-a813-4d3f-9db6-89bcd5a9c001` while retaining the `hermes-data` Data Disk.
+- Verified the v2 `distribution.yaml`, `SOUL.md`, and blueprint skill plus every v1 private marker and `state.db`.
+- Re-verified Agent Identity access to the private incidents MCP after the upgrade.
 
 Tasks:
 

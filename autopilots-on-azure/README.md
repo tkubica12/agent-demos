@@ -127,7 +127,7 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 ## Hermes blueprint lifecycle
 
-The first A8 distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk.
+The A8 distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.0.0.
 
 Configure one Hermes worker with the repository commit that contains the desired blueprint version:
 
@@ -139,7 +139,7 @@ uv run python -m scripts.setup_app_tfvars `
   --blueprint-name junior-project-manager `
   --blueprint-source https://github.com/tkubica12/agent-demos.git `
   --blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
-  --blueprint-version 1.0.0 `
+  --blueprint-version 2.0.0 `
   --blueprint-commit $commit `
   --assignee-scope "person-or-team" `
   --runtime-only
@@ -168,7 +168,9 @@ The instance record is stored at:
 /data/hermes/profiles/junior-project-manager/local/autopilots-instance.json
 ```
 
-`/health` reports only the installed blueprint name, version, and commit. OpenClaw remains on its runtime-image plus persistent `/data/home` and `/data/workspace` model; A8 does not add a parallel custom distribution manager for it.
+The sandbox labels and `/data/hermes/profiles/junior-project-manager/local/autopilots-instance.json` report the installed blueprint name, version, and commit. The native Hermes `/health` endpoint reports Hermes runtime health and version. OpenClaw remains on its runtime-image plus persistent `/data/home` and `/data/workspace` model; A8 does not add a parallel custom distribution manager for it.
+
+The complete v1-to-v2 lifecycle was live-verified on 2026-07-13. Hermes installed v1.0.0 from `ecc07fad92122d6ae6d4e44bd145c1814a746071`, wrote private memory/session/local skill markers, then installed v2.0.0 from `50342bd359a3f0fce9669a43b1d6eeb4fa690900` in a replacement sandbox using the same `hermes-data` volume. The v2 distribution files changed, every private marker and native `state.db` survived, and the private incidents MCP still returned the expected five services.
 
 ## Prerequisites
 

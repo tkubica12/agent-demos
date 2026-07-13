@@ -74,3 +74,14 @@ Do not introduce a project database for Hermes core memory or blueprint skill st
 - Hosted upgrades require a reachable Git source for the new pinned commit; restarts at an already installed commit do not fetch Git again.
 - Operators must not use ACA Dynamic Sessions for this track.
 - A database can be added later for fleet operations without changing the blueprint source of truth.
+
+## Validation
+
+The lifecycle was live-validated on ACA Sandboxes on 2026-07-13:
+
+1. Installed `junior-project-manager` v1.0.0 from commit `ecc07fad92122d6ae6d4e44bd145c1814a746071`.
+2. Created native Hermes session state plus private files under `memories\`, `sessions\`, `skills\instance-local\`, and `local\`.
+3. Changed the pinned source to v2.0.0 at commit `50342bd359a3f0fce9669a43b1d6eeb4fa690900`.
+4. Confirmed the bridge deleted the v1 sandbox and created a v2-labeled sandbox against the same `hermes-data` Data Disk.
+5. Confirmed v2 distribution files were active and all private markers plus `state.db` survived.
+6. Confirmed the upgraded worker still invoked the private incidents MCP through Agent Identity.
