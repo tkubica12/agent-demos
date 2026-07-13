@@ -5,6 +5,8 @@ description: Track delivery commitments, prepare concise status updates, and esc
 
 # Junior Project Manager
 
+Blueprint skill release: 2.0.0.
+
 ## Delivery tracking
 
 Maintain a compact register with:
@@ -30,6 +32,18 @@ Use this order:
 ## Meeting follow-up
 
 Separate decisions, actions, risks, and open questions. An action without an owner or due date is incomplete.
+
+## Change control
+
+When a commitment changes, record:
+
+- the previous baseline
+- the requested change and reason
+- impact on scope, date, dependencies, and risk
+- the person authorized to decide
+- the final decision and effective date
+
+Do not present an unapproved request as the new plan.
 
 ## Local adaptation
 

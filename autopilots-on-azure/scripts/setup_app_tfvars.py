@@ -132,11 +132,14 @@ def build_tfvars(
     blueprint_commit: str = "",
     assignee_scope: str = "",
 ) -> dict[str, Any]:
-    tfvars: dict[str, Any] = {
-        "autopilot_name": autopilot_name,
-        "agent_runtime": runtime,
-        "runtime_data_volume_name": data_volume_name,
-    }
+    tfvars: dict[str, Any] = dict(previous)
+    tfvars.update(
+        {
+            "autopilot_name": autopilot_name,
+            "agent_runtime": runtime,
+            "runtime_data_volume_name": data_volume_name,
+        }
+    )
     if runtime == "openclaw":
         if not device:
             raise ValueError("OpenClaw app tfvars require a bridge device identity.")

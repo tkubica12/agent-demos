@@ -90,6 +90,25 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["agent365_client_secret"], "previous-secret")
         self.assertEqual(tfvars["agent365_tenant_id"], "previous-tenant")
 
+    def test_runtime_tfvars_preserve_a7_identity_and_mcp_values(self):
+        tfvars = build_tfvars(
+            runtime="hermes",
+            autopilot_name="hermes",
+            data_volume_name="hermes-data",
+            previous={
+                "agent365_agent_identity_client_id": "agent-id",
+                "agent365_agent_user_id": "agent-user-id",
+                "private_mcp_api_audience": "api://private",
+                "public_shipments_mcp_api_audience": "api://shipments",
+            },
+            api_server_key="api-key",
+        )
+
+        self.assertEqual(tfvars["agent365_agent_identity_client_id"], "agent-id")
+        self.assertEqual(tfvars["agent365_agent_user_id"], "agent-user-id")
+        self.assertEqual(tfvars["private_mcp_api_audience"], "api://private")
+        self.assertEqual(tfvars["public_shipments_mcp_api_audience"], "api://shipments")
+
     def test_hermes_blueprint_requires_full_commit_pinning(self):
         with self.assertRaisesRegex(ValueError, "full 40-character"):
             build_tfvars(
