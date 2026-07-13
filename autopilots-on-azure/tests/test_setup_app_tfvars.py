@@ -48,6 +48,12 @@ class SetupAppTfvarsTests(unittest.TestCase):
             agent365_client_id="blueprint-id",
             agent365_client_secret="blueprint-secret",
             agent365_tenant_id="tenant-id",
+            blueprint_name="junior-project-manager",
+            blueprint_source="https://github.com/example/agent-demos.git",
+            blueprint_path="autopilots-on-azure/blueprints/junior-project-manager",
+            blueprint_version="1.0.0",
+            blueprint_commit="a" * 40,
+            assignee_scope="team-alpha",
         )
 
         self.assertEqual(tfvars["agent_runtime"], "hermes")
@@ -61,6 +67,9 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["agent365_client_id"], "blueprint-id")
         self.assertEqual(tfvars["agent365_client_secret"], "blueprint-secret")
         self.assertEqual(tfvars["agent365_tenant_id"], "tenant-id")
+        self.assertEqual(tfvars["hermes_blueprint_name"], "junior-project-manager")
+        self.assertEqual(tfvars["hermes_blueprint_commit"], "a" * 40)
+        self.assertEqual(tfvars["hermes_assignee_scope"], "team-alpha")
         self.assertNotIn("openclaw_gateway_token", tfvars)
         self.assertNotIn("openclaw_bridge_device_private_key_pem", tfvars)
 
@@ -81,9 +90,23 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["agent365_client_secret"], "previous-secret")
         self.assertEqual(tfvars["agent365_tenant_id"], "previous-tenant")
 
+    def test_hermes_blueprint_requires_full_commit_pinning(self):
+        with self.assertRaisesRegex(ValueError, "full 40-character"):
+            build_tfvars(
+                runtime="hermes",
+                autopilot_name="hermes",
+                data_volume_name="hermes-data",
+                previous={},
+                blueprint_name="junior-project-manager",
+                blueprint_source="https://github.com/example/agent-demos.git",
+                blueprint_version="1.0.0",
+                blueprint_commit="main",
+            )
+
     def test_runtime_defaults_keep_side_by_side_state_distinct(self):
         self.assertEqual(default_data_volume_name("openclaw"), "openclaw-kind-data")
         self.assertEqual(default_data_volume_name("hermes"), "hermes-data")
+        self.assertEqual(default_data_volume_name("hermes", "jpm-team-alpha"), "hermes-jpm-team-alpha-data")
         self.assertEqual(runtime_workspace("openclaw"), Path.cwd() / ".local" / "openclaw" / "apps")
         self.assertEqual(runtime_workspace("hermes"), Path.cwd() / ".local" / "hermes" / "apps")
         self.assertEqual(runtime_app_tfvars_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "generated.app.auto.tfvars.json")

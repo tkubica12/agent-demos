@@ -125,6 +125,51 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 `reset-sandbox` uses the ACA Sandbox data-plane resource `https://dynamicsessions.io`. If it returns `ERROR: Forbidden`, the current Azure login can still operate normal Azure resources but cannot list/delete sandboxes through the sandbox data plane. Run `grant-sandbox-access --execute` with an identity allowed to create role assignments, or use an identity that already has **Container Apps SandboxGroup Data Owner** on the sandbox group.
 
+## Hermes blueprint lifecycle
+
+The first A8 distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk.
+
+Configure one Hermes worker with the repository commit that contains the desired blueprint version:
+
+```powershell
+$commit = "<full-40-character-remote-commit-sha>"
+
+uv run python -m scripts.setup_app_tfvars `
+  --runtime hermes `
+  --blueprint-name junior-project-manager `
+  --blueprint-source https://github.com/tkubica12/agent-demos.git `
+  --blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
+  --blueprint-version 1.0.0 `
+  --blueprint-commit $commit `
+  --assignee-scope "person-or-team" `
+  --runtime-only
+
+uv run python -m scripts.deploy_apps_runtime --runtime hermes --apply --auto-approve --capture
+```
+
+The source must be reachable from the sandbox without an interactive Git prompt. Do not embed credentials in the URL; the source is deployment metadata and is recorded in the instance manifest. The commit is intentionally immutable. On restart with the same commit, Hermes reuses the installed profile without fetching Git.
+
+To upgrade, bump `distribution.yaml`, commit the reviewed blueprint changes, and rerun the two commands with the new version and full commit SHA. The changed sandbox label replaces the sandbox container but reuses the same Data Disk. The upgrade replaces only `distribution_owned` paths and preserves:
+
+```text
+memories\
+sessions\
+state.db*
+logs\
+workspace\
+.env
+local\
+skills outside skills\junior-project-manager\
+```
+
+The instance record is stored at:
+
+```text
+/data/hermes/profiles/junior-project-manager/local/autopilots-instance.json
+```
+
+`/health` reports only the installed blueprint name, version, and commit. OpenClaw remains on its runtime-image plus persistent `/data/home` and `/data/workspace` model; A8 does not add a parallel custom distribution manager for it.
+
 ## Prerequisites
 
 ```powershell

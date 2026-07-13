@@ -70,6 +70,13 @@ class AgentSandboxConfig:
     gateway_token: str = ""
     runtime_home: str = "/data/home"
     runtime_workspace: str = "/data/workspace"
+    blueprint_name: str = ""
+    blueprint_source: str = ""
+    blueprint_path: str = ""
+    blueprint_version: str = ""
+    blueprint_commit: str = ""
+    instance_id: str = ""
+    assignee_scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,6 +157,14 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
         "kind": config.runtime_kind,
         "identityArchitecture": "agent-federation-v1",
     }
+    if config.blueprint_name:
+        labels["blueprint"] = config.blueprint_name
+    if config.blueprint_version:
+        labels["blueprintVersion"] = config.blueprint_version
+    if config.blueprint_commit:
+        labels["blueprintCommit"] = config.blueprint_commit
+    if config.instance_id:
+        labels["instance"] = config.instance_id
     labels.update(config.labels)
     return labels
 
@@ -272,12 +287,26 @@ def hermes_runtime_environment(
     api_server_key: str = "",
     foundry_openai_base_url: str = "",
     model_deployment: str = "",
+    blueprint_name: str = "",
+    blueprint_source: str = "",
+    blueprint_path: str = "",
+    blueprint_version: str = "",
+    blueprint_commit: str = "",
+    instance_id: str = "",
+    assignee_scope: str = "",
 ) -> dict[str, str]:
     environment = {
         "API_SERVER_ENABLED": "true",
         "API_SERVER_HOST": "0.0.0.0",
         "API_SERVER_PORT": str(HERMES_API_PORT),
         "HERMES_HOME": "/data/hermes",
+        "HERMES_BLUEPRINT_NAME": blueprint_name,
+        "HERMES_BLUEPRINT_SOURCE": blueprint_source,
+        "HERMES_BLUEPRINT_PATH": blueprint_path,
+        "HERMES_BLUEPRINT_VERSION": blueprint_version,
+        "HERMES_BLUEPRINT_COMMIT": blueprint_commit,
+        "AUTOPILOT_INSTANCE_ID": instance_id,
+        "HERMES_ASSIGNEE_SCOPE": assignee_scope,
     }
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
@@ -287,7 +316,7 @@ def hermes_runtime_environment(
         environment["OPENCLAW_MODEL_ID"] = model_deployment or "gpt-5-4-mini"
     if api_server_key:
         environment["API_SERVER_KEY"] = api_server_key
-    return environment
+    return {key: value for key, value in environment.items() if value}
 
 
 def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
@@ -350,6 +379,13 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         api_server_key=overrides.get("api_server_key") or "",
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
         model_deployment=overrides.get("model_deployment") or "",
+        blueprint_name=overrides.get("blueprint_name") or "",
+        blueprint_source=overrides.get("blueprint_source") or "",
+        blueprint_path=overrides.get("blueprint_path") or "",
+        blueprint_version=overrides.get("blueprint_version") or "",
+        blueprint_commit=overrides.get("blueprint_commit") or "",
+        instance_id=overrides.get("instance_id") or "",
+        assignee_scope=overrides.get("assignee_scope") or "",
     )
     config = AgentSandboxConfig(
         subscription_id=overrides.get("subscription_id") or "",
@@ -390,6 +426,13 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         root_disk_size=overrides.get("root_disk_size") or "20Gi",
         runtime_home="/data/hermes",
         runtime_workspace="/data/hermes/workspace",
+        blueprint_name=overrides.get("blueprint_name") or "",
+        blueprint_source=overrides.get("blueprint_source") or "",
+        blueprint_path=overrides.get("blueprint_path") or "",
+        blueprint_version=overrides.get("blueprint_version") or "",
+        blueprint_commit=overrides.get("blueprint_commit") or "",
+        instance_id=overrides.get("instance_id") or "",
+        assignee_scope=overrides.get("assignee_scope") or "",
     )
     environment.update(agent_mcp_environment(config))
     return config
@@ -634,6 +677,13 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
             foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
             model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-4-mini"),
             api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
+            blueprint_name=overrides.get("blueprint_name") or get_config("HERMES_BLUEPRINT_NAME"),
+            blueprint_source=overrides.get("blueprint_source") or get_config("HERMES_BLUEPRINT_SOURCE"),
+            blueprint_path=overrides.get("blueprint_path") or get_config("HERMES_BLUEPRINT_PATH"),
+            blueprint_version=overrides.get("blueprint_version") or get_config("HERMES_BLUEPRINT_VERSION"),
+            blueprint_commit=overrides.get("blueprint_commit") or get_config("HERMES_BLUEPRINT_COMMIT"),
+            instance_id=overrides.get("instance_id") or get_config("AUTOPILOT_INSTANCE_ID", get_config("AUTOPILOT_NAME")),
+            assignee_scope=overrides.get("assignee_scope") or get_config("HERMES_ASSIGNEE_SCOPE"),
         )
     if runtime_kind != "openclaw":
         raise ValueError(f"Unsupported AGENT_RUNTIME '{runtime_kind}'.")

@@ -10,6 +10,7 @@ COPY runtimes/hermes/requirements.txt .
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt
 
 COPY runtimes/hermes/start_hermes.py .
+COPY runtimes/hermes/blueprint.py .
 COPY runtimes/hermes/foundry_token_proxy.py .
 COPY autopilots_identity ./autopilots_identity
 

@@ -188,6 +188,9 @@ Agent 365 BYO currently requires a public endpoint and supported client connecti
 | --- | --- |
 | Azure resources | Terraform platform/apps states. |
 | Runtime filesystem | Sandbox Data Disk volume. |
+| Hermes blueprint source | Commit-pinned Git repository and `distribution.yaml`. |
+| Hermes active profile | `/data/hermes/profiles/<blueprint-name>` on the Sandbox Data Disk. |
+| Hermes instance manifest | `<profile>/local/autopilots-instance.json`; records source, version, commit, instance, and assignee scope. |
 | Agent 365 blueprint/package files | `.local\<runtime>\agent365`. |
 | Agent instance identifiers | `.local\<runtime>\agent365\instance.*.json`. |
 | Entra MCP API discovery state | `.local\a7-*-mcp-api.json`, recoverable by display name. |
@@ -195,6 +198,12 @@ Agent 365 BYO currently requires a public endpoint and supported client connecti
 | Durable design rationale | `docs\adr`. |
 
 Local state accelerates operation but must not be the only source of truth for cloud object discovery.
+
+### Hermes blueprint and state boundary
+
+Hermes uses one named profile per digital-worker instance. Git owns only paths declared by the profile distribution, while the Sandbox Data Disk owns memories, sessions, SQLite state, workspace, `.env`, `local\`, and assignment-specific artifacts. A blueprint upgrade changes the pinned commit label, recreates the sandbox container, reuses the same Data Disk, and synchronizes only distribution-owned paths.
+
+OpenClaw remains on its runtime-image package plus persistent data directories. It has no equivalent Git profile-distribution lifecycle in A8, so the project documents that exception rather than adding a parallel custom package manager.
 
 ## Observability
 

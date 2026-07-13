@@ -542,6 +542,8 @@ Exit criteria:
 
 Goal: install and update digital-worker blueprints from Git while preserving instance-local state, with Hermes as the first full implementation and OpenClaw evaluated against the same lifecycle contract.
 
+Status: In progress. The commit-pinned Git lifecycle, instance manifest, persistent named profile, sandbox replacement labels, state-preservation unit proof, and OpenClaw exception are implemented. A live ACA Sandbox v1-to-v2 upgrade remains before completion.
+
 Tasks:
 
 - Define `junior-project-manager` blueprint distribution layout.

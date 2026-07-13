@@ -54,6 +54,14 @@ The worker instance owns private/durable runtime state:
 
 The active worker copy lives on the sandbox Data Disk, but Git remains the source of truth for the releasable blueprint. The instance records the blueprint source, version, and commit in an instance manifest so central tools can compare local candidate changes against the correct base revision.
 
+The hosted implementation uses a full commit SHA, not a floating branch. The bridge passes the source repository, repository-relative distribution path, expected version, and commit to the sandbox. The persistent Hermes root remains `/data/hermes`; the distribution is installed into `/data/hermes/profiles/<blueprint-name>`, recorded as the sticky active profile, and passed to the gateway subprocess as its effective `HERMES_HOME`. The instance manifest is stored at `local\autopilots-instance.json`, which is instance-owned and preserved during updates.
+
+Changing the pinned commit changes the ACA Sandbox labels. The bridge deletes the stale sandbox container and creates a new one against the same Data Disk volume. Startup then replaces only the paths listed by `distribution_owned`; memories, sessions, SQLite state, workspace, `.env`, `local\`, and any skills outside the distribution-owned namespace remain intact.
+
+The runtime owns a small effective-config merge at startup. Blueprint defaults are loaded first, then Azure-required model, API server, path, and loopback MCP settings are applied. Existing `.env` content is preserved except for the explicit runtime-managed keys that must follow the current sandbox configuration.
+
+OpenClaw is an explicit A8 exception. It keeps the lighter runtime-image plus persistent `/data/home` and `/data/workspace` model because it does not currently expose a Hermes-equivalent, reviewed Git profile-distribution lifecycle with clear distribution-owned update semantics. Do not create a second custom package manager for OpenClaw in this milestone.
+
 Do not introduce a project database for Hermes core memory or blueprint skill storage in the first implementation. Databases remain appropriate for external business data, policy corpora, data-agent backends, fleet dashboards, audit search, or an admin UI, but those are not Hermes core storage.
 
 ## Consequences
@@ -63,5 +71,6 @@ Do not introduce a project database for Hermes core memory or blueprint skill st
 - Git diffs and pull requests become the natural review surface for releasable role skills.
 - The sandbox Data Disk must be treated as single-writer per worker instance because Hermes state includes SQLite.
 - The startup script must avoid overwriting distribution-owned or instance-owned files unexpectedly.
+- Hosted upgrades require a reachable Git source for the new pinned commit; restarts at an already installed commit do not fetch Git again.
 - Operators must not use ACA Dynamic Sessions for this track.
 - A database can be added later for fleet operations without changing the blueprint source of truth.

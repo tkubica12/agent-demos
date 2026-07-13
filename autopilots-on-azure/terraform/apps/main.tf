@@ -330,6 +330,34 @@ resource "azapi_resource" "bridge_app" {
                 value = var.autopilot_name
               },
               {
+                name  = "AUTOPILOT_INSTANCE_ID"
+                value = var.autopilot_name
+              },
+              {
+                name  = "HERMES_BLUEPRINT_NAME"
+                value = var.hermes_blueprint_name
+              },
+              {
+                name  = "HERMES_BLUEPRINT_SOURCE"
+                value = var.hermes_blueprint_source
+              },
+              {
+                name  = "HERMES_BLUEPRINT_PATH"
+                value = var.hermes_blueprint_path
+              },
+              {
+                name  = "HERMES_BLUEPRINT_VERSION"
+                value = var.hermes_blueprint_version
+              },
+              {
+                name  = "HERMES_BLUEPRINT_COMMIT"
+                value = var.hermes_blueprint_commit
+              },
+              {
+                name  = "HERMES_ASSIGNEE_SCOPE"
+                value = var.hermes_assignee_scope
+              },
+              {
                 name  = "AZURE_TENANT_ID"
                 value = data.azurerm_client_config.current.tenant_id
               },

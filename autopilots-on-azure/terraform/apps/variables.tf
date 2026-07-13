@@ -8,6 +8,41 @@ variable "agent_runtime" {
   default = "openclaw"
 }
 
+variable "hermes_blueprint_name" {
+  type    = string
+  default = ""
+}
+
+variable "hermes_blueprint_source" {
+  type    = string
+  default = ""
+}
+
+variable "hermes_blueprint_path" {
+  type    = string
+  default = ""
+}
+
+variable "hermes_blueprint_version" {
+  type    = string
+  default = ""
+}
+
+variable "hermes_blueprint_commit" {
+  type    = string
+  default = ""
+
+  validation {
+    condition     = var.hermes_blueprint_commit == "" || can(regex("^[0-9a-fA-F]{40}$", var.hermes_blueprint_commit))
+    error_message = "hermes_blueprint_commit must be empty or a full 40-character Git commit SHA."
+  }
+}
+
+variable "hermes_assignee_scope" {
+  type    = string
+  default = ""
+}
+
 variable "runtime_image" {
   type    = string
   default = ""

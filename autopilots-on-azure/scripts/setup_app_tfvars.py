@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import secrets
 import subprocess
 from pathlib import Path
@@ -79,8 +80,13 @@ def default_autopilot_name(runtime: str) -> str:
     return runtime
 
 
-def default_data_volume_name(runtime: str) -> str:
+def default_data_volume_name(runtime: str, autopilot_name: str = "") -> str:
     if runtime == "hermes":
+        if autopilot_name and autopilot_name != "hermes":
+            normalized = "".join(character if character.isalnum() else "-" for character in autopilot_name.lower()).strip("-")
+            if not normalized:
+                raise ValueError("autopilot_name must contain at least one letter or number.")
+            return f"hermes-{normalized[:40]}-data"
         return "hermes-data"
     return "openclaw-kind-data"
 
@@ -119,6 +125,12 @@ def build_tfvars(
     agent365_client_id: str = "",
     agent365_client_secret: str = "",
     agent365_tenant_id: str = "",
+    blueprint_name: str = "",
+    blueprint_source: str = "",
+    blueprint_path: str = "",
+    blueprint_version: str = "",
+    blueprint_commit: str = "",
+    assignee_scope: str = "",
 ) -> dict[str, Any]:
     tfvars: dict[str, Any] = {
         "autopilot_name": autopilot_name,
@@ -143,6 +155,30 @@ def build_tfvars(
         tfvars["api_server_key"] = api_server_key or previous.get("api_server_key") or previous.get("hermes_api_server_key") or random_token()
         tfvars["runtime_image"] = runtime_image or previous.get("runtime_image", "")
         tfvars["runtime_disk_image_name"] = runtime_disk_image_name or previous.get("runtime_disk_image_name", "hermes-api-server-image")
+        blueprint_values = {
+            "hermes_blueprint_name": blueprint_name or previous.get("hermes_blueprint_name", ""),
+            "hermes_blueprint_source": blueprint_source or previous.get("hermes_blueprint_source", ""),
+            "hermes_blueprint_path": blueprint_path or previous.get("hermes_blueprint_path", ""),
+            "hermes_blueprint_version": blueprint_version or previous.get("hermes_blueprint_version", ""),
+            "hermes_blueprint_commit": blueprint_commit or previous.get("hermes_blueprint_commit", ""),
+            "hermes_assignee_scope": assignee_scope or previous.get("hermes_assignee_scope", ""),
+        }
+        if any(blueprint_values.values()):
+            required_blueprint_values = {
+                key: blueprint_values[key]
+                for key in (
+                    "hermes_blueprint_name",
+                    "hermes_blueprint_source",
+                    "hermes_blueprint_version",
+                    "hermes_blueprint_commit",
+                )
+            }
+            missing = [key for key, value in required_blueprint_values.items() if not value]
+            if missing:
+                raise ValueError(f"Hermes blueprint configuration requires: {', '.join(missing)}.")
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", blueprint_values["hermes_blueprint_commit"]):
+                raise ValueError("hermes_blueprint_commit must be a full 40-character Git commit SHA.")
+        tfvars.update({key: value for key, value in blueprint_values.items() if value})
     else:
         raise ValueError(f"Unsupported runtime '{runtime}'.")
     resolved_agent365_client_id = agent365_client_id or previous.get("agent365_client_id", "")
@@ -172,6 +208,12 @@ def main() -> None:
     parser.add_argument("--device-identity-file", default="")
     parser.add_argument("--approved-device-token", default="")
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY. Generated when omitted.")
+    parser.add_argument("--blueprint-name", default="", help="Hermes profile distribution name.")
+    parser.add_argument("--blueprint-source", default="", help="Git repository URL containing the Hermes distribution.")
+    parser.add_argument("--blueprint-path", default="", help="Distribution path relative to the repository root.")
+    parser.add_argument("--blueprint-version", default="", help="Expected distribution.yaml version.")
+    parser.add_argument("--blueprint-commit", default="", help="Full Git commit SHA to install.")
+    parser.add_argument("--assignee-scope", default="", help="Person, team, or workstream assigned to this worker.")
     parser.add_argument("--runtime-image", default="", help="Runtime image digest. Recommended for Hermes to avoid reusing an OpenClaw image tfvars value.")
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
     parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
@@ -193,7 +235,11 @@ def main() -> None:
 
     previous = existing_app_tfvars(runtime)
     agent365_auth = load_agent365_auth(runtime) if args.agent365_from_generated else {}
-    data_volume_name = args.data_volume_name or reusable_data_volume_name(runtime, previous.get("runtime_data_volume_name") or "") or default_data_volume_name(runtime)
+    data_volume_name = (
+        args.data_volume_name
+        or reusable_data_volume_name(runtime, previous.get("runtime_data_volume_name") or "")
+        or default_data_volume_name(runtime, autopilot_name)
+    )
     device: dict[str, str] | None = None
     device_path: Path | None = None
     if runtime == "openclaw":
@@ -216,6 +262,12 @@ def main() -> None:
         agent365_client_id=args.agent365_client_id or agent365_auth.get("client_id", ""),
         agent365_client_secret=args.agent365_client_secret or agent365_auth.get("client_secret", ""),
         agent365_tenant_id=args.agent365_tenant_id,
+        blueprint_name=args.blueprint_name,
+        blueprint_source=args.blueprint_source,
+        blueprint_path=args.blueprint_path,
+        blueprint_version=args.blueprint_version,
+        blueprint_commit=args.blueprint_commit,
+        assignee_scope=args.assignee_scope,
     )
     runtime_path = runtime_app_tfvars_path(runtime)
     write_tfvars(runtime_path, tfvars)

@@ -10,6 +10,18 @@ output "agent_runtime" {
   value = var.agent_runtime
 }
 
+output "hermes_blueprint_name" {
+  value = var.hermes_blueprint_name
+}
+
+output "hermes_blueprint_version" {
+  value = var.hermes_blueprint_version
+}
+
+output "hermes_blueprint_commit" {
+  value = var.hermes_blueprint_commit
+}
+
 output "private_mcp_fqdn" {
   value = azapi_resource.private_mcp_app.output.properties.configuration.ingress.fqdn
 }

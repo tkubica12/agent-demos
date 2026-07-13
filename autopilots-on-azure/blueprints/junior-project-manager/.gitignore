@@ -1,0 +1,15 @@
+.env
+auth.json
+memories/
+sessions/
+state.db*
+hermes_state.db
+response_store.db*
+logs/
+workspace/
+plans/
+home/
+local/
+checkpoints/
+backups/
+*_cache/

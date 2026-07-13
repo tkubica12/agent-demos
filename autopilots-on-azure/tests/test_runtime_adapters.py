@@ -298,6 +298,13 @@ class RuntimeAdapterTests(unittest.TestCase):
             agent365_agent_identity_client_id="agent-1",
             foundry_openai_base_url="https://foundry.example/openai/v1",
             model_deployment="gpt-test",
+            blueprint_name="junior-project-manager",
+            blueprint_source="https://github.com/example/blueprints.git",
+            blueprint_path="blueprints/junior-project-manager",
+            blueprint_version="1.0.0",
+            blueprint_commit="a" * 40,
+            instance_id="worker-1",
+            assignee_scope="team-alpha",
         )
 
         self.assertEqual(config.runtime_kind, "hermes")
@@ -313,8 +320,14 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.environment["FOUNDRY_OPENAI_BASE_URL"], "https://foundry.example/openai/v1")
         self.assertEqual(config.environment["HERMES_MODEL"], "gpt-test")
         self.assertEqual(config.environment["OPENCLAW_MODEL_ID"], "gpt-test")
+        self.assertEqual(config.environment["HERMES_BLUEPRINT_NAME"], "junior-project-manager")
+        self.assertEqual(config.environment["HERMES_BLUEPRINT_COMMIT"], "a" * 40)
+        self.assertEqual(config.environment["AUTOPILOT_INSTANCE_ID"], "worker-1")
         self.assertEqual(config.data_volume_name, "hermes-data")
         self.assertEqual(runtime_labels(config)["kind"], "hermes")
+        self.assertEqual(runtime_labels(config)["blueprint"], "junior-project-manager")
+        self.assertEqual(runtime_labels(config)["blueprintCommit"], "a" * 40)
+        self.assertEqual(runtime_labels(config)["instance"], "worker-1")
 
     def test_environment_config_uses_bridge_registry_credentials(self):
         previous = {key: os.environ.get(key) for key in ["AGENT_RUNTIME_REGISTRY_USERNAME", "AGENT_RUNTIME_REGISTRY_PASSWORD"]}

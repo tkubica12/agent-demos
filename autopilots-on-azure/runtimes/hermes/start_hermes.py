@@ -14,6 +14,8 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 
+from blueprint import BlueprintInstall, install_or_update_blueprint, settings_from_environment
+
 
 DEFAULT_HERMES_HOME = "/data/hermes"
 DEFAULT_GATEWAY_PORT = 9119
@@ -60,14 +62,39 @@ def write_env_file(home: Path) -> Path:
         "PUBLIC_SHIPMENTS_MCP_URL": os.getenv("PUBLIC_SHIPMENTS_MCP_URL", ""),
         "WORKIQ_MAIL_MCP_URL": os.getenv("WORKIQ_MAIL_MCP_URL", ""),
     }
-    env_path.write_text("\n".join(f"{key}={value}" for key, value in values.items() if value) + "\n", encoding="utf-8")
+    managed = {key: value for key, value in values.items() if value}
+    existing_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    rendered: list[str] = []
+    replaced: set[str] = set()
+    for line in existing_lines:
+        key, separator, _ = line.partition("=")
+        if separator and key in values:
+            if key in managed:
+                rendered.append(f"{key}={managed[key]}")
+                replaced.add(key)
+            continue
+        rendered.append(line)
+    if rendered and rendered[-1]:
+        rendered.append("")
+    rendered.extend(f"{key}={value}" for key, value in managed.items() if key not in replaced)
+    env_path.write_text("\n".join(rendered).rstrip() + "\n", encoding="utf-8")
     return env_path
 
 
-def hermes_config(home: Path) -> dict[str, Any]:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, Any]:
     configure_model_environment()
     api_port = api_server_port()
-    config: dict[str, Any] = {
+    runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
             "name": os.getenv("HERMES_MODEL", os.getenv("OPENCLAW_MODEL_ID", "gpt-5-4-mini")),
@@ -98,7 +125,15 @@ def hermes_config(home: Path) -> dict[str, Any]:
     if workiq_mail_mcp_url:
         mcp_servers["workiq-mail"] = {"url": workiq_mail_mcp_url}
     if mcp_servers:
-        config["mcp_servers"] = mcp_servers
+        runtime_config["mcp_servers"] = mcp_servers
+    config = _deep_merge(base or {}, runtime_config)
+    configured_servers = config.get("mcp_servers")
+    if isinstance(configured_servers, dict):
+        for name in ("private-incidents", "public-shipments", "workiq-mail"):
+            if name not in mcp_servers:
+                configured_servers.pop(name, None)
+        if not configured_servers:
+            config.pop("mcp_servers", None)
     return config
 
 
@@ -163,13 +198,28 @@ def start_agent_mcp_proxy() -> subprocess.Popen | None:
 
 def write_config(home: Path) -> Path:
     config_path = home / "config.yaml"
-    config_path.write_text(yaml.safe_dump(hermes_config(home), sort_keys=False), encoding="utf-8")
+    base: dict[str, Any] = {}
+    if config_path.exists():
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            raise ValueError(f"{config_path} must contain a YAML mapping.")
+        base = loaded
+    config_path.write_text(yaml.safe_dump(hermes_config(home, base), sort_keys=False), encoding="utf-8")
     return config_path
 
 
-def start_gateway(home: Path) -> subprocess.Popen:
+def activate_profile(home: Path, name: str) -> Path:
+    active_path = home / "active_profile"
+    temporary = active_path.with_suffix(".tmp")
+    temporary.write_text(f"{name}\n", encoding="utf-8")
+    temporary.replace(active_path)
+    os.environ["HERMES_PROFILE"] = name
+    return active_path
+
+
+def start_gateway(profile_home: Path) -> subprocess.Popen:
     env = os.environ.copy()
-    env["HERMES_HOME"] = str(home)
+    env["HERMES_HOME"] = str(profile_home)
     command = [
         "hermes",
         "gateway",
@@ -179,8 +229,20 @@ def start_gateway(home: Path) -> subprocess.Popen:
     return subprocess.Popen(command, env=env)
 
 
-def create_health_app(home: Path, gateway: subprocess.Popen | None) -> FastAPI:
+def create_health_app(
+    home: Path,
+    profile_home: Path,
+    blueprint: BlueprintInstall | None,
+    gateway: subprocess.Popen | None,
+) -> FastAPI:
     app = FastAPI(title="Hermes ACA Sandbox runtime")
+    blueprint_health = None
+    if blueprint:
+        blueprint_health = {
+            "name": blueprint.manifest["blueprintName"],
+            "version": blueprint.manifest["blueprintVersion"],
+            "commit": blueprint.manifest["blueprintCommit"],
+        }
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -188,8 +250,11 @@ def create_health_app(home: Path, gateway: subprocess.Popen | None) -> FastAPI:
             "status": "ok" if gateway is None or gateway.poll() is None else "gateway-exited",
             "runtime": "hermes",
             "hermesHome": str(home),
-            "configExists": (home / "config.yaml").exists(),
-            "envExists": (home / ".env").exists(),
+            "profileHome": str(profile_home),
+            "profileName": os.getenv("HERMES_PROFILE", "default"),
+            "configExists": (profile_home / "config.yaml").exists(),
+            "envExists": (profile_home / ".env").exists(),
+            "blueprint": blueprint_health,
             "gatewayPort": gateway_port(),
             "apiServerPort": api_server_port(),
             "gatewayPid": gateway.pid if gateway and gateway.poll() is None else None,
@@ -220,10 +285,24 @@ def main() -> None:
     home = hermes_home()
     configure_model_environment()
     home.mkdir(parents=True, exist_ok=True)
-    (home / "workspace").mkdir(parents=True, exist_ok=True)
-    env_path = write_env_file(home)
-    config_path = write_config(home)
+    blueprint = None
+    profile_home = home
+    blueprint_settings = settings_from_environment()
+    if blueprint_settings:
+        blueprint = install_or_update_blueprint(home, blueprint_settings)
+        profile_home = blueprint.profile_home
+        activate_profile(home, blueprint_settings.name)
+        action = "updated" if blueprint.changed else "reused"
+        print(
+            f"Hermes blueprint {action}: {blueprint_settings.name}@{blueprint_settings.version or blueprint_settings.commit}",
+            flush=True,
+        )
+    profile_home.mkdir(parents=True, exist_ok=True)
+    (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
+    env_path = write_env_file(profile_home)
+    config_path = write_config(profile_home)
     print(f"Hermes home: {home}", flush=True)
+    print(f"Hermes profile home: {profile_home}", flush=True)
     print(f"Hermes env: {env_path}", flush=True)
     print(f"Hermes config: {config_path}", flush=True)
 
@@ -234,7 +313,7 @@ def main() -> None:
     gateway = None
     if bool_env("HERMES_START_GATEWAY", True):
         try:
-            gateway = start_gateway(home)
+            gateway = start_gateway(profile_home)
             print(f"Started Hermes gateway pid={gateway.pid}", flush=True)
             time.sleep(3)
         except Exception as exc:
@@ -242,12 +321,12 @@ def main() -> None:
 
     try:
         if bool_env("HERMES_HEALTH_WRAPPER", False):
-            app = create_health_app(home, gateway)
+            app = create_health_app(home, profile_home, blueprint, gateway)
             uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
             return
 
         if gateway is None:
-            app = create_health_app(home, gateway)
+            app = create_health_app(home, profile_home, blueprint, gateway)
             uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
             return
 
