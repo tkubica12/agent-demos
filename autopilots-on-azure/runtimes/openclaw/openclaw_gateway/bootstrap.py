@@ -35,7 +35,7 @@ def openclaw_env() -> dict[str, str]:
 
 def _model_config(gateway: bool = False) -> dict[str, Any]:
     provider_id = os.getenv("OPENCLAW_MODEL_PROVIDER_ID", "foundry")
-    model_id = os.getenv("OPENCLAW_MODEL_ID") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5-4-mini")
+    model_id = os.getenv("OPENCLAW_MODEL_ID") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-5-6-terra")
     base_url = os.getenv("OPENCLAW_MODEL_BASE_URL")
     api_key_env = os.getenv("OPENCLAW_MODEL_API_KEY_ENV", "OPENCLAW_MODEL_API_KEY")
     auth_header_name = os.getenv("OPENCLAW_MODEL_AUTH_HEADER_NAME", "Authorization")

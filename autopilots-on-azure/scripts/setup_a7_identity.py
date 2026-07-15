@@ -255,9 +255,15 @@ def ensure_federated_credential(
     existing = next((item for item in payload.get("value", []) if item.get("name") == name), None)
     expected_issuer = f"https://login.microsoftonline.com/{tenant_id}/v2.0"
     if existing:
-        if existing.get("issuer") != expected_issuer or existing.get("subject") != managed_identity_principal_id:
-            raise RuntimeError(f"Federated credential {name} exists with a different issuer or subject.")
-        return
+        if existing.get("issuer") == expected_issuer and existing.get("subject") == managed_identity_principal_id:
+            return
+        credential_id = existing.get("id")
+        if not credential_id:
+            raise RuntimeError(f"Federated credential {name} cannot be replaced because its id is missing.")
+        graph.request(
+            "DELETE",
+            f"/applications/{blueprint_object_id}/federatedIdentityCredentials/{credential_id}",
+        )
     graph.request(
         "POST",
         f"/applications/{blueprint_object_id}/federatedIdentityCredentials",

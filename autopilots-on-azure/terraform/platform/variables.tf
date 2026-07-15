@@ -10,17 +10,17 @@ variable "bridge_location" {
 
 variable "model_deployment_name" {
   type    = string
-  default = "gpt-5-4-mini"
+  default = "gpt-5-6-terra"
 }
 
 variable "model_name" {
   type    = string
-  default = "gpt-5.4-mini"
+  default = "gpt-5.6-terra"
 }
 
 variable "model_version" {
   type    = string
-  default = "2026-03-17"
+  default = "2026-07-09"
 }
 
 variable "model_sku_name" {
@@ -30,5 +30,5 @@ variable "model_sku_name" {
 
 variable "model_capacity" {
   type    = number
-  default = 145
+  default = 100
 }

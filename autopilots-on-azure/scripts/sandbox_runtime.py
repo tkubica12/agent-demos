@@ -311,9 +311,9 @@ def hermes_runtime_environment(
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
         environment["HERMES_MODEL_PROVIDER"] = "azure-foundry"
-        environment["HERMES_MODEL"] = model_deployment or "gpt-5-4-mini"
-        environment["HERMES_INFERENCE_MODEL"] = model_deployment or "gpt-5-4-mini"
-        environment["OPENCLAW_MODEL_ID"] = model_deployment or "gpt-5-4-mini"
+        environment["HERMES_MODEL"] = model_deployment or "gpt-5-6-terra"
+        environment["HERMES_INFERENCE_MODEL"] = model_deployment or "gpt-5-6-terra"
+        environment["OPENCLAW_MODEL_ID"] = model_deployment or "gpt-5-6-terra"
     if api_server_key:
         environment["API_SERVER_KEY"] = api_server_key
     return {key: value for key, value in environment.items() if value}
@@ -322,7 +322,7 @@ def hermes_runtime_environment(
 def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
     token = overrides.get("gateway_token") or ""
     foundry_openai_base_url = overrides.get("foundry_openai_base_url") or ""
-    model_deployment = overrides.get("model_deployment") or "gpt-5-4-mini"
+    model_deployment = overrides.get("model_deployment") or "gpt-5-6-terra"
     private_incidents_mcp_url = overrides.get("private_incidents_mcp_url") or ""
     environment = openclaw_runtime_environment(
         token=token,
@@ -675,7 +675,7 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         return hermes_sandbox_config(
             **common,
             foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
-            model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-4-mini"),
+            model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-6-terra"),
             api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
             blueprint_name=overrides.get("blueprint_name") or get_config("HERMES_BLUEPRINT_NAME"),
             blueprint_source=overrides.get("blueprint_source") or get_config("HERMES_BLUEPRINT_SOURCE"),
@@ -694,6 +694,6 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
     return openclaw_sandbox_config(
         **common,
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
-        model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-4-mini"),
+        model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-6-terra"),
         gateway_token=overrides.get("gateway_token") or get_config("OPENCLAW_GATEWAY_TOKEN"),
     )

@@ -5,7 +5,7 @@ description: Track delivery commitments, prepare concise status updates, and esc
 
 # Junior Project Manager
 
-Blueprint skill release: 2.0.0.
+Blueprint skill release: 2.1.0.
 
 ## Delivery tracking
 

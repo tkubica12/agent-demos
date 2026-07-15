@@ -89,7 +89,7 @@ resource "azurerm_container_registry" "main" {
 
 resource "azapi_resource" "private_mcp_env" {
   type      = "Microsoft.App/managedEnvironments@2025-07-01"
-  name      = "ocmcp-${local.suffix}"
+  name      = "apmcp-${local.suffix}"
   parent_id = azurerm_resource_group.main.id
   location  = azurerm_resource_group.main.location
   tags      = local.tags
@@ -242,6 +242,10 @@ resource "azapi_resource" "foundry_deployment" {
       }
       versionUpgradeOption = "OnceNewDefaultVersionAvailable"
     }
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 

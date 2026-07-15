@@ -166,7 +166,7 @@ class HermesRuntimeAdapter:
 
     async def _responses_api(self, base_url: str, api_key: str, request: AgentRequest) -> dict[str, Any]:
         body = {
-            "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-4-mini"),
+            "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-6-terra"),
             "input": request.prompt,
             "instructions": BRIDGE_INSTRUCTIONS,
             "conversation": request.conversation_id,
@@ -185,7 +185,7 @@ class HermesRuntimeAdapter:
             {"role": "user", "content": request.prompt},
         ]
         body = {
-            "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-4-mini"),
+            "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-6-terra"),
             "messages": messages,
         }
         async with self._client_factory(timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))) as client:

@@ -97,7 +97,7 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
-            "name": os.getenv("HERMES_MODEL", os.getenv("OPENCLAW_MODEL_ID", "gpt-5-4-mini")),
+            "name": os.getenv("HERMES_MODEL", os.getenv("OPENCLAW_MODEL_ID", "gpt-5-6-terra")),
         },
         "gateway": {
             "platforms": {
@@ -149,7 +149,7 @@ def configure_model_environment() -> None:
         os.environ.setdefault("AZURE_FOUNDRY_BASE_URL", proxy_url)
         os.environ.setdefault("AZURE_FOUNDRY_API_KEY", "unused-managed-identity-token-proxy")
         os.environ.setdefault("HERMES_MODEL_PROVIDER", "azure-foundry")
-        model = os.getenv("HERMES_MODEL") or os.getenv("OPENCLAW_MODEL_ID") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-5-4-mini"
+        model = os.getenv("HERMES_MODEL") or os.getenv("OPENCLAW_MODEL_ID") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-5-6-terra"
         os.environ.setdefault("HERMES_MODEL", model)
         os.environ.setdefault("HERMES_INFERENCE_MODEL", model)
 

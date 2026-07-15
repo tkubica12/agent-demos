@@ -9,7 +9,7 @@ import httpx
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:18080/v1")
-    parser.add_argument("--model", default=os.getenv("OPENCLAW_MODEL_ID", "gpt-5-4-mini"))
+    parser.add_argument("--model", default=os.getenv("OPENCLAW_MODEL_ID", "gpt-5-6-terra"))
     args = parser.parse_args()
 
     response = httpx.post(

@@ -21,9 +21,41 @@ from scripts.setup_agent365 import (
     setup_command,
     update_endpoint_command,
 )
+from scripts.setup_a7_identity import ensure_federated_credential
 
 
 class Agent365SetupTests(unittest.TestCase):
+    def test_federated_credential_is_replaced_when_sandbox_identity_changes(self):
+        calls = []
+
+        class Graph:
+            def request(self, method, path, body=None):
+                calls.append((method, path, body))
+                if method == "GET":
+                    return {
+                        "value": [
+                            {
+                                "id": "credential-1",
+                                "name": "a7-hermes-sandbox",
+                                "issuer": "https://login.microsoftonline.com/tenant-1/v2.0",
+                                "subject": "old-sandbox-principal",
+                            }
+                        ]
+                    }
+                return {}
+
+        ensure_federated_credential(
+            Graph(),
+            blueprint_object_id="blueprint-object-1",
+            tenant_id="tenant-1",
+            name="a7-hermes-sandbox",
+            managed_identity_principal_id="new-sandbox-principal",
+        )
+
+        self.assertEqual(calls[1][0], "DELETE")
+        self.assertEqual(calls[2][0], "POST")
+        self.assertEqual(calls[2][2]["subject"], "new-sandbox-principal")
+
     def test_config_payload_marks_external_hosting(self):
         payload = agent365_config_payload(
             autopilot_name="openclaw",

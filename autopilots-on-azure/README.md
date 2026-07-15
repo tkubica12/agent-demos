@@ -127,7 +127,7 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 ## Hermes blueprint lifecycle
 
-The A8 distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.0.0.
+The A8 distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.1.0.
 
 Configure one Hermes worker with the repository commit that contains the desired blueprint version:
 
@@ -139,7 +139,7 @@ uv run python -m scripts.setup_app_tfvars `
   --blueprint-name junior-project-manager `
   --blueprint-source https://github.com/tkubica12/agent-demos.git `
   --blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
-  --blueprint-version 2.0.0 `
+  --blueprint-version 2.1.0 `
   --blueprint-commit $commit `
   --assignee-scope "person-or-team" `
   --runtime-only
