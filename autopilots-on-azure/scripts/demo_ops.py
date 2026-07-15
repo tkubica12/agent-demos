@@ -163,13 +163,20 @@ def sandbox_matches(sandbox: dict[str, Any], selector: dict[str, Any]) -> bool:
     return bool(data_volume and any(volume.get("volumeName") == data_volume for volume in volumes))
 
 
-def http_json(url: str, *, method: str = "GET", body: dict[str, Any] | None = None, timeout: int = 120) -> dict[str, Any]:
+def http_json(
+    url: str,
+    *,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 120,
+) -> dict[str, Any]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     request = urllib.request.Request(
         url,
         data=data,
         method=method,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={"Content-Type": "application/json", "Accept": "application/json", **(headers or {})},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -247,6 +254,28 @@ def invoke_check(runtime: str, *, message: str = "", timeout: int = 120) -> dict
         **result,
         "ok": bool(result.get("ok")) and not missing,
     }
+
+
+def dream_check(*, focus: str = "", max_records: int = 5, timeout: int = 900) -> dict[str, Any]:
+    runtime = "hermes"
+    try:
+        outputs = load_json(runtime_outputs_path(runtime))
+        tfvars = load_json(runtime_app_tfvars_path(runtime))
+        url = bridge_url(outputs)
+        api_key = str(tfvars.get("api_server_key") or "")
+        if not api_key:
+            raise KeyError("api_server_key")
+    except Exception as exc:
+        return {"runtime": runtime, "check": "dream", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
+
+    result = http_json(
+        f"{url}/internal/dream",
+        method="POST",
+        body={"focus": focus, "maxRecords": max_records},
+        headers={"X-Autopilot-Key": api_key},
+        timeout=timeout,
+    )
+    return {"runtime": runtime, "check": "dream", "url": f"{url}/internal/dream", **result}
 
 
 def diag_check(runtime: str, *, timeout: int = 120) -> dict[str, Any]:
@@ -338,6 +367,12 @@ def run_smoke(args: argparse.Namespace) -> int:
     results = [invoke_check(runtime, message=args.message, timeout=args.timeout) for runtime in runtime_list(args.runtime)]
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
+
+
+def run_dream(args: argparse.Namespace) -> int:
+    result = dream_check(focus=args.focus, max_records=args.max_records, timeout=args.timeout)
+    print_json(result)
+    return 0 if result.get("ok") else 1
 
 
 def run_activate(args: argparse.Namespace) -> int:
@@ -461,6 +496,12 @@ def main() -> None:
     smoke.add_argument("--message", default="", help="Override the default runtime smoke prompt. Expected-marker checks are skipped.")
     smoke.add_argument("--timeout", type=int, default=120)
     smoke.set_defaults(func=run_smoke)
+
+    dream = subparsers.add_parser("dream", help="Run a secured local Hermes reflection and return its redacted learning packet.")
+    dream.add_argument("--focus", default="", help="Optional reflection focus. Defaults to recent meaningful work.")
+    dream.add_argument("--max-records", type=int, choices=range(1, 11), default=5)
+    dream.add_argument("--timeout", type=int, default=900)
+    dream.set_defaults(func=run_dream)
 
     activate = subparsers.add_parser("activate", help="Make one runtime's tfvars active for Terraform operations.")
     activate.add_argument("--runtime", choices=RUNTIMES, required=True)

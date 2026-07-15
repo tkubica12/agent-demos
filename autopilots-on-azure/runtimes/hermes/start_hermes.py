@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -13,8 +14,10 @@ import httpx
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from blueprint import BlueprintInstall, install_or_update_blueprint, settings_from_environment
+from learning import build_learning_packet, ensure_learning_state
 
 
 DEFAULT_HERMES_HOME = "/data/hermes"
@@ -42,13 +45,17 @@ def gateway_port() -> int:
     return int(os.getenv("HERMES_GATEWAY_PORT", str(DEFAULT_GATEWAY_PORT)))
 
 
+def gateway_api_port() -> int:
+    return gateway_port() if bool_env("HERMES_HEALTH_WRAPPER", False) else api_server_port()
+
+
 def write_env_file(home: Path) -> Path:
     configure_model_environment()
     env_path = home / ".env"
     values = {
         "API_SERVER_ENABLED": os.getenv("API_SERVER_ENABLED", "true"),
         "API_SERVER_HOST": os.getenv("API_SERVER_HOST", "0.0.0.0"),
-        "API_SERVER_PORT": str(api_server_port()),
+        "API_SERVER_PORT": str(gateway_api_port()),
         "API_SERVER_KEY": os.getenv("API_SERVER_KEY", ""),
         "HERMES_HOME": str(home),
         "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL", ""),
@@ -93,7 +100,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, Any]:
     configure_model_environment()
-    api_port = api_server_port()
+    api_port = gateway_api_port()
     runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
@@ -264,6 +271,17 @@ def create_health_app(
     def health_detailed() -> dict[str, Any]:
         return health()
 
+    def require_internal_key(request: Request) -> None:
+        expected = os.getenv("API_SERVER_KEY", "")
+        supplied = request.headers.get("x-autopilot-key", "")
+        if not expected or not secrets.compare_digest(supplied, expected):
+            raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
+
+    @app.get("/internal/learning/packet")
+    def learning_packet(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        return build_learning_packet(profile_home)
+
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
@@ -275,7 +293,7 @@ def create_health_app(
                 headers={key: value for key, value in request.headers.items() if key.lower() != "host"},
             )
         if response.headers.get("content-type", "").startswith("application/json"):
-            return response.json()
+            return JSONResponse(content=response.json(), status_code=response.status_code)
         raise HTTPException(status_code=response.status_code, detail=response.text)
 
     return app
@@ -299,6 +317,7 @@ def main() -> None:
         )
     profile_home.mkdir(parents=True, exist_ok=True)
     (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
+    ensure_learning_state(profile_home)
     env_path = write_env_file(profile_home)
     config_path = write_config(profile_home)
     print(f"Hermes home: {home}", flush=True)

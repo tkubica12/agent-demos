@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autopilots-on-azure.example/schemas/learning-record.schema.json",
+  "title": "Autopilots transferable learning record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "recordId",
+    "createdAt",
+    "classification",
+    "title",
+    "generalizedLearning",
+    "rationale",
+    "evidence",
+    "confidence",
+    "proposedTarget",
+    "privacy"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "recordId": {
+      "type": "string",
+      "pattern": "^lr-"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "classification": {
+      "enum": [
+        "transferable_procedural",
+        "transferable_domain"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "generalizedLearning": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sourceType",
+          "summary"
+        ],
+        "properties": {
+          "sourceType": {
+            "enum": [
+              "private_session",
+              "tool_result",
+              "public_source"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "proposedTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "skill",
+            "knowledge"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^(skills/[a-z0-9][a-z0-9-]*|knowledge/[a-z0-9][a-z0-9-]*\\.md)$"
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "redactionStatus",
+        "warnings"
+      ],
+      "properties": {
+        "redactionStatus": {
+          "const": "passed"
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    }
+  }
+}

@@ -74,7 +74,7 @@ terraform\platform\       shared Azure substrate
 terraform\apps\           bridge, private MCP, and public BYO MCP app resources
 runtimes\openclaw\        OpenClaw Gateway sandbox image
 runtimes\hermes\          Hermes API server sandbox image
-bridge\                   FastAPI bridge: /health, /invoke, /api/messages
+bridge\                   FastAPI bridge: /health, /invoke, /internal/dream, /api/messages
 bridge\runtime\           runtime adapters: OpenClaw and Hermes
 private-incidents-mcp\    mock private MCP server
 public-shipments-mcp\     public scale-to-zero MCP server for Agent 365 BYO
@@ -91,9 +91,10 @@ A6 adds a single operator helper for day-two demo work. Use it before opening Te
 ```powershell
 uv run python -m scripts.demo_ops status --runtime both
 uv run python -m scripts.demo_ops status --runtime both --invoke
+uv run python -m scripts.demo_ops dream
 ```
 
-`status` checks the captured runtime bridge URLs under `.local\<runtime>\apps\terraform-outputs.json`. With `--invoke`, it also runs the direct bridge smoke prompt and checks expected markers.
+`status` checks the captured runtime bridge URLs under `.local\<runtime>\apps\terraform-outputs.json`. With `--invoke`, it also runs the direct bridge smoke prompt and checks expected markers. `dream` reads the local Hermes operator key, wakes or reuses the worker Sandbox, submits an isolated reflection session, and prints the resulting redacted learning packet.
 
 Switch the active Terraform tfvars to one runtime without guessing which generated file is live:
 
@@ -128,7 +129,7 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 ## Hermes blueprint lifecycle
 
-The A8 distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.1.0.
+The distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.2.0.
 
 Configure one Hermes worker with the repository commit that contains the desired blueprint version:
 
@@ -140,7 +141,7 @@ uv run python -m scripts.setup_app_tfvars `
   --blueprint-name junior-project-manager `
   --blueprint-source https://github.com/tkubica12/agent-demos.git `
   --blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
-  --blueprint-version 2.1.0 `
+  --blueprint-version 2.2.0 `
   --blueprint-commit $commit `
   --assignee-scope "person-or-team" `
   --runtime-only
@@ -161,6 +162,7 @@ workspace\
 .env
 local\
 skills outside skills\junior-project-manager\
+learning\records.jsonl
 ```
 
 The instance record is stored at:
@@ -170,6 +172,23 @@ The instance record is stored at:
 ```
 
 The sandbox labels and `/data/hermes/profiles/junior-project-manager/local/autopilots-instance.json` report the installed blueprint name, version, and commit. The native Hermes `/health` endpoint reports Hermes runtime health and version. OpenClaw remains on its runtime-image plus persistent `/data/home` and `/data/workspace` model; A8 does not add a parallel custom distribution manager for it.
+
+## Local learning and dreaming
+
+Blueprint v2.2.0 classifies learning before storage and adds the `dream-reflection` skill. Private personal/team context, cache, raw sessions, memory, `.env`, auth, logs, workspace content, and `state.db*` remain instance-local. Transferable candidates can be appended only through the runtime validator:
+
+```text
+/data/hermes/profiles/junior-project-manager/learning/records.jsonl
+```
+
+Run a manual reflection through the secured bridge operation:
+
+```powershell
+uv run python -m scripts.demo_ops dream
+uv run python -m scripts.demo_ops dream --focus "Review recurring delivery-risk escalation patterns" --max-records 3
+```
+
+The command uses the Hermes `api_server_key` from `.local\hermes\apps\generated.app.auto.tfvars.json`; the key is not printed. The bridge uses the stable `dream:<instance-id>` session, and the runtime returns only records that match schema v1.0 and pass deterministic checks for credentials, tokens, email addresses, GUIDs, IP addresses, and user-specific absolute paths. Rejected or private observations stay local. Recurring scheduling remains A11.
 
 The complete v1-to-v2 lifecycle was live-verified on 2026-07-13. Hermes installed v1.0.0 from `ecc07fad92122d6ae6d4e44bd145c1814a746071`, wrote private memory/session/local skill markers, then installed v2.0.0 from `50342bd359a3f0fce9669a43b1d6eeb4fa690900` in a replacement sandbox using the same `hermes-data` volume. The v2 distribution files changed, every private marker and native `state.db` survived, and the private incidents MCP still returned the expected five services.
 

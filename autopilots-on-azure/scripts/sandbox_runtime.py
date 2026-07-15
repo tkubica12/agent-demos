@@ -299,6 +299,8 @@ def hermes_runtime_environment(
         "API_SERVER_ENABLED": "true",
         "API_SERVER_HOST": "0.0.0.0",
         "API_SERVER_PORT": str(HERMES_API_PORT),
+        "HERMES_HEALTH_WRAPPER": "true",
+        "HERMES_GATEWAY_PORT": "9119",
         "HERMES_HOME": "/data/hermes",
         "HERMES_BLUEPRINT_NAME": blueprint_name,
         "HERMES_BLUEPRINT_SOURCE": blueprint_source,

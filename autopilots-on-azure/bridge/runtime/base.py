@@ -54,10 +54,26 @@ class AgentResponse:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class DreamRequest:
+    session_id: str
+    focus: str = ""
+    max_records: int = 5
+
+
+@dataclass(frozen=True)
+class DreamResponse:
+    agent: AgentResponse
+    learning_packet: dict[str, Any]
+
+
 class AgentRuntimeAdapter(Protocol):
     @property
     def runtime_kind(self) -> str:
         ...
 
     async def invoke(self, request: AgentRequest) -> AgentResponse:
+        ...
+
+    async def dream(self, request: DreamRequest) -> DreamResponse:
         ...

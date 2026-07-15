@@ -11,7 +11,7 @@ import bridge.runtime.factory as runtime_factory
 import bridge.runtime.openclaw as openclaw_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.gateway_client import OpenClawGatewayError
-from bridge.runtime.base import AgentRequest
+from bridge.runtime.base import AgentRequest, DreamRequest
 from bridge.runtime.hermes import HermesRuntimeAdapter
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import (
@@ -262,6 +262,48 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(response.raw["hermesEndpoint"], "responses")
         self.assertEqual(post_urls, ["https://hermes.example/api/sessions/teams%3Athread%3A1/chat", "https://hermes.example/v1/responses"])
 
+    def test_hermes_dream_uses_isolated_session_and_returns_learning_packet(self):
+        calls: list[dict] = []
+        post_responses = [(200, {"output": "Dream complete"})]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "AUTOPILOT_NAME"]}
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        os.environ["AUTOPILOT_NAME"] = "hermes-worker"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
+            )
+            result = asyncio.run(
+                adapter.dream(
+                    DreamRequest(
+                        session_id="dream:hermes-worker",
+                        focus="delivery follow-up",
+                        max_records=3,
+                    )
+                )
+            )
+        finally:
+            restore_env(previous_env)
+
+        post = next(call for call in calls if call["method"] == "POST")
+        packet_get = next(call for call in calls if call["url"].endswith("/internal/learning/packet"))
+        self.assertEqual(post["url"], "https://hermes.example/api/sessions/dream%3Ahermes-worker/chat")
+        self.assertIn("delivery follow-up", post["json"]["input"])
+        self.assertIn("at most 3", post["json"]["input"])
+        self.assertEqual(packet_get["headers"]["X-Autopilot-Key"], "api-key-1")
+        self.assertEqual(result.learning_packet["packetVersion"], "1.0")
+
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(
             image_name="registry.example/openclaw-runtime@sha256:test",
@@ -458,9 +500,10 @@ class FakeHermesClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def get(self, url: str):
-        self.calls.append({"method": "GET", "url": url})
-        return httpx.Response(200, json={"status": "ok"}, request=httpx.Request("GET", url))
+    async def get(self, url: str, *, headers: dict | None = None):
+        self.calls.append({"method": "GET", "url": url, "headers": headers or {}})
+        payload = {"packetVersion": "1.0", "records": []} if url.endswith("/internal/learning/packet") else {"status": "ok"}
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
 
     async def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})

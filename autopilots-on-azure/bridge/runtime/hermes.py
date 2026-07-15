@@ -11,7 +11,7 @@ import httpx
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 
-from bridge.runtime.base import AgentRequest, AgentResponse
+from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
@@ -66,6 +66,19 @@ def _endpoint_mode() -> str:
     return value
 
 
+def dream_prompt(request: DreamRequest) -> str:
+    focus = request.focus.strip() or "Review the most recent meaningful work available in your local sessions and memory."
+    return (
+        "Run an explicit local dream reflection using the dream-reflection skill.\n"
+        f"Focus: {focus}\n"
+        f"Create at most {request.max_records} transferable learning records.\n"
+        "Keep private personal/team context and private cache updates only in instance-owned memory or local skills. "
+        "Do not quote or export raw sessions, messages, documents, customer details, credentials, identifiers, internal URLs, "
+        "or private file paths. Append transferable candidates only through /app/learning.py so deterministic validation and "
+        "redaction run before storage. Return the requested reflection summary."
+    )
+
+
 class HermesRuntimeAdapter:
     def __init__(
         self,
@@ -109,6 +122,32 @@ class HermesRuntimeAdapter:
                 "payload": payload,
             },
         )
+
+    async def dream(self, request: DreamRequest) -> DreamResponse:
+        agent_response = await self.invoke(
+            AgentRequest(
+                prompt=dream_prompt(request),
+                conversation_id=request.session_id,
+                user_id="operator",
+                source="dream",
+                must_answer=True,
+                metadata={"maxRecords": request.max_records},
+            )
+        )
+        base_url = str(agent_response.raw.get("gatewayUrl") or "").rstrip("/")
+        if not base_url:
+            raise RuntimeError("Hermes dream run did not return a gateway URL.")
+        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        async with self._client_factory(timeout=30) as client:
+            response = await client.get(
+                f"{base_url}/internal/learning/packet",
+                headers={"X-Autopilot-Key": api_key},
+            )
+            response.raise_for_status()
+            packet = response.json()
+        if not isinstance(packet, dict):
+            raise RuntimeError("Hermes learning packet endpoint returned a non-object response.")
+        return DreamResponse(agent=agent_response, learning_packet=packet)
 
     async def _wait_for_health(self, base_url: str) -> None:
         deadline = time.time() + int(_env_optional("HERMES_HEALTH_TIMEOUT_SECONDS", default="120"))

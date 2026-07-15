@@ -9,7 +9,7 @@ from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 
 from bridge.gateway_client import OpenClawGatewayClient, OpenClawGatewayError, gateway_http_url_to_ws
-from bridge.runtime.base import AgentRequest, AgentResponse
+from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
 
@@ -99,3 +99,6 @@ class OpenClawRuntimeAdapter:
                 "dataVolume": sandbox.data_volume,
             },
         )
+
+    async def dream(self, request: DreamRequest) -> DreamResponse:
+        raise RuntimeError("Dream runs are supported only by the Hermes runtime.")

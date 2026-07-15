@@ -13,9 +13,29 @@ sys.path.insert(0, str(RUNTIME_DIR))
 
 import start_hermes  # noqa: E402
 from blueprint import BlueprintSettings, install_or_update_blueprint, settings_from_environment  # noqa: E402
+from learning import LearningRecordError, append_candidate, build_learning_packet, ensure_learning_state  # noqa: E402
 
 
 class HermesRuntimeTests(unittest.TestCase):
+    @staticmethod
+    def _learning_candidate(**overrides):
+        candidate = {
+            "classification": "transferable_procedural",
+            "title": "Confirm ownership before accepting a delivery action",
+            "generalizedLearning": "Treat an action without an accountable owner as incomplete.",
+            "rationale": "Repeated follow-up failures were caused by unowned actions.",
+            "evidence": [
+                {
+                    "sourceType": "private_session",
+                    "summary": "Several generalized follow-ups lacked an accountable role.",
+                }
+            ],
+            "confidence": 0.9,
+            "proposedTarget": {"kind": "skill", "path": "skills/action-ownership"},
+        }
+        candidate.update(overrides)
+        return candidate
+
     @staticmethod
     def _git(repo: Path, *args: str) -> str:
         result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
@@ -79,6 +99,9 @@ class HermesRuntimeTests(unittest.TestCase):
             (profile / "memories" / "MEMORY.md").write_text("private memory\n", encoding="utf-8")
             (profile / "sessions" / "session.json").write_text('{"private":true}\n', encoding="utf-8")
             (profile / "state.db").write_bytes(b"private sqlite state")
+            learning_path = ensure_learning_state(profile)
+            append_candidate(profile, self._learning_candidate())
+            learning_before = learning_path.read_text(encoding="utf-8")
             custom_skill = profile / "skills" / "instance-local" / "SKILL.md"
             custom_skill.parent.mkdir(parents=True)
             custom_skill.write_text("# local skill\n", encoding="utf-8")
@@ -102,10 +125,63 @@ class HermesRuntimeTests(unittest.TestCase):
             self.assertTrue((profile / "sessions" / "session.json").exists())
             self.assertEqual((profile / "state.db").read_bytes(), b"private sqlite state")
             self.assertEqual(custom_skill.read_text(encoding="utf-8"), "# local skill\n")
+            self.assertEqual(learning_path.read_text(encoding="utf-8"), learning_before)
             manifest = json.loads((profile / "local" / "autopilots-instance.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["blueprintVersion"], "2.0.0")
             self.assertEqual(manifest["blueprintCommit"], commit_v2)
             self.assertEqual(manifest["instanceId"], "worker-1")
+
+    def test_learning_packet_contains_only_validated_records_and_exclusion_manifest(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir)
+            (profile / "local").mkdir()
+            (profile / "local" / "autopilots-instance.json").write_text(
+                json.dumps(
+                    {
+                        "instanceId": "worker-1",
+                        "assigneeScope": "team-alpha",
+                        "blueprintName": "junior-project-manager",
+                        "blueprintVersion": "2.2.0",
+                        "blueprintCommit": "a" * 40,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            record = append_candidate(profile, self._learning_candidate())
+            packet = build_learning_packet(profile)
+
+        self.assertEqual(packet["records"], [record])
+        self.assertEqual(packet["rejectedRecords"], [])
+        self.assertIn("memories/", packet["privatePathsExcluded"])
+        self.assertIn("sessions/", packet["privatePathsExcluded"])
+        self.assertNotIn("private memory", json.dumps(packet))
+
+    def test_learning_redaction_rejects_private_identifiers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(LearningRecordError, "email address"):
+                append_candidate(
+                    Path(temp_dir),
+                    self._learning_candidate(
+                        generalizedLearning="Send the report to owner@example.com after every review."
+                    ),
+                )
+
+    def test_wrapper_routes_gateway_to_separate_internal_port(self):
+        previous = {key: os.environ.get(key) for key in ["HERMES_HEALTH_WRAPPER", "API_SERVER_PORT", "HERMES_GATEWAY_PORT"]}
+        os.environ["HERMES_HEALTH_WRAPPER"] = "true"
+        os.environ["API_SERVER_PORT"] = "8642"
+        os.environ["HERMES_GATEWAY_PORT"] = "9119"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                config = start_hermes.hermes_config(Path(temp_dir))
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(config["gateway"]["platforms"]["api_server"]["port"], 9119)
 
     def test_matching_pinned_blueprint_reuses_installed_profile_without_git(self):
         with tempfile.TemporaryDirectory() as temp_dir:

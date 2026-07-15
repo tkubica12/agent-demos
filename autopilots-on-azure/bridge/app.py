@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import os
+import secrets
 import re
 import time
 import unicodedata
@@ -19,7 +20,7 @@ from microsoft_agents.hosting.core import AgentApplication, Authorization, Memor
 from microsoft_agents.hosting.fastapi import CloudAdapter, start_agent_process
 from pydantic import BaseModel, Field
 
-from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse
+from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.factory import create_runtime_adapter
 
 
@@ -59,6 +60,20 @@ class InvokeResponse(BaseModel):
     gateway_url: str = Field(alias="gatewayUrl")
     reused_existing_sandbox: bool = Field(alias="reusedExistingSandbox")
     response: str
+
+
+class DreamRunRequest(BaseModel):
+    focus: str = Field(default="", max_length=2000)
+    max_records: int = Field(default=5, alias="maxRecords", ge=1, le=10)
+
+
+class DreamRunResponse(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    sandbox_id: str = Field(alias="sandboxId")
+    gateway_url: str = Field(alias="gatewayUrl")
+    reused_existing_sandbox: bool = Field(alias="reusedExistingSandbox")
+    response: str
+    learning_packet: dict[str, Any] = Field(alias="learningPacket")
 
 
 _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
@@ -692,6 +707,48 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
         if os.getenv("OPENCLAW_BRIDGE_DEBUG", "").lower() in {"1", "true", "yes"}:
             detail["type"] = exc.__class__.__name__
         raise HTTPException(status_code=500, detail=detail) from exc
+
+
+def require_operator_key(request: Request) -> None:
+    expected = os.getenv("API_SERVER_KEY", "")
+    supplied = request.headers.get("x-autopilot-key", "")
+    if not expected or expected == "not-configured" or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
+
+
+@app.post("/internal/dream", response_model=DreamRunResponse, response_model_by_alias=True)
+async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResponse:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Dream runs are supported only by the Hermes runtime.")
+    instance_id = os.getenv("AUTOPILOT_INSTANCE_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
+    session_id = f"dream:{instance_id}"
+    try:
+        result = await adapter.dream(
+            DreamRequest(
+                session_id=session_id,
+                focus=request.focus,
+                max_records=request.max_records,
+            )
+        )
+    except Exception as exc:
+        detail = {"message": str(exc)}
+        sandbox_id = getattr(exc, "sandbox_id", "")
+        gateway_url = getattr(exc, "gateway_url", "")
+        if sandbox_id:
+            detail["sandboxId"] = sandbox_id
+        if gateway_url:
+            detail["gatewayUrl"] = gateway_url
+        raise HTTPException(status_code=500, detail=detail) from exc
+    return DreamRunResponse(
+        sessionId=session_id,
+        sandboxId=str(result.agent.raw.get("sandboxId") or ""),
+        gatewayUrl=str(result.agent.raw.get("gatewayUrl") or ""),
+        reusedExistingSandbox=bool(result.agent.raw.get("reusedExistingSandbox")),
+        response=result.agent.text,
+        learningPacket=result.learning_packet,
+    )
 
 
 @agent365_app.activity("message")

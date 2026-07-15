@@ -1,8 +1,11 @@
 import asyncio
+import os
 from types import SimpleNamespace
 import unittest
 
+import bridge.app as bridge_app
 from bridge.app import (
+    DreamRunRequest,
     _teams_memory,
     _teams_diag,
     bot_is_mentioned,
@@ -32,6 +35,7 @@ from bridge.app import (
     teams_session_key,
     teams_signal_type,
 )
+from bridge.runtime.base import AgentResponse, DreamResponse
 from scripts.sandbox_runtime import existing_gateway_sandbox
 from scripts.sandbox_runtime import private_incidents_mcp_server_config
 
@@ -78,6 +82,68 @@ class TeamsBridgeTests(unittest.TestCase):
     def tearDown(self):
         _teams_memory.clear()
         _teams_diag.clear()
+
+    def test_internal_dream_requires_operator_key_and_returns_packet(self):
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def dream(self, request):
+                self.request = request
+                return DreamResponse(
+                    agent=AgentResponse(
+                        text="Dream complete",
+                        raw={
+                            "sandboxId": "sandbox-1",
+                            "gatewayUrl": "https://hermes.example",
+                            "reusedExistingSandbox": True,
+                        },
+                    ),
+                    learning_packet={"packetVersion": "1.0", "records": []},
+                )
+
+        adapter = Adapter()
+        original_adapter = bridge_app.runtime_adapter
+        previous_key = os.environ.get("API_SERVER_KEY")
+        previous_instance = os.environ.get("AUTOPILOT_INSTANCE_ID")
+        os.environ["API_SERVER_KEY"] = "operator-key"
+        os.environ["AUTOPILOT_INSTANCE_ID"] = "worker-1"
+        bridge_app.runtime_adapter = lambda: adapter
+        request = ns(headers={"x-autopilot-key": "operator-key"})
+        try:
+            result = asyncio.run(
+                bridge_app.dream(
+                    DreamRunRequest(focus="recent delivery work", maxRecords=2),
+                    request,
+                )
+            )
+        finally:
+            bridge_app.runtime_adapter = original_adapter
+            if previous_key is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous_key
+            if previous_instance is None:
+                os.environ.pop("AUTOPILOT_INSTANCE_ID", None)
+            else:
+                os.environ["AUTOPILOT_INSTANCE_ID"] = previous_instance
+
+        self.assertEqual(adapter.request.session_id, "dream:worker-1")
+        self.assertEqual(result.learning_packet["packetVersion"], "1.0")
+        self.assertEqual(result.sandbox_id, "sandbox-1")
+
+    def test_internal_dream_rejects_wrong_operator_key(self):
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "expected"
+        try:
+            with self.assertRaises(Exception) as raised:
+                bridge_app.require_operator_key(ns(headers={"x-autopilot-key": "wrong"}))
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        self.assertEqual(raised.exception.status_code, 401)
 
     def test_groupchat_prompt_strips_bot_mention(self):
         activity = ns(
