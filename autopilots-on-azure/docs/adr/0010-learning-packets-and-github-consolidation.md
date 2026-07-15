@@ -38,6 +38,8 @@ Each worker may freely self-improve locally, but it must classify durable learni
 
 For transferable candidates, the worker records rationale in a local journal such as `learning\records.jsonl`. The worker does not need to compute Git diffs.
 
+Normal answers may include a bounded transferable-candidate block. Because a stateful model can omit that optional block, explicit durable-learning language (`learn this`, `remember this`, `from now on`, or equivalent) also triggers one isolated post-answer classification pass. That pass returns candidates or an empty array and still writes only through the trusted validator.
+
 Use two distinct local durability lanes:
 
 - Private-permanent adaptation: `USER.md`, `MEMORY.md`, `local\private-cache.md`, and private session state. This survives every blueprint generation and is excluded from consolidation.

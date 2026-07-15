@@ -177,7 +177,7 @@ The sandbox labels and `/data/hermes/profiles/junior-project-manager/local/autop
 
 ## Local learning and dreaming
 
-Blueprint v2.3.0 classifies learning before storage and adds both hot-path and dream-path transferable learning. Private personal/team context, account-specific procedures, raw sessions, memory, `.env`, auth, logs, workspace content, and `state.db*` remain instance-local. Use `local\private-cache.md` for private assignment cache and never `/root`. Transferable candidates can be appended only through the runtime validator:
+Blueprint v2.3.0 classifies learning before storage and adds both hot-path and dream-path transferable learning. Private personal/team context, account-specific procedures, raw sessions, memory, `.env`, auth, logs, workspace content, and `state.db*` remain instance-local. Use `local\private-cache.md` for private assignment cache and never `/root`. An explicit durable-learning request such as `learn this`, `remember this`, `from now on`, or `for future assignments` triggers a bounded post-answer extraction pass if the normal answer did not emit a candidate itself. Transferable candidates can be appended only through the runtime validator:
 
 ```text
 /data/hermes/profiles/junior-project-manager/learning/records.jsonl

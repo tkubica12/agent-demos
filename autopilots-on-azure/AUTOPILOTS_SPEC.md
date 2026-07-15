@@ -451,7 +451,7 @@ Dreaming is distinct from normal turn-time self-improvement:
 
 | Stage | Trigger | Output |
 | --- | --- | --- |
-| Hot-path learning | During or right after a user turn | Immediate private memory/cache update or validated transferable record plus generated hot-learning skill. |
+| Hot-path learning | During or right after a user turn; explicit durable intent triggers a bounded post-answer extraction pass when the normal response has no candidate block | Immediate private memory/cache update or validated transferable record plus generated hot-learning skill. |
 | Dreaming | Scheduled or manual offline run | Batch reflection over sessions and evidence; private consolidation plus additional validated hot-learning candidates. |
 | Fleet consolidation | Periodic central process across many instances | Reviewed blueprint PR for the next blueprint version. |
 
