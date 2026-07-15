@@ -14,6 +14,17 @@ SCHEMA_VERSION = "1.0"
 PACKET_VERSION = "1.0"
 TRANSFERABLE_CLASSIFICATIONS = {"transferable_procedural", "transferable_domain"}
 SOURCE_TYPES = {"private_session", "tool_result", "public_source"}
+SOURCE_TYPE_ALIASES = {
+    "session": "private_session",
+    "recent_session": "private_session",
+    "local_session": "private_session",
+    "private_session_summary": "private_session",
+    "tool": "tool_result",
+    "tool_output": "tool_result",
+    "mcp_result": "tool_result",
+    "public": "public_source",
+    "documentation": "public_source",
+}
 TARGET_KINDS = {"skill", "knowledge"}
 PRIVATE_EXCLUSIONS = [
     ".env",
@@ -121,6 +132,8 @@ def validate_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict) or set(item) != {"sourceType", "summary"}:
             raise LearningRecordError(f"evidence[{index}] must contain only sourceType and summary.")
         source_type = item.get("sourceType")
+        if isinstance(source_type, str):
+            source_type = SOURCE_TYPE_ALIASES.get(source_type.strip().lower(), source_type.strip().lower())
         if source_type not in SOURCE_TYPES:
             raise LearningRecordError(f"evidence[{index}].sourceType is invalid.")
         summary = item.get("summary")

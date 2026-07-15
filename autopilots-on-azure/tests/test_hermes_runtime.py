@@ -180,6 +180,15 @@ class HermesRuntimeTests(unittest.TestCase):
         self.assertEqual(result["rejected"][0]["index"], 1)
         self.assertIn("email address", result["rejected"][0]["reason"])
 
+    def test_learning_normalizes_safe_evidence_source_aliases(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            candidate = self._learning_candidate(
+                evidence=[{"sourceType": "recent_session", "summary": "A generalized pattern recurred."}]
+            )
+            record = append_candidate(Path(temp_dir), candidate)
+
+        self.assertEqual(record["evidence"][0]["sourceType"], "private_session")
+
     def test_wrapper_routes_gateway_to_separate_internal_port(self):
         previous = {key: os.environ.get(key) for key in ["HERMES_HEALTH_WRAPPER", "API_SERVER_PORT", "HERMES_GATEWAY_PORT"]}
         os.environ["HERMES_HEALTH_WRAPPER"] = "true"

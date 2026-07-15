@@ -81,6 +81,7 @@ def dream_prompt(request: DreamRequest) -> str:
         f"summary followed by {LEARNING_RECORDS_START}, one JSON array of candidate objects, and {LEARNING_RECORDS_END}. "
         "Use an empty array when there are no transferable candidates. Each candidate must contain only classification, title, "
         "generalizedLearning, rationale, evidence, confidence, and proposedTarget as defined by the dream-reflection skill. "
+        "Every evidence sourceType must be exactly private_session, tool_result, or public_source. "
         "The trusted runtime will validate, redact, and append accepted candidates."
     )
 
