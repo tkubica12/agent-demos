@@ -1,0 +1,16 @@
+name: smoke-core
+agent:
+    name: foundry-showcase-main
+    kind: hosted
+    version: "3"
+dataset:
+    name: smoke-core
+    version: "2.0"
+    local_uri: datasets\smoke-core
+evaluators:
+    - name: smoke-core
+      version: "2"
+      local_uri: evaluators\smoke-core\rubric_dimensions.json
+options:
+    eval_model: gpt-5.4-mini
+max_samples: 15

@@ -11,6 +11,24 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 - platform-managed hosting, memory, tools, identity, scheduling, observability, evaluation, optimization, safety, and Microsoft 365 publication;
 - no Hermes, OpenClaw, runtime fleet, m:n group chat, swarm learning, or custom autonomous-worker infrastructure.
 
+## Implementation status
+
+Implemented and live-validated on 2026-07-15:
+
+- `foundry-showcase-main` Microsoft Agent Framework Hosted Agent;
+- Responses `2.0.0` and Invocations `1.0.0`;
+- dedicated `foundry-showcase-main` Foundry Memory store;
+- reusable local Agent Skills;
+- local profile, conversation, summary, and audit behavior;
+- OpenTelemetry and Application Insights wiring;
+- source-controlled `uv.lock`, evaluation dataset, evaluator, and `eval.yaml`;
+- active Hosted Agent version 3;
+- direct Responses and Invocations deployment smoke tests;
+- real Foundry Memory create, update, search, remember, and delete validation;
+- first cloud evaluation improved from 9/15 on version 2 to 13/15 on version 3.
+
+Next implementation milestone: the governed case MCP and Foundry Toolbox, followed by the LangGraph A2A helper.
+
 ## Demo story
 
 Use a support-operations scenario because it makes every capability visible without requiring a complicated domain.
