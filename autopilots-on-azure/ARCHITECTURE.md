@@ -61,7 +61,7 @@ The platform Terraform state owns:
 - global VNet peering between the regional VNets;
 - private MCP DNS linked to both VNets.
 
-The split is intentional. Sweden Central remains the runtime and model region. North Europe hosts Container Apps because Azure rejected new Sweden Central managed environments with `ManagedEnvironmentCapacityHeavyUsageError`. Sandbox-to-private-MCP traffic stays private across the peered VNets.
+The split is intentional. Sweden Central remains the runtime and model region. North Europe hosts Container Apps because Azure rejected new Sweden Central managed environments with `ManagedEnvironmentCapacityHeavyUsageError`. Sandbox-to-private-MCP traffic stays private across the peered VNets. Regional selection and fallback order are recorded in [ADR 0013](docs/adr/0013-regional-placement-and-capacity-fallback.md).
 
 ### Runtime application layers
 
@@ -89,6 +89,8 @@ The bridge:
 - creates, resumes, or reuses the runtime Sandbox;
 - forwards turns to the runtime port;
 - returns messages and Teams reactions through Microsoft 365 Agents SDK.
+
+Bridge Container Apps scale to zero. An incoming HTTP request wakes a replica, and normal `/invoke`, Agent 365 message, and reaction processing remains awaited inside that request so the HTTP scaler observes the work as active. Keeping one replica permanently running does not prevent ingress timeouts and is not required for Sandbox lifecycle operations.
 
 The bridge does not:
 

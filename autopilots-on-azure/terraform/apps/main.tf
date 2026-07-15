@@ -529,7 +529,7 @@ resource "azapi_resource" "bridge_app" {
           }
         ]
         scale = {
-          minReplicas = 1
+          minReplicas = 0
           maxReplicas = 1
           rules       = []
         }

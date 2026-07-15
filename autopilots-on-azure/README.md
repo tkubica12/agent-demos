@@ -13,6 +13,8 @@ OpenClaw and Hermes run side by side:
 | OpenClaw | `autopilot-openclaw` | `autopilot-bridge-openclaw-*` | `18789` | Requires OpenClaw Gateway device approval. |
 | Hermes | `autopilot-hermes` | `autopilot-bridge-hermes-*` | `8642` | Uses Hermes API server and `API_SERVER_KEY`. |
 
+The OpenClaw image intentionally installs `openclaw@latest` so the demo follows the current product. The latest live-tested version is `2026.7.1`; when a newer release is pulled, repeat the OpenClaw smoke and device-approval checks before treating it as the new baseline.
+
 Microsoft 365 app installation is **Agent 365 only**:
 
 - Do not use Teams sideloading.

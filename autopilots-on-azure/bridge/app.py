@@ -838,15 +838,13 @@ async def handle_teams_message_reaction(ctx: TurnContext, _state: TurnState) -> 
             reactions=added,
         ),
     )
-    asyncio.create_task(
-        run_agent_runtime_for_teams(
-            ctx,
-            conversation_id=conversation_id,
-            session_key=session_key,
-            message=prompt,
-            memory_session_key=session_key,
-            suppress_no_response=True,
-        )
+    await run_agent_runtime_for_teams(
+        ctx,
+        conversation_id=conversation_id,
+        session_key=session_key,
+        message=prompt,
+        memory_session_key=session_key,
+        suppress_no_response=True,
     )
 
 
