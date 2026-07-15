@@ -576,6 +576,18 @@ Exit criteria:
 
 Goal: let one worker adapt locally and produce learning packets without central consolidation.
 
+Status: Complete. Blueprint v2.2.0, the secured bridge dream operation, runtime-local JSONL validator, deterministic redaction, private-path exclusions, and operator command are implemented and live-validated.
+
+Live evidence from 2026-07-15:
+
+- Installed `junior-project-manager` v2.2.0 from commit `c785192de8bca5eceb243dd0f02f0f1886fdec6a` in a replacement Sandbox while retaining `hermes-data`.
+- Submitted manual reflection through `POST /internal/dream` with the local operator key and stable `dream:hermes` session.
+- Produced three schema v1.0 `transferable_procedural` records for commitment ownership, outcome-focused status, and risk escalation.
+- Passed deterministic redaction with no rejected stored records.
+- Consolidated a compact-table status preference into private instance-local memory and produced no transferable record for it.
+- Returned a packet that excluded memory, raw sessions, `.env`, auth, logs, workspace, and `state.db*`.
+- Avoided Hermes shell-approval dependence by submitting bounded candidate JSON from the bridge to a trusted runtime-local validation endpoint.
+
 Tasks:
 
 - Add digital-worker instructions for learning classification.

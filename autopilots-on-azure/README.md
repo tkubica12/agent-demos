@@ -190,6 +190,8 @@ uv run python -m scripts.demo_ops dream --focus "Review recurring delivery-risk 
 
 The command uses the Hermes `api_server_key` from `.local\hermes\apps\generated.app.auto.tfvars.json`; the key is not printed. The bridge uses the stable `dream:<instance-id>` session. Hermes returns generalized candidates in a bounded JSON block, then the trusted runtime validates and appends them without requiring agent shell approval. The response includes only records that match schema v1.0 and pass deterministic checks for credentials, tokens, email addresses, GUIDs, IP addresses, and user-specific absolute paths. Rejected or private observations stay local. Recurring scheduling remains A11.
 
+The A9 flow was live-verified on 2026-07-15 with blueprint commit `c785192de8bca5eceb243dd0f02f0f1886fdec6a`. One dream run produced three accepted procedural records with no redaction rejection. A separate run consolidated one assignment-specific formatting preference into private local memory and added no transferable record; the returned packet continued to expose only the three validated records and the private-path exclusion manifest.
+
 The complete v1-to-v2 lifecycle was live-verified on 2026-07-13. Hermes installed v1.0.0 from `ecc07fad92122d6ae6d4e44bd145c1814a746071`, wrote private memory/session/local skill markers, then installed v2.0.0 from `50342bd359a3f0fce9669a43b1d6eeb4fa690900` in a replacement sandbox using the same `hermes-data` volume. The v2 distribution files changed, every private marker and native `state.db` survived, and the private incidents MCP still returned the expected five services.
 
 ## Prerequisites
