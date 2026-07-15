@@ -1,54 +1,11 @@
-# Agent Demos for Microsoft 365
+# Agent Demos
 
-This repository contains multiple demos of AI agents and their integrations with Microsoft 365, industry standards, governance patterns, and the Agent 365 ecosystem.
+Focused demonstrations of modern Microsoft agent architectures.
 
-## Overview
-For end-to-end story of agents see [AI agents end-to-end](./docs/AgentsE2E.html).
+## Projects
 
-## Demos
+- [Autopilots on Azure](autopilots-on-azure/README.md) - advanced digital workers using OpenClaw and Hermes, persistent state, identity, memory, learning, and multi-agent scenarios.
+- [Progressive Agents](progressive-agents/README.md) - a step-by-step Microsoft Foundry learning path where each runnable stage adds one platform capability.
+- [Foundry Showcase plan](foundry-showcase/PLAN.md) - a planned cohesive Foundry solution combining Hosted Agents, Agent 365, Teams, memory, tools, A2A, workflows, routines, evaluations, optimization, and red teaming.
 
-### agent-365-mcp
-
-Work-in-progress Agent 365 demo focused on the **tooling gateway / MCP** pattern (agents should invoke tools via MCP servers governed by Agent 365, rather than calling line-of-business APIs directly).
-
-- Current state: a minimal FastAPI-based Agent 365 “echo” agent deployed as a **blueprint** and working as an **instance** in Teams
-- In progress: agent identity + tool access through MCP (including exploring the Agent 365 tooling gateway / tooling servers)
-
-See [agent-365-mcp/README.md](agent-365-mcp/README.md) for details.
-
-### empty-demo
-
-Showcases integration, UI capabilities, and authorization flows. It contains an empty agent (a demo agent that sends messages without a true AI system) and demonstrates:
-
-- Activity Protocol via Microsoft 365 Agents SDK through Azure Bot Service
-- Streaming events and messages
-- Adaptive Cards
-- Posting debug information
-- Authentication and authorization: user in Teams talks to the agent, and the agent uses on-behalf-of (OBO) flow via Azure Bot Service token exchange to access services as the user
-- Accessing Microsoft Graph for user profile via admin consent
-- Accessing the empty API service via OBO flow, with user consent on the first message
-
-See [empty-demo/README.md](empty-demo/README.md) for details.
-
-### legacy-agent-publish
-
-Showcases a proprietary AI chatbot projected into Teams without modifying legacy code. It contains:
-
-- A proprietary backend with a RESTful API
-- A Streamlit frontend that uses the backend
-- A Teams translation service that uses Microsoft 365 Agents SDK via Azure Bot Service toward Teams and translates messages into REST calls to the proprietary backend
-
-See [legacy-agent-publish/README.md](legacy-agent-publish/README.md) for details.
-
-## Roadmap (TBD)
-
-- [ ] Agents 365 solution in "empty" mode
-- [ ] Microsoft Agent Framework integration to M365 demo
-- [ ] Foundry Agent Service integration to M365 demo
-- [ ] MCP layer into all demos between agent and API
-- [ ] Agent 365 tooling gateway / MCP servers (no direct API calls from agents)
-- [ ] Multi-agent and A2A
-- [ ] Copilot Studio + Foundry Agent Service + Microsoft Agent Framework interactions
-- [ ] Foundry IQ integration with user fencing
-- [ ] AG-UI interface and integration into Entra ID etc.
-- [ ] MCP registry integration and governance
+Educational material about agents is available under [docs](docs/).

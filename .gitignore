@@ -15,7 +15,6 @@ __pycache__/
 
 # uv
 .uv/
-uv.lock
 
 # Streamlit
 .streamlit/

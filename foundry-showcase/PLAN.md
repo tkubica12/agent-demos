@@ -1,0 +1,442 @@
+# Foundry Showcase Plan
+
+## Objective
+
+Build one cohesive, presentation-ready Microsoft Foundry solution from the capabilities already proven in `progressive-agents`.
+
+This is not another gradual tutorial and it is not a smaller version of `autopilots-on-azure`. It is the final-state Foundry reference demo:
+
+- one primary business agent;
+- one bounded specialist helper;
+- platform-managed hosting, memory, tools, identity, scheduling, observability, evaluation, optimization, safety, and Microsoft 365 publication;
+- no Hermes, OpenClaw, runtime fleet, m:n group chat, swarm learning, or custom autonomous-worker infrastructure.
+
+## Demo story
+
+Use a support-operations scenario because it makes every capability visible without requiring a complicated domain.
+
+The primary agent helps a support lead:
+
+- answer policy and customer-support questions;
+- inspect a synthetic but realistically hosted case system through governed MCP tools;
+- remember user preferences and previous case context;
+- delegate policy analysis to a specialist helper;
+- run a deterministic approval workflow for high-impact actions;
+- produce a scheduled daily quality digest;
+- operate from Teams and a simple AG-UI web client;
+- improve only after evaluation and human approval.
+
+The business data may be synthetic, but every platform interaction must be real: real Hosted Agents, real A2A, real Toolbox MCP, real Foundry Memory, real traces, real evaluations, real optimization jobs, and real Agent 365 publication.
+
+## Final architecture
+
+```text
+Teams / Microsoft 365                 AG-UI web or TUI
+          |                                  |
+          | Activity bridge                  | Entra auth
+          v                                  v
+     Agent 365                         thin ACA BFF
+          |                                  |
+          +---------------+------------------+
+                          |
+                          v
+        Main Foundry Hosted Agent - Microsoft Agent Framework
+        Responses + Invocations
+        - conversation and policy reasoning
+        - Foundry Memory
+        - MAF declarative/code-first workflow
+        - Toolbox MCP client
+        - A2A client
+             |                 |                    |
+             v                 v                    v
+      Foundry Toolbox     Foundry Memory      LangGraph helper
+      tools + skills      user scoped         Hosted Agent + A2A
+             |
+             +--> case MCP
+             +--> policy/search tools
+             +--> controlled case-update tool
+
+Foundry Routine -> Main Agent -> daily review workflow
+
+OpenTelemetry / Application Insights / Foundry traces
+        -> evaluations
+        -> Agent Optimizer candidates
+        -> AI Red Teaming Agent
+        -> reviewed version promotion
+```
+
+## Agent roles
+
+### Primary agent
+
+Framework: Microsoft Agent Framework.
+
+Responsibilities:
+
+- own the user conversation;
+- decide when tools, memory, workflow, or specialist delegation are needed;
+- preserve user scope and conversation identity;
+- enforce confirmation before high-impact changes;
+- summarize helper output rather than forwarding it blindly;
+- expose Responses for direct and Microsoft 365 use;
+- expose Invocations for structured AG-UI and Routine requests.
+
+### Specialist helper
+
+Framework: LangGraph.
+
+Purpose: demonstrate that Foundry Hosted Agents and A2A are framework-neutral.
+
+The helper performs one narrow task: policy and escalation analysis. It receives a sanitized case summary, retrieves relevant policy context, and returns structured findings:
+
+```json
+{
+  "risk_level": "low|medium|high",
+  "applicable_policies": [],
+  "required_approvals": [],
+  "recommended_action": "",
+  "reasoning_summary": ""
+}
+```
+
+The helper:
+
+- runs as a separate Foundry Hosted Agent;
+- exposes an A2A endpoint and agent card;
+- has no direct user channel;
+- has read-only tools;
+- receives only the minimum context needed;
+- cannot execute case changes.
+
+The primary MAF agent calls it through a Foundry A2A project connection and retains control of the conversation.
+
+## Foundry capabilities demonstrated
+
+| Capability | Demonstration |
+| --- | --- |
+| Hosted Agents | Separate MAF and LangGraph containers with immutable versions and managed endpoints. |
+| Responses | Main conversational protocol and platform bridge to Microsoft 365. |
+| Invocations | Structured AG-UI and scheduled-operation payloads. |
+| A2A | Main MAF agent delegates policy analysis to the LangGraph helper. |
+| Agent identity | Per-agent Entra identities with least-privilege access. |
+| Foundry Memory | Per-user profile, durable preferences, and summarized case context. |
+| Sessions and conversations | Platform conversation continuity plus explicit user isolation. |
+| Toolbox | Versioned collection of tools, MCP connections, and skills. |
+| MCP | Entra-protected case service consumed through the Toolbox MCP endpoint. |
+| Skills | Versioned support style, escalation policy, and profile-update policy packages. |
+| Workflows | MAF declarative or code-first workflow hosted inside the main agent. |
+| Routines | Recurring daily support-quality review and one-time follow-up example. |
+| Observability | End-to-end traces across BFF, main agent, workflow nodes, MCP, memory, and A2A helper. |
+| Evaluations | Golden datasets, generated suites, built-in and custom evaluators, and trace evaluation. |
+| Optimization | Foundry Agent Optimizer compares instruction, skill, tool-description, and model candidates. |
+| Red teaming | Foundry AI Red Teaming Agent scans the main Hosted Agent in a safe test environment. |
+| Versioning | Baseline, candidate, canary, and promoted Hosted Agent versions. |
+| Agent 365 | Registry, identity governance, observability, autopilot publication, and Teams surface. |
+
+## Tools and Toolbox
+
+Create one Foundry Toolbox with immutable versions.
+
+Initial contents:
+
+- `search_cases`: read-only case search;
+- `get_case`: read-only case detail;
+- `propose_case_update`: creates a noncommitted proposal;
+- `apply_case_update`: high-impact write requiring a confirmed workflow state;
+- policy or Azure AI Search capability;
+- support and escalation skills.
+
+The case service should be a small Entra-protected MCP server on Azure Container Apps. Use workload identity and scopes or app roles; do not store API keys.
+
+The main agent uses the Toolbox MCP endpoint rather than wiring every tool independently. Promote a new Toolbox version only after tool contract tests and agent evaluations pass.
+
+## Memory model
+
+Use Foundry Memory with explicit per-user scope.
+
+Store:
+
+- stable user preferences;
+- concise support-lead profile;
+- approved summaries of prior case discussions;
+- explicit remember and forget requests.
+
+Do not store:
+
+- raw secrets or credentials;
+- entire tool payloads by default;
+- unverified profile guesses;
+- adversarial red-team content;
+- helper-agent scratch state.
+
+Keep raw conversation history separate from distilled long-term memory. Audit memory creation, update, deletion, and summary generation.
+
+## Workflow design
+
+Use Microsoft Agent Framework declarative YAML or code-first workflows inside the main Hosted Agent.
+
+Do not build a new dependency on the Foundry portal workflow designer. Microsoft currently documents that designer and in-portal execution as retiring on December 1, 2026. The recommended path is Agent Framework workflows deployed as Hosted Agents.
+
+Workflow: `resolve_support_case`
+
+```text
+validate request
+  -> load user and case context
+  -> retrieve case and policies
+  -> delegate policy analysis through A2A when needed
+  -> create structured proposed action
+  -> evaluate risk
+       low    -> present proposal
+       medium -> request explicit user confirmation
+       high   -> require approval and refuse autonomous execution
+  -> apply permitted update
+  -> record audit and memory summary
+```
+
+The workflow demonstrates deterministic state, branching, tool boundaries, and human confirmation. It deliberately avoids group-chat orchestration.
+
+## Routine design
+
+Foundry Routines answer when the agent should run; the MAF workflow answers how the task executes.
+
+### Recurring routine
+
+`daily-support-quality-review`
+
+- recurring weekday schedule;
+- invokes the main Hosted Agent;
+- sends structured read-only input through Invocations;
+- reviews unresolved cases and yesterday's quality signals;
+- produces a digest stored as a traceable run result;
+- does not send external messages or mutate cases automatically.
+
+### One-time routine
+
+`case-follow-up-reminder`
+
+- fires once at a specified time;
+- asks the main agent to inspect one case and prepare a recommendation;
+- becomes inactive after execution.
+
+Demonstrate routine lifecycle, run history, response linkage, traces, enable/disable, and cleanup. Keep at least a five-minute interval where required by preview limits.
+
+## Microsoft 365 and Agent 365
+
+Publish the main Hosted Agent through Foundry's native Agent 365 autopilot path.
+
+Demonstrate:
+
+- automatic Agent 365 registry presence;
+- blueprint approval;
+- Agent User and Agent Identity behavior;
+- Teams 1:1 conversation;
+- channel mention where supported;
+- Agent 365 activity collection and governance;
+- clear data-residency and licensing notes.
+
+Use the platform Responses-to-Activity bridge. Do not create a separate classic Azure Bot fallback.
+
+The LangGraph helper remains internal and is not separately published to Teams.
+
+## Observability
+
+Instrument:
+
+- channel or BFF ingress;
+- main-agent request;
+- memory search and update;
+- skill load;
+- Toolbox and MCP calls;
+- workflow nodes and decisions;
+- A2A delegation and helper processing;
+- Routine invocation;
+- model name, latency, tokens, and estimated cost;
+- confirmation and policy outcomes.
+
+Use W3C trace context and one correlation ID across the full request. Hosted Agent protocol libraries provide OpenTelemetry integration and Foundry injects Application Insights configuration.
+
+The demo dashboard should answer:
+
+- Which path handled the request?
+- Was the helper called?
+- Which tools and skills were selected?
+- What memory was read or changed?
+- Where was time and cost spent?
+- Did the workflow require approval?
+- Which agent and Toolbox versions ran?
+
+## Evaluation strategy
+
+Keep evaluation assets in source control:
+
+```text
+eval.yaml
+datasets/
+evaluators/
+redteam/
+```
+
+Evaluation layers:
+
+1. Unit and contract tests for tools, workflow nodes, memory guards, and A2A schemas.
+2. Direct target evaluations for synchronous Responses and Invocations behavior.
+3. Trace evaluations for Teams Activity, A2A, streaming, and workflow trajectories.
+4. Quality evaluators for task adherence, groundedness, policy accuracy, escalation correctness, tool selection, and response style.
+5. Operational metrics for latency, token use, cost, tool failure rate, and helper-call rate.
+6. Safety evaluations and red-team Attack Success Rate.
+
+Use the same pinned `eval.yaml`, dataset versions, and evaluator versions when comparing agent releases.
+
+## Optimization and guarded improvement
+
+Prepare the main Hosted Agent for the Foundry Agent Optimizer.
+
+Optimization targets:
+
+- instructions;
+- `SKILL.md` content;
+- tool and parameter descriptions;
+- model selection for quality-to-cost trade-offs.
+
+Process:
+
+```text
+baseline version
+  -> evaluation
+  -> optimizer candidates
+  -> candidate evaluation
+  -> human review of score, behavior, cost, and diff
+  -> apply selected candidate locally
+  -> deploy immutable candidate version
+  -> canary validation
+  -> explicit promotion
+```
+
+Never auto-promote an optimizer result. Treat improvements below 0.03 as likely noise unless repeated evidence shows otherwise. Use isolated or read-only tools during optimization because every candidate evaluation can invoke external tools.
+
+## Red teaming
+
+Run the AI Red Teaming Agent against the main Hosted Agent in a dedicated test environment.
+
+Cover:
+
+- prohibited actions;
+- sensitive-data leakage;
+- task adherence;
+- direct and indirect prompt injection;
+- harmful content categories relevant to the scenario;
+- attempts to bypass confirmation or invoke the write tool.
+
+Current platform constraints must shape the test:
+
+- Hosted Agents are supported targets;
+- Foundry workflow agents are not supported targets;
+- some agentic tests support Azure tools but not function, connected-agent, or arbitrary non-Azure tools;
+- harmful data should never enter normal long-term memory;
+- results require human review because ASR scoring can be nondeterministic.
+
+Where a full live-tool red-team path is unsupported, test the core Hosted Agent with supported synthetic tools and separately run deterministic policy tests against the real MCP contracts.
+
+## Infrastructure and repository shape
+
+Proposed structure:
+
+```text
+foundry-showcase/
+  README.md
+  PLAN.md
+  pyproject.toml
+  uv.lock
+  azure.yaml
+  main-agent/
+  helper-langgraph/
+  bff/
+  tools/case-mcp/
+  skills/
+  workflows/
+  evals/
+  redteam/
+  scripts/
+  terraform/
+```
+
+Use Terraform with `azapi` for Azure resources and `azd` for Hosted Agent packaging and deployment where the platform requires it. Keep imperative publication, evaluation, optimization, and Routine operations in explicit `uv run` scripts.
+
+## Delivery phases
+
+### Phase 1: Consolidate the proven baseline
+
+- copy the latest useful implementation from Progressive Agents;
+- remove step-specific naming and duplicated historical code;
+- deploy one clean MAF Hosted Agent;
+- establish tests, traces, and a concise README.
+
+### Phase 2: Governed tools, skills, and memory
+
+- deploy the case MCP;
+- create Toolbox and skill versions;
+- connect Foundry Memory;
+- validate identity, user scope, audit, and tool contracts.
+
+### Phase 3: Workflow and cross-framework A2A
+
+- implement the MAF case-resolution workflow;
+- deploy the LangGraph helper;
+- enable A2A and project connection;
+- validate delegation, state, confirmation, and trace correlation.
+
+### Phase 4: Routines and user surfaces
+
+- create recurring and one-time Routines;
+- deploy the thin AG-UI BFF;
+- publish the main agent to Agent 365 and Teams;
+- validate direct, web, scheduled, and Teams paths.
+
+### Phase 5: Quality, optimization, and safety
+
+- finalize golden datasets and evaluators;
+- run direct and trace evaluations;
+- run Agent Optimizer and review candidates;
+- run AI Red Teaming Agent scans;
+- canary and promote the best approved version.
+
+## Completion criteria
+
+The showcase is complete when:
+
+1. the main MAF Hosted Agent works through direct Responses, structured Invocations, AG-UI, and Teams;
+2. the LangGraph helper is independently hosted and invoked only through authenticated A2A;
+3. Toolbox tools and skills are versioned and accessed through MCP;
+4. Foundry Memory recalls user-scoped information across sessions without leakage;
+5. the MAF workflow demonstrates branching and human confirmation;
+6. both Routine types run and have inspectable history and traces;
+7. end-to-end traces connect ingress, memory, tools, workflow, and helper;
+8. evaluation results compare immutable versions reproducibly;
+9. an optimizer candidate is reviewed, deployed, and canary-tested without automatic promotion;
+10. red-team findings and mitigations are documented;
+11. Agent 365 registration, governance, and Teams interaction are validated;
+12. no classic bot fallback, stored secret, simulated platform feature, or Autopilots runtime code is present.
+
+## Research conclusions
+
+- Hosted Agents can use Microsoft Agent Framework, LangGraph, or custom code and can expose Responses, Invocations, Activity, and A2A protocols.
+- A2A is the appropriate lightweight boundary for one main agent delegating to one specialist while retaining control.
+- Routines provide one trigger and one agent action with run history; they do not replace orchestration.
+- The Foundry visual workflow designer is retiring on December 1, 2026. New workflow work should use Microsoft Agent Framework declarative YAML or code-first workflows deployed as Hosted Agents.
+- Foundry Toolbox is the preferred governed surface for tools, MCP connections, and skills.
+- The Agent Optimizer can improve instructions, skills, tool descriptions, and model choice from evaluation signal.
+- Direct target evaluations fit synchronous Responses and Invocations; A2A, Activity, streaming, and complex trajectories should use trace evaluation.
+- AI Red Teaming supports Hosted Agents, but tool and workflow support has important preview constraints that must be demonstrated honestly.
+
+## Primary references
+
+- [Foundry Hosted Agents](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agents)
+- [Connect to an A2A endpoint](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/agent-to-agent)
+- [Foundry Routines](https://learn.microsoft.com/azure/foundry/agents/concepts/routines)
+- [Foundry workflow migration guidance](https://learn.microsoft.com/azure/foundry/agents/concepts/workflow#migration-guide)
+- [Microsoft Agent Framework workflows](https://learn.microsoft.com/agent-framework/workflows/)
+- [Foundry Toolbox](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/toolbox)
+- [Foundry Agent Optimizer](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-optimizer-overview)
+- [Agent evaluations with azd](https://learn.microsoft.com/azure/foundry/observability/how-to/azure-developer-cli-evaluation)
+- [AI Red Teaming Agent](https://learn.microsoft.com/azure/foundry/concepts/ai-red-teaming-agent)
+- [Agent 365 integration with Foundry](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-365-integration)
