@@ -176,6 +176,19 @@ def append_candidate(profile_home: Path, candidate: dict[str, Any]) -> dict[str,
     return record
 
 
+def append_candidates(profile_home: Path, candidates: list[Any]) -> dict[str, Any]:
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
+        try:
+            if not isinstance(candidate, dict):
+                raise LearningRecordError("candidate is not a JSON object.")
+            accepted.append(append_candidate(profile_home, candidate))
+        except LearningRecordError as exc:
+            rejected.append({"index": index, "reason": str(exc)})
+    return {"accepted": accepted, "rejected": rejected}
+
+
 def validate_stored_record(record: dict[str, Any]) -> dict[str, Any]:
     required = {
         "schemaVersion",

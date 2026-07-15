@@ -13,7 +13,7 @@ sys.path.insert(0, str(RUNTIME_DIR))
 
 import start_hermes  # noqa: E402
 from blueprint import BlueprintSettings, install_or_update_blueprint, settings_from_environment  # noqa: E402
-from learning import LearningRecordError, append_candidate, build_learning_packet, ensure_learning_state  # noqa: E402
+from learning import LearningRecordError, append_candidate, append_candidates, build_learning_packet, ensure_learning_state  # noqa: E402
 
 
 class HermesRuntimeTests(unittest.TestCase):
@@ -165,6 +165,20 @@ class HermesRuntimeTests(unittest.TestCase):
                         generalizedLearning="Send the report to owner@example.com after every review."
                     ),
                 )
+
+    def test_candidate_batch_accepts_safe_records_and_reports_redaction_rejections(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = append_candidates(
+                Path(temp_dir),
+                [
+                    self._learning_candidate(),
+                    self._learning_candidate(generalizedLearning="Contact owner@example.com."),
+                ],
+            )
+
+        self.assertEqual(len(result["accepted"]), 1)
+        self.assertEqual(result["rejected"][0]["index"], 1)
+        self.assertIn("email address", result["rejected"][0]["reason"])
 
     def test_wrapper_routes_gateway_to_separate_internal_port(self):
         previous = {key: os.environ.get(key) for key in ["HERMES_HEALTH_WRAPPER", "API_SERVER_PORT", "HERMES_GATEWAY_PORT"]}

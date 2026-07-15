@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import Callable
@@ -15,6 +16,8 @@ from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, Dream
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
+LEARNING_RECORDS_START = "<TRANSFERABLE_LEARNING_RECORDS>"
+LEARNING_RECORDS_END = "</TRANSFERABLE_LEARNING_RECORDS>"
 
 
 def _configured_env(*names: str) -> str | None:
@@ -74,9 +77,25 @@ def dream_prompt(request: DreamRequest) -> str:
         f"Create at most {request.max_records} transferable learning records.\n"
         "Keep private personal/team context and private cache updates only in instance-owned memory or local skills. "
         "Do not quote or export raw sessions, messages, documents, customer details, credentials, identifiers, internal URLs, "
-        "or private file paths. Append transferable candidates only through /app/learning.py so deterministic validation and "
-        "redaction run before storage. Return the requested reflection summary."
+        "or private file paths. Do not run shell commands and do not edit learning/records.jsonl. Return a concise reflection "
+        f"summary followed by {LEARNING_RECORDS_START}, one JSON array of candidate objects, and {LEARNING_RECORDS_END}. "
+        "Use an empty array when there are no transferable candidates. Each candidate must contain only classification, title, "
+        "generalizedLearning, rationale, evidence, confidence, and proposedTarget as defined by the dream-reflection skill. "
+        "The trusted runtime will validate, redact, and append accepted candidates."
     )
+
+
+def extract_dream_candidates(text: str) -> tuple[str, list[Any]]:
+    start = text.find(LEARNING_RECORDS_START)
+    end = text.find(LEARNING_RECORDS_END, start + len(LEARNING_RECORDS_START)) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return text.strip(), []
+    raw = text[start + len(LEARNING_RECORDS_START) : end].strip()
+    payload = json.loads(raw)
+    if not isinstance(payload, list):
+        raise ValueError("Hermes dream candidate block must contain a JSON array.")
+    visible = (text[:start] + text[end + len(LEARNING_RECORDS_END) :]).strip()
+    return visible, payload
 
 
 class HermesRuntimeAdapter:
@@ -138,7 +157,15 @@ class HermesRuntimeAdapter:
         if not base_url:
             raise RuntimeError("Hermes dream run did not return a gateway URL.")
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        visible_text, candidates = extract_dream_candidates(agent_response.text)
         async with self._client_factory(timeout=30) as client:
+            submission_response = await client.post(
+                f"{base_url}/internal/learning/candidates",
+                headers={"X-Autopilot-Key": api_key},
+                json={"candidates": candidates[: request.max_records]},
+            )
+            submission_response.raise_for_status()
+            submission = submission_response.json()
             response = await client.get(
                 f"{base_url}/internal/learning/packet",
                 headers={"X-Autopilot-Key": api_key},
@@ -147,7 +174,15 @@ class HermesRuntimeAdapter:
             packet = response.json()
         if not isinstance(packet, dict):
             raise RuntimeError("Hermes learning packet endpoint returned a non-object response.")
-        return DreamResponse(agent=agent_response, learning_packet=packet)
+        packet["dreamSubmission"] = submission
+        return DreamResponse(
+            agent=AgentResponse(
+                text=visible_text,
+                reaction=agent_response.reaction,
+                raw=agent_response.raw,
+            ),
+            learning_packet=packet,
+        )
 
     async def _wait_for_health(self, base_url: str) -> None:
         deadline = time.time() + int(_env_optional("HERMES_HEALTH_TIMEOUT_SECONDS", default="120"))

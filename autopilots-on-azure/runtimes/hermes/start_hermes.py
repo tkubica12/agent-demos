@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from blueprint import BlueprintInstall, install_or_update_blueprint, settings_from_environment
-from learning import build_learning_packet, ensure_learning_state
+from learning import append_candidates, build_learning_packet, ensure_learning_state
 
 
 DEFAULT_HERMES_HOME = "/data/hermes"
@@ -281,6 +281,15 @@ def create_health_app(
     def learning_packet(request: Request) -> dict[str, Any]:
         require_internal_key(request)
         return build_learning_packet(profile_home)
+
+    @app.post("/internal/learning/candidates")
+    async def learning_candidates(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        candidates = payload.get("candidates") if isinstance(payload, dict) else None
+        if not isinstance(candidates, list) or len(candidates) > 10:
+            raise HTTPException(status_code=400, detail="candidates must be an array with at most 10 items.")
+        return append_candidates(profile_home, candidates)
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):

@@ -12,7 +12,7 @@ import bridge.runtime.openclaw as openclaw_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.gateway_client import OpenClawGatewayError
 from bridge.runtime.base import AgentRequest, DreamRequest
-from bridge.runtime.hermes import HermesRuntimeAdapter
+from bridge.runtime.hermes import HermesRuntimeAdapter, extract_dream_candidates
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import (
     AgentSandboxConfig,
@@ -264,7 +264,22 @@ class RuntimeAdapterTests(unittest.TestCase):
 
     def test_hermes_dream_uses_isolated_session_and_returns_learning_packet(self):
         calls: list[dict] = []
-        post_responses = [(200, {"output": "Dream complete"})]
+        post_responses = [
+            (
+                200,
+                {
+                    "output": (
+                        "Dream complete\n"
+                        "<TRANSFERABLE_LEARNING_RECORDS>"
+                        '[{"classification":"transferable_procedural","title":"Ownership",'
+                        '"generalizedLearning":"Require an owner.","rationale":"Actions need accountability.",'
+                        '"evidence":[{"sourceType":"private_session","summary":"Generalized action gaps recurred."}],'
+                        '"confidence":0.9,"proposedTarget":{"kind":"skill","path":"skills/action-ownership"}}]'
+                        "</TRANSFERABLE_LEARNING_RECORDS>"
+                    )
+                },
+            )
+        ]
 
         def ensure_sandbox(config, *, credential):
             return SimpleNamespace(
@@ -298,11 +313,20 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         post = next(call for call in calls if call["method"] == "POST")
         packet_get = next(call for call in calls if call["url"].endswith("/internal/learning/packet"))
+        candidate_post = next(call for call in calls if call["url"].endswith("/internal/learning/candidates"))
         self.assertEqual(post["url"], "https://hermes.example/api/sessions/dream%3Ahermes-worker/chat")
         self.assertIn("delivery follow-up", post["json"]["input"])
         self.assertIn("at most 3", post["json"]["input"])
+        self.assertEqual(candidate_post["json"]["candidates"][0]["title"], "Ownership")
         self.assertEqual(packet_get["headers"]["X-Autopilot-Key"], "api-key-1")
         self.assertEqual(result.learning_packet["packetVersion"], "1.0")
+        self.assertEqual(result.agent.text, "Dream complete")
+
+    def test_extract_dream_candidates_requires_json_array(self):
+        with self.assertRaisesRegex(ValueError, "JSON array"):
+            extract_dream_candidates(
+                "summary<TRANSFERABLE_LEARNING_RECORDS>{}</TRANSFERABLE_LEARNING_RECORDS>"
+            )
 
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(
@@ -507,6 +531,12 @@ class FakeHermesClient:
 
     async def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
+        if url.endswith("/internal/learning/candidates"):
+            return httpx.Response(
+                200,
+                json={"accepted": [{"recordId": "lr-test"}], "rejected": []},
+                request=httpx.Request("POST", url),
+            )
         status_code, payload = self.post_responses.pop(0)
         return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
 

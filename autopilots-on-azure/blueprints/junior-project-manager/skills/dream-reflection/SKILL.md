@@ -11,9 +11,7 @@ Use this skill only for an explicit dream run.
 2. Classify each observation as private personal/team context, private cache, candidate transferable procedure, candidate transferable domain knowledge, or do not store.
 3. Update private memory or instance-local skills only for the first two classes. Never copy those details into a transferable record.
 4. For each useful transferable candidate, generalize it so it contains no people, customers, tenants, message text, document excerpts, credentials, identifiers, internal URLs, or user-specific paths.
-5. Append the candidate only through:
-
-   `python3 /app/learning.py append --record '<one JSON object>'`
+5. During a bridge dream run, return candidate objects in the exact machine-readable block requested by the dream prompt. Do not run shell commands or edit `learning/records.jsonl`.
 
 The candidate object must contain:
 
@@ -25,6 +23,6 @@ The candidate object must contain:
 - `confidence`: number from 0 to 1
 - `proposedTarget`: `{"kind":"skill","path":"skills/<name>"}` or `{"kind":"knowledge","path":"knowledge/<name>.md"}`
 
-The validator assigns record identity, timestamp, and privacy status. If it rejects a record, keep the material private; do not weaken or bypass the validator.
+The trusted runtime submits the objects to the validator, which assigns record identity, timestamp, and privacy status. If it rejects a record, keep the material private; do not weaken or bypass the validator. `/app/learning.py append` remains available only for explicit local operator use.
 
 Finish with a concise count of private updates, accepted transferable records, rejected candidates, and observations intentionally not stored.

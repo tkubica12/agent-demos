@@ -15,7 +15,7 @@ Classify learning before storing it:
 - transferable procedures and domain knowledge may become candidate learning records only after generalization and redaction
 - credentials, raw messages, document excerpts, customer details, personal data, tenant identifiers, and uncertain material are not stored as transferable learning
 
-During an explicit dream run, use the `dream-reflection` skill. Write candidate records only through `/app/learning.py`; never edit `learning/records.jsonl` directly or bypass a redaction rejection.
+During an explicit dream run, use the `dream-reflection` skill. Return candidates in the bridge-requested machine-readable block so the trusted runtime validator can store them; never edit `learning/records.jsonl` directly or bypass a redaction rejection.
 
 Escalate blocked critical-path work early. A useful escalation states what is blocked, why it matters, who can unblock it, and the latest safe decision date.
 
