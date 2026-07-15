@@ -129,7 +129,7 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 ## Hermes blueprint lifecycle
 
-The distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.2.0.
+The distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.3.0.
 
 Configure one Hermes worker with the repository commit that contains the desired blueprint version:
 
@@ -141,7 +141,7 @@ uv run python -m scripts.setup_app_tfvars `
   --blueprint-name junior-project-manager `
   --blueprint-source https://github.com/tkubica12/agent-demos.git `
   --blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
-  --blueprint-version 2.2.0 `
+  --blueprint-version 2.3.0 `
   --blueprint-commit $commit `
   --assignee-scope "person-or-team" `
   --runtime-only
@@ -161,9 +161,11 @@ logs\
 workspace\
 .env
 local\
-skills outside skills\junior-project-manager\
-learning\records.jsonl
+private instance skills outside blueprint-owned paths
+local\private-cache.md
 ```
+
+Within the same `learning_generation`, `learning\records.jsonl` and `skills\hot-learning` are also preserved. When a reviewed fleet release increments the generation, the installer archives the previous journal and removes the generated hot-learning skill. Private memory and private assignment cache remain.
 
 The instance record is stored at:
 
@@ -175,10 +177,11 @@ The sandbox labels and `/data/hermes/profiles/junior-project-manager/local/autop
 
 ## Local learning and dreaming
 
-Blueprint v2.2.0 classifies learning before storage and adds the `dream-reflection` skill. Private personal/team context, cache, raw sessions, memory, `.env`, auth, logs, workspace content, and `state.db*` remain instance-local. Transferable candidates can be appended only through the runtime validator:
+Blueprint v2.3.0 classifies learning before storage and adds both hot-path and dream-path transferable learning. Private personal/team context, account-specific procedures, raw sessions, memory, `.env`, auth, logs, workspace content, and `state.db*` remain instance-local. Use `local\private-cache.md` for private assignment cache and never `/root`. Transferable candidates can be appended only through the runtime validator:
 
 ```text
 /data/hermes/profiles/junior-project-manager/learning/records.jsonl
+/data/hermes/profiles/junior-project-manager/skills/hot-learning/SKILL.md
 ```
 
 Run a manual reflection through the secured bridge operation:
@@ -188,7 +191,7 @@ uv run python -m scripts.demo_ops dream
 uv run python -m scripts.demo_ops dream --focus "Review recurring delivery-risk escalation patterns" --max-records 3
 ```
 
-The command uses the Hermes `api_server_key` from `.local\hermes\apps\generated.app.auto.tfvars.json`; the key is not printed. The bridge uses the stable `dream:<instance-id>` session. Hermes returns generalized candidates in a bounded JSON block, then the trusted runtime validates and appends them without requiring agent shell approval. The response includes only records that match schema v1.0 and pass deterministic checks for credentials, tokens, email addresses, GUIDs, IP addresses, and user-specific absolute paths. Rejected or private observations stay local. Recurring scheduling remains A11.
+Normal turns and dream runs use the same candidate path. Hermes returns generalized candidates in a bounded JSON block, then the trusted runtime validates and appends them without requiring agent shell approval. Accepted records regenerate `skills\hot-learning`, making the learning available to the next local session immediately. The response includes only records that match schema v1.0 and pass deterministic checks for credentials, tokens, email addresses, GUIDs, IP addresses, and user-specific absolute paths. Rejected or private observations stay local. Recurring scheduling remains A11.
 
 The A9 flow was live-verified on 2026-07-15 with blueprint commit `c785192de8bca5eceb243dd0f02f0f1886fdec6a`. One dream run produced three accepted procedural records with no redaction rejection. A separate run consolidated one assignment-specific formatting preference into private local memory and added no transferable record; the returned packet continued to expose only the three validated records and the private-path exclusion manifest.
 

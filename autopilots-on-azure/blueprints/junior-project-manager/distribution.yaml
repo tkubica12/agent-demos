@@ -1,5 +1,6 @@
 name: junior-project-manager
-version: 2.2.0
+version: 2.3.0
+learning_generation: 1
 description: Junior project manager for delivery tracking, meeting follow-up, change control, and risk escalation.
 hermes_requires: ">=0.18.0"
 author: Autopilots on Azure

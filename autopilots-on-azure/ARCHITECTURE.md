@@ -193,6 +193,8 @@ Agent 365 BYO currently requires a public endpoint and supported client connecti
 | Hermes blueprint source | Commit-pinned Git repository and `distribution.yaml`. |
 | Hermes active profile | `/data/hermes/profiles/<blueprint-name>` on the Sandbox Data Disk. |
 | Hermes instance manifest | `<profile>/local/autopilots-instance.json`; records source, version, commit, instance, and assignee scope. |
+| Hermes private adaptation | `<profile>/memories`, `<profile>/local/private-cache.md`, and private SQLite/session state; permanent for that instance and never exported by default. |
+| Hermes transferable hot learning | `<profile>/learning/records.jsonl` rendered into `<profile>/skills/hot-learning/SKILL.md`; immediately active but scoped to one blueprint learning generation. |
 | Agent 365 blueprint/package files | `.local\<runtime>\agent365`. |
 | Agent instance identifiers | `.local\<runtime>\agent365\instance.*.json`. |
 | Entra MCP API discovery state | `.local\a7-*-mcp-api.json`, recoverable by display name. |
@@ -204,6 +206,8 @@ Local state accelerates operation but must not be the only source of truth for c
 ### Hermes blueprint and state boundary
 
 Hermes uses one named profile per digital-worker instance. Git owns only paths declared by the profile distribution, while the Sandbox Data Disk owns memories, sessions, SQLite state, workspace, `.env`, `local\`, and assignment-specific artifacts. A blueprint upgrade changes the pinned commit label, recreates the sandbox container, reuses the same Data Disk, and synchronizes only distribution-owned paths.
+
+Learning has two durability lanes. Private adaptation survives all generations. Transferable candidates are validated on either the normal hot path or a dream run, journaled, and rendered into a generated hot-learning skill for immediate use. A reviewed fleet release increments `learning_generation`; installation archives the old journal and removes the generated hot skill before the new shared blueprint becomes active.
 
 OpenClaw remains on its runtime-image package plus persistent data directories. It has no equivalent Git profile-distribution lifecycle in A8, so the project documents that exception rather than adding a parallel custom package manager.
 

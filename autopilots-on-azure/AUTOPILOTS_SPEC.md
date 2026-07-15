@@ -348,9 +348,10 @@ Hermes-native state is the default. Do not add a database for Hermes core memory
 | --- | --- | --- |
 | Active Hermes profile state | ACA Sandbox Data Disk mounted as `HERMES_HOME`, currently `/data/hermes` | Preserved across suspend/resume, sandbox restart, and blueprint upgrade. Single-writer per worker instance. |
 | Personal/team memory | Hermes `memories\USER.md`, `memories\MEMORY.md`, optional external Hermes memory provider state, and `state.db` | Private to the assigned person/team. Never exported into shared blueprint consolidation. |
+| Private assignment cache | `local\private-cache.md`, private memory, and private session state | Persists across blueprint generations. Contains account/customer/team-specific procedures and facts; never enters consolidation. |
 | Session history and search | Hermes `state.db` with built-in SQLite/FTS5 session storage | Private operational state. Used by the instance for recall and by local dreaming, not by shared consolidation unless explicitly summarized and redacted. |
 | Blueprint-owned files | Git-backed Hermes profile distribution: `SOUL.md`, `skills\`, `mcp.json`, selected `config.yaml` defaults, and optional cron templates | Replaced or updated from reviewed blueprint versions. Canonical source is Git, not the sandbox disk. |
-| Candidate transferable learnings | Local `learning\records.jsonl` plus changed allowed skill files under a designated skills namespace | Exported by central extractor into a learning packet. Reviewed before promotion. |
+| Candidate transferable learnings | Local `learning\records.jsonl` plus generated `skills\hot-learning\SKILL.md` | Available to the current worker immediately, exported by central consolidation, and reviewed before promotion. Generation-scoped rather than private-permanent. |
 | Policy documents and business data | External systems exposed through MCP/data agents/RAG, not Hermes core storage | Queried as tools. Governed by the owning system. |
 
 This deliberately avoids a central database in v1. A database may be added later for fleet administration, proposal tracking, dashboards, or audit search, but it must not become the source of truth for blueprint skills.
@@ -392,6 +393,7 @@ Each digital worker instance stores its installed blueprint source and base comm
   "blueprintSource": "git@github.com:org/junior-project-manager-blueprint.git",
   "blueprintVersion": "v1.0.0",
   "blueprintCommit": "<git-sha>",
+  "learningGeneration": 1,
   "instanceId": "<worker-instance-id>",
   "assigneeScope": "person-or-team"
 }
@@ -403,8 +405,10 @@ Upgrade flow:
 2. Run learning export for allowed paths and `learning\records.jsonl`.
 3. Preserve private state on the sandbox Data Disk.
 4. Update blueprint-owned files from the new profile distribution version.
-5. Restart or resume Hermes with the same `HERMES_HOME`.
-6. Validate health and a stateful session smoke.
+5. If `learning_generation` changed, archive the previous generation journal and remove `skills\hot-learning`; the new reviewed blueprint replaces accepted fleet knowledge.
+6. Preserve personal/team memory, private assignment cache, session history, and other explicitly private instance state.
+7. Restart or resume Hermes with the same `HERMES_HOME`.
+8. Validate health and a stateful session smoke.
 
 Private memory and session state must survive every blueprint upgrade. Deleting and reinstalling a profile is not an acceptable upgrade path for assigned workers unless the operator explicitly chooses to discard private state.
 
@@ -416,20 +420,23 @@ Hermes may continue to self-improve locally:
 - Hermes can create or patch skills through `skill_manage`.
 - Hermes background review and curator can improve or prune agent-created skills.
 - A worker can record on-the-job rationale in `learning\records.jsonl`.
+- Accepted transferable records are rendered into `skills\hot-learning\SKILL.md` so the same worker benefits immediately.
 
-For this track, allow local writes freely. Do not require every local memory or skill write to be approved before it takes effect. The safety boundary is promotion, not local adaptation: nothing becomes part of the shared blueprint until the central consolidation flow opens a reviewed GitHub pull request.
+For this track, allow local writes freely. Do not require every local memory or skill write to be approved before it takes effect. The safety boundary is promotion, not local adaptation: nothing becomes part of the shared blueprint until the central consolidation flow opens a reviewed GitHub pull request. Transferable hot patches are generation-scoped; private adaptation is permanent for the instance.
 
 Hermes must be instructed to classify learnings before persisting them:
 
 | Classification | Store | Examples |
 | --- | --- | --- |
 | Private personal/team | `USER.md`, `MEMORY.md`, local session state, private workspace files | Senior person's communication preferences, team structure, customer names, internal stakeholder preferences. |
-| Private cache | Local memory/session/workspace only | Reusable facts for this assignment that are too specific for other workers. |
-| Candidate transferable procedural learning | Blueprint skill candidate or `learning\records.jsonl` | Better meeting-prep procedure, issue triage checklist, risk escalation heuristic. |
-| Candidate domain knowledge | Skill reference or external knowledge proposal | Generalizable project-management concept or policy interpretation, with sources. |
+| Private cache | `local\private-cache.md`, private memory/session/workspace only | Reusable facts and procedures for this assignment, account, customer, manager, or team. |
+| Candidate transferable procedural learning | `learning\records.jsonl` and generated `skills\hot-learning` | Better meeting-prep procedure, issue triage checklist, risk escalation heuristic. |
+| Candidate domain knowledge | `learning\records.jsonl` and generated `skills\hot-learning` | Generalizable project-management concept or policy interpretation, with sources. |
 | Do not store | Nowhere durable | Secrets, raw customer data, trivial facts, one-off noise, low-confidence speculation. |
 
 Transferable candidates should be generalized. Prefer variables, conditions, and decision rules over named people, named customers, or one-off anecdotes.
+
+Hot-path transferable learning does not wait for dreaming. When a normal turn establishes a high-confidence reusable rule, Hermes may return a bounded candidate block. The bridge submits it to the trusted runtime validator, which appends the record and regenerates `skills\hot-learning`. Dreaming uses the same path for batch discovery and consolidation. Neither path edits blueprint-owned skills directly.
 
 ### Dreaming / reflection
 
@@ -444,8 +451,8 @@ Dreaming is distinct from normal turn-time self-improvement:
 
 | Stage | Trigger | Output |
 | --- | --- | --- |
-| Hot-path learning | During or right after a user turn | Immediate local memory/skill updates. |
-| Dreaming | Scheduled or manual offline run | Batch reflection over sessions and evidence; local consolidation and learning packets. |
+| Hot-path learning | During or right after a user turn | Immediate private memory/cache update or validated transferable record plus generated hot-learning skill. |
+| Dreaming | Scheduled or manual offline run | Batch reflection over sessions and evidence; private consolidation plus additional validated hot-learning candidates. |
 | Fleet consolidation | Periodic central process across many instances | Reviewed blueprint PR for the next blueprint version. |
 
 For hosted Azure workers, dreaming should be submitted through the bridge to a stateful Hermes endpoint. The bridge must wake or reuse the ACA Sandbox, pass stable session identity, and keep the run isolated from user-facing conversation threads.

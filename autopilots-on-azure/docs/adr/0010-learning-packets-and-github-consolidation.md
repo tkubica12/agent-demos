@@ -38,6 +38,13 @@ Each worker may freely self-improve locally, but it must classify durable learni
 
 For transferable candidates, the worker records rationale in a local journal such as `learning\records.jsonl`. The worker does not need to compute Git diffs.
 
+Use two distinct local durability lanes:
+
+- Private-permanent adaptation: `USER.md`, `MEMORY.md`, `local\private-cache.md`, and private session state. This survives every blueprint generation and is excluded from consolidation.
+- Transferable generation-scoped adaptation: validated `learning\records.jsonl` entries rendered into `skills\hot-learning\SKILL.md`. The current worker uses this immediately, but it may be replaced by reviewed fleet knowledge in a later blueprint generation.
+
+Transferable candidates may be produced either on the hot path after a normal turn or during a dream run. Both paths use the same runtime validator and redaction boundary. Workers never write the shared blueprint directly.
+
 Central consolidation does the following:
 
 1. Reads the worker instance manifest to identify the blueprint source and base commit.
@@ -50,6 +57,8 @@ Central consolidation does the following:
 8. Opens a GitHub pull request with proposed blueprint changes, evidence notes, conflict analysis, and rejected-candidate rationale.
 9. Requires human expert review before merge.
 
+After the reviewed blueprint increments `learning_generation`, each upgraded worker archives the previous generation journal and removes the generated hot-learning skill. Permanent private adaptation remains. The reviewed blueprint becomes the new common baseline; rejected, incorrect, or superseded transferable hot patches are intentionally not carried forward.
+
 GitHub is the v1 governance surface. Use branch protection, rulesets, CODEOWNERS, checks, and pull requests. A future admin app may visualize and triage proposals, but it must write GitHub issues, branches, or pull requests rather than becoming a parallel blueprint source of truth.
 
 ## Consequences
@@ -60,4 +69,5 @@ GitHub is the v1 governance surface. Use branch protection, rulesets, CODEOWNERS
 - Repeated patterns across multiple workers can be promoted with stronger confidence.
 - Outliers can be preserved as conditional guidance when useful, or rejected when they appear to be mistakes or local-only context.
 - Local worker behavior can improve immediately, while shared blueprint changes still require review.
+- Instance-specific knowledge cannot be placed in the generation-scoped hot-learning lane; misclassification would cause it to disappear when the next learning generation is installed.
 - Consolidation tooling must be strict about allowed paths and redaction before invoking the merger LLM.

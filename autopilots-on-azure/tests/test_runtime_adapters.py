@@ -262,6 +262,67 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(response.raw["hermesEndpoint"], "responses")
         self.assertEqual(post_urls, ["https://hermes.example/api/sessions/teams%3Athread%3A1/chat", "https://hermes.example/v1/responses"])
 
+    def test_hermes_normal_turn_submits_transferable_hot_learning(self):
+        calls: list[dict] = []
+        post_responses = [
+            (
+                200,
+                {
+                    "output": (
+                        "I will apply that procedure."
+                        "<TRANSFERABLE_LEARNING_RECORDS>"
+                        '[{"classification":"transferable_procedural","title":"Owner required",'
+                        '"generalizedLearning":"Require an accountable owner.","rationale":"Ownership prevents ambiguity.",'
+                        '"evidence":[{"sourceType":"private_session","summary":"A generalized correction established the rule."}],'
+                        '"confidence":0.9,"proposedTarget":{"kind":"skill","path":"skills/action-ownership"}}]'
+                        "</TRANSFERABLE_LEARNING_RECORDS>"
+                    )
+                },
+            )
+        ]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
+            )
+            result = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="Remember this reusable procedure.",
+                        conversation_id="session-1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        candidate_post = next(call for call in calls if call["url"].endswith("/internal/learning/candidates"))
+        gateway_post = next(call for call in calls if "/api/sessions/" in call["url"])
+        self.assertEqual(result.text, "I will apply that procedure.")
+        self.assertEqual(candidate_post["json"]["candidates"][0]["title"], "Owner required")
+        self.assertEqual(result.raw["learningSubmission"]["accepted"][0]["recordId"], "lr-test")
+        self.assertIn("local/private-cache.md", gateway_post["json"]["instructions"])
+        self.assertIn("hot-learning skill", gateway_post["json"]["instructions"])
+
     def test_hermes_dream_uses_isolated_session_and_returns_learning_packet(self):
         calls: list[dict] = []
         post_responses = [
@@ -327,6 +388,59 @@ class RuntimeAdapterTests(unittest.TestCase):
             extract_dream_candidates(
                 "summary<TRANSFERABLE_LEARNING_RECORDS>{}</TRANSFERABLE_LEARNING_RECORDS>"
             )
+
+    def test_invalid_hot_learning_block_preserves_user_answer_and_surfaces_failure(self):
+        calls: list[dict] = []
+        post_responses = [
+            (
+                200,
+                {
+                    "output": (
+                        "The user-visible answer."
+                        "<TRANSFERABLE_LEARNING_RECORDS>{invalid json}</TRANSFERABLE_LEARNING_RECORDS>"
+                    )
+                },
+            )
+        ]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
+            )
+            result = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="hello",
+                        conversation_id="session-1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        self.assertIn("The user-visible answer.", result.text)
+        self.assertIn("Local hot learning was not saved", result.text)
+        self.assertIn("Invalid transferable-learning block", result.raw["learningCaptureError"])
+        self.assertFalse(any(call["url"].endswith("/internal/learning/candidates") for call in calls))
 
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from typing import Any
 
 SCHEMA_VERSION = "1.0"
 PACKET_VERSION = "1.0"
+HOT_LEARNING_SKILL = "skills/hot-learning/SKILL.md"
+PRIVATE_CACHE_FILE = "local/private-cache.md"
 TRANSFERABLE_CLASSIFICATIONS = {"transferable_procedural", "transferable_domain"}
 SOURCE_TYPES = {"private_session", "tool_result", "public_source"}
 SOURCE_TYPE_ALIASES = {
@@ -30,6 +33,7 @@ PRIVATE_EXCLUSIONS = [
     ".env",
     "auth/",
     "logs/",
+    "local/private-cache.md",
     "memories/",
     "sessions/",
     "state.db",
@@ -46,7 +50,10 @@ _SECRET = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|[A-Za-z0-9_-]{40,})",
     re.IGNORECASE,
 )
-_ABSOLUTE_PATH = re.compile(r"(?:\b[A-Za-z]:\\Users\\[^\\\s]+|/(?:home|users)/[^/\s]+)", re.IGNORECASE)
+_ABSOLUTE_PATH = re.compile(
+    r"(?:\b[A-Za-z]:\\Users\\[^\\\s]+|/(?:root|data|etc|home|tmp|users|var)/[^\s]*)",
+    re.IGNORECASE,
+)
 _SAFE_TARGET = re.compile(r"^(?:skills/[a-z0-9][a-z0-9-]*|knowledge/[a-z0-9][a-z0-9-]*\.md)$")
 
 
@@ -66,6 +73,18 @@ def ensure_learning_state(profile_home: Path) -> Path:
     path = learning_file(profile_home)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
+    return path
+
+
+def ensure_private_cache(profile_home: Path) -> Path:
+    path = profile_home / PRIVATE_CACHE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(
+            "# Private assignment cache\n\n"
+            "Instance-specific facts and procedures belong here. Never export this file into fleet consolidation.\n",
+            encoding="utf-8",
+        )
     return path
 
 
@@ -199,6 +218,8 @@ def append_candidates(profile_home: Path, candidates: list[Any]) -> dict[str, An
             accepted.append(append_candidate(profile_home, candidate))
         except LearningRecordError as exc:
             rejected.append({"index": index, "reason": str(exc)})
+    if accepted:
+        render_hot_learning_skill(profile_home)
     return {"accepted": accepted, "rejected": rejected}
 
 
@@ -231,7 +252,7 @@ def validate_stored_record(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def build_learning_packet(profile_home: Path) -> dict[str, Any]:
+def stored_learning_records(profile_home: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     path = ensure_learning_state(profile_home)
     records: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
@@ -245,6 +266,49 @@ def build_learning_packet(profile_home: Path) -> dict[str, Any]:
             records.append(validate_stored_record(payload))
         except (json.JSONDecodeError, LearningRecordError) as exc:
             rejected.append({"line": line_number, "reason": str(exc)})
+    return records, rejected
+
+
+def render_hot_learning_skill(profile_home: Path) -> Path:
+    records, _ = stored_learning_records(profile_home)
+    path = profile_home / HOT_LEARNING_SKILL
+    if not records:
+        if path.parent.exists():
+            shutil.rmtree(path.parent)
+        return path
+
+    sections = [
+        "---",
+        "name: hot-learning",
+        "description: Generation-scoped transferable learnings available immediately to this worker.",
+        "---",
+        "",
+        "# Hot learning",
+        "",
+        "These validated learnings apply locally now. They remain candidates until fleet consolidation and may be replaced by the next blueprint generation.",
+    ]
+    for record in records:
+        sections.extend(
+            [
+                "",
+                f"## {record['title']}",
+                "",
+                record["generalizedLearning"],
+                "",
+                f"Rationale: {record['rationale']}",
+                f"Candidate target: `{record['proposedTarget']['path']}`",
+                f"Learning record: `{record['recordId']}`",
+            ]
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
+def build_learning_packet(profile_home: Path) -> dict[str, Any]:
+    records, rejected = stored_learning_records(profile_home)
 
     manifest_path = profile_home / "local" / "autopilots-instance.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
@@ -259,6 +323,7 @@ def build_learning_packet(profile_home: Path) -> dict[str, Any]:
             "name": manifest.get("blueprintName", os.getenv("HERMES_BLUEPRINT_NAME", "")),
             "version": manifest.get("blueprintVersion", os.getenv("HERMES_BLUEPRINT_VERSION", "")),
             "commit": manifest.get("blueprintCommit", os.getenv("HERMES_BLUEPRINT_COMMIT", "")),
+            "learningGeneration": manifest.get("learningGeneration", 1),
         },
         "records": records,
         "rejectedRecords": rejected,

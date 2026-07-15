@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment,
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
 LEARNING_RECORDS_START = "<TRANSFERABLE_LEARNING_RECORDS>"
 LEARNING_RECORDS_END = "</TRANSFERABLE_LEARNING_RECORDS>"
+logger = logging.getLogger(__name__)
 
 
 def _configured_env(*names: str) -> str | None:
@@ -86,6 +88,23 @@ def dream_prompt(request: DreamRequest) -> str:
     )
 
 
+def bridge_instructions(request: AgentRequest) -> str:
+    if request.source == "dream":
+        return BRIDGE_INSTRUCTIONS
+    return (
+        f"{BRIDGE_INSTRUCTIONS}\n\n"
+        "Classify durable learning before storing it. Personal, manager, team, customer, account, communication-style, and "
+        "assignment-specific information is private: use Hermes memory or $HERMES_HOME/local/private-cache.md, never /root. "
+        "When this turn provides a high-confidence procedure or domain rule that is useful beyond this assignment, do not edit "
+        "blueprint-owned skills. After the normal user-visible answer, optionally return "
+        f"{LEARNING_RECORDS_START}, one JSON array with at most 3 transferable candidates, and {LEARNING_RECORDS_END}. "
+        "Omit the block when there is no durable transferable learning. Candidate objects must contain only classification, "
+        "title, generalizedLearning, rationale, evidence, confidence, and proposedTarget. Every evidence sourceType must be "
+        "exactly private_session, tool_result, or public_source. The trusted runtime validates the candidate and immediately "
+        "materializes accepted learning into the local generation-scoped hot-learning skill."
+    )
+
+
 def extract_dream_candidates(text: str) -> tuple[str, list[Any]]:
     start = text.find(LEARNING_RECORDS_START)
     end = text.find(LEARNING_RECORDS_END, start + len(LEARNING_RECORDS_START)) if start >= 0 else -1
@@ -131,8 +150,34 @@ class HermesRuntimeAdapter:
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
         await self._wait_for_health(base_url)
         endpoint, payload = await self._invoke_hermes(base_url, api_key, request)
+        response_text = self._response_text(payload)
+        learning_error = None
+        try:
+            visible_text, candidates = extract_dream_candidates(response_text)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Hermes returned an invalid transferable-learning block: %s", exc)
+            start = response_text.find(LEARNING_RECORDS_START)
+            visible_text = response_text[:start].strip() if start >= 0 else response_text
+            candidates = []
+            learning_error = f"Invalid transferable-learning block: {exc}"
+        learning_submission = None
+        if candidates and learning_error is None:
+            try:
+                learning_submission = await self._submit_learning_candidates(
+                    base_url,
+                    api_key,
+                    candidates[: int(request.metadata.get("maxRecords", 3))],
+                )
+            except httpx.HTTPError as exc:
+                logger.warning("Hermes transferable-learning submission failed: %s", exc)
+                learning_error = f"Transferable-learning submission failed: {exc}"
+        if learning_error:
+            visible_text = (
+                f"{visible_text}\n\n"
+                "Local hot learning was not saved. Retry the learning request or run a dream reflection."
+            ).strip()
         return AgentResponse(
-            text=self._response_text(payload),
+            text=visible_text,
             raw={
                 "sandboxId": sandbox.sandbox_id,
                 "gatewayUrl": sandbox.endpoint_url,
@@ -140,6 +185,8 @@ class HermesRuntimeAdapter:
                 "dataVolume": sandbox.data_volume,
                 "hermesEndpoint": endpoint,
                 "payload": payload,
+                "learningSubmission": learning_submission,
+                "learningCaptureError": learning_error,
             },
         )
 
@@ -158,15 +205,7 @@ class HermesRuntimeAdapter:
         if not base_url:
             raise RuntimeError("Hermes dream run did not return a gateway URL.")
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
-        visible_text, candidates = extract_dream_candidates(agent_response.text)
         async with self._client_factory(timeout=30) as client:
-            submission_response = await client.post(
-                f"{base_url}/internal/learning/candidates",
-                headers={"X-Autopilot-Key": api_key},
-                json={"candidates": candidates[: request.max_records]},
-            )
-            submission_response.raise_for_status()
-            submission = submission_response.json()
             response = await client.get(
                 f"{base_url}/internal/learning/packet",
                 headers={"X-Autopilot-Key": api_key},
@@ -175,15 +214,32 @@ class HermesRuntimeAdapter:
             packet = response.json()
         if not isinstance(packet, dict):
             raise RuntimeError("Hermes learning packet endpoint returned a non-object response.")
-        packet["dreamSubmission"] = submission
+        packet["dreamSubmission"] = agent_response.raw.get("learningSubmission") or {
+            "accepted": [],
+            "rejected": [],
+        }
         return DreamResponse(
-            agent=AgentResponse(
-                text=visible_text,
-                reaction=agent_response.reaction,
-                raw=agent_response.raw,
-            ),
+            agent=agent_response,
             learning_packet=packet,
         )
+
+    async def _submit_learning_candidates(
+        self,
+        base_url: str,
+        api_key: str,
+        candidates: list[Any],
+    ) -> dict[str, Any]:
+        async with self._client_factory(timeout=30) as client:
+            response = await client.post(
+                f"{base_url}/internal/learning/candidates",
+                headers={"X-Autopilot-Key": api_key},
+                json={"candidates": candidates},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Hermes learning candidate endpoint returned a non-object response.")
+        return payload
 
     async def _wait_for_health(self, base_url: str) -> None:
         deadline = time.time() + int(_env_optional("HERMES_HEALTH_TIMEOUT_SECONDS", default="120"))
@@ -232,7 +288,7 @@ class HermesRuntimeAdapter:
         session_id = quote(request.conversation_id, safe="")
         body = {
             "input": request.prompt,
-            "instructions": BRIDGE_INSTRUCTIONS,
+            "instructions": bridge_instructions(request),
         }
         async with self._client_factory(timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))) as client:
             response = await client.post(f"{base_url}/api/sessions/{session_id}/chat", headers=self._headers(api_key, request), json=body)
@@ -243,7 +299,7 @@ class HermesRuntimeAdapter:
         body = {
             "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-6-terra"),
             "input": request.prompt,
-            "instructions": BRIDGE_INSTRUCTIONS,
+            "instructions": bridge_instructions(request),
             "conversation": request.conversation_id,
         }
         async with self._client_factory(timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))) as client:
@@ -255,7 +311,7 @@ class HermesRuntimeAdapter:
         messages = [
             {
                 "role": "system",
-                "content": BRIDGE_INSTRUCTIONS,
+                "content": bridge_instructions(request),
             },
             {"role": "user", "content": request.prompt},
         ]

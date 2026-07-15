@@ -5,7 +5,7 @@ description: Track delivery commitments, prepare concise status updates, and esc
 
 # Junior Project Manager
 
-Blueprint skill release: 2.2.0.
+Blueprint skill release: 2.3.0.
 
 ## Delivery tracking
 
@@ -50,3 +50,5 @@ Do not present an unapproved request as the new plan.
 Store private assignment context in memories, workspace, or `local/`. Do not write private facts into this distribution-owned skill. Instance-specific skill extensions belong outside `skills/junior-project-manager/` so blueprint upgrades preserve them.
 
 Use `dream-reflection` for explicit reflection runs. Transferable candidates must be generalized, redacted, and appended by the runtime validator rather than written directly.
+
+During normal work, apply private assignment-specific facts only through memory or `local/private-cache.md`. For a high-confidence reusable procedure, return a transferable candidate when the bridge requests it; the runtime makes it available immediately through `skills/hot-learning` without modifying blueprint-owned skills.

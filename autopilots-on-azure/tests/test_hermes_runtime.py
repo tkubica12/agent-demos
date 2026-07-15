@@ -47,6 +47,7 @@ class HermesRuntimeTests(unittest.TestCase):
         version: str,
         marker: str,
         extra_owned: tuple[str, ...] = (),
+        learning_generation: int = 1,
     ) -> str:
         distribution = repo / "blueprints" / "junior-project-manager"
         skill = distribution / "skills" / "junior-project-manager"
@@ -54,6 +55,7 @@ class HermesRuntimeTests(unittest.TestCase):
         manifest_lines = [
             "name: junior-project-manager",
             f"version: {version}",
+            f"learning_generation: {learning_generation}",
             "distribution_owned:",
             "  - SOUL.md",
             "  - config.yaml",
@@ -100,8 +102,10 @@ class HermesRuntimeTests(unittest.TestCase):
             (profile / "sessions" / "session.json").write_text('{"private":true}\n', encoding="utf-8")
             (profile / "state.db").write_bytes(b"private sqlite state")
             learning_path = ensure_learning_state(profile)
-            append_candidate(profile, self._learning_candidate())
+            append_candidates(profile, [self._learning_candidate()])
             learning_before = learning_path.read_text(encoding="utf-8")
+            hot_skill = profile / "skills" / "hot-learning" / "SKILL.md"
+            self.assertTrue(hot_skill.exists())
             custom_skill = profile / "skills" / "instance-local" / "SKILL.md"
             custom_skill.parent.mkdir(parents=True)
             custom_skill.write_text("# local skill\n", encoding="utf-8")
@@ -126,10 +130,60 @@ class HermesRuntimeTests(unittest.TestCase):
             self.assertEqual((profile / "state.db").read_bytes(), b"private sqlite state")
             self.assertEqual(custom_skill.read_text(encoding="utf-8"), "# local skill\n")
             self.assertEqual(learning_path.read_text(encoding="utf-8"), learning_before)
+            self.assertTrue(hot_skill.exists())
             manifest = json.loads((profile / "local" / "autopilots-instance.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["blueprintVersion"], "2.0.0")
             self.assertEqual(manifest["blueprintCommit"], commit_v2)
             self.assertEqual(manifest["instanceId"], "worker-1")
+            self.assertEqual(manifest["learningGeneration"], 1)
+
+    def test_new_learning_generation_archives_candidates_and_preserves_private_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            repo = root / "source"
+            home = root / "hermes"
+            repo.mkdir()
+            self._git(repo, "init")
+            self._git(repo, "config", "user.email", "test@example.com")
+            self._git(repo, "config", "user.name", "Hermes Test")
+            commit_v1 = self._commit_blueprint(repo, "1.0.0", "v1", learning_generation=1)
+            settings_v1 = BlueprintSettings(
+                name="junior-project-manager",
+                source=str(repo),
+                repository_path="blueprints/junior-project-manager",
+                version="1.0.0",
+                commit=commit_v1,
+                instance_id="worker-1",
+                assignee_scope="team-alpha",
+            )
+            installed = install_or_update_blueprint(home, settings_v1)
+            profile = installed.profile_home
+            (profile / "memories" / "MEMORY.md").write_text("private preference\n", encoding="utf-8")
+            private_cache = profile / "local" / "private-cache.md"
+            private_cache.write_text("private account procedure\n", encoding="utf-8")
+            append_candidates(profile, [self._learning_candidate()])
+
+            commit_v2 = self._commit_blueprint(repo, "2.0.0", "v2", learning_generation=2)
+            install_or_update_blueprint(
+                home,
+                BlueprintSettings(
+                    name=settings_v1.name,
+                    source=settings_v1.source,
+                    repository_path=settings_v1.repository_path,
+                    version="2.0.0",
+                    commit=commit_v2,
+                    instance_id=settings_v1.instance_id,
+                    assignee_scope=settings_v1.assignee_scope,
+                ),
+            )
+
+            self.assertFalse((profile / "skills" / "hot-learning").exists())
+            self.assertFalse((profile / "learning" / "records.jsonl").exists())
+            self.assertTrue((profile / "learning" / "archive" / "generation-1.jsonl").exists())
+            self.assertEqual((profile / "memories" / "MEMORY.md").read_text(encoding="utf-8"), "private preference\n")
+            self.assertEqual(private_cache.read_text(encoding="utf-8"), "private account procedure\n")
+            manifest = json.loads((profile / "local" / "autopilots-instance.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["learningGeneration"], 2)
 
     def test_learning_packet_contains_only_validated_records_and_exclusion_manifest(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -143,6 +197,7 @@ class HermesRuntimeTests(unittest.TestCase):
                         "blueprintName": "junior-project-manager",
                         "blueprintVersion": "2.2.0",
                         "blueprintCommit": "a" * 40,
+                        "learningGeneration": 1,
                     }
                 ),
                 encoding="utf-8",
@@ -154,7 +209,9 @@ class HermesRuntimeTests(unittest.TestCase):
         self.assertEqual(packet["rejectedRecords"], [])
         self.assertIn("memories/", packet["privatePathsExcluded"])
         self.assertIn("sessions/", packet["privatePathsExcluded"])
+        self.assertIn("local/private-cache.md", packet["privatePathsExcluded"])
         self.assertNotIn("private memory", json.dumps(packet))
+        self.assertEqual(packet["blueprint"]["learningGeneration"], 1)
 
     def test_learning_redaction_rejects_private_identifiers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -163,6 +220,14 @@ class HermesRuntimeTests(unittest.TestCase):
                     Path(temp_dir),
                     self._learning_candidate(
                         generalizedLearning="Send the report to owner@example.com after every review."
+                    ),
+                )
+
+            with self.assertRaisesRegex(LearningRecordError, "user-specific absolute path"):
+                append_candidate(
+                    Path(temp_dir),
+                    self._learning_candidate(
+                        generalizedLearning="Read the persistent note from /root/on-the-job-memory.md."
                     ),
                 )
 
@@ -179,6 +244,17 @@ class HermesRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result["accepted"]), 1)
         self.assertEqual(result["rejected"][0]["index"], 1)
         self.assertIn("email address", result["rejected"][0]["reason"])
+
+    def test_accepted_candidates_materialize_generation_scoped_hot_skill(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir)
+            result = append_candidates(profile, [self._learning_candidate()])
+            hot_skill = (profile / "skills" / "hot-learning" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertEqual(len(result["accepted"]), 1)
+        self.assertIn("Confirm ownership before accepting a delivery action", hot_skill)
+        self.assertIn("Treat an action without an accountable owner as incomplete.", hot_skill)
+        self.assertIn("Generation-scoped", hot_skill)
 
     def test_learning_normalizes_safe_evidence_source_aliases(self):
         with tempfile.TemporaryDirectory() as temp_dir:

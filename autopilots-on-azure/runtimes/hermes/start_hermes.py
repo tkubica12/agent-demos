@@ -17,7 +17,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from blueprint import BlueprintInstall, install_or_update_blueprint, settings_from_environment
-from learning import append_candidates, build_learning_packet, ensure_learning_state
+from learning import (
+    append_candidates,
+    build_learning_packet,
+    ensure_learning_state,
+    ensure_private_cache,
+    render_hot_learning_skill,
+)
 
 
 DEFAULT_HERMES_HOME = "/data/hermes"
@@ -327,6 +333,8 @@ def main() -> None:
     profile_home.mkdir(parents=True, exist_ok=True)
     (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
     ensure_learning_state(profile_home)
+    ensure_private_cache(profile_home)
+    render_hot_learning_skill(profile_home)
     env_path = write_env_file(profile_home)
     config_path = write_config(profile_home)
     print(f"Hermes home: {home}", flush=True)

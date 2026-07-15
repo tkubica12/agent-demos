@@ -16,6 +16,7 @@ import yaml
 
 
 INSTANCE_MANIFEST = "autopilots-instance.json"
+DEFAULT_LEARNING_GENERATION = 1
 DEFAULT_DISTRIBUTION_OWNED = (
     "SOUL.md",
     "config.yaml",
@@ -260,6 +261,32 @@ def _remove_stale_owned_paths(profile_home: Path, previous: list[str], current: 
             destination.unlink()
 
 
+def _start_new_learning_generation(
+    profile_home: Path,
+    installed: dict[str, Any],
+    distribution: dict[str, Any],
+) -> None:
+    if not installed:
+        return
+    previous_generation = int(installed.get("learningGeneration", DEFAULT_LEARNING_GENERATION))
+    next_generation = int(distribution.get("learning_generation", DEFAULT_LEARNING_GENERATION))
+    if previous_generation == next_generation:
+        return
+
+    records = profile_home / "learning" / "records.jsonl"
+    if records.exists() and records.stat().st_size:
+        archive = profile_home / "learning" / "archive" / f"generation-{previous_generation}.jsonl"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if archive.exists():
+            archive = archive.with_name(
+                f"generation-{previous_generation}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+            )
+        records.replace(archive)
+    hot_learning = profile_home / "skills" / "hot-learning"
+    if hot_learning.exists():
+        shutil.rmtree(hot_learning)
+
+
 def install_or_update_blueprint(hermes_home: Path, settings: BlueprintSettings) -> BlueprintInstall:
     profile_home = hermes_home / "profiles" / settings.name
     manifest_path = _instance_manifest_path(profile_home)
@@ -275,6 +302,7 @@ def install_or_update_blueprint(hermes_home: Path, settings: BlueprintSettings) 
         if not isinstance(previous_owned, list):
             raise ValueError(f"{manifest_path} distributionOwned must be a list.")
         _remove_stale_owned_paths(profile_home, [str(path) for path in previous_owned], owned_paths)
+        _start_new_learning_generation(profile_home, installed, distribution)
         _copy_owned_paths(distribution_root, profile_home, owned_paths)
 
     for directory in ("memories", "sessions", "logs", "workspace", "plans", "home", "local"):
@@ -290,6 +318,7 @@ def install_or_update_blueprint(hermes_home: Path, settings: BlueprintSettings) 
         "assigneeScope": settings.assignee_scope,
         "profileName": settings.name,
         "distributionOwned": owned_paths,
+        "learningGeneration": int(distribution.get("learning_generation", DEFAULT_LEARNING_GENERATION)),
         "installedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     _write_json_atomic(manifest_path, instance_manifest)
