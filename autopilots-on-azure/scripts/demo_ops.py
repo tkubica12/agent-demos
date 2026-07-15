@@ -135,7 +135,7 @@ def missing_expected_markers(runtime: str, payload: Any) -> list[str]:
 
 def sandbox_group_url(platform: dict[str, Any], subscription_id: str) -> str:
     return (
-        f"https://management.{platform['location']}.azuredevcompute.io"
+        f"https://management.{platform['sandbox_location']}.azuredevcompute.io"
         f"/subscriptions/{subscription_id}"
         f"/resourceGroups/{platform['resource_group_name']}"
         f"/sandboxGroups/{platform['sandbox_group_name']}"

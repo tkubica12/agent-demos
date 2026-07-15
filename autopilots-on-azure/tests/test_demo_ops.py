@@ -8,6 +8,7 @@ from scripts.demo_ops import (
     role_assignment_command,
     runtime_list,
     runtime_sandbox_selector,
+    sandbox_group_url,
     sandbox_matches,
 )
 
@@ -51,6 +52,23 @@ class DemoOpsTests(unittest.TestCase):
                 },
                 {"labels": {"app": "autopilots-on-azure", "kind": "hermes"}, "dataVolume": "hermes-data"},
             )
+        )
+
+    def test_sandbox_group_url_uses_sandbox_region(self):
+        url = sandbox_group_url(
+            {
+                "location": "northeurope",
+                "sandbox_location": "swedencentral",
+                "resource_group_name": "rg-test",
+                "sandbox_group_name": "sandbox-test",
+            },
+            "sub-test",
+        )
+
+        self.assertEqual(
+            url,
+            "https://management.swedencentral.azuredevcompute.io"
+            "/subscriptions/sub-test/resourceGroups/rg-test/sandboxGroups/sandbox-test",
         )
 
     def test_role_assignment_command_grants_sandbox_data_owner(self):

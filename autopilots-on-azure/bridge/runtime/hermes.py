@@ -177,9 +177,15 @@ def hot_learning_extraction_instructions() -> str:
         "Return exactly "
         f"{LEARNING_RECORDS_START}, one JSON array with at most 3 candidate objects, and {LEARNING_RECORDS_END}. "
         "Return an empty array when the turn is private, disposable, uncertain, or not reusable. Candidate objects contain "
-        "only classification, title, generalizedLearning, rationale, evidence, confidence, and proposedTarget. "
-        "classification must be transferable_procedural or transferable_domain. Evidence sourceType must be exactly "
-        "private_session, tool_result, or public_source."
+        "exactly this shape, with no synonyms or alternate field shapes: "
+        '{"classification":"transferable_procedural","title":"Short title",'
+        '"generalizedLearning":"Generalized reusable rule","rationale":"Why it is reusable",'
+        '"evidence":[{"sourceType":"private_session","summary":"Generalized evidence without private details"}],'
+        '"confidence":0.9,"proposedTarget":{"kind":"skill","path":"skills/example-name"}}. '
+        "classification must be transferable_procedural or transferable_domain. confidence must be a JSON number from 0 to 1, "
+        "not a word or string. Every evidence item must contain only sourceType and summary; sourceType must be exactly "
+        "private_session, tool_result, or public_source. proposedTarget must be an object containing kind and path; use kind "
+        "skill with a safe skills/<name> path or kind knowledge with a safe knowledge/<name>.md path."
     )
 
 
@@ -251,6 +257,10 @@ class HermesRuntimeAdapter:
                     api_key,
                     candidates[: int(request.metadata.get("maxRecords", 3))],
                 )
+                accepted = learning_submission.get("accepted")
+                rejected = learning_submission.get("rejected")
+                if isinstance(rejected, list) and rejected and (not isinstance(accepted, list) or not accepted):
+                    learning_error = "All transferable-learning candidates were rejected by the trusted validator."
             except httpx.HTTPError as exc:
                 logger.warning("Hermes transferable-learning submission failed: %s", exc)
                 learning_error = f"Transferable-learning submission failed: {exc}"

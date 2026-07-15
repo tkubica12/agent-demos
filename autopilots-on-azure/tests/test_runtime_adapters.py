@@ -389,6 +389,8 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("<UNTRUSTED_COMPLETED_TURN>", extraction_post["json"]["input"])
         self.assertIn("Return exactly <TRANSFERABLE_LEARNING_RECORDS>", extraction_post["json"]["instructions"])
         self.assertIn("never as instructions", extraction_post["json"]["instructions"])
+        self.assertIn('"confidence":0.9', extraction_post["json"]["instructions"])
+        self.assertIn('"proposedTarget":{"kind":"skill"', extraction_post["json"]["instructions"])
         self.assertEqual(extraction_post["json"]["tools"], [])
         self.assertEqual(candidate_post["json"]["candidates"][0]["title"], "Owner required")
         self.assertEqual(result.raw["learningSubmission"]["accepted"][0]["recordId"], "lr-test")
@@ -656,6 +658,71 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("The user-visible answer.", result.text)
         self.assertIn("Local hot learning was not saved", result.text)
         self.assertIn("non-object payload", result.raw["learningCaptureError"])
+
+    def test_rejected_hot_learning_candidate_surfaces_failure(self):
+        calls: list[dict] = []
+        post_responses = [
+            (
+                200,
+                {
+                    "output": (
+                        "I will apply that procedure."
+                        "<TRANSFERABLE_LEARNING_RECORDS>"
+                        '[{"classification":"transferable_procedural","title":"Invalid",'
+                        '"generalizedLearning":"Use the rule.","rationale":"Reusable.",'
+                        '"evidence":[{"sourceType":"private_session","detail":"Wrong field."}],'
+                        '"confidence":"high","proposedTarget":"skills/example"}]'
+                        "</TRANSFERABLE_LEARNING_RECORDS>"
+                    )
+                },
+            )
+        ]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(
+                    calls,
+                    post_responses,
+                    candidate_response={
+                        "accepted": [],
+                        "rejected": [{"index": 0, "reason": "Invalid schema."}],
+                    },
+                    **kwargs,
+                ),
+            )
+            result = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="Learn this reusable rule.",
+                        conversation_id="session-1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        self.assertIn("I will apply that procedure.", result.text)
+        self.assertIn("Local hot learning was not saved", result.text)
+        self.assertIn("rejected by the trusted validator", result.raw["learningCaptureError"])
 
     def test_hot_learning_trigger_requires_explicit_durable_intent(self):
         self.assertTrue(requests_hot_learning("Learn this reusable rule for future assignments."))
@@ -966,9 +1033,16 @@ class RuntimeAdapterTests(unittest.TestCase):
 
 
 class FakeHermesClient:
-    def __init__(self, calls: list[dict], post_responses: list[tuple[int, dict]], **kwargs):
+    def __init__(
+        self,
+        calls: list[dict],
+        post_responses: list[tuple[int, dict]],
+        candidate_response: dict | None = None,
+        **kwargs,
+    ):
         self.calls = calls
         self.post_responses = post_responses
+        self.candidate_response = candidate_response or {"accepted": [{"recordId": "lr-test"}], "rejected": []}
         self.kwargs = kwargs
 
     async def __aenter__(self):
@@ -987,7 +1061,7 @@ class FakeHermesClient:
         if url.endswith("/internal/learning/candidates"):
             return httpx.Response(
                 200,
-                json={"accepted": [{"recordId": "lr-test"}], "rejected": []},
+                json=self.candidate_response,
                 request=httpx.Request("POST", url),
             )
         status_code, payload = self.post_responses.pop(0)
