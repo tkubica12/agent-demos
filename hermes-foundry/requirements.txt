@@ -1,5 +1,0 @@
-fastapi>=0.104.0,<1
-uvicorn[standard]>=0.24.0,<1
-pydantic>=2.13.0,<3
-hermes-agent==0.16.0
-azure-identity>=1.25.0,<2

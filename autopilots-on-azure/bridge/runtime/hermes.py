@@ -20,6 +20,12 @@ from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment,
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
 LEARNING_RECORDS_START = "<TRANSFERABLE_LEARNING_RECORDS>"
 LEARNING_RECORDS_END = "</TRANSFERABLE_LEARNING_RECORDS>"
+CANDIDATE_SHAPE_EXAMPLE = (
+    '{"classification":"transferable_procedural","title":"Short title",'
+    '"generalizedLearning":"Generalized reusable rule","rationale":"Why it is reusable",'
+    '"evidence":[{"sourceType":"private_session","summary":"Generalized evidence without private details"}],'
+    '"confidence":0.9,"proposedTarget":{"kind":"skill","path":"skills/example-name"}}'
+)
 HOT_LEARNING_TRIGGERS = (
     "remember this",
     "remember that",
@@ -117,7 +123,8 @@ def bridge_instructions(request: AgentRequest) -> str:
         "Omit the block when there is no durable transferable learning. Candidate objects must contain only classification, "
         "title, generalizedLearning, rationale, evidence, confidence, and proposedTarget. Every evidence sourceType must be "
         "exactly private_session, tool_result, or public_source. The trusted runtime validates the candidate and immediately "
-        "materializes accepted learning into the local generation-scoped hot-learning skill."
+        "materializes accepted learning into the local generation-scoped hot-learning skill. Use this exact candidate shape "
+        f"with no alternate field shapes: {CANDIDATE_SHAPE_EXAMPLE}."
     )
 
 
@@ -177,11 +184,7 @@ def hot_learning_extraction_instructions() -> str:
         "Return exactly "
         f"{LEARNING_RECORDS_START}, one JSON array with at most 3 candidate objects, and {LEARNING_RECORDS_END}. "
         "Return an empty array when the turn is private, disposable, uncertain, or not reusable. Candidate objects contain "
-        "exactly this shape, with no synonyms or alternate field shapes: "
-        '{"classification":"transferable_procedural","title":"Short title",'
-        '"generalizedLearning":"Generalized reusable rule","rationale":"Why it is reusable",'
-        '"evidence":[{"sourceType":"private_session","summary":"Generalized evidence without private details"}],'
-        '"confidence":0.9,"proposedTarget":{"kind":"skill","path":"skills/example-name"}}. '
+        f"exactly this shape, with no synonyms or alternate field shapes: {CANDIDATE_SHAPE_EXAMPLE}. "
         "classification must be transferable_procedural or transferable_domain. confidence must be a JSON number from 0 to 1, "
         "not a word or string. Every evidence item must contain only sourceType and summary; sourceType must be exactly "
         "private_session, tool_result, or public_source. proposedTarget must be an object containing kind and path; use kind "
@@ -260,8 +263,27 @@ class HermesRuntimeAdapter:
                 accepted = learning_submission.get("accepted")
                 rejected = learning_submission.get("rejected")
                 if isinstance(rejected, list) and rejected and (not isinstance(accepted, list) or not accepted):
-                    learning_error = "All transferable-learning candidates were rejected by the trusted validator."
-            except httpx.HTTPError as exc:
+                    if (
+                        request.source != "dream"
+                        and candidate_block_present
+                        and requests_hot_learning(request.prompt)
+                    ):
+                        extraction_payload = await self._extract_hot_learning(base_url, api_key, request, visible_text)
+                        extraction_text = self._response_text(extraction_payload)
+                        _, replacement_candidates, extraction_block_present = parse_learning_candidate_block(extraction_text)
+                        if not extraction_block_present:
+                            raise ValueError("Hermes hot-learning extraction omitted the required candidate block.")
+                        if replacement_candidates:
+                            learning_submission = await self._submit_learning_candidates(
+                                base_url,
+                                api_key,
+                                replacement_candidates[: int(request.metadata.get("maxRecords", 3))],
+                            )
+                            accepted = learning_submission.get("accepted")
+                            rejected = learning_submission.get("rejected")
+                    if isinstance(rejected, list) and rejected and (not isinstance(accepted, list) or not accepted):
+                        learning_error = "All transferable-learning candidates were rejected by the trusted validator."
+            except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Hermes transferable-learning submission failed: %s", exc)
                 learning_error = f"Transferable-learning submission failed: {exc}"
         if learning_error:

@@ -641,7 +641,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             result = asyncio.run(
                 adapter.invoke(
                     AgentRequest(
-                        prompt="Learn this reusable rule.",
+                        prompt="Learn this reusable procedure.",
                         conversation_id="session-1",
                         user_id="user-1",
                         source="teams_personal",
@@ -706,7 +706,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             result = asyncio.run(
                 adapter.invoke(
                     AgentRequest(
-                        prompt="Learn this reusable rule.",
+                        prompt="Please use this procedure.",
                         conversation_id="session-1",
                         user_id="user-1",
                         source="teams_personal",
@@ -723,6 +723,88 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("I will apply that procedure.", result.text)
         self.assertIn("Local hot learning was not saved", result.text)
         self.assertIn("rejected by the trusted validator", result.raw["learningCaptureError"])
+
+    def test_rejected_inline_candidate_retries_with_hardened_extractor(self):
+        calls: list[dict] = []
+        candidate_responses = [
+            {"accepted": [], "rejected": [{"index": 0, "reason": "Invalid schema."}]},
+            {"accepted": [{"recordId": "lr-recovered"}], "rejected": []},
+        ]
+        post_responses = [
+            (
+                200,
+                {
+                    "output": (
+                        "I will apply that procedure."
+                        "<TRANSFERABLE_LEARNING_RECORDS>"
+                        '[{"classification":"transferable_procedural","title":"Invalid",'
+                        '"generalizedLearning":"Use the rule.","rationale":"Reusable.",'
+                        '"evidence":[{"sourceType":"private_session","detail":"Wrong field."}],'
+                        '"confidence":"high","proposedTarget":"skills/example"}]'
+                        "</TRANSFERABLE_LEARNING_RECORDS>"
+                    )
+                },
+            ),
+            (
+                200,
+                {
+                    "output": (
+                        "<TRANSFERABLE_LEARNING_RECORDS>"
+                        '[{"classification":"transferable_procedural","title":"Owner required",'
+                        '"generalizedLearning":"Require an accountable owner.","rationale":"Ownership prevents ambiguity.",'
+                        '"evidence":[{"sourceType":"private_session","summary":"A generalized correction established the rule."}],'
+                        '"confidence":0.9,"proposedTarget":{"kind":"skill","path":"skills/action-ownership"}}]'
+                        "</TRANSFERABLE_LEARNING_RECORDS>"
+                    )
+                },
+            ),
+        ]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(
+                    calls,
+                    post_responses,
+                    candidate_response=candidate_responses,
+                    **kwargs,
+                ),
+            )
+            result = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="Learn this reusable rule for future assignments.",
+                        conversation_id="session-1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        candidate_posts = [call for call in calls if call["url"].endswith("/internal/learning/candidates")]
+        self.assertEqual(result.text, "I will apply that procedure.")
+        self.assertEqual(len(candidate_posts), 2)
+        self.assertEqual(candidate_posts[1]["json"]["candidates"][0]["title"], "Owner required")
+        self.assertEqual(result.raw["learningSubmission"]["accepted"][0]["recordId"], "lr-recovered")
+        self.assertIsNone(result.raw["learningCaptureError"])
 
     def test_hot_learning_trigger_requires_explicit_durable_intent(self):
         self.assertTrue(requests_hot_learning("Learn this reusable rule for future assignments."))
@@ -1037,7 +1119,7 @@ class FakeHermesClient:
         self,
         calls: list[dict],
         post_responses: list[tuple[int, dict]],
-        candidate_response: dict | None = None,
+        candidate_response: dict | list[dict] | None = None,
         **kwargs,
     ):
         self.calls = calls
@@ -1059,9 +1141,14 @@ class FakeHermesClient:
     async def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
         if url.endswith("/internal/learning/candidates"):
+            candidate_response = (
+                self.candidate_response.pop(0)
+                if isinstance(self.candidate_response, list)
+                else self.candidate_response
+            )
             return httpx.Response(
                 200,
-                json=self.candidate_response,
+                json=candidate_response,
                 request=httpx.Request("POST", url),
             )
         status_code, payload = self.post_responses.pop(0)
