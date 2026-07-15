@@ -7,11 +7,11 @@ output "resource_group_name" {
 }
 
 output "location" {
-  value = azurerm_resource_group.main.location
+  value = var.apps_location
 }
 
-output "bridge_location" {
-  value = var.bridge_location
+output "sandbox_location" {
+  value = var.sandbox_location
 }
 
 output "acr_name" {

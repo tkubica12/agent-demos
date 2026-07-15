@@ -28,8 +28,7 @@ If platform/apps were already deployed and packages were already generated, star
 ```powershell
 Set-Location .\autopilots-on-azure
 
-Invoke-RestMethod "https://autopilot-bridge-openclaw-ehvw.icymeadow-c517d14c.swedencentral.azurecontainerapps.io/health"
-Invoke-RestMethod "https://autopilot-bridge-hermes-ehvw.icymeadow-c517d14c.swedencentral.azurecontainerapps.io/health"
+uv run python -m scripts.demo_ops status --runtime both
 ```
 
 Then open Microsoft 365 admin center and upload the Agent 365 packages. This step is still manual: `uv run python -m scripts.setup_agent365 --runtime <runtime> --publish` calls `a365 publish`, but the Agent 365 CLI only creates a ZIP package for admin-center upload.
@@ -353,7 +352,9 @@ If you see `pairing required: device is not approved yet`, run:
 uv run python -m scripts.prepare_control_ui
 ```
 
-Open the printed Gateway URL, paste the printed Gateway token, and approve the printed bridge `deviceId`.
+Open the printed Gateway URL and paste the printed Gateway token. In the current Control UI, select **Devices** (monitor icon), find **Pending approval**, and approve the bridge device whose ID matches the printed `deviceId`.
+
+The upstream CLI equivalent is `openclaw devices list --json` followed by `openclaw devices approve <requestId>`. Those commands must run inside the OpenClaw sandbox, so the Control UI is the normal operator path for this demo.
 
 ## 7. Validate selected runtime with `/invoke`
 

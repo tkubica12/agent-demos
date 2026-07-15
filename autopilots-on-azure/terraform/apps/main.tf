@@ -16,7 +16,7 @@ locals {
   suffix              = data.terraform_remote_state.platform.outputs.suffix
   resource_group_name = data.terraform_remote_state.platform.outputs.resource_group_name
   location            = data.terraform_remote_state.platform.outputs.location
-  bridge_location     = data.terraform_remote_state.platform.outputs.bridge_location
+  sandbox_location    = data.terraform_remote_state.platform.outputs.sandbox_location
   acr_login_server    = data.terraform_remote_state.platform.outputs.acr_login_server
 
   tags = {
@@ -56,7 +56,7 @@ resource "azurerm_role_assignment" "private_mcp_acr_pull" {
 
 resource "azurerm_user_assigned_identity" "public_shipments_mcp" {
   name                = "id-apshipmcp-${var.autopilot_name}-${local.suffix}"
-  location            = local.bridge_location
+  location            = local.location
   resource_group_name = local.resource_group_name
   tags                = local.tags
 }
@@ -70,7 +70,7 @@ resource "azurerm_role_assignment" "public_shipments_mcp_acr_pull" {
 
 resource "azurerm_user_assigned_identity" "bridge" {
   name                = "id-apbridge-${var.autopilot_name}-${local.suffix}"
-  location            = local.bridge_location
+  location            = local.location
   resource_group_name = local.resource_group_name
   tags                = local.tags
 }
@@ -180,7 +180,7 @@ resource "azapi_resource" "public_shipments_mcp_app" {
   type      = "Microsoft.App/containerApps@2025-07-01"
   name      = local.public_mcp_app_name
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
-  location  = local.bridge_location
+  location  = local.location
   tags      = local.tags
 
   identity {
@@ -263,7 +263,7 @@ resource "azapi_resource" "bridge_app" {
   type      = "Microsoft.App/containerApps@2025-07-01"
   name      = local.bridge_app_name
   parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
-  location  = local.bridge_location
+  location  = local.location
   tags      = local.tags
 
   identity {
@@ -371,7 +371,7 @@ resource "azapi_resource" "bridge_app" {
               },
               {
                 name  = "AZURE_REGION"
-                value = local.location
+                value = local.sandbox_location
               },
               {
                 name  = "AZURE_CLIENT_ID"
@@ -529,7 +529,7 @@ resource "azapi_resource" "bridge_app" {
           }
         ]
         scale = {
-          minReplicas = 0
+          minReplicas = 1
           maxReplicas = 1
           rules       = []
         }

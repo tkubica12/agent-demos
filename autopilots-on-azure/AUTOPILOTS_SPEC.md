@@ -68,6 +68,9 @@ Implemented; live-verified items are called out explicitly:
 - OpenClaw replied successfully in Teams 1:1 chat and a Teams channel mention after applying the same Microsoft 365 Agents SDK bridge path.
 - `scripts.snapshot_system` captures redacted local, Azure, Entra, Graph, and Agent 365 JSON state under `.local\snapshots\<timestamp>` for future clean-state diffs.
 - `scripts.demo_ops` provides A6 operator commands for side-by-side health checks, direct `/invoke` smoke validation, active runtime tfvars switching, and Azure Container Apps log triage.
+- Both runtimes use Foundry deployment `gpt-5-6-terra` (`gpt-5.6-terra`, version `2026-07-09`) with Global Standard capacity 100 and workload-identity authentication.
+- The live regional topology is Foundry plus ACA Sandboxes in Sweden Central and Container Apps plus ACR in North Europe. Globally peered VNets and shared private DNS preserve private Sandbox-to-MCP connectivity.
+- OpenClaw and Hermes both passed direct `/invoke` validation against Terra from the Sweden Central Sandbox Group on 2026-07-15.
 - Agent 365 Teams reactions work through the authenticated connector client: both runtimes add/remove temporary `eyes`, and Hermes validated semantic `heart` from runtime `TEAMS_REACTION` output.
 - `scripts.setup_agent365 --publish` creates/repackages `.local\<runtime>\agent365\manifest\manifest.zip`; it does not upload the package. Upload or upgrade in Microsoft 365 admin center remains manual because the current `a365` CLI exposes package creation, not package upload.
 - Live API inspection confirmed the Agent User registration and blueprint are healthy, but Agent 365 `agenticUserTemplates` packages are cataloged for Copilot rather than installed as Teams bot apps. The target Team has no RSC grants, so unmentioned channel messages are not delivered to the bridge.

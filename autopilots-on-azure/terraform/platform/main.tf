@@ -30,17 +30,25 @@ resource "azurerm_resource_group" "main" {
 
 resource "azurerm_virtual_network" "main" {
   name                = "vnet-autopilots-${local.suffix}"
-  location            = azurerm_resource_group.main.location
+  location            = var.apps_location
   resource_group_name = azurerm_resource_group.main.name
   address_space       = ["10.42.0.0/16"]
+  tags                = local.tags
+}
+
+resource "azurerm_virtual_network" "sandbox" {
+  name                = "vnet-sandbox-${local.suffix}"
+  location            = var.sandbox_location
+  resource_group_name = azurerm_resource_group.main.name
+  address_space       = ["10.44.0.0/16"]
   tags                = local.tags
 }
 
 resource "azurerm_subnet" "sandbox" {
   name                 = "snet-sandbox"
   resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.42.0.0/24"]
+  virtual_network_name = azurerm_virtual_network.sandbox.name
+  address_prefixes     = ["10.44.0.0/24"]
 
   delegation {
     name = "container-apps"
@@ -80,7 +88,7 @@ resource "azurerm_subnet" "private_mcp" {
 
 resource "azurerm_container_registry" "main" {
   name                = "apilots${local.suffix}"
-  location            = azurerm_resource_group.main.location
+  location            = var.apps_location
   resource_group_name = azurerm_resource_group.main.name
   sku                 = "Basic"
   admin_enabled       = true
@@ -91,7 +99,7 @@ resource "azapi_resource" "private_mcp_env" {
   type      = "Microsoft.App/managedEnvironments@2025-07-01"
   name      = "apmcp-${local.suffix}"
   parent_id = azurerm_resource_group.main.id
-  location  = azurerm_resource_group.main.location
+  location  = var.apps_location
   tags      = local.tags
 
   body = {
@@ -133,6 +141,31 @@ resource "azurerm_private_dns_zone_virtual_network_link" "private_mcp" {
   tags                  = local.tags
 }
 
+resource "azurerm_private_dns_zone_virtual_network_link" "sandbox" {
+  name                  = "vnet-sandbox-${local.suffix}"
+  resource_group_name   = azurerm_resource_group.main.name
+  private_dns_zone_name = azurerm_private_dns_zone.private_mcp.name
+  virtual_network_id    = azurerm_virtual_network.sandbox.id
+  registration_enabled  = false
+  tags                  = local.tags
+}
+
+resource "azurerm_virtual_network_peering" "sandbox_to_private_mcp" {
+  name                      = "sandbox-to-private-mcp"
+  resource_group_name       = azurerm_resource_group.main.name
+  virtual_network_name      = azurerm_virtual_network.sandbox.name
+  remote_virtual_network_id = azurerm_virtual_network.main.id
+  allow_forwarded_traffic   = true
+}
+
+resource "azurerm_virtual_network_peering" "private_mcp_to_sandbox" {
+  name                      = "private-mcp-to-sandbox"
+  resource_group_name       = azurerm_resource_group.main.name
+  virtual_network_name      = azurerm_virtual_network.main.name
+  remote_virtual_network_id = azurerm_virtual_network.sandbox.id
+  allow_forwarded_traffic   = true
+}
+
 resource "azurerm_private_dns_a_record" "private_mcp_apex" {
   name                = "@"
   zone_name           = azurerm_private_dns_zone.private_mcp.name
@@ -153,9 +186,9 @@ resource "azurerm_private_dns_a_record" "private_mcp_wildcard" {
 
 resource "azapi_resource" "bridge_env" {
   type      = "Microsoft.App/managedEnvironments@2025-07-01"
-  name      = "apbridge-se-${local.suffix}"
+  name      = "apbridge-ne-${local.suffix}"
   parent_id = azurerm_resource_group.main.id
-  location  = var.bridge_location
+  location  = var.apps_location
   tags      = local.tags
 
   body = {
@@ -197,7 +230,7 @@ resource "azapi_resource" "foundry" {
     properties = {
       allowProjectManagement        = true
       customSubDomainName           = "autopilots-${local.suffix}"
-      disableLocalAuth              = false
+      disableLocalAuth              = true
       dynamicThrottlingEnabled      = false
       publicNetworkAccess           = "Enabled"
       restrictOutboundNetworkAccess = false
@@ -251,9 +284,9 @@ resource "azapi_resource" "foundry_deployment" {
 
 resource "azapi_resource" "sandbox_group" {
   type      = "Microsoft.App/sandboxGroups@2026-02-01-preview"
-  name      = "autopilots-sandbox-${local.suffix}"
+  name      = "autopilots-sandbox-se-${local.suffix}"
   parent_id = azurerm_resource_group.main.id
-  location  = azurerm_resource_group.main.location
+  location  = var.sandbox_location
   tags      = local.tags
 
   identity {
@@ -268,15 +301,13 @@ resource "azapi_resource" "sandbox_vnet_connection" {
   type      = "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
   name      = "autopilots-vnet"
   parent_id = azapi_resource.sandbox_group.id
-  location  = azurerm_resource_group.main.location
+  location  = var.sandbox_location
 
   body = {
     properties = {
-      subnetId = azurerm_subnet.sandbox.id
+      subnetId = lower(azurerm_subnet.sandbox.id)
     }
   }
-
-
 
   schema_validation_enabled = false
 }

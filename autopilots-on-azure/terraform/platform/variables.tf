@@ -3,9 +3,14 @@ variable "location" {
   default = "swedencentral"
 }
 
-variable "bridge_location" {
+variable "sandbox_location" {
   type    = string
   default = "swedencentral"
+}
+
+variable "apps_location" {
+  type    = string
+  default = "northeurope"
 }
 
 variable "model_deployment_name" {

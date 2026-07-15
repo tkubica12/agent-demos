@@ -55,13 +55,13 @@ Microsoft Teams / Agent 365 / operator /invoke
 
 The platform Terraform state owns:
 
-- Azure resource group and virtual network;
-- Sandbox delegated subnet and Sandbox Group VNet connection;
-- internal ACA environment and private DNS for private MCP servers;
-- public ACA environment for bridges and public MCP servers;
-- Azure Container Registry;
-- Foundry account, project, and model deployment;
-- ACA Sandbox Group and its managed identity.
+- the Sweden Central Foundry account, project, and `gpt-5.6-terra` Global Standard deployment;
+- the Sweden Central Sandbox VNet, delegated subnet, Sandbox Group, and managed identity;
+- the North Europe application VNet, internal private-MCP ACA environment, public bridge ACA environment, and Azure Container Registry;
+- global VNet peering between the regional VNets;
+- private MCP DNS linked to both VNets.
+
+The split is intentional. Sweden Central remains the runtime and model region. North Europe hosts Container Apps because Azure rejected new Sweden Central managed environments with `ManagedEnvironmentCapacityHeavyUsageError`. Sandbox-to-private-MCP traffic stays private across the peered VNets.
 
 ### Runtime application layers
 
