@@ -583,7 +583,7 @@ Exit criteria:
 
 Goal: let one worker adapt locally and produce learning packets without central consolidation.
 
-Status: Complete. Blueprint v2.2.0, the secured bridge dream operation, runtime-local JSONL validator, deterministic redaction, private-path exclusions, and operator command are implemented and live-validated.
+Status: Complete. Blueprint v2.3.0, immediate generation-scoped hot learning, the secured bridge dream operation, runtime-local JSONL validator, deterministic redaction, private-path exclusions, and operator command are implemented and live-validated.
 
 Live evidence from 2026-07-15:
 
@@ -594,6 +594,11 @@ Live evidence from 2026-07-15:
 - Consolidated a compact-table status preference into private instance-local memory and produced no transferable record for it.
 - Returned a packet that excluded memory, raw sessions, `.env`, auth, logs, workspace, and `state.db*`.
 - Avoided Hermes shell-approval dependence by submitting bounded candidate JSON from the bridge to a trusted runtime-local validation endpoint.
+- Upgraded to v2.3.0 at commit `01e048d2991113aa327a827a62f78286b17206a5` without changing learning generation 1 or losing the three existing records.
+- Captured a rollback-checkpoint rule during an ordinary user turn as record `lr-20260715T202440Z-d0ef1ffb`.
+- Recalled the accepted rule in a new session immediately: the worker required both the previous version identifier and exact restore command without waiting for dreaming.
+- Ran a subsequent dream that recognized the rule as already captured and produced zero duplicate candidates.
+- Corrected `scripts.demo_ops reset-sandbox` to use the Sweden Central Sandbox data-plane endpoint rather than the North Europe application region.
 
 Tasks:
 
