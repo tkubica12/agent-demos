@@ -129,7 +129,7 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 ## Role Blueprint lifecycle and Worker Refresh
 
-The Role Blueprint is committed at `blueprints\junior-project-manager`. Hosted Workers install one immutable Role Release into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. A10 introduces Role Release 3.0.0.
+The Role Blueprint is committed at `blueprints\junior-project-manager`. Hosted Workers install one immutable Role Release into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. A10 introduces Role Release 3.0.1.
 
 Configure one Hermes Worker with the repository commit that contains the desired Role Release:
 
@@ -141,7 +141,7 @@ uv run python -m scripts.setup_app_tfvars `
   --role-blueprint junior-project-manager `
   --role-blueprint-source https://github.com/tkubica12/agent-demos.git `
   --role-blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
-  --role-release 3.0.0 `
+  --role-release 3.0.1 `
   --role-release-commit $commit `
   --assignment-scope "person-or-team" `
   --runtime-only

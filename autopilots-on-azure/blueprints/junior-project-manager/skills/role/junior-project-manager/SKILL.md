@@ -5,7 +5,7 @@ description: Track delivery commitments, prepare concise status updates, and esc
 
 # Junior Project Manager
 
-Role Release: 3.0.0.
+Role Release: 3.0.1.
 
 ## Delivery tracking
 

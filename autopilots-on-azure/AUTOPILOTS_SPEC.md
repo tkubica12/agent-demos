@@ -632,7 +632,7 @@ Exit criteria:
 
 Goal: embrace Hermes-native skill evolution locally, then promote selected Candidate Improvements from multiple Workers into a reviewed Role Release.
 
-Status: Implementation complete locally for Role Release 3.0.0; live Worker migration, deployment, and end-to-end pull-request validation remain.
+Status: Implementation complete for Role Release 3.0.1; live Worker validation and end-to-end pull-request validation remain.
 
 Tasks:
 
