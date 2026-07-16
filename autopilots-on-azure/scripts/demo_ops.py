@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -115,7 +116,7 @@ def bridge_url(outputs: dict[str, Any]) -> str:
 
 def invoke_body(runtime: str, *, conversation_id: str = "", message: str = "") -> dict[str, str]:
     return {
-        "conversationId": conversation_id or f"{runtime}-operator-smoke",
+        "conversationId": conversation_id or f"{runtime}-operator-smoke-{uuid.uuid4().hex}",
         "message": message or SMOKE_PROMPTS[runtime],
     }
 

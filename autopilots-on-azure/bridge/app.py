@@ -6,6 +6,7 @@ import os
 import secrets
 import re
 import time
+import uuid
 import unicodedata
 from collections import deque
 from functools import cache
@@ -728,7 +729,7 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
     if adapter.runtime_kind != "hermes":
         raise HTTPException(status_code=409, detail="Dream runs are supported only by the Hermes runtime.")
     worker_id = os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
-    session_id = f"dream:{worker_id}"
+    session_id = f"dream:{worker_id}:{uuid.uuid4().hex}"
     try:
         result = await adapter.dream(
             DreamRequest(

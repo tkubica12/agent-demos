@@ -127,7 +127,7 @@ class TeamsBridgeTests(unittest.TestCase):
             else:
                 os.environ["WORKER_ID"] = previous_worker
 
-        self.assertEqual(adapter.request.session_id, "dream:worker-1")
+        self.assertTrue(adapter.request.session_id.startswith("dream:worker-1:"))
         self.assertEqual(result.learning_status["statusVersion"], "2.0")
         self.assertEqual(result.sandbox_id, "sandbox-1")
 
