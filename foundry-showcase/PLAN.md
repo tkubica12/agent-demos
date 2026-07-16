@@ -13,9 +13,9 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 
 ## Implementation status
 
-Phases 1 through 3 are deployed and live-validated:
+Phases 1 through 3 and the Routines and AG-UI portions of Phase 4 are deployed and live-validated:
 
-- active Hosted Agent `foundry-showcase-main`, version 16;
+- active Hosted Agent `foundry-showcase-main`, version 22;
 - active LangGraph Hosted Agent `foundry-showcase-policy-helper`, version 2;
 - Responses `2.0.0` and Invocations `1.0.0`;
 - Foundry Toolbox `foundry-showcase-support`, default version 2;
@@ -26,7 +26,7 @@ Phases 1 through 3 are deployed and live-validated:
 - read tools and proposal creation without approval;
 - write approval request, pre-approval blocking, successful continuation, single apply, and audit behavior;
 - OpenTelemetry and Application Insights wiring;
-- 12/12 local MCP and approval-continuation tests;
+- 12/12 local MCP tests and 17/17 main-agent tests;
 - deployed Responses read, skill, memory, proposal, approval, write, and restore validation;
 - deployed structured Invocations read validation;
 - Foundry evaluation `evalrun_00182e08a0f84a2caf02aeabd3375edb`: 15/15.
@@ -34,13 +34,17 @@ Phases 1 through 3 are deployed and live-validated:
 - authenticated RemoteA2A project connection and policy-delegation Toolbox;
 - exact policy delegation from the workflow and structured Invocations;
 - policy contradictions rejected before proposal creation;
-- correlated trace operation spanning the primary agent, A2A Toolbox call, and helper.
+- correlated trace operation spanning the primary agent, A2A Toolbox call, and helper;
+- recurring weekday and one-time Routines with completed manual and timer-delivered runs;
+- Entra-authenticated AG-UI web client and thin Container Apps BFF;
+- secretless managed-identity federation and OBO exchange for delegated Foundry access;
+- authenticated AG-UI smoke response `AG-UI showcase ready`.
 
 The current Agent Framework/OpenAI client drops approval responses on service-managed continuation turns. `ApprovalContinuationFoundryChatClient` restores only the current response while continuing to suppress replayed approval history. The override is unit-tested and should be removed when the upstream package includes the fix.
 
 Hosted Toolbox token acquisition uses the Hosted Agent version's instance identity, not its Agent Identity Blueprint. Toolbox approval mappings use the composite names exposed by Foundry, such as `case-write___apply_case_update`.
 
-Phases 4 and 5 are not implemented. Routines, AG-UI, Agent 365, Teams, expanded evaluations, optimizer candidate review, red teaming, canary, and final promotion remain.
+Agent 365 and Teams remain in Phase 4. Expanded evaluations, optimizer candidate review, red teaming, canary, and final promotion remain in Phase 5.
 
 ## Demo story
 
@@ -416,12 +420,12 @@ Use Terraform with `azapi` for Azure resources and `azd` for Hosted Agent packag
 - enable A2A and project connection;
 - validate delegation, state, confirmation, and trace correlation.
 
-### Phase 4: Routines and user surfaces — pending
+### Phase 4: Routines and user surfaces — in progress
 
-- create recurring and one-time Routines;
-- deploy the thin AG-UI BFF;
+- create recurring and one-time Routines — complete;
+- deploy the thin AG-UI BFF — complete;
 - publish the main agent to Agent 365 and Teams;
-- validate direct, web, scheduled, and Teams paths.
+- validate direct, web, scheduled, and Teams paths — direct, web, and scheduled complete.
 
 ### Phase 5: Quality, optimization, and safety — pending
 

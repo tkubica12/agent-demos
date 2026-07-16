@@ -6,6 +6,7 @@ import os
 import tempfile
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -454,6 +455,69 @@ def foundry_memory_options(user_id: str) -> dict[str, Any]:
     return {"extra_headers": {"x-memory-user-id": user_id}}
 
 
+def parse_invocation_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if "action" not in value and "message" not in value and "input" in value:
+            return parse_invocation_payload(value["input"])
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {"message": value}
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("Invocation payload must be an object or a JSON object string.")
+
+
+def build_quality_digest(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    priority_counts: dict[str, int] = {}
+    owner_counts: dict[str, int] = {}
+    for case in cases:
+        priority = str(case.get("priority", "unknown"))
+        owner = str(case.get("owner", "unassigned"))
+        priority_counts[priority] = priority_counts.get(priority, 0) + 1
+        owner_counts[owner] = owner_counts.get(owner, 0) + 1
+    return {
+        "unresolvedCount": len(cases),
+        "priorityCounts": priority_counts,
+        "ownerCounts": owner_counts,
+        "cases": [
+            {
+                key: case.get(key)
+                for key in (
+                    "case_id",
+                    "title",
+                    "status",
+                    "priority",
+                    "owner",
+                    "updated_at",
+                )
+            }
+            for case in cases
+        ],
+    }
+
+
+def build_follow_up(case: dict[str, Any]) -> dict[str, Any]:
+    status = case.get("status")
+    if status == "resolved":
+        recommendation = "No follow-up is required unless the customer reports recurrence."
+    elif status == "pending_customer":
+        recommendation = "Contact the customer for the missing information and keep the case open."
+    elif status == "escalated":
+        recommendation = "Review the escalation owner and confirm the next internal checkpoint."
+    else:
+        recommendation = "Review current evidence with the owner and define the next customer update."
+    return {
+        "caseId": case.get("case_id"),
+        "status": status,
+        "priority": case.get("priority"),
+        "owner": case.get("owner"),
+        "recommendation": recommendation,
+    }
+
+
 class ResponsesAndInvocationsHost(ResponsesHostServer):
     def __init__(
         self,
@@ -468,9 +532,15 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
 
         @invocations.invoke_handler
         async def handle_invoke(request: Request) -> Response:
-            data = await request.json()
-            await self._ensure_agent_ready()
+            data = parse_invocation_payload(await request.json())
             correlation_id = correlation_id_from(request, data)
+            log_event(
+                "invocation.payload_parsed",
+                correlation_id=correlation_id,
+                keys=sorted(data),
+                action=data.get("action"),
+                message_type=type(data.get("message")).__name__,
+            )
 
             with span(
                 "request.received",
@@ -520,6 +590,7 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
         if action_response is not None:
             return action_response
 
+        await self._ensure_agent_ready()
         user_message = data.get("message")
         if not isinstance(user_message, str) or not user_message.strip():
             log_event("request.invalid", correlation_id=correlation_id, reason="missing_message")
@@ -699,6 +770,55 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             return JSONResponse(
                 {
                     "assessment": assessment,
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "daily_support_quality_review":
+            with span(
+                "routine.daily_support_quality_review",
+                correlation_id,
+                routine="daily-support-quality-review",
+            ):
+                cases = await self.case_workflow.tools.search_cases(limit=50)
+                unresolved = [
+                    case for case in cases if case.get("status") != "resolved"
+                ]
+                digest = build_quality_digest(unresolved)
+            log_event(
+                "routine.daily_support_quality_review_completed",
+                correlation_id=correlation_id,
+                unresolved_count=digest["unresolvedCount"],
+            )
+            return JSONResponse(
+                {
+                    "action": action,
+                    "generatedAt": datetime.now(UTC).isoformat(),
+                    "digest": digest,
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "case_follow_up_reminder":
+            case_id = data.get("caseId")
+            if not isinstance(case_id, str) or not case_id.strip():
+                raise ValueError("caseId must be a non-empty string.")
+            with span(
+                "routine.case_follow_up_reminder",
+                correlation_id,
+                routine="case-follow-up-reminder",
+                case_id=case_id,
+            ):
+                case = await self.case_workflow.tools.get_case(case_id)
+                follow_up = build_follow_up(case)
+            log_event(
+                "routine.case_follow_up_reminder_completed",
+                correlation_id=correlation_id,
+                case_id=case_id,
+            )
+            return JSONResponse(
+                {
+                    "action": action,
+                    "generatedAt": datetime.now(UTC).isoformat(),
+                    "followUp": follow_up,
                     "correlationId": correlation_id,
                 }
             )

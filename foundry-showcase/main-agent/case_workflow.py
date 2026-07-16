@@ -114,6 +114,15 @@ class WorkflowEnvelope(BaseModel):
 
 
 class CaseTools(Protocol):
+    async def search_cases(
+        self,
+        *,
+        query: str = "",
+        status: str | None = None,
+        priority: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]: ...
+
     async def get_case(self, case_id: str) -> dict[str, Any]: ...
 
     async def propose_case_update(
@@ -530,6 +539,31 @@ class MCPCaseTools:
     def __init__(self, mcp_tool) -> None:
         self.mcp_tool = mcp_tool
 
+    async def search_cases(
+        self,
+        *,
+        query: str = "",
+        status: str | None = None,
+        priority: str | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        value = await self._invoke_json(
+            "search_cases",
+            {
+                "query": query,
+                "status": status,
+                "priority": priority,
+                "limit": limit,
+            },
+        )
+        if isinstance(value, dict) and set(value) == {"result"}:
+            value = value["result"]
+        if not isinstance(value, list) or not all(
+            isinstance(item, dict) for item in value
+        ):
+            raise RuntimeError("Toolbox function search_cases returned an invalid list.")
+        return value
+
     async def get_case(self, case_id: str) -> dict[str, Any]:
         return await self._invoke("get_case", {"case_id": case_id})
 
@@ -558,6 +592,12 @@ class MCPCaseTools:
         )
 
     async def _invoke(self, remote_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        value = await self._invoke_json(remote_name, arguments)
+        if isinstance(value, dict):
+            return value
+        raise RuntimeError(f"Toolbox function {remote_name} returned no JSON object.")
+
+    async def _invoke_json(self, remote_name: str, arguments: dict[str, Any]) -> Any:
         await self.mcp_tool.connect()
         candidates = [
             function
@@ -580,6 +620,6 @@ class MCPCaseTools:
                 value = json.loads(text)
             except json.JSONDecodeError:
                 continue
-            if isinstance(value, dict):
+            if isinstance(value, (dict, list)):
                 return value
-        raise RuntimeError(f"Toolbox function {remote_name} returned no JSON object.")
+        raise RuntimeError(f"Toolbox function {remote_name} returned no JSON value.")

@@ -9,31 +9,39 @@ This project demonstrates Microsoft Foundry agent capabilities through one inspe
 | 1. Hosted baseline | Complete | Hosted Agent, Responses, Invocations, Foundry Memory, telemetry |
 | 2. Governed tools and skills | Complete | Toolbox v2, three published skills, Entra-protected case MCP, private Table Storage, approval round trip |
 | 3. Workflow and A2A | Complete | MAF checkpointed workflow, LangGraph Hosted Agent v2, authenticated A2A Toolbox delegation, correlated traces |
-| 4. Routines and surfaces | Not started | Routines, AG-UI, Agent 365, and Teams remain pending |
+| 4. Routines and surfaces | In progress | Recurring and one-time Routines plus secretless Entra/OBO AG-UI are live; Agent 365 and Teams remain |
 | 5. Quality and safety | Partial | Baseline evaluation is live; optimizer review, red teaming, canary, and final promotion remain pending |
 
 Current immutable assets:
 
-- Hosted Agent `foundry-showcase-main`, active version 16;
+- Hosted Agent `foundry-showcase-main`, active version 22;
 - Hosted Agent `foundry-showcase-policy-helper`, active version 2;
 - Toolbox `foundry-showcase-support`, default version 2;
 - Toolbox `foundry-showcase-policy-tools`, default version 1;
 - skills `support-style`, `escalation-policy`, and `profile-update-policy`, version 1;
 - case MCP `ca-foundry-showcase-case-mcp` in North Europe;
-- private case data in Azure Table Storage in Sweden Central.
+- private case data in Azure Table Storage in Sweden Central;
+- AG-UI BFF `ca-foundry-showcase-agui`, revision `ca-foundry-showcase-agui--0000005`;
+- weekday `daily-support-quality-review` Routine and disabled completed one-time `case-follow-up-reminder`.
 
 ## Architecture today
 
 ```text
-Responses / structured Invocations
-                |
-             MAF Hosted Agent v16
-        /            |                 \
-Foundry Memory  Support Toolbox v2   Policy Toolbox v1
-                      |                 |
-              Entra case MCP       RemoteA2A connection
-                      |                 |
-             private Table       LangGraph helper v2
+Responses / structured Invocations     AG-UI browser
+                |                           |
+                |                    Entra token / thin BFF
+                |                           |
+                +-------------+-------------+
+                              |
+                     MAF Hosted Agent v22
+                 /             |                 \
+        Foundry Memory  Support Toolbox v2   Policy Toolbox v1
+                              |                 |
+                       Entra case MCP       RemoteA2A connection
+                              |                 |
+                      private Table       LangGraph helper v2
+
+Foundry Routines ---------> structured Invocations
 ```
 
 Toolbox reads and proposal creation do not require approval. `case-write___apply_case_update` always requires the Responses approval exchange. Live validation proved that the write does not run before approval, resumes from `previous_response_id`, updates Table Storage once, and can be restored through a second approved write.
@@ -90,6 +98,25 @@ uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\con
   --project-name "<foundry-project-name>"
 ```
 
+Converge and validate both Routines:
+
+```powershell
+uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\configure_routines.py `
+  --project-endpoint $projectEndpoint `
+  --agent-name foundry-showcase-main `
+  --wait-for-timer
+```
+
+Build, deploy, and validate the secretless AG-UI BFF:
+
+```powershell
+uv run --project foundry-showcase\bff python foundry-showcase\scripts\deploy_agui.py `
+  --agent-invocations-url "<main-agent-invocations-url>" `
+  --foundry-account-name "<foundry-account-name>" `
+  --foundry-project-name "<foundry-project-name>" `
+  --auto-approve
+```
+
 ## Validate
 
 ```powershell
@@ -112,15 +139,19 @@ uv run --with pytest pytest -q
 uv run python smoke_a2a.py --a2a-url "<policy-helper-a2a-url>"
 Pop-Location
 
+Push-Location foundry-showcase\bff
+uv run pytest -q
+Pop-Location
+
 azd ai agent invoke foundry-showcase-main `
   "Use the case tools to get CASE-1001." `
-  --version 16 `
+  --version 22 `
   --protocol responses `
   --new-session `
   -C foundry-showcase
 
 azd ai agent invoke foundry-showcase-main `
-  --version 16 `
+  --version 22 `
   --protocol invocations `
   --input-file foundry-showcase\main-agent\smoke-invocation.json `
   --new-session `
@@ -133,7 +164,7 @@ azd ai agent eval run `
   -C foundry-showcase\main-agent
 ```
 
-The current Phase 3 regression is 9/9 main-agent tests, 4/4 helper tests, the existing 12/12 MCP regression, and 15/15 rows in Foundry evaluation run `evalrun_00182e08a0f84a2caf02aeabd3375edb`.
+The current regression is 17/17 main-agent tests, 4/4 helper tests, 3/3 AG-UI tests, the existing 12/12 MCP regression, and 15/15 rows in Foundry evaluation run `evalrun_00182e08a0f84a2caf02aeabd3375edb`.
 
 ## Known constraints
 
@@ -142,8 +173,9 @@ The current Phase 3 regression is 9/9 main-agent tests, 4/4 helper tests, the ex
 - Foundry Toolbox uses the Hosted Agent instance identity, not the Agent Identity Blueprint.
 - The A2A connection uses Entra token passthrough because the current regional backend rejects the documentation's `AgenticIdentity` discriminator. The caller's instance and blueprint principals have only `Foundry Agent Consumer` on the target project.
 - The current upstream client drops approval responses during service-managed continuation. The main agent contains a tested narrow override until the package fixes that behavior.
+- The AG-UI BFF uses its managed identity as a federated client assertion for a secretless OBO exchange, so Foundry and the internal `UserEntraToken` A2A connection receive the signed-in user context.
 - Non-fatal hosted logs can report duplicate telemetry instrumentation and unavailable optional `agents` instrumentation.
-- Phases 4 and 5 remain; the showcase does not yet meet the completion criteria in [PLAN.md](PLAN.md).
+- Agent 365/Teams and Phase 5 remain; the showcase does not yet meet the completion criteria in [PLAN.md](PLAN.md).
 
 ## Design constraints
 
