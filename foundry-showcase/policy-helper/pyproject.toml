@@ -1,0 +1,19 @@
+[project]
+name = "foundry-showcase-policy-helper"
+version = "0.1.0"
+description = "Bounded read-only LangGraph policy helper for the Foundry showcase."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "a2a-sdk==1.0.2",
+    "azure-ai-projects>=2.3.0",
+    "azure-identity>=1.25.0",
+    "langchain>=1.2.12",
+    "langchain-azure-ai[hosting]>=1.2.4",
+    "langchain-openai>=1.1.11",
+]
+
+[tool.uv]
+prerelease = "allow"
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]

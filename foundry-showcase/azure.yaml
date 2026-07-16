@@ -28,10 +28,14 @@ services:
               value: playground-user
             - name: MEMORY_STORE_PATH
               value: /files/foundry-showcase-memory-store.json
+            - name: WORKFLOW_CHECKPOINT_DIR
+              value: /files/foundry-showcase-workflows
             - name: TOOLBOX_NAME
               value: foundry-showcase-support
             - name: TOOLBOX_ENDPOINT
               value: ${TOOLBOX_ENDPOINT}
+            - name: POLICY_TOOLBOX_NAME
+              value: foundry-showcase-policy-tools
         kind: hosted
         metadata:
             tags:
@@ -41,9 +45,37 @@ services:
                 - Invocations Protocol
                 - Foundry Toolbox
                 - Foundry Memory
+                - A2A Delegation
         name: foundry-showcase-main
         protocols:
             - protocol: responses
               version: 2.0.0
             - protocol: invocations
               version: 1.0.0
+    foundry-showcase-policy-helper:
+        project: policy-helper
+        host: azure.ai.agent
+        language: python
+        codeConfiguration:
+            entryPoint: main.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        description: Bounded read-only LangGraph support-case policy helper exposed through Foundry A2A.
+        environmentVariables:
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: gpt-5.4-mini
+        kind: hosted
+        metadata:
+            tags:
+                - LangGraph
+                - Foundry Hosted Agent
+                - Responses Protocol
+                - A2A
+                - Read Only
+        name: foundry-showcase-policy-helper
+        protocols:
+            - protocol: responses
+              version: 2.0.0

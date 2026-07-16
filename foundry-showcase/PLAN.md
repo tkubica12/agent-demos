@@ -13,9 +13,10 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 
 ## Implementation status
 
-Phases 1 and 2 are deployed and live-validated:
+Phases 1 through 3 are deployed and live-validated:
 
-- active Hosted Agent `foundry-showcase-main`, version 9;
+- active Hosted Agent `foundry-showcase-main`, version 16;
+- active LangGraph Hosted Agent `foundry-showcase-policy-helper`, version 2;
 - Responses `2.0.0` and Invocations `1.0.0`;
 - Foundry Toolbox `foundry-showcase-support`, default version 2;
 - published skills `support-style`, `escalation-policy`, and `profile-update-policy`, version 1;
@@ -29,12 +30,17 @@ Phases 1 and 2 are deployed and live-validated:
 - deployed Responses read, skill, memory, proposal, approval, write, and restore validation;
 - deployed structured Invocations read validation;
 - Foundry evaluation `evalrun_00182e08a0f84a2caf02aeabd3375edb`: 15/15.
+- checkpointed MAF case-resolution workflow with deterministic risk branching and restoration;
+- authenticated RemoteA2A project connection and policy-delegation Toolbox;
+- exact policy delegation from the workflow and structured Invocations;
+- policy contradictions rejected before proposal creation;
+- correlated trace operation spanning the primary agent, A2A Toolbox call, and helper.
 
 The current Agent Framework/OpenAI client drops approval responses on service-managed continuation turns. `ApprovalContinuationFoundryChatClient` restores only the current response while continuing to suppress replayed approval history. The override is unit-tested and should be removed when the upstream package includes the fix.
 
 Hosted Toolbox token acquisition uses the Hosted Agent version's instance identity, not its Agent Identity Blueprint. Toolbox approval mappings use the composite names exposed by Foundry, such as `case-write___apply_case_update`.
 
-Phases 3 through 5 are not implemented. The next milestone is the MAF case-resolution workflow and one bounded LangGraph A2A policy helper. Routines, AG-UI, Agent 365, Teams, expanded evaluations, optimizer candidate review, red teaming, canary, and final promotion remain later work.
+Phases 4 and 5 are not implemented. Routines, AG-UI, Agent 365, Teams, expanded evaluations, optimizer candidate review, red teaming, canary, and final promotion remain.
 
 ## Demo story
 
@@ -403,7 +409,7 @@ Use Terraform with `azapi` for Azure resources and `azd` for Hosted Agent packag
 - connect Foundry Memory;
 - validate identity, user scope, audit, and tool contracts.
 
-### Phase 3: Workflow and cross-framework A2A — next
+### Phase 3: Workflow and cross-framework A2A — complete
 
 - implement the MAF case-resolution workflow;
 - deploy the LangGraph helper;

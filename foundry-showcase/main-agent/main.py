@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from agent_framework import (
@@ -27,6 +29,12 @@ from opentelemetry.trace import Span
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from case_workflow import (
+    CaseResolutionApprovalResponse,
+    CaseResolutionRequest,
+    CaseResolutionWorkflowService,
+    MCPCaseTools,
+)
 from memory_store import store
 
 
@@ -64,6 +72,57 @@ class TrustedToolboxSkillsSource(SkillsSource):
         if session is None:
             raise RuntimeError("Foundry Toolbox must be connected before skill discovery.")
         return await MCPSkillsSource(client=session).get_skills(context)
+
+
+class PolicyA2AService:
+    def __init__(self, toolbox: FoundryToolbox) -> None:
+        self.toolbox = toolbox
+
+    async def assess(self, policy_input: dict[str, str]) -> dict[str, Any]:
+        await self.toolbox.connect()
+        candidates = [
+            function
+            for function in self.toolbox.functions
+            if function.name == "SendMessage"
+            or function.name.endswith("___SendMessage")
+            or (function.additional_properties or {}).get("_mcp_remote_name") == "SendMessage"
+        ]
+        if len(candidates) != 1:
+            names = sorted(function.name for function in self.toolbox.functions)
+            raise RuntimeError(
+                f"Expected one A2A SendMessage function, found {len(candidates)} in {names}."
+            )
+        contents = await candidates[0].invoke(
+            arguments={
+                "message": {
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": json.dumps(policy_input, sort_keys=True),
+                        }
+                    ]
+                }
+            }
+        )
+        for content in reversed(contents):
+            text = getattr(content, "text", None)
+            if not isinstance(text, str):
+                continue
+            try:
+                task = json.loads(text)
+                parts = task["artifacts"][-1]["parts"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                continue
+            for part in reversed(parts):
+                if part.get("kind") != "text" or not isinstance(part.get("text"), str):
+                    continue
+                try:
+                    assessment = json.loads(part["text"])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(assessment, dict):
+                    return assessment
+        raise RuntimeError("A2A policy helper returned no structured assessment.")
 
 
 class ApprovalContinuationFoundryChatClient(FoundryChatClient):
@@ -179,7 +238,7 @@ def set_span_result(current_span: Span, **attributes: Any) -> None:
             current_span.set_attribute(key, value)
 
 
-def create_agent() -> Agent:
+def create_runtime() -> tuple[Agent, CaseResolutionWorkflowService, PolicyA2AService]:
     configure_telemetry()
     credential = create_credential()
     client = ApprovalContinuationFoundryChatClient(
@@ -214,7 +273,20 @@ def create_agent() -> Agent:
         disable_read_skill_resource_approval=True,
         disable_run_skill_script_approval=True,
     )
-    tools = [memory_tool.as_dict(), toolbox]
+    policy_toolbox_name = os.getenv(
+        "POLICY_TOOLBOX_NAME",
+        "foundry-showcase-policy-tools",
+    )
+    policy_toolbox = FoundryToolbox(
+        credential,
+        url=(
+            f"{required_env('FOUNDRY_PROJECT_ENDPOINT').rstrip('/')}/toolboxes/"
+            f"{policy_toolbox_name}/mcp?api-version=v1"
+        ),
+        name="policy-delegation",
+    )
+    policy_service = PolicyA2AService(policy_toolbox)
+    tools = [memory_tool.as_dict(), toolbox, policy_toolbox]
     log_event(
         "memory.foundry_tool_configured",
         memory_store_name=memory_store_name,
@@ -227,8 +299,13 @@ def create_agent() -> Agent:
         toolbox_name=os.getenv("TOOLBOX_NAME"),
         toolbox_endpoint=os.getenv("TOOLBOX_ENDPOINT"),
     )
+    log_event(
+        "a2a.policy_helper_configured",
+        policy_toolbox_name=policy_toolbox_name,
+        policy_toolbox_endpoint=policy_toolbox.url,
+    )
 
-    return Agent(
+    agent = Agent(
         client=client,
         name="FoundryShowcaseAgent",
         instructions=(
@@ -243,6 +320,10 @@ def create_agent() -> Agent:
             "update proposals. The case-write.apply_case_update tool is a "
             "high-impact action and must run only after the client completes "
             "the explicit Agent Framework approval exchange. "
+            "Delegate support-case policy contradiction and risk checks to the "
+            "read-only A2A policy helper before recommending high-impact updates. "
+            "Never ask the policy helper to mutate a case, and identify its output "
+            "as an advisory policy assessment rather than a completed write. "
             "For profile mutations, prefer explicit profile patch operations "
             "provided by the host API. Include correlation IDs only when "
             "explicitly asked; otherwise answer naturally."
@@ -254,6 +335,26 @@ def create_agent() -> Agent:
             "extra_headers": {"x-memory-user-id": memory_default_user_id},
         },
     )
+    checkpoint_dir = Path(
+        os.getenv(
+            "WORKFLOW_CHECKPOINT_DIR",
+            str(Path(tempfile.gettempdir()) / "foundry-showcase-workflows"),
+        )
+    )
+    return (
+        agent,
+        CaseResolutionWorkflowService(
+            MCPCaseTools(toolbox),
+            checkpoint_dir,
+            policy_tools=policy_service,
+        ),
+        policy_service,
+    )
+
+
+def create_agent() -> Agent:
+    agent, _, _ = create_runtime()
+    return agent
 
 
 def correlation_id_from(request: Request, data: dict) -> str:
@@ -354,8 +455,15 @@ def foundry_memory_options(user_id: str) -> dict[str, Any]:
 
 
 class ResponsesAndInvocationsHost(ResponsesHostServer):
-    def __init__(self, agent: Agent) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        case_workflow: CaseResolutionWorkflowService,
+        policy_delegate: PolicyA2AService,
+    ) -> None:
         super().__init__(agent)
+        self.case_workflow = case_workflow
+        self.policy_delegate = policy_delegate
         invocations = InvocationAgentServerHost()
 
         @invocations.invoke_handler
@@ -393,6 +501,17 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             session_id = request.state.session_id
         stream = data.get("stream", False)
         user_id = user_id_from(request, data)
+        try:
+            workflow_response = await self._handle_workflow_action(
+                data,
+                user_id=user_id,
+                correlation_id=correlation_id,
+            )
+        except (ValueError, KeyError) as exc:
+            log_event("workflow.action_invalid", correlation_id=correlation_id, error=str(exc))
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if workflow_response is not None:
+            return workflow_response
         try:
             action_response = handle_memory_action(user_id, session_id, data)
         except (KeyError, ValueError) as exc:
@@ -490,6 +609,106 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             pass
         return JSONResponse({"response": response.text, "correlationId": correlation_id})
 
+    async def _handle_workflow_action(
+        self,
+        data: dict,
+        *,
+        user_id: str,
+        correlation_id: str,
+    ) -> JSONResponse | None:
+        action = data.get("action")
+        if action == "start_case_resolution":
+            changes = data.get("changes")
+            if not isinstance(changes, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in changes.items()
+            ):
+                raise ValueError("changes must be an object with string values.")
+            with span("workflow.start", correlation_id, workflow="resolve_support_case"):
+                envelope = await self.case_workflow.start(
+                    CaseResolutionRequest(
+                        case_id=data.get("caseId", ""),
+                        changes=changes,
+                        reason=data.get("reason", ""),
+                        requested_by=data.get("requestedBy") or user_id,
+                    )
+                )
+            log_event(
+                "workflow.started",
+                correlation_id=correlation_id,
+                workflow_id=envelope.workflow_id,
+                state=envelope.state,
+            )
+            return JSONResponse(
+                {
+                    **envelope.model_dump(mode="json", exclude_none=True),
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "resume_case_resolution":
+            workflow_id = data.get("workflowId")
+            checkpoint_id = data.get("checkpointId")
+            request_id = data.get("requestId")
+            for name, value in (
+                ("workflowId", workflow_id),
+                ("checkpointId", checkpoint_id),
+                ("requestId", request_id),
+            ):
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"{name} must be a non-empty string.")
+            with span("workflow.resume", correlation_id, workflow="resolve_support_case"):
+                envelope = await self.case_workflow.resume(
+                    workflow_id=workflow_id,
+                    checkpoint_id=checkpoint_id,
+                    request_id=request_id,
+                    response=CaseResolutionApprovalResponse(
+                        approved=data.get("approved"),
+                        confirmation_id=data.get("confirmationId"),
+                        comment=data.get("comment", ""),
+                    ),
+                )
+            log_event(
+                "workflow.resumed",
+                correlation_id=correlation_id,
+                workflow_id=envelope.workflow_id,
+                state=envelope.state,
+            )
+            return JSONResponse(
+                {
+                    **envelope.model_dump(mode="json", exclude_none=True),
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "assess_case_policy":
+            policy_input = data.get("policyInput")
+            if not isinstance(policy_input, dict) or not policy_input:
+                raise ValueError("policyInput must be a non-empty object.")
+            if not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in policy_input.items()
+            ):
+                raise ValueError("policyInput keys and values must be strings.")
+            with span("a2a.policy_assessment", correlation_id, worker="policy-helper"):
+                assessment = await self.policy_delegate.assess(policy_input)
+            log_event(
+                "a2a.policy_assessment_completed",
+                correlation_id=correlation_id,
+                decision=assessment.get("decision"),
+                risk=assessment.get("risk"),
+            )
+            return JSONResponse(
+                {
+                    "assessment": assessment,
+                    "correlationId": correlation_id,
+                }
+            )
+        return None
+
 
 if __name__ == "__main__":
-    ResponsesAndInvocationsHost(create_agent()).run()
+    runtime_agent, runtime_workflow, runtime_policy_delegate = create_runtime()
+    ResponsesAndInvocationsHost(
+        runtime_agent,
+        runtime_workflow,
+        runtime_policy_delegate,
+    ).run()
