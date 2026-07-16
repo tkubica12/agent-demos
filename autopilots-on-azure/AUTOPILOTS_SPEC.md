@@ -632,7 +632,7 @@ Exit criteria:
 
 Goal: embrace Hermes-native skill evolution locally, then promote selected Candidate Improvements from multiple Workers into a reviewed Role Release.
 
-Status: Implementation complete locally for Role Release 3.0.0; live Worker migration, deployment, and end-to-end pull-request validation remain.
+Status: Implemented and live-validated through a single-Worker draft Promotion pull request. Multi-Worker fan-in remains to be exercised when a second Worker exists.
 
 Tasks:
 
@@ -648,7 +648,8 @@ Tasks:
 - Complete: keep the current Worker running when refresh preflight fails.
 - Complete: validate multi-Worker packets and run the Foundry merger/judge over privacy-scanned content only.
 - Complete: support draft GitHub pull-request creation for the proposed next Role Release.
-- Remaining live validation: migrate the A9 Worker, deploy Role Release 3.0.0, exercise foreground and Dreaming skill evolution, approve/export a packet, and create a real draft Role Release pull request.
+- Live: migrated the A9 Worker, deployed Role Release 3.0.1, exercised foreground and Dreaming skill evolution, approved/exported attested packets, ran the merger/judge, and created draft Role Release 3.1.0 PR #3.
+- Remaining live validation: process independent Learning Packets from at least two Workers of the same Role Release.
 
 Exit criteria:
 

@@ -29,6 +29,7 @@ from collective_learning import (  # noqa: E402
 )
 from learning import (  # noqa: E402
     LearningRecordError,
+    abort_learning_turn,
     assert_legacy_state_migrated,
     begin_learning_turn,
     build_learning_status,
@@ -501,6 +502,23 @@ class HermesRuntimeTests(unittest.TestCase):
             reconcile_learning_turn(profile, token=second["token"], provenance=[])
 
         self.assertNotEqual(first["token"], second["token"])
+
+    def test_abort_learning_turn_rolls_back_and_releases_lease(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, profile, _ = self._installed_profile(root)
+            role = profile / "skills" / "role" / "junior-project-manager" / "SKILL.md"
+            before = role.read_text(encoding="utf-8")
+            turn = begin_learning_turn(profile)
+            role.write_text(before + "\nPartial failed change.\n", encoding="utf-8")
+
+            result = abort_learning_turn(profile, token=turn["token"])
+            after = role.read_text(encoding="utf-8")
+            retry = begin_learning_turn(profile)
+            reconcile_learning_turn(profile, token=retry["token"], provenance=[])
+
+        self.assertTrue(result["aborted"])
+        self.assertEqual(after, before)
 
     def test_learning_status_contains_provenance_and_excludes_private_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

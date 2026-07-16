@@ -20,7 +20,7 @@ class DemoOpsTests(unittest.TestCase):
     def test_invoke_body_uses_runtime_default_prompt(self):
         body = invoke_body("hermes")
 
-        self.assertEqual(body["conversationId"], "hermes-operator-smoke")
+        self.assertTrue(body["conversationId"].startswith("hermes-operator-smoke-"))
         self.assertEqual(body["message"], "Reply with exactly: Hermes bridge OK")
 
     def test_missing_expected_markers_detects_failed_openclaw_smoke(self):
