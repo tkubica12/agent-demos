@@ -1,27 +1,11 @@
 # Repository Guidance
 
-## Purpose
-
-This is a demonstration and experimentation repository, not a production system. Prefer the simplest real implementation that makes architecture, behavior, identity, evaluation, observability, and cost easy to explain and inspect.
-
-The repository has two flagship projects:
-
-- `autopilots-on-azure`: the advanced autonomous digital-worker demo. It owns the OpenClaw and Hermes runtimes, persistent runtime state, memory, identity, multiple agents and users, learning, skill consolidation, and swarm-style scenarios.
-- `progressive-agents`: the step-by-step Microsoft Foundry learning path. Each numbered step starts from the previous working step and adds one clearly isolated capability using a small custom Microsoft Agent Framework agent.
-
-A future consolidated Foundry showcase may derive from validated `progressive-agents` steps. It should demonstrate a coherent Foundry solution such as Hosted Agents, Agent 365 and Teams publication, Foundry Memory, observability, evaluations, optimization, guarded improvement, skills, tools, MCP governance, red teaming, and bounded helper agents over A2A.
-
-Keep the roles distinct:
-
-- Do not introduce Hermes, OpenClaw, general-purpose autonomous runtimes, m:n group-chat behavior, replica swarms, or distributed skill-learning architecture into `progressive-agents`.
-- Multi-agent behavior in the Foundry path should remain bounded and easy to explain: one primary agent may call focused helper agents through platform-native A2A integration.
-- If a feature belongs to both flagships, `progressive-agents` proves the smallest Foundry-native capability; `autopilots-on-azure` demonstrates the advanced autonomous-system version.
-- Keep the educational agent material under `docs\`.
-
 ## Change Approach
 
+- Treat this as a demonstration and experimentation repository, not a production system.
+- Prefer the simplest real implementation that makes architecture, behavior, identity, evaluation, observability, and cost easy to explain and inspect.
 - Keep the repository clean and current. Do not preserve backward compatibility, migration paths, archives, duplicated implementations, or superseded attempts.
-- Breaking changes are expected. Delete obsolete code, resources, fallbacks, generated files, and documentation once their useful behavior is covered by a flagship project.
+- Breaking changes are expected. Delete obsolete code, resources, fallbacks, generated files, and documentation once their useful behavior is covered by a current demo.
 - Prefer a clean final architecture over compatibility with an older demo.
 - Do not add fake demonstrations, mocks, simulations, replay paths, or substantial strategy changes without consulting the user.
 - Prefer real product, model, identity, deployment, evaluation, and observability flows whenever practical.
@@ -30,6 +14,8 @@ Keep the roles distinct:
 
 ## Progressive Demo Rules
 
+- Do not add Hermes, OpenClaw, general-purpose autonomous runtimes, m:n group-chat behavior, replica swarms, or distributed skill learning.
+- Keep multi-agent behavior bounded: one primary agent may call focused helpers through platform-native A2A.
 - Every numbered step must remain independently understandable and runnable.
 - Start a new step by copying the previous step, then change only what the new step needs.
 - Keep the primary agent intentionally small and domain-focused.
@@ -64,8 +50,9 @@ Keep the roles distinct:
 
 ## Documentation and Decisions
 
-- Keep the root `README.md` short: explain the repository portfolio and point to the flagship projects and `docs\`.
-- Keep detailed design, plans, and operations inside the project they describe.
+- Keep the root `README.md` short: state the purpose and link to projects and `docs\`.
+- Keep detailed design and operations inside the project they describe.
+- Keep educational agent material under `docs\`.
 - Do not create documentation files without user agreement.
 - Use a focused `SPEC.md` or `ARCHITECTURE.md` when detail is warranted.
 - Record architecture decisions in `adr\` only after multiple viable options were discussed and a decision was made. State the options, decision, rationale, and rejected alternatives.
