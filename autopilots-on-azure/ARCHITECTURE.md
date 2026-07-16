@@ -1,6 +1,6 @@
 # Autopilots on Azure architecture
 
-This document describes the durable, currently implemented system architecture. It intentionally excludes deployment commands, troubleshooting steps, and future milestone plans.
+This document describes the durable system architecture. Implemented behavior and accepted target architecture are labeled separately. Deployment commands and troubleshooting remain in `README.md`; milestone execution remains in `AUTOPILOTS_SPEC.md`.
 
 ## Document map
 
@@ -190,11 +190,15 @@ Agent 365 BYO currently requires a public endpoint and supported client connecti
 | --- | --- |
 | Azure resources | Terraform platform/apps states. |
 | Runtime filesystem | Sandbox Data Disk volume. |
-| Hermes blueprint source | Commit-pinned Git repository and `distribution.yaml`. |
-| Hermes active profile | `/data/hermes/profiles/<blueprint-name>` on the Sandbox Data Disk. |
-| Hermes instance manifest | `<profile>/local/autopilots-instance.json`; records source, version, commit, instance, and assignee scope. |
-| Hermes private adaptation | `<profile>/memories`, `<profile>/local/private-cache.md`, and private SQLite/session state; permanent for that instance and never exported by default. |
-| Hermes transferable hot learning | `<profile>/learning/records.jsonl` rendered into `<profile>/skills/hot-learning/SKILL.md`; immediately active but scoped to one blueprint learning generation. |
+| Role Blueprint source | Commit-pinned Git repository and `distribution.yaml`. |
+| Active Worker profile | `/data/hermes/profiles/<role-blueprint>` on the Sandbox Data Disk. |
+| Worker manifest | `<profile>/local/worker.json`; records Role Blueprint source, Role Release, commit, Worker identity, and assignment scope. |
+| Personal Memory | `<profile>/memories/USER.md` and `MEMORY.md`; bounded Hermes-native memory injected as a frozen snapshot at session start. Permanent for the Worker and never exported. |
+| Private Playbooks | `<profile>/skills/private/`; Hermes-native progressive-disclosure skills and references. Permanent for the Worker and never exported. |
+| Work History | `<profile>/state.db`; messages, tool calls, and FTS indexes used by `session_search`. Private operational evidence and never exported raw. |
+| Role Skills | `<profile>/skills/role/`; inherited from the Role Release and locally patchable. |
+| Candidate Improvements | `<profile>/skills/candidates/`; Worker-authored reusable skills scoped to the current Role Release. |
+| Learning provenance | `<profile>/learning/records.jsonl`; linked rationale and evidence for Role Skill diffs and Candidate Improvements. |
 | Agent 365 blueprint/package files | `.local\<runtime>\agent365`. |
 | Agent instance identifiers | `.local\<runtime>\agent365\instance.*.json`. |
 | Entra MCP API discovery state | `.local\a7-*-mcp-api.json`, recoverable by display name. |
@@ -203,11 +207,179 @@ Agent 365 BYO currently requires a public endpoint and supported client connecti
 
 Local state accelerates operation but must not be the only source of truth for cloud object discovery.
 
-### Hermes blueprint and state boundary
+## Hermes memory and Collective Learning Review architecture
 
-Hermes uses one named profile per digital-worker instance. Git owns only paths declared by the profile distribution, while the Sandbox Data Disk owns memories, sessions, SQLite state, workspace, `.env`, `local\`, and assignment-specific artifacts. A blueprint upgrade changes the pinned commit label, recreates the sandbox container, reuses the same Data Disk, and synchronizes only distribution-owned paths.
+### Design stance
 
-Learning has two durability lanes. Private adaptation survives all generations. Transferable candidates are validated on either the normal hot path or a dream run, journaled, and rendered into a generated hot-learning skill for immediate use. A reviewed fleet release increments `learning_generation`; installation archives the old journal and removes the generated hot skill before the new shared blueprint becomes active.
+Hermes is the local learning engine. Autopilots should use its native memory, progressive skill disclosure, `/learn`, `skill_manage`, background review, and curator rather than replacing them with a parallel learning runtime.
+
+Autopilots adds the boundaries Hermes does not provide across Workers:
+
+- durable classification of private versus potentially transferable adaptation;
+- provenance and rationale linked to local skill changes;
+- deterministic redaction and export allowlists;
+- Role Release lifecycle for Role Skills and Candidate Improvements;
+- Collective Learning Review across Workers into a reviewed GitHub pull request.
+
+Local learning and Collective Learning Review are intentionally different:
+
+- Local learning optimizes one Worker and may be wrong, narrow, or private.
+- Collective Learning Review compares many Workers, generalizes patterns, rejects outliers, and proposes the next Role Release.
+
+### Memory and learning planes
+
+| Plane | Store | Loaded or used | Role Release behavior | Collective Learning Review |
+| --- | --- | --- | --- | --- |
+| Personal Memory: user profile | `memories/USER.md` | Frozen into every fresh session prompt | Survives every Role Release | Never exported |
+| Personal Memory: compact notes | `memories/MEMORY.md` | Frozen into every fresh session prompt | Survives every Role Release | Never exported |
+| Private Playbook | Hermes-native skill under the reserved private namespace, with optional references | Progressive disclosure by skill name and description | Survives Worker Refresh; user-directed `/learn` skills are curator-exempt | Never exported |
+| Work History | `state.db` sessions, messages, tool calls, and FTS | `session_search`, foreground recall, and Dreaming evidence | Survives every Role Release | Raw content never exported |
+| Role Skill | Git-backed skill inherited from the Role Release | Progressive disclosure during normal work | Locally mutable within one Role Release; replaced during Worker Refresh | Export local diff plus provenance |
+| Candidate Improvement | Hermes-native skill under the reserved candidate namespace | Progressive disclosure in a fresh session | Scoped to one Role Release; archived or retired during Worker Refresh | Export artifact plus provenance |
+| A9 legacy learning record v1 | `learning/records.jsonl` | Operator inspection and central candidate input; not ordinary task context | Scoped to the A9 release and archived | Exported during migration |
+| A10 target: artifact provenance v2 | Extended learning journal linked to skill artifacts | Dreaming, operator inspection, and Collective Learning Review | Scoped to one Role Release and archived | Exported with artifact |
+
+`USER.md` and `MEMORY.md` are official bounded Hermes memory. Rich private content belongs in a Private Playbook rather than an additional custom cache. A playbook can include `SKILL.md` for discovery and procedure plus reference files for customer, account, project, manager, or team facts.
+
+All private stores remain private even when Dreaming uses them as evidence. Dreaming may derive a separate generalized Candidate Improvement, but it never moves, promotes, deletes, or exposes the Private Playbook source.
+
+### Skills are the Worker's local behavior
+
+The intended worker behavior is its effective skill tree, not the JSONL journal.
+
+A10 allows Hermes to:
+
+- patch an inherited Role Skill after discovering a better procedure;
+- create a Candidate Improvement with `/learn`, `skill_manage`, or background review;
+- create a Private Playbook containing assignment-specific knowledge or procedure;
+- patch an existing Private Playbook as the assignment evolves.
+
+An inherited Role Skill patch takes effect in the next fresh session. The Role Release commit remains the immutable baseline, so central tooling can compute an exact diff later. A new Candidate Improvement is also active locally after fresh-session discovery and is scoped to that Role Release. A Private Playbook is excluded from export and survives Worker Refresh.
+
+Role Release is the only public replacement boundary. Before any Worker Refresh replaces Role Skills, eligible local diffs and provenance must have a durable export receipt.
+
+The lifecycle requires explicit classification metadata outside free-form skill content. Each locally created or modified skill must be classified as one of:
+
+- `private_playbook`;
+- `candidate_improvement`;
+- `role_skill`;
+- `runtime_owned`.
+
+Private details must not be patched into Role Skills or Candidate Improvements. If a procedure depends on a named customer or assignment, Hermes creates or patches a Private Playbook instead.
+
+### What `learning/records.jsonl` means
+
+The journal is not primary behavior memory and not a replacement for skill diffs. It is the provenance envelope explaining why a Candidate Improvement or Role Skill changed.
+
+A9 schema v1 currently contains classification, title, generalized learning, rationale, redacted evidence summaries, confidence, a proposed target, record identity, timestamp, and privacy result. It has no exact artifact path binding, action, base commit, or before/after hash. A9 also uses the records as input to the generated aggregate `hot-learning` skill.
+
+A10 provenance schema v2 identifies:
+
+- record ID and timestamp;
+- classification and confidence;
+- affected skill or knowledge paths;
+- create, patch, or delete action;
+- Role Release commit and before/after content hashes;
+- generalized learning and rationale;
+- redacted evidence summaries and source types;
+- privacy/redaction result;
+- originating hot turn or dream run;
+- optional relationships to earlier records or superseded attempts.
+
+Collective Learning Review therefore receives both:
+
+1. **What changed:** exact Candidate Improvement artifacts and Role Skill diffs against the recorded Role Release.
+2. **Why it changed:** learning records with rationale, evidence, confidence, and provenance.
+
+This lets the merger judge distinguish repeated successful adaptations from accidental edits, private overfitting, and unsupported local preferences.
+
+Export is fail closed. A10 must:
+
+- export only artifacts explicitly classified `candidate_improvement` or diffs of recorded Role Skill paths;
+- exclude Private Playbooks, Personal Memory, Work History, credentials, logs, and workspace data before invoking any merger model;
+- run source-aware DLP and redaction over both records and changed artifacts, not only regex checks over the journal;
+- require a human-visible export summary and approval before packets leave the worker privacy boundary;
+- never use `privatePathsExcluded` metadata alone as proof that exclusion occurred.
+
+### Dreaming outputs
+
+Dreaming is a regular offline reflection pass over Work History, outcomes, corrections, tool traces, Personal Memory, Private Playbooks, Role Skills, and Candidate Improvements. It can discover patterns that were not obvious during one foreground turn.
+
+For every observation, dreaming chooses one output:
+
+| Observation | Dream output |
+| --- | --- |
+| Critical personal preference or compact private fact | Add or consolidate Personal Memory |
+| Rich assignment-specific fact or procedure | Create or patch a Private Playbook and its references |
+| Reusable correction to inherited role behavior | Patch a Role Skill and append linked provenance |
+| New reusable procedure or domain capability | Create a Candidate Improvement and append linked provenance |
+| Already represented learning | No artifact change; record or report duplicate suppression |
+| Secret, raw customer data, noise, or weak speculation | Do not store |
+
+Foreground learning can produce the same artifact types. The difference is evidence horizon: a foreground turn sees an immediate explicit lesson, while Dreaming can compare several sessions and identify recurrence, failure patterns, and Promotion opportunities.
+
+### Role Release and Collective Learning Review lifecycle
+
+```text
+reviewed Role Release N
+              |
+              v
+Worker receives Role Skills
+              |
+              v
+Hermes uses, creates, and patches skills locally
+       |                         |
+       | private                 | transferable candidate
+       v                         v
+Personal Memory/Playbooks      Candidate Improvement + provenance
+       |                         |
+       | excluded                v
+       |                 central A10 exporter
+       |                         |
+       |               diffs + rationale from many Workers
+       |                         |
+       |               Collective Learning Review
+       |                         |
+       +-------------------------v
+                   reviewed Role Release N+1
+```
+
+Before adopting Role Release N+1, the Worker exports Candidate Improvements and persists an approved export receipt. Worker Refresh then:
+
+1. preserves Personal Memory, Private Playbooks, and Work History;
+2. archives Role Release N provenance and Candidate Improvements;
+3. replaces Role Skills with the reviewed Role Release N+1 baseline;
+4. removes superseded release-local improvements;
+5. starts fresh sessions against the new skill index.
+
+The installer must reject Role Release rollback and must not replace release-local artifacts without a durable export/archive receipt. Reserved Role Skill, Private Playbook, Candidate Improvement, and runtime namespaces prevent a later Role Blueprint path from colliding with Worker-owned state.
+
+Loss or modification of a Candidate Improvement is acceptable at this boundary: Collective Learning Review may reject it, generalize it differently, or replace it with stronger evidence. Loss of Personal Memory, Private Playbooks, or Work History is not acceptable.
+
+### A9 migration into A10
+
+A9 implemented a safe interim subset:
+
+- foreground and dream turns emit bounded generalized candidate records;
+- the runtime validates, redacts, deduplicates, and appends `learning/records.jsonl`;
+- the runtime renders all accepted records into one generated `skills/hot-learning/SKILL.md`;
+- Role Blueprint instructions keep private content out of the journal.
+
+A10 retires the generated aggregate skill and connects Hermes-native skill creation and Role Skill patches to provenance and export. It adds:
+
+- skill classification and provenance metadata;
+- interception or auditing of `skill_manage`, `/learn`, and background-review writes;
+- exact diff export against the Role Release commit;
+- Private Playbook exclusion and redaction;
+- release retirement for Candidate Improvements;
+- preservation or mandatory export of Role Skill diffs before any distribution-owned replacement;
+- fail-closed artifact allowlisting, source-aware DLP, human export approval, and durable export receipts;
+- reserved Private Playbook, Candidate Improvement, Role Skill, and runtime namespaces;
+- multi-worker merger/judge and reviewed GitHub pull requests.
+
+### Role Blueprint and Worker state boundary
+
+Hermes uses one named profile per Worker. Git owns only Role Blueprint distribution paths, while the Sandbox Data Disk owns Personal Memory, Private Playbooks, Work History, Candidate Improvements, workspace, `.env`, and Worker metadata. Worker Refresh changes the pinned Role Release commit, recreates the Sandbox container, reuses the same Data Disk, and synchronizes only Role Blueprint-owned paths after an approved export receipt.
 
 OpenClaw remains on its runtime-image package plus persistent data directories. It has no equivalent Git profile-distribution lifecycle in A8, so the project documents that exception rather than adding a parallel custom package manager.
 
@@ -234,4 +406,5 @@ OpenClaw remains on its runtime-image package plus persistent data directories. 
 - [ADR 0002](docs/adr/0002-teams-event-routing-and-reactions.md): Teams delivery boundaries.
 - [ADR 0004](docs/adr/0004-agent-identity-before-workiq.md): identity before broad Work IQ use.
 - [ADR 0007](docs/adr/0007-side-by-side-autopilot-deployments.md): runtime-specific workspaces.
+- [ADR 0010](docs/adr/0010-candidate-improvements-and-collective-learning-review.md): Candidate Improvements and Collective Learning Review.
 - [ADR 0012](docs/adr/0012-mcp-identity-and-governance.md): MCP identity and governance.

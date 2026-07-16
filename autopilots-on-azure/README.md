@@ -127,31 +127,31 @@ uv run python -m scripts.demo_ops smoke --runtime hermes
 
 `reset-sandbox` uses the ACA Sandbox data-plane resource `https://dynamicsessions.io`. If it returns `ERROR: Forbidden`, the current Azure login can still operate normal Azure resources but cannot list/delete sandboxes through the sandbox data plane. Run `grant-sandbox-access --execute` with an identity allowed to create role assignments, or use an identity that already has **Container Apps SandboxGroup Data Owner** on the sandbox group.
 
-## Hermes blueprint lifecycle
+## Role Blueprint lifecycle and Worker Refresh
 
-The distribution is committed at `blueprints\junior-project-manager`. Hosted workers install it from a commit-pinned Git source into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. The current release is v2.3.0.
+The Role Blueprint is committed at `blueprints\junior-project-manager`. Hosted Workers install one immutable Role Release into `/data/hermes/profiles/junior-project-manager`; private state remains on the existing Hermes Data Disk. A10 introduces Role Release 3.0.0.
 
-Configure one Hermes worker with the repository commit that contains the desired blueprint version:
+Configure one Hermes Worker with the repository commit that contains the desired Role Release:
 
 ```powershell
 $commit = "<full-40-character-remote-commit-sha>"
 
 uv run python -m scripts.setup_app_tfvars `
   --runtime hermes `
-  --blueprint-name junior-project-manager `
-  --blueprint-source https://github.com/tkubica12/agent-demos.git `
-  --blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
-  --blueprint-version 2.3.0 `
-  --blueprint-commit $commit `
-  --assignee-scope "person-or-team" `
+  --role-blueprint junior-project-manager `
+  --role-blueprint-source https://github.com/tkubica12/agent-demos.git `
+  --role-blueprint-path autopilots-on-azure/blueprints/junior-project-manager `
+  --role-release 3.0.0 `
+  --role-release-commit $commit `
+  --assignment-scope "person-or-team" `
   --runtime-only
 
 uv run python -m scripts.deploy_apps_runtime --runtime hermes --apply --auto-approve --capture
 ```
 
-The source must be reachable from the sandbox without an interactive Git prompt. Do not embed credentials in the URL; the source is deployment metadata and is recorded in the instance manifest. The commit is intentionally immutable. On restart with the same commit, Hermes reuses the installed profile without fetching Git.
+The source must be reachable from the Sandbox without an interactive Git prompt. Do not embed credentials in the URL; the source is deployment metadata recorded in the Worker manifest. The Role Release commit is immutable. On restart with the same commit, Hermes reuses the installed profile without fetching Git.
 
-To upgrade, bump `distribution.yaml`, commit the reviewed blueprint changes, and rerun the two commands with the new version and full commit SHA. The changed sandbox label replaces the sandbox container but reuses the same Data Disk. The upgrade replaces only `distribution_owned` paths and preserves:
+For Worker Refresh, publish a reviewed Role Release and rerun the commands with its release number and full commit SHA. The changed Sandbox label replaces the container but reuses the same Data Disk. Refresh requires an approved Candidate Improvement export receipt, replaces Role Skills, and preserves:
 
 ```text
 memories\
@@ -160,38 +160,162 @@ state.db*
 logs\
 workspace\
 .env
-local\
-private instance skills outside blueprint-owned paths
-local\private-cache.md
+skills\private\
 ```
 
-Within the same `learning_generation`, `learning\records.jsonl` and `skills\hot-learning` are also preserved. When a reviewed fleet release increments the generation, the installer archives the previous journal and removes the generated hot-learning skill. Private memory and private assignment cache remain.
+Candidate Improvements and Role Skill diffs are exported with provenance before refresh, then archived. Personal Memory, Private Playbooks, and Work History remain.
 
-The instance record is stored at:
+The Worker manifest is stored at:
 
 ```text
-/data/hermes/profiles/junior-project-manager/local/autopilots-instance.json
+/data/hermes/profiles/junior-project-manager/local/worker.json
 ```
 
-The sandbox labels and `/data/hermes/profiles/junior-project-manager/local/autopilots-instance.json` report the installed blueprint name, version, and commit. The native Hermes `/health` endpoint reports Hermes runtime health and version. OpenClaw remains on its runtime-image plus persistent `/data/home` and `/data/workspace` model; A8 does not add a parallel custom distribution manager for it.
+The Sandbox labels and Worker manifest report the Role Blueprint, Role Release, release commit, Worker ID, and assignment scope. The native Hermes `/health` endpoint reports Hermes runtime health and version. OpenClaw remains on its runtime-image plus persistent `/data/home` and `/data/workspace` model; A8 does not add a parallel Role Blueprint manager for it.
 
-## Local learning and dreaming
+## Worker memory, Dreaming, and Collective Learning Review
 
-Blueprint v2.3.0 classifies learning before storage and adds both hot-path and dream-path transferable learning. Private personal/team context, account-specific procedures, raw sessions, memory, `.env`, auth, logs, workspace content, and `state.db*` remain instance-local. Use `local\private-cache.md` for private assignment cache and never `/root`. An explicit durable-learning request such as `learn this`, `remember this`, `from now on`, or `for future assignments` triggers a bounded post-answer extraction pass if the normal answer did not emit a candidate itself. Transferable candidates can be appended only through the runtime validator:
+Use this vocabulary consistently:
 
-```text
-/data/hermes/profiles/junior-project-manager/learning/records.jsonl
-/data/hermes/profiles/junior-project-manager/skills/hot-learning/SKILL.md
-```
+| Term | Meaning |
+| --- | --- |
+| **Role Blueprint** | Central definition of a digital-worker job. |
+| **Role Release** | Immutable numbered release of a Role Blueprint. |
+| **Worker** | Named digital teammate with identity, assignment, memory, history, and local adaptation. |
+| **Personal Memory** | Small always-loaded private facts in `USER.md` and `MEMORY.md`. |
+| **Private Playbook** | Rich private Hermes skill with optional references, stored under `skills\private`. |
+| **Work History** | Private SQLite sessions and search indexes in `state.db`. |
+| **Role Skill** | Skill inherited from the Role Release under `skills\role`. |
+| **Candidate Improvement** | Locally patched Role Skill or new reusable skill under `skills\candidates`. |
+| **Dreaming** | Offline reflection over several sessions and existing adaptations. |
+| **Collective Learning Review** | Multi-Worker review that proposes the next Role Release. |
+| **Promotion** | Human-reviewed acceptance into the next Role Release. |
+| **Worker Refresh** | Adoption of a new Role Release while preserving private state. |
 
-Run a manual reflection through the secured bridge operation:
+Do not call Candidate Improvements “public memory”: they are local to one Worker until Promotion.
+
+| Lane | Retrieval and lifetime | Collective Learning Review |
+| --- | --- | --- |
+| Personal Memory | Bounded and injected into every fresh session. Preserved during Worker Refresh. | Never exported |
+| Private Playbooks | Progressive disclosure through Hermes skill discovery. Preserved during Worker Refresh. | Never exported |
+| Work History | On-demand `session_search` and Dreaming evidence. Preserved during Worker Refresh. | Never exported raw |
+| Role Skills | Inherited, locally patchable, and used in a fresh session. | Export local diff plus provenance |
+| Candidate Improvements | New reusable local skills used in a fresh session and scoped to one Role Release. | Export artifact plus provenance |
+
+`learning\records.jsonl` is provenance, not behavior memory. It records why a Role Skill changed or a Candidate Improvement was created, including evidence, confidence, artifact hashes, and the originating foreground turn or Dream. The actual local behavior is the effective Hermes skill tree.
+
+Run Dreaming through the secured bridge operation:
 
 ```powershell
 uv run python -m scripts.demo_ops dream
 uv run python -m scripts.demo_ops dream --focus "Review recurring delivery-risk escalation patterns" --max-records 3
 ```
 
-Normal turns and dream runs use the same candidate path. Hermes returns generalized candidates in a bounded JSON block, then the trusted runtime validates and appends them without requiring agent shell approval. Accepted records regenerate `skills\hot-learning`, making the learning available to the next local session immediately. The response includes only records that match schema v1.0 and pass deterministic checks for credentials, tokens, email addresses, GUIDs, IP addresses, and user-specific absolute paths. Rejected or private observations stay local. Recurring scheduling remains A11.
+A fresh session is the guaranteed way to prove changed skill behavior. Hermes progressively discovers Private Playbooks, Role Skills, and Candidate Improvements from their names and descriptions, then loads full content only when relevant. A persistent Teams thread may retain an older skill index; use a fresh Sandbox CLI session for deterministic testing.
+
+### Controlled memory-routing demo
+
+Send this prompt to Hermes in Teams. The markers are harmless test values, not credentials:
+
+```text
+This is a memory-routing test.
+
+1. Remember personal marker ORCHID-73 as private personal memory. Also remember that I prefer risk summaries as short bullet lists.
+2. Create or update Private Playbook `cedar-delivery` with assignment marker CEDAR-42 and the rule that Project Cedar's weekly status draft is due every Thursday at 15:00.
+3. Learn this reusable procedure for future assignments: before accepting an externally supplied deadline, record its source, timezone, and the person who confirmed it. Create Candidate Improvement `deadline-verification`.
+
+Do not store persistent information under /root. Tell me where you stored each item.
+```
+
+In the Sandbox terminal, inspect each canonical store:
+
+```bash
+export HERMES_HOME=/data/hermes/profiles/junior-project-manager
+cd "$HERMES_HOME"
+
+echo "=== Personal/team memory ==="
+cat memories/USER.md
+cat memories/MEMORY.md
+
+echo "=== Private Playbooks ==="
+find skills/private -type f -maxdepth 4 -print
+
+echo "=== Candidate Improvements ==="
+find skills/candidates -type f -maxdepth 4 -print
+
+echo "=== Learning provenance ==="
+tail -n 5 learning/records.jsonl
+
+grep -RniE 'ORCHID-73|CEDAR-42|source.*timezone.*confirm' \
+  memories skills/private skills/candidates learning
+```
+
+Teams 1:1 does not provide a reliable "new session" button: the bridge session follows the Teams conversation/thread identity. Use the Hermes CLI inside the Sandbox for a controlled fresh session:
+
+```bash
+export HERMES_HOME=/data/hermes/profiles/junior-project-manager
+cd "$HERMES_HOME/workspace"
+hermes --cli
+```
+
+Launching `hermes --cli` without `--continue` or `--resume` creates a fresh CLI session. Exit and relaunch it for each proof:
+
+1. **Native personal memory injection:** ask `Without using recall, session_search, or reading files, what is my harmless personal marker and how do I prefer risk summaries?` No retrieval tool should be needed because `USER.md` and `MEMORY.md` were injected at session start.
+2. **Private Playbook retrieval:** enter `/cedar-delivery What is Project Cedar's marker and weekly draft deadline?` The slash command deterministically loads the Private Playbook.
+3. **Candidate Improvement retrieval:** enter `/deadline-verification Before accepting an externally supplied deadline, what must I record?` This loads the Candidate Improvement.
+
+### Dreaming demo
+
+The expected response to a dream that recognizes an already accepted hot rule is zero candidates. If it emits the same normalized candidate again, the runtime reports it under `skippedDuplicates` and does not append another record. Both outcomes confirm deduplication rather than failure.
+
+To demonstrate retrospective discovery instead, first note the journal size:
+
+```bash
+wc -l "$HERMES_HOME/learning/records.jsonl"
+```
+
+Then send this ordinary Teams prompt:
+
+```text
+Analyze this delivery problem, but do not create or modify memories, playbooks, Role Skills, or Candidate Improvements during this turn because I want Dreaming to evaluate it later:
+
+Three recent handoffs accepted dates copied from meeting notes. One date used an unstated timezone, another had no accountable confirmer, and the third could not be traced to its source. What pattern do you see and how should future handoffs prevent it?
+```
+
+Confirm that the journal line count did not change. Back in the repository terminal, run:
+
+```powershell
+Set-Location .\autopilots-on-azure
+
+uv run python -m scripts.demo_ops dream `
+  --focus "Review the recent deferred deadline-handoff analysis. Decide whether it contains a generalized transferable procedure, keep all assignment details private, and avoid duplicates." `
+  --max-records 1 `
+  --timeout 600
+```
+
+Inspect `learning\records.jsonl`, `skills\role`, and `skills\candidates` again. A new Candidate Improvement or Role Skill patch with linked provenance demonstrates dream-time discovery. No change is correct when the same behavior was already represented.
+
+### Hermes-native skill creation
+
+Hermes creates and patches skills with `skill_manage`, `/learn`, and background review. A Private Playbook stays with one Worker. A Role Skill patch or Candidate Improvement is used locally and enters Collective Learning Review with linked provenance.
+
+To demonstrate native private skill authoring in the Sandbox CLI:
+
+```text
+/learn this private assignment workflow: for Project Cedar, prepare the Thursday status draft as a short bullet list, verify owners and due dates, and keep all Cedar-specific details local. Create Private Playbook cedar-status-draft under the private skill namespace.
+```
+
+Watch for the `skill_manage` action, then inspect:
+
+```bash
+hermes skills list
+find "$HERMES_HOME/skills" -maxdepth 3 -type f -name SKILL.md -print
+find "$HERMES_HOME/skills/private" -path '*cedar-status-draft*/SKILL.md' -exec cat {} \;
+```
+
+Foreground `/learn` is user-directed, so Hermes 0.18 does not treat that skill as a curator candidate. Skills created autonomously by background review are curator-managed. Enable Hermes `skills.write_approval` when every native skill change must be staged for review.
+
+See **Hermes memory and Collective Learning Review architecture** in `ARCHITECTURE.md`.
 
 The A9 flow was live-verified on 2026-07-15 through blueprint v2.3.0 at commit `01e048d2991113aa327a827a62f78286b17206a5`. The original dream produced three accepted procedural records with no redaction rejection. A normal turn then added a fourth rollback-checkpoint record, and a new session immediately recalled both required fields from the generated hot-learning skill without waiting for dreaming. A subsequent dream recognized the record as already captured and produced no duplicate. Private paths remained excluded from the packet.
 
