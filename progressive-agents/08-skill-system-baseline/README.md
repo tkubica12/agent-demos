@@ -32,7 +32,8 @@ The hosted Agent Framework agent wires `SkillsProvider.from_paths(...)` as a
 context provider. MAF advertises only skill names/descriptions up front. The
 model must call `load_skill` to retrieve the full `SKILL.md` and
 `read_skill_resource` to load referenced resources such as the escalation
-matrix. Script skills are intentionally not enabled in this baseline.
+matrix. The two read-only skill tools are explicitly approved for this
+non-interactive hosted runtime; script skills remain disabled.
 
 Distribution paths to understand:
 
@@ -84,6 +85,9 @@ Smoke local skill packages:
 ```powershell
 uv run python smoke_skills.py
 ```
+
+This validates the checked-in packages with the current Agent Framework API,
+including discovery and reading the escalation matrix resource.
 
 Run BFF local:
 
@@ -150,6 +154,44 @@ $env:FOUNDRY_PROJECT_ENDPOINT = "https://<account>.services.ai.azure.com/api/pro
 .\scripts\Provision-Step08.ps1
 ```
 
+The provisioning script runs frozen dependency restore, static skill and file
+memory smokes, real Foundry Memory CRUD/search, deployment, and the deployed
+smoke below. It resolves and persists `AZURE_AI_PROJECT_ID` from the configured
+Foundry project endpoint, so a fresh `azd` environment does not depend on prior
+agent initialization state. Infrastructure grants that project's managed
+identity `AcrPull` on the step registry before deploying the hosted agent.
+After deployment, the script grants the newly created hosted-agent identity
+`Foundry User` on the project and `Cognitive Services OpenAI User` on the
+account, then waits for role propagation before invoking it.
+
+Smoke the deployed Hosted Agent:
+
+```powershell
+uv run python smoke_deployed.py
+```
+
+This checks Responses, Invocations, relevant skill loading, escalation resource
+loading, unrelated-skill non-selection, and Foundry Memory recall across fresh
+hosted sessions.
+
+Observe deployed skill activity:
+
+See [OBSERVABILITY_PORTAL_INVESTIGATION.md](OBSERVABILITY_PORTAL_INVESTIGATION.md)
+for the verified App Insights span chain and reusable Kusto queries. The trace
+contains real `execute_tool load_skill` and
+`execute_tool read_skill_resource` spans.
+
+Known gaps:
+
+- Foundry Memory and Agent Skills are preview capabilities.
+- Foundry Conversations can lag or omit Agent Framework indexing even when App
+  Insights contains the complete correlated trace.
+- The optional Agent 365 OpenTelemetry instrumentor can log a missing
+  `openai-agents` warning; Agent Framework and Azure Monitor spans still export.
+- Current container deployment still uses the top-level `agent.yaml` consumed
+  by the Foundry `azd` extension. The extension warns that a future unified
+  `azure.yaml` migration will supersede this file.
+
 Deploy Hosted Agent:
 
 ```powershell
@@ -171,7 +213,7 @@ $write = Join-Path $env:TEMP "step08-memory-write.json"
 }
 '@ | Set-Content -Path $write -Encoding utf8
 
-azd ai agent invoke step-08-skill-system-baseline --protocol invocations --new-session --user-isolation-key raw-memory-user --chat-isolation-key silver-write -f $write
+azd ai agent invoke step-08-skill-system-baseline --protocol invocations --new-session --user-identity raw-memory-user -f $write
 
 Start-Sleep -Seconds 35
 
@@ -185,7 +227,7 @@ $read = Join-Path $env:TEMP "step08-memory-read.json"
 }
 '@ | Set-Content -Path $read -Encoding utf8
 
-azd ai agent invoke step-08-skill-system-baseline --protocol invocations --new-session --user-isolation-key raw-memory-user --chat-isolation-key silver-read -f $read
+azd ai agent invoke step-08-skill-system-baseline --protocol invocations --new-session --user-identity raw-memory-user -f $read
 ```
 
 Inspect raw Foundry Memory for the same scope:
@@ -238,8 +280,10 @@ Done means:
 
 ```text
 MAF SkillsProvider loads checked-in SKILL.md packages
+read-only skill tools execute without an interactive approval boundary
 support-style, escalation-policy, and profile-update-policy validate
 escalation-policy resource can be read through the MAF skill resource API
+deployed prompts prove relevant skill selection and unrelated-skill non-selection
 profile loads into turn context
 profile patch is audited
 raw history is listed in web UI

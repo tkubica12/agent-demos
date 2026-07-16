@@ -1,5 +1,8 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 
+requiredVersions:
+    extensions:
+        azure.ai.agents: '>=1.0.0-beta.4'
 name: step-08-skill-system-baseline
 services:
     step-08-skill-system-baseline:

@@ -133,7 +133,9 @@ def create_skills_provider() -> SkillsProvider:
     log_event("skills.local_provider_configured", skills_path=str(skills_path))
     return SkillsProvider.from_paths(
         skill_paths=skills_path,
-        resource_directories=("references", "assets"),
+        resource_filter=lambda _skill_name, path: path.startswith(("references/", "assets/")),
+        disable_load_skill_approval=True,
+        disable_read_skill_resource_approval=True,
     )
 
 
@@ -352,22 +354,17 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
 
             async def stream_response() -> AsyncGenerator[str]:
                 assistant_text = ""
-                with span("skill.load", correlation_id, skill_count=0):
-                    pass
-                with span("worker.dispatch", correlation_id, worker="agent.run"):
-                    with span("tool.call", correlation_id, tool_count=0):
-                        pass
-                    with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
-                        async for update in agent.run(
-                            enriched_message,
-                            session=session,
-                            stream=True,
-                            options=foundry_memory_options(user_id),
-                        ):
-                            if update.text:
-                                assistant_text += update.text
-                                yield update.text
-                        set_span_result(model_span, response_length=len(assistant_text))
+                with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
+                    async for update in agent.run(
+                        enriched_message,
+                        session=session,
+                        stream=True,
+                        options=foundry_memory_options(user_id),
+                    ):
+                        if update.text:
+                            assistant_text += update.text
+                            yield update.text
+                    set_span_result(model_span, response_length=len(assistant_text))
                 with span(
                     "memory.write",
                     correlation_id,
@@ -381,8 +378,6 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
                         assistant_text,
                         {"correlationId": correlation_id},
                     )
-                with span("skill.use", correlation_id, skill_count=0):
-                    pass
 
             return StreamingResponse(
                 stream_response(),
@@ -390,19 +385,14 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
 
-        with span("skill.load", correlation_id, skill_count=0):
-            pass
-        with span("worker.dispatch", correlation_id, worker="agent.run"):
-            with span("tool.call", correlation_id, tool_count=0):
-                pass
-            with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
-                response = await agent.run(
-                    [enriched_message],
-                    session=session,
-                    stream=False,
-                    options=foundry_memory_options(user_id),
-                )
-                set_span_result(model_span, response_length=len(response.text or ""))
+        with span("model.call", correlation_id, model=DEFAULT_MODEL_DEPLOYMENT) as model_span:
+            response = await agent.run(
+                [enriched_message],
+                session=session,
+                stream=False,
+                options=foundry_memory_options(user_id),
+            )
+            set_span_result(model_span, response_length=len(response.text or ""))
         with span(
             "memory.write",
             correlation_id,
@@ -416,8 +406,6 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
                 response.text or "",
                 {"correlationId": correlation_id},
             )
-        with span("skill.use", correlation_id, skill_count=0):
-            pass
         return JSONResponse({"response": response.text, "correlationId": correlation_id})
 
 
