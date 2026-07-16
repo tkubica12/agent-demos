@@ -59,27 +59,9 @@ Routine trigger        -> existing hosted agent
 | 06 | `06-foundry-observability-evals` | OpenTelemetry, Application Insights, correlation, generated datasets, and evaluations. |
 | 07 | `07-foundry-memory-profile` | Foundry Memory, scoped profiles, conversation history, summaries, and audit. |
 | 08 | `08-skill-system-baseline` | Microsoft Agent Framework skills using versionable `SKILL.md` packages. |
+| 09 | `09-foundry-agent-optimizer` | Evaluation-driven optimization of instructions, skills, tools, and model selection with explicit promotion. |
 
 ## Planned stages
-
-### Step 09: Evaluation-driven optimization
-
-Directory: `09-foundry-agent-optimizer`
-
-Prepare the Hosted Agent for the Foundry Agent Optimizer.
-
-Demonstrate:
-
-- a versioned baseline configuration;
-- a reproducible `eval.yaml`;
-- representative tasks and evaluators;
-- instruction optimization;
-- skill improvement;
-- tool-description optimization;
-- model selection for quality and cost;
-- explicit review before applying and deploying a candidate.
-
-The optimizer may propose improvements, but it must not silently alter the active agent. Tools used during optimization must be read-only or point to an isolated test environment.
 
 ### Step 10: Toolbox, tools, skills, and MCP governance
 

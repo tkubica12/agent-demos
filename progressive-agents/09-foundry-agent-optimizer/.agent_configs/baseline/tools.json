@@ -1,0 +1,27 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "lookup_support_policy",
+      "description": "Read a Contoso Outdoors support policy.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string",
+            "enum": [
+              "returns",
+              "shipping",
+              "escalation"
+            ],
+            "description": "Policy topic."
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+]

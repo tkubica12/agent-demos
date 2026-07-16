@@ -1,0 +1,16 @@
+name: step09-baseline-evaluation
+agent:
+    name: step-09-foundry-agent-optimizer
+    kind: hosted
+    config: .agent_configs/baseline/metadata.yaml
+    model: gpt-5.4-mini
+dataset:
+    local_uri: datasets/optimizer-train.jsonl
+evaluators:
+    - builtin.task_adherence
+    - name: step09-optimizer-training
+      version: "1"
+      local_uri: evaluators/step09-optimizer-training/rubric_dimensions.json
+options:
+    eval_model: gpt-5.4-mini
+max_samples: 6
