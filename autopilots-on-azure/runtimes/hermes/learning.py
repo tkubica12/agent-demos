@@ -476,6 +476,22 @@ def begin_learning_turn(profile_home: Path) -> dict[str, Any]:
     return {"token": token, "recoveredUnprovenancedFiles": recovered}
 
 
+def abort_learning_turn(profile_home: Path, *, token: str) -> dict[str, Any]:
+    if _read_lease(profile_home).get("token") != token:
+        raise LearningRecordError("Learning transaction lease is missing or belongs to another turn.")
+    pending_path = profile_home / "learning" / "pending" / f"{token}.json"
+    if pending_path.is_file():
+        transaction = json.loads(pending_path.read_text(encoding="utf-8"))
+        _restore_governed_files(profile_home, _decoded_snapshot(transaction["files"]))
+        commit_record_ids = set(transaction.get("commitRecordIds") or [])
+        if commit_record_ids:
+            _remove_journal_records(profile_home, commit_record_ids)
+        pending_path.unlink()
+    _release_lease(profile_home, token)
+    _update_governed_ledger(profile_home)
+    return {"aborted": True, "token": token}
+
+
 def _restore_skill_files(
     profile_home: Path,
     before: dict[str, bytes],
@@ -896,6 +912,8 @@ def main() -> None:
     parser.add_argument("--profile-home", default=os.getenv("HERMES_HOME", ""))
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("begin")
+    abort = subparsers.add_parser("abort")
+    abort.add_argument("--token", required=True)
     reconcile = subparsers.add_parser("reconcile")
     reconcile.add_argument("--token", required=True)
     reconcile.add_argument("--provenance", required=True, help="Provenance as one JSON array.")
@@ -906,6 +924,8 @@ def main() -> None:
     profile_home = Path(args.profile_home)
     if args.command == "begin":
         result = begin_learning_turn(profile_home)
+    elif args.command == "abort":
+        result = abort_learning_turn(profile_home, token=args.token)
     elif args.command == "reconcile":
         provenance = json.loads(args.provenance)
         if not isinstance(provenance, list):

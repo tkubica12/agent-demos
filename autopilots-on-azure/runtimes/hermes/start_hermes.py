@@ -31,6 +31,7 @@ from collective_learning import (
 )
 from learning import (
     assert_legacy_state_migrated,
+    abort_learning_turn,
     begin_learning_turn,
     build_learning_status,
     ensure_learning_state,
@@ -324,6 +325,18 @@ def create_health_app(
                 token=token,
                 provenance=provenance,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/learning/abort")
+    async def abort_turn(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        token = payload.get("token") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token:
+            raise HTTPException(status_code=400, detail="token must be a non-empty string.")
+        try:
+            return abort_learning_turn(profile_home, token=token)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -244,7 +244,11 @@ class HermesRuntimeAdapter:
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
         await self._wait_for_health(base_url)
         snapshot_token = await self._begin_learning_turn(base_url, api_key)
-        endpoint, payload = await self._invoke_hermes(base_url, api_key, request)
+        try:
+            endpoint, payload = await self._invoke_hermes(base_url, api_key, request)
+        except Exception:
+            await self._abort_learning_turn(base_url, api_key, snapshot_token)
+            raise
         response_text = self._response_text(payload)
         learning_error = None
         try:
@@ -465,6 +469,15 @@ class HermesRuntimeAdapter:
             raise RuntimeError("Hermes learning reconciliation endpoint returned a non-object response.")
         return payload
 
+    async def _abort_learning_turn(self, base_url: str, api_key: str, token: str) -> None:
+        async with self._client_factory(timeout=30) as client:
+            response = await client.post(
+                f"{base_url}/internal/learning/abort",
+                headers={"X-Autopilot-Key": api_key},
+                json={"token": token},
+            )
+            response.raise_for_status()
+
     async def _apply_durable_learning(
         self,
         base_url: str,
@@ -481,7 +494,11 @@ class HermesRuntimeAdapter:
             must_answer=True,
             metadata={"maxRecords": request.metadata.get("maxRecords", 3)},
         )
-        _, payload = await self._invoke_hermes(base_url, api_key, application_request)
+        try:
+            _, payload = await self._invoke_hermes(base_url, api_key, application_request)
+        except Exception:
+            await self._abort_learning_turn(base_url, api_key, token)
+            raise
         text = self._response_text(payload)
         _, provenance, block_present = parse_provenance_block(text)
         if not block_present:

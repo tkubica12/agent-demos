@@ -700,6 +700,51 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(maximum_active, 1)
 
+    def test_hermes_aborts_learning_transaction_when_model_invocation_fails(self):
+        calls: list[dict] = []
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(
+                    calls,
+                    [(500, {"error": "model failed"})],
+                    **kwargs,
+                ),
+            )
+            with self.assertRaises(httpx.HTTPStatusError):
+                asyncio.run(
+                    adapter.invoke(
+                        AgentRequest(
+                            prompt="Ordinary task.",
+                            conversation_id="session-1",
+                            user_id="user-1",
+                            source="teams_personal",
+                            must_answer=True,
+                        )
+                    )
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        abort = next(call for call in calls if call["url"].endswith("/internal/learning/abort"))
+        self.assertEqual(abort["json"], {"token": "lt-test"})
+
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(
             image_name="registry.example/openclaw-runtime@sha256:test",
@@ -968,6 +1013,12 @@ class FakeHermesClient:
             return httpx.Response(
                 200,
                 json=reconciliation_response,
+                request=httpx.Request("POST", url),
+            )
+        if url.endswith("/internal/learning/abort"):
+            return httpx.Response(
+                200,
+                json={"aborted": True, "token": json["token"]},
                 request=httpx.Request("POST", url),
             )
         status_code, payload = self.post_responses.pop(0)
