@@ -12,7 +12,7 @@ Tokens, tenant user details, and request authorization headers are omitted.
 | MCP endpoint | `https://ca-step10-policy-673af34-eastus2.blueglacier-bfa16bf5.eastus2.azurecontainerapps.io/mcp` |
 | MCP API client ID | `7aca035b-d2bc-42b8-912c-afa1b6eb9d00` |
 | RemoteTool connection | `step-10-support-policy-mcp` / `AgenticIdentityToken` |
-| Hosted Agent | `step-10-foundry-toolbox` version `10`, status `active` |
+| Hosted Agent | `step-10-foundry-toolbox` version `13`, status `active` |
 | Hosted identity principal | `cd6dfe0f-8f90-4bff-a1b3-55934d8e6e7d` |
 | Hosted blueprint client | `384b4cc3-e7d6-4164-a361-6544826588f0` |
 | Toolbox | `step-10-contoso-support` |
@@ -42,7 +42,7 @@ Tokens, tenant user details, and request authorization headers are omitted.
 - Toolbox v1 and v2 are immutable and v1 remains `default_version`.
 - V2 metadata records the meaningful `prolonged-delivery escalation` change.
 - Hosted Agent environment uses the unversioned consumer endpoint.
-- Superseded Hosted Agent diagnostic versions 1-9 were deleted after v10 became active.
+- Superseded Hosted Agent diagnostic versions 1-12 were deleted after v13 became active.
 
 ## Blocking acceptance evidence
 
@@ -72,6 +72,15 @@ the brokered Toolbox request:
 HTTP 401 Unauthorized
 WWW-Authenticate: Bearer realm="<container-app-host>"
 ```
+
+Controlled authorization isolation produced the same 401 when:
+
+1. `defaultAuthorizationPolicy.allowedApplications` was removed;
+2. `allowedAudiences` contained both the observed GUID and `api://<GUID>`;
+3. `openIdIssuer` exactly matched the issuer in live tenant OIDC metadata;
+4. the same token called `/.auth/me`, which also returned 401.
+
+The strict instance/blueprint client allowlist was restored after isolation.
 
 Because candidate acceptance failed, the promotion gate left v1 active. V2 was
 not published, deployed behavior was not claimed, and model-judged evaluations

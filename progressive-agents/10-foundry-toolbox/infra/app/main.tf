@@ -81,7 +81,10 @@ resource "azapi_resource" "auth" {
             openIdIssuer = "https://login.microsoftonline.com/${var.tenant_id}/v2.0"
           }
           validation = {
-            allowedAudiences = [var.mcp_api_client_id]
+            allowedAudiences = [
+              var.mcp_api_client_id,
+              "api://${var.mcp_api_client_id}",
+            ]
             defaultAuthorizationPolicy = {
               allowedApplications = var.allowed_client_applications
             }

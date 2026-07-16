@@ -37,7 +37,7 @@ documented platform failure is resolved and the full acceptance path passes.
 ## Architecture
 
 ```text
-Foundry Hosted Agent v10
+Foundry Hosted Agent v13
   |
   | Entra token for https://ai.azure.com/.default
   v
@@ -171,8 +171,10 @@ remain intentionally unclaimed.
   platform-managed; downstream MCP authorization uses Entra app roles.
 - Toolbox accepts that hosted identity token and resolves the RemoteTool
   connection. Both the brokered request and a direct request from the Hosted
-  Agent then receive HTTP 401 from ACA Easy Auth, despite exact audience and
-  client allowlists. This is the current narrow platform blocker.
+  Agent then receive HTTP 401 from ACA Easy Auth. The same result occurs with
+  `allowedApplications` removed, both audience forms configured, and an issuer
+  exactly matching live OIDC metadata. This is the current narrow platform
+  blocker.
 - Sweden Central rejected new ACA environments due regional capacity, so the
   MCP Container App runs in East US 2 while Foundry and ACR remain in Sweden
   Central.
