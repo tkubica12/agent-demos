@@ -16,13 +16,27 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from blueprint import BlueprintInstall, install_or_update_blueprint, settings_from_environment
+from blueprint import (
+    RoleReleaseInstall,
+    install_or_refresh_role_release,
+    role_release_settings_from_environment,
+)
+from collective_learning import (
+    CollectiveLearningError,
+    approved_learning_packet,
+    attest_learning_packet,
+    pending_learning_packet,
+    prepare_learning_packet,
+    worker_refresh_readiness,
+)
 from learning import (
-    append_candidates,
-    build_learning_packet,
+    assert_legacy_state_migrated,
+    begin_learning_turn,
+    build_learning_status,
     ensure_learning_state,
-    ensure_private_cache,
-    render_hot_learning_skill,
+    initialize_governed_state,
+    reconcile_learning_turn,
+    validate_skill_namespaces,
 )
 
 
@@ -245,16 +259,17 @@ def start_gateway(profile_home: Path) -> subprocess.Popen:
 def create_health_app(
     home: Path,
     profile_home: Path,
-    blueprint: BlueprintInstall | None,
+    role_release: RoleReleaseInstall | None,
     gateway: subprocess.Popen | None,
 ) -> FastAPI:
     app = FastAPI(title="Hermes ACA Sandbox runtime")
-    blueprint_health = None
-    if blueprint:
-        blueprint_health = {
-            "name": blueprint.manifest["blueprintName"],
-            "version": blueprint.manifest["blueprintVersion"],
-            "commit": blueprint.manifest["blueprintCommit"],
+    role_release_health = None
+    if role_release:
+        role_release_health = {
+            "roleBlueprint": role_release.manifest["roleBlueprint"],
+            "roleRelease": role_release.manifest["roleRelease"],
+            "commit": role_release.manifest["roleReleaseCommit"],
+            "workerId": role_release.manifest["workerId"],
         }
 
     @app.get("/health")
@@ -267,7 +282,7 @@ def create_health_app(
             "profileName": os.getenv("HERMES_PROFILE", "default"),
             "configExists": (profile_home / "config.yaml").exists(),
             "envExists": (profile_home / ".env").exists(),
-            "blueprint": blueprint_health,
+            "roleRelease": role_release_health,
             "gatewayPort": gateway_port(),
             "apiServerPort": api_server_port(),
             "gatewayPid": gateway.pid if gateway and gateway.poll() is None else None,
@@ -283,19 +298,78 @@ def create_health_app(
         if not expected or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
 
-    @app.get("/internal/learning/packet")
-    def learning_packet(request: Request) -> dict[str, Any]:
+    @app.get("/internal/learning/status")
+    def learning_status(request: Request) -> dict[str, Any]:
         require_internal_key(request)
-        return build_learning_packet(profile_home)
+        return build_learning_status(profile_home)
 
-    @app.post("/internal/learning/candidates")
-    async def learning_candidates(request: Request) -> dict[str, Any]:
+    @app.post("/internal/learning/turns")
+    def begin_turn(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        return begin_learning_turn(profile_home)
+
+    @app.post("/internal/learning/reconcile")
+    async def reconcile_turn(request: Request) -> dict[str, Any]:
         require_internal_key(request)
         payload = await request.json()
-        candidates = payload.get("candidates") if isinstance(payload, dict) else None
-        if not isinstance(candidates, list) or len(candidates) > 10:
-            raise HTTPException(status_code=400, detail="candidates must be an array with at most 10 items.")
-        return append_candidates(profile_home, candidates)
+        token = payload.get("token") if isinstance(payload, dict) else None
+        provenance = payload.get("provenance") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token:
+            raise HTTPException(status_code=400, detail="token must be a non-empty string.")
+        if not isinstance(provenance, list) or len(provenance) > 10:
+            raise HTTPException(status_code=400, detail="provenance must be an array with at most 10 items.")
+        try:
+            return reconcile_learning_turn(
+                profile_home,
+                token=token,
+                provenance=provenance,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/collective-learning/prepare")
+    def prepare_collective_learning(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return prepare_learning_packet(profile_home)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/internal/collective-learning/pending")
+    def pending_collective_learning(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return pending_learning_packet(profile_home)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/collective-learning/attest")
+    async def attest_collective_learning(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        receipt = payload.get("receipt") if isinstance(payload, dict) else None
+        if not isinstance(receipt, dict):
+            raise HTTPException(status_code=400, detail="receipt must be one JSON object.")
+        try:
+            return attest_learning_packet(profile_home, receipt=receipt)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/internal/collective-learning/export")
+    def export_collective_learning(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return approved_learning_packet(profile_home)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/internal/collective-learning/refresh-ready")
+    def refresh_ready(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return worker_refresh_readiness(profile_home)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
@@ -318,23 +392,26 @@ def main() -> None:
     home = hermes_home()
     configure_model_environment()
     home.mkdir(parents=True, exist_ok=True)
-    blueprint = None
+    role_release = None
     profile_home = home
-    blueprint_settings = settings_from_environment()
-    if blueprint_settings:
-        blueprint = install_or_update_blueprint(home, blueprint_settings)
-        profile_home = blueprint.profile_home
-        activate_profile(home, blueprint_settings.name)
-        action = "updated" if blueprint.changed else "reused"
+    role_release_settings = role_release_settings_from_environment()
+    if role_release_settings:
+        role_release = install_or_refresh_role_release(home, role_release_settings)
+        profile_home = role_release.profile_home
+        activate_profile(home, role_release_settings.role_blueprint)
+        action = "refreshed" if role_release.changed else "reused"
         print(
-            f"Hermes blueprint {action}: {blueprint_settings.name}@{blueprint_settings.version or blueprint_settings.commit}",
+            f"Hermes Role Release {action}: "
+            f"{role_release_settings.role_blueprint}@{role_release_settings.role_release}",
             flush=True,
         )
     profile_home.mkdir(parents=True, exist_ok=True)
     (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
-    ensure_learning_state(profile_home)
-    ensure_private_cache(profile_home)
-    render_hot_learning_skill(profile_home)
+    if role_release:
+        assert_legacy_state_migrated(profile_home)
+        ensure_learning_state(profile_home)
+        initialize_governed_state(profile_home)
+        validate_skill_namespaces(profile_home)
     env_path = write_env_file(profile_home)
     config_path = write_config(profile_home)
     print(f"Hermes home: {home}", flush=True)
@@ -357,12 +434,12 @@ def main() -> None:
 
     try:
         if bool_env("HERMES_HEALTH_WRAPPER", False):
-            app = create_health_app(home, profile_home, blueprint, gateway)
+            app = create_health_app(home, profile_home, role_release, gateway)
             uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
             return
 
         if gateway is None:
-            app = create_health_app(home, profile_home, blueprint, gateway)
+            app = create_health_app(home, profile_home, role_release, gateway)
             uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
             return
 

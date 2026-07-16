@@ -6,6 +6,8 @@ import secrets
 import shutil
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -70,13 +72,16 @@ class AgentSandboxConfig:
     gateway_token: str = ""
     runtime_home: str = "/data/home"
     runtime_workspace: str = "/data/workspace"
-    blueprint_name: str = ""
-    blueprint_source: str = ""
-    blueprint_path: str = ""
-    blueprint_version: str = ""
-    blueprint_commit: str = ""
-    instance_id: str = ""
-    assignee_scope: str = ""
+    role_blueprint: str = ""
+    role_blueprint_source: str = ""
+    role_blueprint_path: str = ""
+    role_release: str = ""
+    role_release_commit: str = ""
+    worker_id: str = ""
+    assignment_scope: str = ""
+    collective_learning_approval_public_key: str = ""
+    previous_api_server_key: str = ""
+    runtime_config_revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -157,14 +162,16 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
         "kind": config.runtime_kind,
         "identityArchitecture": "agent-federation-v1",
     }
-    if config.blueprint_name:
-        labels["blueprint"] = config.blueprint_name
-    if config.blueprint_version:
-        labels["blueprintVersion"] = config.blueprint_version
-    if config.blueprint_commit:
-        labels["blueprintCommit"] = config.blueprint_commit
-    if config.instance_id:
-        labels["instance"] = config.instance_id
+    if config.role_blueprint:
+        labels["roleBlueprint"] = config.role_blueprint
+    if config.role_release:
+        labels["roleRelease"] = config.role_release
+    if config.role_release_commit:
+        labels["roleReleaseCommit"] = config.role_release_commit
+    if config.worker_id:
+        labels["worker"] = config.worker_id
+    if config.runtime_config_revision:
+        labels["runtimeConfigRevision"] = config.runtime_config_revision
     labels.update(config.labels)
     return labels
 
@@ -198,6 +205,64 @@ def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig
         if any(labels.get(key) != value for key, value in expected_labels.items()):
             stale.append(sandbox)
     return stale
+
+
+def require_worker_refresh_ready(
+    client: SandboxGroupClient,
+    config: AgentSandboxConfig,
+    sandbox: dict[str, Any],
+) -> None:
+    if config.runtime_kind != "hermes":
+        return
+    labels = sandbox.get("labels") or {}
+    if labels.get("roleReleaseCommit") == config.role_release_commit:
+        return
+    sandbox_id = str(sandbox.get("id") or "")
+    if not sandbox_id:
+        raise RuntimeError("Stale Hermes Sandbox has no ID for Worker Refresh preflight.")
+    sandbox_client = client.get_sandbox_client(sandbox_id)
+    sandbox_client.ensure_running(timeout=600)
+    current = sandbox_client.get()
+    endpoint = next(
+        (
+            getattr(port, "url", None)
+            for port in (getattr(current, "ports", []) or [])
+            if getattr(port, "port", None) == HERMES_API_PORT
+        ),
+        None,
+    )
+    api_keys = [
+        value
+        for value in (
+            config.environment.get("API_SERVER_KEY", ""),
+            config.previous_api_server_key,
+        )
+        if value
+    ]
+    if not endpoint or not api_keys:
+        raise RuntimeError("Worker Refresh preflight cannot reach the current Hermes Worker.")
+    payload = None
+    last_error: urllib.error.HTTPError | None = None
+    for api_key in api_keys:
+        request = urllib.request.Request(
+            f"{str(endpoint).rstrip('/')}/internal/collective-learning/refresh-ready",
+            headers={"X-Autopilot-Key": api_key},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                payload = json.load(response)
+            break
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code != 401:
+                break
+    if payload is None and last_error is not None:
+        detail = last_error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Worker Refresh is blocked by the current Worker ({last_error.code}): {detail}"
+        ) from last_error
+    if not isinstance(payload, dict) or payload.get("ready") is not True:
+        raise RuntimeError("Current Worker did not approve Worker Refresh.")
 
 
 def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str) -> dict | None:
@@ -287,13 +352,14 @@ def hermes_runtime_environment(
     api_server_key: str = "",
     foundry_openai_base_url: str = "",
     model_deployment: str = "",
-    blueprint_name: str = "",
-    blueprint_source: str = "",
-    blueprint_path: str = "",
-    blueprint_version: str = "",
-    blueprint_commit: str = "",
-    instance_id: str = "",
-    assignee_scope: str = "",
+    role_blueprint: str = "",
+    role_blueprint_source: str = "",
+    role_blueprint_path: str = "",
+    role_release: str = "",
+    role_release_commit: str = "",
+    worker_id: str = "",
+    assignment_scope: str = "",
+    collective_learning_approval_public_key: str = "",
 ) -> dict[str, str]:
     environment = {
         "API_SERVER_ENABLED": "true",
@@ -302,13 +368,14 @@ def hermes_runtime_environment(
         "HERMES_HEALTH_WRAPPER": "true",
         "HERMES_GATEWAY_PORT": "9119",
         "HERMES_HOME": "/data/hermes",
-        "HERMES_BLUEPRINT_NAME": blueprint_name,
-        "HERMES_BLUEPRINT_SOURCE": blueprint_source,
-        "HERMES_BLUEPRINT_PATH": blueprint_path,
-        "HERMES_BLUEPRINT_VERSION": blueprint_version,
-        "HERMES_BLUEPRINT_COMMIT": blueprint_commit,
-        "AUTOPILOT_INSTANCE_ID": instance_id,
-        "HERMES_ASSIGNEE_SCOPE": assignee_scope,
+        "HERMES_ROLE_BLUEPRINT": role_blueprint,
+        "HERMES_ROLE_BLUEPRINT_SOURCE": role_blueprint_source,
+        "HERMES_ROLE_BLUEPRINT_PATH": role_blueprint_path,
+        "HERMES_ROLE_RELEASE": role_release,
+        "HERMES_ROLE_RELEASE_COMMIT": role_release_commit,
+        "WORKER_ID": worker_id,
+        "WORKER_ASSIGNMENT_SCOPE": assignment_scope,
+        "COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY": collective_learning_approval_public_key,
     }
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
@@ -381,13 +448,14 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         api_server_key=overrides.get("api_server_key") or "",
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
         model_deployment=overrides.get("model_deployment") or "",
-        blueprint_name=overrides.get("blueprint_name") or "",
-        blueprint_source=overrides.get("blueprint_source") or "",
-        blueprint_path=overrides.get("blueprint_path") or "",
-        blueprint_version=overrides.get("blueprint_version") or "",
-        blueprint_commit=overrides.get("blueprint_commit") or "",
-        instance_id=overrides.get("instance_id") or "",
-        assignee_scope=overrides.get("assignee_scope") or "",
+        role_blueprint=overrides.get("role_blueprint") or "",
+        role_blueprint_source=overrides.get("role_blueprint_source") or "",
+        role_blueprint_path=overrides.get("role_blueprint_path") or "",
+        role_release=overrides.get("role_release") or "",
+        role_release_commit=overrides.get("role_release_commit") or "",
+        worker_id=overrides.get("worker_id") or "",
+        assignment_scope=overrides.get("assignment_scope") or "",
+        collective_learning_approval_public_key=overrides.get("collective_learning_approval_public_key") or "",
     )
     config = AgentSandboxConfig(
         subscription_id=overrides.get("subscription_id") or "",
@@ -428,13 +496,16 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         root_disk_size=overrides.get("root_disk_size") or "20Gi",
         runtime_home="/data/hermes",
         runtime_workspace="/data/hermes/workspace",
-        blueprint_name=overrides.get("blueprint_name") or "",
-        blueprint_source=overrides.get("blueprint_source") or "",
-        blueprint_path=overrides.get("blueprint_path") or "",
-        blueprint_version=overrides.get("blueprint_version") or "",
-        blueprint_commit=overrides.get("blueprint_commit") or "",
-        instance_id=overrides.get("instance_id") or "",
-        assignee_scope=overrides.get("assignee_scope") or "",
+        role_blueprint=overrides.get("role_blueprint") or "",
+        role_blueprint_source=overrides.get("role_blueprint_source") or "",
+        role_blueprint_path=overrides.get("role_blueprint_path") or "",
+        role_release=overrides.get("role_release") or "",
+        role_release_commit=overrides.get("role_release_commit") or "",
+        worker_id=overrides.get("worker_id") or "",
+        assignment_scope=overrides.get("assignment_scope") or "",
+        collective_learning_approval_public_key=overrides.get("collective_learning_approval_public_key") or "",
+        previous_api_server_key=overrides.get("previous_api_server_key") or "",
+        runtime_config_revision=overrides.get("runtime_config_revision") or "",
     )
     environment.update(agent_mcp_environment(config))
     return config
@@ -562,6 +633,7 @@ def ensure_agent_sandbox(
     client = create_sandbox_group_client(config, credential)
 
     for stale in stale_agent_sandboxes(client, config):
+        require_worker_refresh_ready(client, config, stale)
         client.begin_delete_sandbox(stale["id"], polling_timeout=600).result()
 
     existing_sandbox = existing_agent_sandbox(client, config)
@@ -679,13 +751,25 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
             foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
             model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-6-terra"),
             api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
-            blueprint_name=overrides.get("blueprint_name") or get_config("HERMES_BLUEPRINT_NAME"),
-            blueprint_source=overrides.get("blueprint_source") or get_config("HERMES_BLUEPRINT_SOURCE"),
-            blueprint_path=overrides.get("blueprint_path") or get_config("HERMES_BLUEPRINT_PATH"),
-            blueprint_version=overrides.get("blueprint_version") or get_config("HERMES_BLUEPRINT_VERSION"),
-            blueprint_commit=overrides.get("blueprint_commit") or get_config("HERMES_BLUEPRINT_COMMIT"),
-            instance_id=overrides.get("instance_id") or get_config("AUTOPILOT_INSTANCE_ID", get_config("AUTOPILOT_NAME")),
-            assignee_scope=overrides.get("assignee_scope") or get_config("HERMES_ASSIGNEE_SCOPE"),
+            role_blueprint=overrides.get("role_blueprint") or get_config("HERMES_ROLE_BLUEPRINT"),
+            role_blueprint_source=overrides.get("role_blueprint_source") or get_config("HERMES_ROLE_BLUEPRINT_SOURCE"),
+            role_blueprint_path=overrides.get("role_blueprint_path") or get_config("HERMES_ROLE_BLUEPRINT_PATH"),
+            role_release=overrides.get("role_release") or get_config("HERMES_ROLE_RELEASE"),
+            role_release_commit=overrides.get("role_release_commit") or get_config("HERMES_ROLE_RELEASE_COMMIT"),
+            worker_id=overrides.get("worker_id") or get_config("WORKER_ID", get_config("AUTOPILOT_NAME")),
+            assignment_scope=overrides.get("assignment_scope") or get_config("WORKER_ASSIGNMENT_SCOPE"),
+            collective_learning_approval_public_key=(
+                overrides.get("collective_learning_approval_public_key")
+                or get_config("COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY")
+            ),
+            previous_api_server_key=(
+                overrides.get("previous_api_server_key")
+                or get_config("PREVIOUS_API_SERVER_KEY")
+            ),
+            runtime_config_revision=(
+                overrides.get("runtime_config_revision")
+                or get_config("RUNTIME_CONFIG_REVISION")
+            ),
         )
     if runtime_kind != "openclaw":
         raise ValueError(f"Unsupported AGENT_RUNTIME '{runtime_kind}'.")

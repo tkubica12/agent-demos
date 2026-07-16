@@ -98,15 +98,15 @@ class TeamsBridgeTests(unittest.TestCase):
                             "reusedExistingSandbox": True,
                         },
                     ),
-                    learning_packet={"packetVersion": "1.0", "records": []},
+                    learning_status={"statusVersion": "2.0", "records": []},
                 )
 
         adapter = Adapter()
         original_adapter = bridge_app.runtime_adapter
         previous_key = os.environ.get("API_SERVER_KEY")
-        previous_instance = os.environ.get("AUTOPILOT_INSTANCE_ID")
+        previous_worker = os.environ.get("WORKER_ID")
         os.environ["API_SERVER_KEY"] = "operator-key"
-        os.environ["AUTOPILOT_INSTANCE_ID"] = "worker-1"
+        os.environ["WORKER_ID"] = "worker-1"
         bridge_app.runtime_adapter = lambda: adapter
         request = ns(headers={"x-autopilot-key": "operator-key"})
         try:
@@ -122,13 +122,13 @@ class TeamsBridgeTests(unittest.TestCase):
                 os.environ.pop("API_SERVER_KEY", None)
             else:
                 os.environ["API_SERVER_KEY"] = previous_key
-            if previous_instance is None:
-                os.environ.pop("AUTOPILOT_INSTANCE_ID", None)
+            if previous_worker is None:
+                os.environ.pop("WORKER_ID", None)
             else:
-                os.environ["AUTOPILOT_INSTANCE_ID"] = previous_instance
+                os.environ["WORKER_ID"] = previous_worker
 
         self.assertEqual(adapter.request.session_id, "dream:worker-1")
-        self.assertEqual(result.learning_packet["packetVersion"], "1.0")
+        self.assertEqual(result.learning_status["statusVersion"], "2.0")
         self.assertEqual(result.sandbox_id, "sandbox-1")
 
     def test_internal_dream_rejects_wrong_operator_key(self):

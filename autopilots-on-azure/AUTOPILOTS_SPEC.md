@@ -632,25 +632,23 @@ Exit criteria:
 
 Goal: embrace Hermes-native skill evolution locally, then promote selected Candidate Improvements from multiple Workers into a reviewed Role Release.
 
+Status: Implementation complete locally for Role Release 3.0.0; live Worker migration, deployment, and end-to-end pull-request validation remain.
+
 Tasks:
 
-- Remove the interim `local\private-cache.md` and aggregate `skills\hot-learning` design.
-- Reserve Role Skill, Private Playbook, Candidate Improvement, and runtime namespaces.
-- Classify Hermes-native skill writes as Private Playbook, Role Skill improvement, Candidate Improvement, or runtime-owned.
-- Capture provenance for eligible `skill_manage`, `/learn`, background-review, and dream skill changes: artifact path, action, base commit, before/after hashes, rationale, redacted evidence, confidence, and source stage.
-- Allow Role Skills to be patched locally and new Candidate Improvements to be created for use in the next fresh session.
-- Preserve Private Playbooks while marking Candidate Improvements as scoped to one Role Release.
-- Export only Candidate Improvement artifacts, Role Skill diffs, and linked provenance from multiple Workers.
-- Compute exact diffs centrally against each Worker's recorded Role Release commit.
-- Preserve or export Role Skill diffs before any distribution-owned file replacement; Role Release is the replacement boundary.
-- Build learning packets containing both exact diffs and provenance.
-- Fail closed on an explicit transferable-artifact allowlist; run source-aware DLP/redaction over records and skill content, and require human export approval before merger-model processing.
-- Persist a durable export receipt before Worker Refresh.
-- Reserve separate Role Skill, Private Playbook, Candidate Improvement, and runtime namespaces to prevent path collisions.
-- Run merger/judge LLM.
-- Open a draft PR against the blueprint repository.
-- Validate redaction, skill structure, and packaging.
-- Archive or retire release-local Candidate Improvements after the reviewed next Role Release is installed.
+- Complete: remove the interim `local\private-cache.md` and aggregate `skills\hot-learning` design.
+- Complete: reserve Role Skill, Private Playbook, Candidate Improvement, and runtime namespaces.
+- Complete: classify native skill changes and bind schema-v2 provenance to actual artifact hashes.
+- Complete: serialize learning transactions, roll back unprovenanced governed changes, quarantine asynchronous drift, and recover interrupted commits.
+- Complete: allow Role Skill patches and new Candidate Improvements for use in the next fresh session.
+- Complete: preserve Private Playbooks while scoping Candidate Improvements to one Role Release.
+- Complete: prepare fail-closed Learning Packets containing only Role Skill diffs, Candidate Improvement artifacts, and linked provenance.
+- Complete: require bridge-held Ed25519 human approval attestation; Workers receive only the public key.
+- Complete: block Worker Refresh without an approved packet bound to Worker, Role Release, governed-state hash, and packet digest.
+- Complete: keep the current Worker running when refresh preflight fails.
+- Complete: validate multi-Worker packets and run the Foundry merger/judge over privacy-scanned content only.
+- Complete: support draft GitHub pull-request creation for the proposed next Role Release.
+- Remaining live validation: migrate the A9 Worker, deploy Role Release 3.0.0, exercise foreground and Dreaming skill evolution, approve/export a packet, and create a real draft Role Release pull request.
 
 Exit criteria:
 

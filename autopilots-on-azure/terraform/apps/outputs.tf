@@ -2,7 +2,7 @@ output "private_mcp_app_name" {
   value = local.private_mcp_app_name
 }
 
-output "autopilot_name" {
+output "worker_id" {
   value = var.autopilot_name
 }
 
@@ -10,16 +10,20 @@ output "agent_runtime" {
   value = var.agent_runtime
 }
 
-output "hermes_blueprint_name" {
-  value = var.hermes_blueprint_name
+output "hermes_role_blueprint" {
+  value = var.hermes_role_blueprint
 }
 
-output "hermes_blueprint_version" {
-  value = var.hermes_blueprint_version
+output "hermes_role_release" {
+  value = var.hermes_role_release
 }
 
-output "hermes_blueprint_commit" {
-  value = var.hermes_blueprint_commit
+output "hermes_role_release_commit" {
+  value = var.hermes_role_release_commit
+}
+
+output "collective_learning_approval_public_key" {
+  value = var.collective_learning_approval_public_key
 }
 
 output "private_mcp_fqdn" {

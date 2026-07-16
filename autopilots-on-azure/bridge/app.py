@@ -73,7 +73,12 @@ class DreamRunResponse(BaseModel):
     gateway_url: str = Field(alias="gatewayUrl")
     reused_existing_sandbox: bool = Field(alias="reusedExistingSandbox")
     response: str
-    learning_packet: dict[str, Any] = Field(alias="learningPacket")
+    learning_status: dict[str, Any] = Field(alias="learningStatus")
+
+
+class CollectiveLearningApprovalRequest(BaseModel):
+    packet_digest: str = Field(alias="packetDigest", min_length=64, max_length=64)
+    approved_by: str = Field(alias="approvedBy", min_length=1, max_length=200)
 
 
 _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
@@ -722,8 +727,8 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
     adapter = runtime_adapter()
     if adapter.runtime_kind != "hermes":
         raise HTTPException(status_code=409, detail="Dream runs are supported only by the Hermes runtime.")
-    instance_id = os.getenv("AUTOPILOT_INSTANCE_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
-    session_id = f"dream:{instance_id}"
+    worker_id = os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
+    session_id = f"dream:{worker_id}"
     try:
         result = await adapter.dream(
             DreamRequest(
@@ -747,8 +752,50 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
         gatewayUrl=str(result.agent.raw.get("gatewayUrl") or ""),
         reusedExistingSandbox=bool(result.agent.raw.get("reusedExistingSandbox")),
         response=result.agent.text,
-        learningPacket=result.learning_packet,
+        learningStatus=result.learning_status,
     )
+
+
+@app.post("/internal/collective-learning/prepare")
+async def prepare_collective_learning(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
+    try:
+        return await adapter.prepare_collective_learning()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+
+
+@app.post("/internal/collective-learning/approve")
+async def approve_collective_learning(
+    request: CollectiveLearningApprovalRequest,
+    http_request: Request,
+) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
+    try:
+        return await adapter.approve_collective_learning(
+            packet_digest=request.packet_digest,
+            approved_by=request.approved_by,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+
+
+@app.get("/internal/collective-learning/export")
+async def export_collective_learning(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
+    try:
+        return await adapter.export_collective_learning()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
 
 
 @agent365_app.activity("message")

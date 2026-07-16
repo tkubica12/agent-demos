@@ -1,4 +1,4 @@
-# ADR 0009: Use Hermes profile distributions with ACA Sandbox state
+# ADR 0009: Use Role Blueprint distributions with persistent Worker state
 
 ## Status
 
@@ -8,8 +8,8 @@ Accepted.
 
 The future digital-worker scenario needs two different lifecycles:
 
-- A reviewed role blueprint, such as a junior project manager, must be releasable and updatable across many worker instances.
-- Each assigned worker instance must keep personal/team memory, session history, preferences, and local context across blueprint upgrades.
+- A reviewed Role Blueprint, such as Junior Project Manager, must publish immutable Role Releases for many Workers.
+- Each Worker must keep Personal Memory, Private Playbooks, and Work History across Worker Refresh.
 
 Hermes already has native persistence and packaging concepts:
 
@@ -25,13 +25,13 @@ Options considered:
 1. Store all worker state in a central database.
 2. Store all worker state in Blob Storage and materialize files at startup.
 3. Bake each blueprint version into the runtime image.
-4. Use Hermes profile distributions from Git for blueprint-owned files and ACA Sandbox Data Disk for instance-owned state.
+4. Use Hermes profile distributions from Git for Role Blueprint-owned files and ACA Sandbox Data Disk for Worker-owned state.
 
 ## Decision
 
-Use Hermes profile distributions as the canonical blueprint packaging mechanism and use an ACA Sandbox Data Disk as the worker instance's persistent `HERMES_HOME`.
+Use Hermes profile distributions as the canonical Role Blueprint packaging mechanism and use an ACA Sandbox Data Disk as the Worker's persistent `HERMES_HOME`.
 
-The blueprint repository owns releasable files:
+The Role Blueprint repository owns Role Release files:
 
 - `distribution.yaml`
 - `SOUL.md`
@@ -40,7 +40,7 @@ The blueprint repository owns releasable files:
 - selected `config.yaml` defaults
 - optional cron templates
 
-The worker instance owns private/durable runtime state:
+The Worker owns private durable state:
 
 - `.env`
 - `auth.json`
@@ -49,12 +49,12 @@ The worker instance owns private/durable runtime state:
 - sessions
 - logs
 - workspace
-- `local\`
-- assignment-specific private artifacts
+- `skills\private\` Private Playbooks
+- Work History and assignment-specific private artifacts
 
-The active worker copy lives on the sandbox Data Disk, but Git remains the source of truth for the releasable blueprint. The instance records the blueprint source, version, and commit in an instance manifest so central tools can compare local candidate changes against the correct base revision.
+The active Worker copy lives on the Sandbox Data Disk, but Git remains the source of truth for the Role Blueprint. The Worker manifest records the Role Blueprint source, Role Release, and immutable commit so Collective Learning Review can compare Candidate Improvements against the correct base.
 
-The hosted implementation uses a full commit SHA, not a floating branch. The bridge passes the source repository, repository-relative distribution path, expected version, and commit to the sandbox. The persistent Hermes root remains `/data/hermes`; the distribution is installed into `/data/hermes/profiles/<blueprint-name>`, recorded as the sticky active profile, and passed to the gateway subprocess as its effective `HERMES_HOME`. The instance manifest is stored at `local\autopilots-instance.json`, which is instance-owned and preserved during updates.
+The hosted implementation uses a full commit SHA, not a floating branch. The bridge passes the source repository, repository-relative Role Blueprint path, Role Release, and commit to the Sandbox. The persistent Hermes root remains `/data/hermes`; the distribution is installed into `/data/hermes/profiles/<role-blueprint>`, recorded as the sticky active profile, and passed to the gateway subprocess as its effective `HERMES_HOME`. The Worker manifest is stored at `local\worker.json`.
 
 Changing the pinned commit changes the ACA Sandbox labels. The bridge deletes the stale sandbox container and creates a new one against the same Data Disk volume. Startup then replaces only the paths listed by `distribution_owned`; memories, sessions, SQLite state, workspace, `.env`, `local\`, and any skills outside the distribution-owned namespace remain intact.
 
@@ -66,11 +66,11 @@ Do not introduce a project database for Hermes core memory or blueprint skill st
 
 ## Consequences
 
-- Blueprint upgrade can preserve personal/team memory and session history.
+- Worker Refresh preserves Personal Memory, Private Playbooks, and Work History.
 - Hermes remains close to its native operating model instead of requiring a custom state backend.
 - Git diffs and pull requests become the natural review surface for releasable role skills.
-- The sandbox Data Disk must be treated as single-writer per worker instance because Hermes state includes SQLite.
-- The startup script must avoid overwriting distribution-owned or instance-owned files unexpectedly.
+- The Sandbox Data Disk must be treated as single-writer per Worker because Hermes state includes SQLite.
+- The startup script must avoid overwriting Role Blueprint-owned or Worker-owned files unexpectedly.
 - Hosted upgrades require a reachable Git source for the new pinned commit; restarts at an already installed commit do not fetch Git again.
 - Operators must not use ACA Dynamic Sessions for this track.
 - A database can be added later for fleet operations without changing the blueprint source of truth.

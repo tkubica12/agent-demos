@@ -306,6 +306,14 @@ resource "azapi_resource" "bridge_app" {
             value = var.api_server_key == "" ? "not-configured" : var.api_server_key
           },
           {
+            name  = "previous-api-server-key"
+            value = var.previous_api_server_key == "" ? "not-configured" : var.previous_api_server_key
+          },
+          {
+            name  = "collective-learning-approval-private-key"
+            value = var.collective_learning_approval_private_key == "" ? "not-configured" : var.collective_learning_approval_private_key
+          },
+          {
             name  = "agent365-client-secret"
             value = var.agent365_client_secret == "" ? "not-configured" : var.agent365_client_secret
           },
@@ -330,32 +338,32 @@ resource "azapi_resource" "bridge_app" {
                 value = var.autopilot_name
               },
               {
-                name  = "AUTOPILOT_INSTANCE_ID"
+                name  = "WORKER_ID"
                 value = var.autopilot_name
               },
               {
-                name  = "HERMES_BLUEPRINT_NAME"
-                value = var.hermes_blueprint_name
+                name  = "HERMES_ROLE_BLUEPRINT"
+                value = var.hermes_role_blueprint
               },
               {
-                name  = "HERMES_BLUEPRINT_SOURCE"
-                value = var.hermes_blueprint_source
+                name  = "HERMES_ROLE_BLUEPRINT_SOURCE"
+                value = var.hermes_role_blueprint_source
               },
               {
-                name  = "HERMES_BLUEPRINT_PATH"
-                value = var.hermes_blueprint_path
+                name  = "HERMES_ROLE_BLUEPRINT_PATH"
+                value = var.hermes_role_blueprint_path
               },
               {
-                name  = "HERMES_BLUEPRINT_VERSION"
-                value = var.hermes_blueprint_version
+                name  = "HERMES_ROLE_RELEASE"
+                value = var.hermes_role_release
               },
               {
-                name  = "HERMES_BLUEPRINT_COMMIT"
-                value = var.hermes_blueprint_commit
+                name  = "HERMES_ROLE_RELEASE_COMMIT"
+                value = var.hermes_role_release_commit
               },
               {
-                name  = "HERMES_ASSIGNEE_SCOPE"
-                value = var.hermes_assignee_scope
+                name  = "WORKER_ASSIGNMENT_SCOPE"
+                value = var.worker_assignment_scope
               },
               {
                 name  = "AZURE_TENANT_ID"
@@ -396,6 +404,22 @@ resource "azapi_resource" "bridge_app" {
               {
                 name      = "HERMES_API_SERVER_KEY"
                 secretRef = "api-server-key"
+              },
+              {
+                name      = "PREVIOUS_API_SERVER_KEY"
+                secretRef = "previous-api-server-key"
+              },
+              {
+                name  = "RUNTIME_CONFIG_REVISION"
+                value = substr(sha256(var.api_server_key), 0, 16)
+              },
+              {
+                name      = "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"
+                secretRef = "collective-learning-approval-private-key"
+              },
+              {
+                name  = "COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY"
+                value = var.collective_learning_approval_public_key
               },
               {
                 name  = "USE_AGENTIC_AUTH"

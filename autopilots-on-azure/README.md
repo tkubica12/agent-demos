@@ -319,6 +319,55 @@ See **Hermes memory and Collective Learning Review architecture** in `ARCHITECTU
 
 The A9 flow was live-verified on 2026-07-15 through blueprint v2.3.0 at commit `01e048d2991113aa327a827a62f78286b17206a5`. The original dream produced three accepted procedural records with no redaction rejection. A normal turn then added a fourth rollback-checkpoint record, and a new session immediately recalled both required fields from the generated hot-learning skill without waiting for dreaming. A subsequent dream recognized the record as already captured and produced no duplicate. Private paths remained excluded from the packet.
 
+### Collective Learning Review
+
+Prepare a fail-closed Learning Packet. The response contains only a human-readable summary and exact digest; Private Playbooks, Personal Memory, and Work History are excluded:
+
+```powershell
+uv run python -m scripts.collective_learning prepare
+```
+
+After reviewing the listed artifacts, approve that exact digest through the bridge. The bridge holds the Ed25519 approval private key; the Worker receives only the public key and cannot forge human approval:
+
+```powershell
+uv run python -m scripts.collective_learning approve `
+  --packet-digest "<digest-from-prepare>" `
+  --approved-by "<operator-alias>"
+```
+
+Export the attested packet and trusted Worker public-key mapping:
+
+```powershell
+uv run python -m scripts.collective_learning export `
+  --output .local\collective-learning\hermes1.packet.json
+```
+
+Run the merger/judge over one or more approved Worker packets:
+
+```powershell
+uv run python -m scripts.collective_review `
+  --packet .local\collective-learning\hermes1.packet.json `
+  --worker-public-keys .local\collective-learning\hermes1.packet.worker-public-keys.json `
+  --next-role-release 3.1.0 `
+  --decision-output .local\collective-learning\role-release-3.1.0-decision.json
+```
+
+Add `--create-pr` to create a draft Role Blueprint pull request. Add `--ready` only when the PR should immediately enter normal human review.
+
+Worker Refresh validates the approved packet, its digest, the bridge signature, Worker identity, Role Release commit, and current governed-state hash before replacing Role Skills. The current Worker remains running if preflight validation fails.
+
+### One-time A9 to A10 transition
+
+Role Release 3 refuses to silently consume A9 state. Before the first refresh:
+
+1. Convert useful `local\private-cache.md` content into one or more Private Playbooks.
+2. Convert useful `skills\hot-learning` rules into Candidate Improvements.
+3. Remove the obsolete A9 cache, aggregate hot skill, old distribution-owned skill directories, and `local\autopilots-instance.json`.
+4. Configure explicit `--role-blueprint`, `--role-release`, `--role-release-commit`, and `--assignment-scope` values.
+5. Delete the old Sandbox only after inspecting the migrated files; keep the `hermes-data` volume.
+
+The runtime fails explicitly when legacy environment variables, manifests, or A9 artifacts remain.
+
 The complete v1-to-v2 lifecycle was live-verified on 2026-07-13. Hermes installed v1.0.0 from `ecc07fad92122d6ae6d4e44bd145c1814a746071`, wrote private memory/session/local skill markers, then installed v2.0.0 from `50342bd359a3f0fce9669a43b1d6eeb4fa690900` in a replacement sandbox using the same `hermes-data` volume. The v2 distribution files changed, every private marker and native `state.db` survived, and the private incidents MCP still returned the expected five services.
 
 ## Prerequisites

@@ -64,7 +64,7 @@ class DreamRequest:
 @dataclass(frozen=True)
 class DreamResponse:
     agent: AgentResponse
-    learning_packet: dict[str, Any]
+    learning_status: dict[str, Any]
 
 
 class AgentRuntimeAdapter(Protocol):
@@ -76,4 +76,18 @@ class AgentRuntimeAdapter(Protocol):
         ...
 
     async def dream(self, request: DreamRequest) -> DreamResponse:
+        ...
+
+    async def prepare_collective_learning(self) -> dict[str, Any]:
+        ...
+
+    async def approve_collective_learning(
+        self,
+        *,
+        packet_digest: str,
+        approved_by: str,
+    ) -> dict[str, Any]:
+        ...
+
+    async def export_collective_learning(self) -> dict[str, Any]:
         ...

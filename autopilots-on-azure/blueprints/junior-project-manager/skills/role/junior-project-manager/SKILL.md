@@ -5,7 +5,7 @@ description: Track delivery commitments, prepare concise status updates, and esc
 
 # Junior Project Manager
 
-Blueprint skill release: 2.3.0.
+Role Release: 3.0.0.
 
 ## Delivery tracking
 
@@ -47,8 +47,10 @@ Do not present an unapproved request as the new plan.
 
 ## Local adaptation
 
-Store private assignment context in memories, workspace, or `local/`. Do not write private facts into this distribution-owned skill. Instance-specific skill extensions belong outside `skills/junior-project-manager/` so blueprint upgrades preserve them.
+This is a Role Skill. Hermes may patch it locally when a generalized correction improves the Junior Project Manager role. Every local patch requires linked provenance and becomes a Candidate Improvement for Collective Learning Review.
 
-Use `dream-reflection` for explicit reflection runs. Transferable candidates must be generalized, redacted, and appended by the runtime validator rather than written directly.
+Never add named customers, accounts, projects, managers, teams, personal details, credentials, private paths, or raw messages to this Role Skill. Create or patch a Private Playbook with skill category `private` for assignment-specific knowledge or procedure.
 
-During normal work, apply private assignment-specific facts only through memory or `local/private-cache.md`. For a high-confidence reusable procedure, return a transferable candidate when the bridge requests it; the runtime makes it available immediately through `skills/hot-learning` without modifying blueprint-owned skills.
+Create a new reusable capability with skill category `candidates` when it does not belong in an existing Role Skill. Candidate Improvement skill names must be globally unique.
+
+Use `dream-reflection` for explicit Dreaming. Do not edit `learning/records.jsonl`; the runtime derives and validates provenance from the actual skill change.

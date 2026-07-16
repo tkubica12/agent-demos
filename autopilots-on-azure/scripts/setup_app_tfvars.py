@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import secrets
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bridge.gateway_client import generate_bridge_device_identity
 from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, terraform_output, write_tfvars
@@ -23,6 +27,33 @@ def load_or_create_device(path: Path) -> dict[str, str]:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(device, indent=2), encoding="utf-8")
     return device
+
+
+def load_or_create_collective_approval_identity(path: Path) -> dict[str, str]:
+    if path.exists():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or set(payload) != {"privateKey", "publicKey"}:
+            raise ValueError(f"{path} contains an invalid Collective Learning approval identity.")
+        return payload
+    private_key = Ed25519PrivateKey.generate()
+    payload = {
+        "privateKey": base64.b64encode(
+            private_key.private_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PrivateFormat.Raw,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        ).decode("ascii"),
+        "publicKey": base64.b64encode(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        ).decode("ascii"),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
 
 
 def unprotect_windows_secret(protected_value: str) -> str:
@@ -125,12 +156,14 @@ def build_tfvars(
     agent365_client_id: str = "",
     agent365_client_secret: str = "",
     agent365_tenant_id: str = "",
-    blueprint_name: str = "",
-    blueprint_source: str = "",
-    blueprint_path: str = "",
-    blueprint_version: str = "",
-    blueprint_commit: str = "",
-    assignee_scope: str = "",
+    role_blueprint: str = "",
+    role_blueprint_source: str = "",
+    role_blueprint_path: str = "",
+    role_release: str = "",
+    role_release_commit: str = "",
+    assignment_scope: str = "",
+    collective_approval_private_key: str = "",
+    collective_approval_public_key: str = "",
 ) -> dict[str, Any]:
     tfvars: dict[str, Any] = dict(previous)
     tfvars.update(
@@ -155,33 +188,74 @@ def build_tfvars(
         if runtime_disk_image_name:
             tfvars["runtime_disk_image_name"] = runtime_disk_image_name
     elif runtime == "hermes":
-        tfvars["api_server_key"] = api_server_key or previous.get("api_server_key") or previous.get("hermes_api_server_key") or random_token()
+        legacy_configured = any(
+            previous.get(key)
+            for key in (
+                "hermes_blueprint_name",
+                "hermes_blueprint_source",
+                "hermes_blueprint_path",
+                "hermes_blueprint_version",
+                "hermes_blueprint_commit",
+                "hermes_assignee_scope",
+            )
+        )
+        for deprecated in (
+            "hermes_blueprint_name",
+            "hermes_blueprint_source",
+            "hermes_blueprint_path",
+            "hermes_blueprint_version",
+            "hermes_blueprint_commit",
+            "hermes_assignee_scope",
+        ):
+            tfvars.pop(deprecated, None)
+        existing_api_server_key = previous.get("api_server_key") or previous.get("hermes_api_server_key") or ""
+        resolved_api_server_key = api_server_key or existing_api_server_key or random_token()
+        tfvars["api_server_key"] = resolved_api_server_key
+        tfvars["previous_api_server_key"] = (
+            existing_api_server_key
+            if api_server_key
+            and existing_api_server_key
+            and api_server_key != existing_api_server_key
+            else ""
+        )
         tfvars["runtime_image"] = runtime_image or previous.get("runtime_image", "")
         tfvars["runtime_disk_image_name"] = runtime_disk_image_name or previous.get("runtime_disk_image_name", "hermes-api-server-image")
-        blueprint_values = {
-            "hermes_blueprint_name": blueprint_name or previous.get("hermes_blueprint_name", ""),
-            "hermes_blueprint_source": blueprint_source or previous.get("hermes_blueprint_source", ""),
-            "hermes_blueprint_path": blueprint_path or previous.get("hermes_blueprint_path", ""),
-            "hermes_blueprint_version": blueprint_version or previous.get("hermes_blueprint_version", ""),
-            "hermes_blueprint_commit": blueprint_commit or previous.get("hermes_blueprint_commit", ""),
-            "hermes_assignee_scope": assignee_scope or previous.get("hermes_assignee_scope", ""),
+        tfvars["collective_learning_approval_private_key"] = (
+            collective_approval_private_key
+            or previous.get("collective_learning_approval_private_key", "")
+        )
+        tfvars["collective_learning_approval_public_key"] = (
+            collective_approval_public_key
+            or previous.get("collective_learning_approval_public_key", "")
+        )
+        role_values = {
+            "hermes_role_blueprint": role_blueprint or previous.get("hermes_role_blueprint", ""),
+            "hermes_role_blueprint_source": role_blueprint_source or previous.get("hermes_role_blueprint_source", ""),
+            "hermes_role_blueprint_path": role_blueprint_path or previous.get("hermes_role_blueprint_path", ""),
+            "hermes_role_release": role_release or previous.get("hermes_role_release", ""),
+            "hermes_role_release_commit": role_release_commit or previous.get("hermes_role_release_commit", ""),
+            "worker_assignment_scope": assignment_scope or previous.get("worker_assignment_scope", ""),
         }
-        if any(blueprint_values.values()):
-            required_blueprint_values = {
-                key: blueprint_values[key]
-                for key in (
-                    "hermes_blueprint_name",
-                    "hermes_blueprint_source",
-                    "hermes_blueprint_version",
-                    "hermes_blueprint_commit",
-                )
-            }
-            missing = [key for key, value in required_blueprint_values.items() if not value]
-            if missing:
-                raise ValueError(f"Hermes blueprint configuration requires: {', '.join(missing)}.")
-            if not re.fullmatch(r"[0-9a-fA-F]{40}", blueprint_values["hermes_blueprint_commit"]):
-                raise ValueError("hermes_blueprint_commit must be a full 40-character Git commit SHA.")
-        tfvars.update({key: value for key, value in blueprint_values.items() if value})
+        if legacy_configured and not any(role_values.values()):
+            raise ValueError(
+                "A9 Hermes blueprint tfvars require explicit --role-blueprint, "
+                "--role-blueprint-source, --role-release, and --role-release-commit migration values."
+            )
+        required_role_values = {
+            key: role_values[key]
+            for key in (
+                "hermes_role_blueprint",
+                "hermes_role_blueprint_source",
+                "hermes_role_release",
+                "hermes_role_release_commit",
+            )
+        }
+        missing = [key for key, value in required_role_values.items() if not value]
+        if missing:
+            raise ValueError(f"Hermes Role Release configuration requires: {', '.join(missing)}.")
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", role_values["hermes_role_release_commit"]):
+            raise ValueError("hermes_role_release_commit must be a full 40-character Git commit SHA.")
+        tfvars.update({key: value for key, value in role_values.items() if value})
     else:
         raise ValueError(f"Unsupported runtime '{runtime}'.")
     resolved_agent365_client_id = agent365_client_id or previous.get("agent365_client_id", "")
@@ -211,12 +285,13 @@ def main() -> None:
     parser.add_argument("--device-identity-file", default="")
     parser.add_argument("--approved-device-token", default="")
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY. Generated when omitted.")
-    parser.add_argument("--blueprint-name", default="", help="Hermes profile distribution name.")
-    parser.add_argument("--blueprint-source", default="", help="Git repository URL containing the Hermes distribution.")
-    parser.add_argument("--blueprint-path", default="", help="Distribution path relative to the repository root.")
-    parser.add_argument("--blueprint-version", default="", help="Expected distribution.yaml version.")
-    parser.add_argument("--blueprint-commit", default="", help="Full Git commit SHA to install.")
-    parser.add_argument("--assignee-scope", default="", help="Person, team, or workstream assigned to this worker.")
+    parser.add_argument("--role-blueprint", default="", help="Hermes Role Blueprint name.")
+    parser.add_argument("--role-blueprint-source", default="", help="Git repository URL containing the Role Blueprint.")
+    parser.add_argument("--role-blueprint-path", default="", help="Role Blueprint path relative to the repository root.")
+    parser.add_argument("--role-release", default="", help="Expected distribution.yaml Role Release.")
+    parser.add_argument("--role-release-commit", default="", help="Full immutable Git commit SHA for the Role Release.")
+    parser.add_argument("--assignment-scope", default="", help="Person, team, or workstream assigned to this Worker.")
+    parser.add_argument("--collective-approval-identity-file", default="", help="Local Ed25519 approval identity file.")
     parser.add_argument("--runtime-image", default="", help="Runtime image digest. Recommended for Hermes to avoid reusing an OpenClaw image tfvars value.")
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
     parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
@@ -248,6 +323,15 @@ def main() -> None:
     if runtime == "openclaw":
         device_path = Path(args.device_identity_file) if args.device_identity_file else default_device_identity_path(runtime=runtime, suffix=suffix)
         device = load_or_create_device(device_path)
+    collective_identity: dict[str, str] = {}
+    collective_identity_path: Path | None = None
+    if runtime == "hermes":
+        collective_identity_path = (
+            Path(args.collective_approval_identity_file)
+            if args.collective_approval_identity_file
+            else runtime_workspace(runtime) / "collective-learning-approval.json"
+        )
+        collective_identity = load_or_create_collective_approval_identity(collective_identity_path)
 
     tfvars = build_tfvars(
         runtime=runtime,
@@ -265,12 +349,14 @@ def main() -> None:
         agent365_client_id=args.agent365_client_id or agent365_auth.get("client_id", ""),
         agent365_client_secret=args.agent365_client_secret or agent365_auth.get("client_secret", ""),
         agent365_tenant_id=args.agent365_tenant_id,
-        blueprint_name=args.blueprint_name,
-        blueprint_source=args.blueprint_source,
-        blueprint_path=args.blueprint_path,
-        blueprint_version=args.blueprint_version,
-        blueprint_commit=args.blueprint_commit,
-        assignee_scope=args.assignee_scope,
+        role_blueprint=args.role_blueprint,
+        role_blueprint_source=args.role_blueprint_source,
+        role_blueprint_path=args.role_blueprint_path,
+        role_release=args.role_release,
+        role_release_commit=args.role_release_commit,
+        assignment_scope=args.assignment_scope,
+        collective_approval_private_key=collective_identity.get("privateKey", ""),
+        collective_approval_public_key=collective_identity.get("publicKey", ""),
     )
     runtime_path = runtime_app_tfvars_path(runtime)
     write_tfvars(runtime_path, tfvars)
@@ -283,13 +369,14 @@ def main() -> None:
         json.dumps(
             {
                 "runtime": runtime,
-                "autopilotName": autopilot_name,
+                "workerId": autopilot_name,
                 "dataVolumeName": data_volume_name,
                 "runtimeTfvarsFile": str(runtime_path),
                 "activeTfvarsFile": "" if args.runtime_only else str(active_path),
                 "activePrecedenceTfvarsFile": "" if args.runtime_only else str(precedence_path),
                 "deviceId": device["deviceId"] if device else "",
                 "deviceIdentityFile": str(device_path) if device_path else "",
+                "collectiveApprovalIdentityFile": str(collective_identity_path) if collective_identity_path else "",
                 "approvedDeviceTokenConfigured": bool(tfvars.get("openclaw_bridge_device_token")),
                 "apiServerKeyConfigured": bool(tfvars.get("api_server_key")),
                 "next": "Run terraform apply in terraform/apps. The bridge uses a managed identity for Azure API calls.",

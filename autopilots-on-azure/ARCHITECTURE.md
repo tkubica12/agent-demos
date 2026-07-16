@@ -365,7 +365,7 @@ A9 implemented a safe interim subset:
 - the runtime renders all accepted records into one generated `skills/hot-learning/SKILL.md`;
 - Role Blueprint instructions keep private content out of the journal.
 
-A10 retires the generated aggregate skill and connects Hermes-native skill creation and Role Skill patches to provenance and export. It adds:
+A10 in Role Release 3 retires the generated aggregate skill and connects Hermes-native skill creation and Role Skill patches to provenance and export. It provides:
 
 - skill classification and provenance metadata;
 - interception or auditing of `skill_manage`, `/learn`, and background-review writes;
@@ -376,6 +376,10 @@ A10 retires the generated aggregate skill and connects Hermes-native skill creat
 - fail-closed artifact allowlisting, source-aware DLP, human export approval, and durable export receipts;
 - reserved Private Playbook, Candidate Improvement, Role Skill, and runtime namespaces;
 - multi-worker merger/judge and reviewed GitHub pull requests.
+
+Learning transactions are serialized both in the bridge and by a profile-local lease. The runtime snapshots governed skills before each turn, verifies post-turn artifacts against returned provenance, and atomically commits the journal plus governed-state ledger. Invalid or unprovenanced Role Skill and Candidate Improvement changes are rolled back. Asynchronous governed drift is quarantined for later Dreaming and restored to the last committed state.
+
+Learning Packet approval is independent of the Worker. The bridge owns an Ed25519 private key and signs the exact prepared packet digest only after explicit operator approval. The Worker and central Collective Learning Review hold trusted public keys only. Worker Refresh validates the signed packet and current governed-state hash before the old Sandbox is deleted.
 
 ### Role Blueprint and Worker state boundary
 

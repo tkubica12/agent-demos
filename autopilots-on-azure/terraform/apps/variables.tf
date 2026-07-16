@@ -8,37 +8,48 @@ variable "agent_runtime" {
   default = "openclaw"
 }
 
-variable "hermes_blueprint_name" {
+variable "hermes_role_blueprint" {
   type    = string
   default = ""
 }
 
-variable "hermes_blueprint_source" {
+variable "hermes_role_blueprint_source" {
   type    = string
   default = ""
 }
 
-variable "hermes_blueprint_path" {
+variable "hermes_role_blueprint_path" {
   type    = string
   default = ""
 }
 
-variable "hermes_blueprint_version" {
+variable "hermes_role_release" {
   type    = string
   default = ""
 }
 
-variable "hermes_blueprint_commit" {
+variable "hermes_role_release_commit" {
   type    = string
   default = ""
 
   validation {
-    condition     = var.hermes_blueprint_commit == "" || can(regex("^[0-9a-fA-F]{40}$", var.hermes_blueprint_commit))
-    error_message = "hermes_blueprint_commit must be empty or a full 40-character Git commit SHA."
+    condition     = var.hermes_role_release_commit == "" || can(regex("^[0-9a-fA-F]{40}$", var.hermes_role_release_commit))
+    error_message = "hermes_role_release_commit must be empty or a full 40-character Git commit SHA."
   }
 }
 
-variable "hermes_assignee_scope" {
+variable "worker_assignment_scope" {
+  type    = string
+  default = ""
+}
+
+variable "collective_learning_approval_private_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "collective_learning_approval_public_key" {
   type    = string
   default = ""
 }
@@ -94,6 +105,12 @@ variable "openclaw_bridge_device_token" {
 }
 
 variable "api_server_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "previous_api_server_key" {
   type      = string
   default   = ""
   sensitive = true

@@ -10,7 +10,7 @@ The digital-worker loop has three learning stages:
 
 - Hot-path learning during or after a user turn.
 - Dreaming, where one worker reflects over recent sessions and local evidence in batches.
-- Fleet consolidation, where candidate learnings from many workers are distilled into a new blueprint version.
+- Collective Learning Review, where Candidate Improvements from many Workers are proposed for the next Role Release.
 
 For hosted Azure workers, dreaming must run even when the ACA Sandbox has suspended. We investigated whether ACA Sandboxes have their own native schedule/trigger mechanism. Current Microsoft documentation describes ACA Sandboxes as stateful compute with explicit lifecycle control, suspend/resume, snapshots, volumes, ports, and data-plane management. It does not describe a Sandbox-native timer trigger.
 
@@ -37,7 +37,7 @@ Schedule dreaming outside the ACA Sandbox and submit dream runs through the prop
 
 The bridge is responsible for:
 
-- Selecting the worker instance.
+- Selecting the Worker.
 - Waking or reusing the ACA Sandbox.
 - Waiting for Hermes health.
 - Calling a stateful Hermes endpoint with stable session identity.

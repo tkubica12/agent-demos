@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://autopilots-on-azure.example/schemas/learning-record.schema.json",
-  "title": "Autopilots transferable learning record",
+  "$id": "https://autopilots-on-azure.example/schemas/skill-provenance.schema.json",
+  "title": "Autopilots Candidate Improvement provenance",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,17 +9,22 @@
     "recordId",
     "createdAt",
     "classification",
+    "artifactPath",
+    "action",
     "title",
     "generalizedLearning",
     "rationale",
     "evidence",
     "confidence",
-    "proposedTarget",
+    "sourceStage",
+    "artifact",
+    "roleRelease",
+    "worker",
     "privacy"
   ],
   "properties": {
     "schemaVersion": {
-      "const": "1.0"
+      "const": "2.0"
     },
     "recordId": {
       "type": "string",
@@ -31,8 +36,19 @@
     },
     "classification": {
       "enum": [
-        "transferable_procedural",
-        "transferable_domain"
+        "role_skill_improvement",
+        "candidate_improvement"
+      ]
+    },
+    "artifactPath": {
+      "type": "string",
+      "pattern": "^skills/(role|candidates)/[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "action": {
+      "enum": [
+        "create",
+        "patch",
+        "delete"
       ]
     },
     "title": {
@@ -82,23 +98,81 @@
       "minimum": 0,
       "maximum": 1
     },
-    "proposedTarget": {
+    "sourceStage": {
+      "enum": [
+        "foreground",
+        "dream",
+        "background_review",
+        "operator"
+      ]
+    },
+    "artifact": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "kind",
-        "path"
+        "path",
+        "beforeHash",
+        "afterHash",
+        "changedFiles"
       ],
       "properties": {
-        "kind": {
-          "enum": [
-            "skill",
-            "knowledge"
+        "path": {
+          "type": "string"
+        },
+        "beforeHash": {
+          "type": [
+            "string",
+            "null"
           ]
         },
-        "path": {
+        "afterHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changedFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "roleRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roleBlueprint",
+        "release",
+        "commit"
+      ],
+      "properties": {
+        "roleBlueprint": {
+          "type": "string"
+        },
+        "release": {
+          "type": "string"
+        },
+        "commit": {
           "type": "string",
-          "pattern": "^(skills/[a-z0-9][a-z0-9-]*|knowledge/[a-z0-9][a-z0-9-]*\\.md)$"
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workerId",
+        "assignmentScope"
+      ],
+      "properties": {
+        "workerId": {
+          "type": "string"
+        },
+        "assignmentScope": {
+          "type": "string"
         }
       }
     },
