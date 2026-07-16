@@ -2,7 +2,7 @@
 
 Host OpenClaw and Hermes autopilot runtimes in Azure Container Apps Sandboxes behind runtime-specific bridge apps. Each bridge receives `/invoke` and Agent 365 `/api/messages` traffic, wakes or reuses its runtime sandbox, forwards the turn, and returns the response.
 
-The active plan and specification is in `AUTOPILOTS_SPEC.md`.
+Product requirements are in [SPEC.md](SPEC.md), delivery status and future milestones in [PLAN.md](PLAN.md), and architecture in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Current deployment model
 

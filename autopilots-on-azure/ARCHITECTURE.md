@@ -1,13 +1,14 @@
 # Autopilots on Azure architecture
 
-This document describes the durable system architecture. Implemented behavior and accepted target architecture are labeled separately. Deployment commands and troubleshooting remain in `README.md`; milestone execution remains in `AUTOPILOTS_SPEC.md`.
+This document describes the durable system architecture. Deployment commands and troubleshooting remain in `README.md`; normative requirements are in `SPEC.md`; milestone execution remains in `PLAN.md`.
 
 ## Document map
 
 | Document | Responsibility |
 | --- | --- |
 | `ARCHITECTURE.md` | Current system shape, trust boundaries, identity flows, networking, and component responsibilities. |
-| `AUTOPILOTS_SPEC.md` | Product requirements, implemented capability baseline, future design, milestones, and exit criteria. |
+| `SPEC.md` | Normative product requirements and constraints. |
+| `PLAN.md` | Delivery status, milestones, next work, and exit criteria. |
 | `README.md` | Operator quick start, deployment, validation, troubleshooting, and cleanup. |
 | `docs\runbooks\` | Detailed repeatable procedures for flows with multiple control planes or authentication steps. |
 | `docs\adr\` | Why consequential architectural decisions were made and what would cause them to be reconsidered. |
