@@ -1,0 +1,12 @@
+.azure/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.data/
+.optimizer/
+.terraform/
+infra/
+memory_store.json
+evals/generated_conversations.jsonl
+evals/eval_results.json

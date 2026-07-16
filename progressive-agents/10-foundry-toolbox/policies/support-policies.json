@@ -1,0 +1,23 @@
+{
+  "returns": {
+    "policy_id": "RET-CANARY-9031",
+    "window_days": 30,
+    "condition": "Items must be unused and include the original packaging.",
+    "proof": "A receipt or order number is required.",
+    "exceptions": [
+      "Final-sale items",
+      "Personalized items"
+    ]
+  },
+  "shipping": {
+    "policy_id": "SHIP-CANARY-4186",
+    "standard_delivery_business_days": "5-7",
+    "delay_guidance": "Ask the customer to confirm the carrier tracking link before contacting support.",
+    "status_boundary": "The agent cannot inspect live order or carrier status."
+  },
+  "escalation": {
+    "safety": "Reported injury or product safety concerns require urgent escalation.",
+    "legal_or_press": "Legal threats and press inquiries require specialist review.",
+    "boundary": "Use the escalation skill and its matrix for the final classification."
+  }
+}
