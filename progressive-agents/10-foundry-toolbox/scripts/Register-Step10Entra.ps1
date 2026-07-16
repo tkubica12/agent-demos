@@ -24,11 +24,11 @@ if (-not $app) {
     } | ConvertFrom-Json
 }
 
-$currentRoles = az ad app show --id $app.appId --query appRoles --output json |
-    ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or $null -eq $currentRoles) {
-    throw "Could not inspect the support-policy application role."
-}
+$currentRoles = @(
+    Invoke-AzChecked {
+        az ad app show --id $app.appId --query appRoles --output json
+    } | ConvertFrom-Json
+)
 $graphToken = (Invoke-AzChecked {
     az account get-access-token `
         --resource-type ms-graph `

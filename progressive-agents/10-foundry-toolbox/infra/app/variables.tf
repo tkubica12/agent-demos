@@ -13,3 +13,8 @@ variable "tenant_id" {
 variable "mcp_api_client_id" {
   type = string
 }
+
+variable "allowed_client_applications" {
+  type    = list(string)
+  default = []
+}

@@ -37,3 +37,5 @@ environment_variables:
       value: /app/.agent_configs
     - name: TOOLBOX_ENDPOINT
       value: ${TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT}
+    - name: MCP_API_AUDIENCE
+      value: ${MCP_API_AUDIENCE}

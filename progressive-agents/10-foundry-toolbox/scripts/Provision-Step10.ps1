@@ -20,28 +20,6 @@ function Invoke-Checked {
     }
 }
 
-function Grant-Role {
-    param([string]$PrincipalId, [string]$Role, [string]$Scope)
-    $count = az role assignment list `
-        --assignee-object-id $PrincipalId `
-        --scope $Scope `
-        --query "[?roleDefinitionName=='$Role'] | length(@)" `
-        --output tsv
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not inspect $Role at $Scope for $PrincipalId."
-    }
-    if ([int]$count -eq 0) {
-        Invoke-Checked {
-            az role assignment create `
-                --assignee-object-id $PrincipalId `
-                --assignee-principal-type ServicePrincipal `
-                --role $Role `
-                --scope $Scope `
-                --output none
-        }
-    }
-}
-
 if (-not $env:FOUNDRY_PROJECT_ENDPOINT) {
     throw "FOUNDRY_PROJECT_ENDPOINT must be set before provisioning Step 10."
 }
@@ -123,8 +101,56 @@ try {
     }
 
     $entra = & "$PSScriptRoot\Register-Step10Entra.ps1" `
-        -DisplayName "step-10-support-policy-mcp-$suffix" |
+        -DisplayName "step-10-support-policy-mcp-api-$suffix" |
         ConvertFrom-Json
+
+    $bootstrapEndpoint = "https://step10-bootstrap.invalid/mcp"
+    $env:MEMORY_STORE_NAME = $MemoryStoreName
+    $env:MEMORY_STORE_CHAT_MODEL_DEPLOYMENT_NAME = $MemoryChatModel
+    $env:MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME = $MemoryEmbeddingModel
+    Invoke-Checked { azd env set FOUNDRY_PROJECT_ENDPOINT $env:FOUNDRY_PROJECT_ENDPOINT }
+    Invoke-Checked {
+        azd env set TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT $bootstrapEndpoint
+    }
+    Invoke-Checked { azd env set MCP_API_AUDIENCE $entra.audience }
+    Invoke-Checked { azd env set MEMORY_STORE_NAME $MemoryStoreName }
+    Invoke-Checked { uv run python scripts\setup_foundry_memory.py --name $MemoryStoreName }
+    Invoke-Checked { azd provision -C . --no-prompt }
+
+    $agent = azd ai agent show step-10-foundry-toolbox --output json 2>$null |
+        ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $agent.instance_identity.principal_id) {
+        Invoke-Checked { azd deploy -C . }
+        $agent = azd ai agent show step-10-foundry-toolbox --output json |
+            ConvertFrom-Json
+    }
+    if (-not $agent.instance_identity.principal_id -or -not $agent.blueprint.principal_id) {
+        throw "Could not resolve the hosted-agent instance and blueprint identities."
+    }
+    $instancePrincipalType = az ad sp show `
+        --id $agent.instance_identity.principal_id `
+        --query servicePrincipalType `
+        --output tsv
+    if ($LASTEXITCODE -ne 0 -or $instancePrincipalType -ne "ServiceIdentity") {
+        throw "Hosted-agent instance principal is not the expected Entra Agent ID ServiceIdentity."
+    }
+    Write-Warning (
+        "Entra Agent ID ServiceIdentity principals do not support direct Azure RBAC " +
+        "assignment in this tenant. Foundry runtime access remains platform-managed; " +
+        "downstream MCP access uses the explicit application-role assignments below."
+    )
+    & "$PSScriptRoot\Grant-Step10AgentRole.ps1" `
+        -PrincipalObjectId $agent.instance_identity.principal_id `
+        -ResourceServicePrincipalObjectId $entra.servicePrincipalObjectId `
+        -AppRoleId $entra.appRoleId
+    & "$PSScriptRoot\Grant-Step10AgentRole.ps1" `
+        -PrincipalObjectId $agent.blueprint.principal_id `
+        -ResourceServicePrincipalObjectId $entra.servicePrincipalObjectId `
+        -AppRoleId $entra.appRoleId
+    $allowedClientApplications = @(
+        $agent.instance_identity.client_id
+        $agent.blueprint.client_id
+    ) | ConvertTo-Json -Compress
 
     Push-Location "infra\app"
     try {
@@ -134,7 +160,8 @@ try {
                 -var "suffix=$suffix" `
                 -var "image=$image" `
                 -var "tenant_id=$($entra.tenantId)" `
-                -var "mcp_api_client_id=$($entra.appClientId)"
+                -var "mcp_api_client_id=$($entra.appClientId)" `
+                -var "allowed_client_applications=$allowedClientApplications"
         }
         $app = terraform output -json | ConvertFrom-Json
     } finally {
@@ -265,27 +292,22 @@ try {
     $consumerEndpoint = "$($env:FOUNDRY_PROJECT_ENDPOINT.TrimEnd('/'))/toolboxes/$ToolboxName/mcp?api-version=v1"
     $env:TOOLBOX_ENDPOINT = $consumerEndpoint
     $env:MEMORY_STORE_NAME = $MemoryStoreName
-    $env:MEMORY_STORE_CHAT_MODEL_DEPLOYMENT_NAME = $MemoryChatModel
-    $env:MEMORY_STORE_EMBEDDING_MODEL_DEPLOYMENT_NAME = $MemoryEmbeddingModel
-    Invoke-Checked { azd env set FOUNDRY_PROJECT_ENDPOINT $env:FOUNDRY_PROJECT_ENDPOINT }
     Invoke-Checked { azd env set TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT $consumerEndpoint }
-    Invoke-Checked { azd env set MEMORY_STORE_NAME $MemoryStoreName }
-    Invoke-Checked { uv run python scripts\setup_foundry_memory.py --name $MemoryStoreName }
-    Invoke-Checked { azd provision -C . --no-prompt }
+    Invoke-Checked { azd env set MCP_API_AUDIENCE $entra.audience }
     Invoke-Checked { azd deploy -C . }
 
-    $agent = azd ai agent show step-10-foundry-toolbox --output json |
+    $deployedAgent = azd ai agent show step-10-foundry-toolbox --output json |
         ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or -not $agent.instance_identity.principal_id) {
+    if ($LASTEXITCODE -ne 0 -or -not $deployedAgent.instance_identity.principal_id) {
         throw "Could not resolve the hosted-agent identity."
     }
-    $accountId = $projectId -replace "/projects/[^/]+$", ""
-    Grant-Role -PrincipalId $agent.instance_identity.principal_id -Role "Foundry User" -Scope $projectId
-    Grant-Role -PrincipalId $agent.instance_identity.principal_id -Role "Cognitive Services OpenAI User" -Scope $accountId
-    & "$PSScriptRoot\Grant-Step10AgentRole.ps1" `
-        -PrincipalObjectId $agent.instance_identity.principal_id `
-        -ResourceServicePrincipalObjectId $entra.servicePrincipalObjectId `
-        -AppRoleId $entra.appRoleId
+    if (
+        $deployedAgent.instance_identity.client_id -ne $agent.instance_identity.client_id -or
+        $deployedAgent.blueprint.client_id -ne $agent.blueprint.client_id
+    ) {
+        throw "Hosted-agent identity changed between bootstrap and final deployment."
+    }
+    $agent = $deployedAgent
     Start-Sleep -Seconds 45
     $promotion = uv run python scripts\toolbox_ops.py promote `
         --toolbox $ToolboxName `

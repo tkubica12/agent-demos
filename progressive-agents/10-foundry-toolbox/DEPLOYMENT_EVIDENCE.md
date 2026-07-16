@@ -10,9 +10,9 @@ Tokens, tenant user details, and request authorization headers are omitted.
 | Resource group | `rg-step10-toolbox-673af34` |
 | MCP Container App | `ca-step10-policy-673af34-eastus2` |
 | MCP endpoint | `https://ca-step10-policy-673af34-eastus2.blueglacier-bfa16bf5.eastus2.azurecontainerapps.io/mcp` |
-| MCP API client ID | `df66acde-3339-4659-af7e-3480d114f9ab` |
+| MCP API client ID | `7aca035b-d2bc-42b8-912c-afa1b6eb9d00` |
 | RemoteTool connection | `step-10-support-policy-mcp` / `AgenticIdentityToken` |
-| Hosted Agent | `step-10-foundry-toolbox` version `4`, status `active` |
+| Hosted Agent | `step-10-foundry-toolbox` version `10`, status `active` |
 | Hosted identity principal | `cd6dfe0f-8f90-4bff-a1b3-55934d8e6e7d` |
 | Hosted blueprint client | `384b4cc3-e7d6-4164-a361-6544826588f0` |
 | Toolbox | `step-10-contoso-support` |
@@ -25,38 +25,52 @@ Tokens, tenant user details, and request authorization headers are omitted.
 - MCP `/health`: `status=ok`, one business tool
   `lookup_support_policy`.
 - Anonymous MCP initialize: HTTP `401`.
-- Easy Auth: enabled, `Return401`, tenant v2 issuer, audience
-  `api://df66acde-3339-4659-af7e-3480d114f9ab`, `/health` excluded.
+- Easy Auth: enabled, `Return401`, tenant v2 issuer, exact observed token
+  audience `7aca035b-d2bc-42b8-912c-afa1b6eb9d00`, `/health` excluded.
+- Easy Auth application allowlist contains only the Hosted Agent instance and
+  blueprint client IDs.
 - API service principal: `appRoleAssignmentRequired=true`.
 - API role: `Mcp.Tools.ReadWrite.All`,
-  `dcc3431c-3ac1-487f-9bc3-6eba3ea86930`.
-- Hosted identity app-role assignment:
-  principal `cd6dfe0f-8f90-4bff-a1b3-55934d8e6e7d` to resource service
-  principal `db0cea7d-93e2-4e48-8aae-093a10fb49f3`.
+  `471715d9-3e5b-4756-89d2-2e2bf58aed7e`.
+- Hosted instance and blueprint app-role assignments target resource service
+  principal `fca627e3-e327-4dd2-b4d6-765ab59358dd`.
+- Direct Azure RBAC assignment is unsupported for the Agent ID principals:
+  the instance ServiceIdentity returns HTTP 500 and the blueprint returns
+  `PrincipalTypeNotSupported`. No success-shaped RBAC fallback is used.
 - RemoteTool connection contains target and `AgenticIdentityToken`; no secret or
   key is returned.
 - Toolbox v1 and v2 are immutable and v1 remains `default_version`.
 - V2 metadata records the meaningful `prolonged-delivery escalation` change.
 - Hosted Agent environment uses the unversioned consumer endpoint.
+- Superseded Hosted Agent diagnostic versions 1-9 were deleted after v10 became active.
 
 ## Blocking acceptance evidence
 
-Authenticated MCP `initialize` reaches the versioned Toolbox v2 endpoint.
-`tools/list` then fails before publication:
+The installed `azure.ai.connections` 1.0.0-beta.2 CLI is hard-coded to ARM
+`2025-04-01-preview` and exposes no explicit instance/blueprint fields.
+The latest provider API accepts those names only as free-form metadata, and
+Toolbox ignores them for direct caller context.
+
+The Hosted Agent now signs the initial Toolbox MCP handshake with an
+authenticated `httpx.AsyncClient`. Toolbox returns HTTP 200, resolves the
+AgenticIdentity connection, and attempts upstream `tools/list`.
+
+The Hosted Agent console proves the token minted for the MCP API:
 
 ```text
-Connection resolution failed for 'step-10-support-policy-mcp'.
-HTTP status: BadRequest.
-Reason: AgenticIdentityToken auth type for connection
-'step-10-support-policy-mcp' requires AgentInstanceClientId and
-AgentBlueprintClientId, or an ApplicationName.
+aud   = 7aca035b-d2bc-42b8-912c-afa1b6eb9d00
+azp   = cd6dfe0f-8f90-4bff-a1b3-55934d8e6e7d
+iss   = https://login.microsoftonline.com/6ce4f237-667f-43f5-aafd-cbef954adf97/v2.0
+ver   = 2.0
+roles = [Mcp.Tools.ReadWrite.All]
 ```
 
-The same failure surfaces from Hosted Agent Responses as:
+ACA Easy Auth rejects that same token on a direct initialize request and rejects
+the brokered Toolbox request:
 
 ```text
-response.failed
-server_error: MCP server failed to initialize
+HTTP 401 Unauthorized
+WWW-Authenticate: Bearer realm="<container-app-host>"
 ```
 
 Because candidate acceptance failed, the promotion gate left v1 active. V2 was
@@ -72,5 +86,6 @@ azd ai connection show step-10-support-policy-mcp --show-credentials
 azd ai toolbox show step-10-contoso-support --version 1 --output json
 azd ai toolbox show step-10-contoso-support --version 2 --output json
 azd ai agent show step-10-foundry-toolbox --output json
+azd ai agent monitor step-10-foundry-toolbox --tail 100 --utc
 uv run python scripts\toolbox_ops.py inspect --endpoint <version-2-endpoint>
 ```

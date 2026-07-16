@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from agent_framework import (
     Agent,
     AgentSession,
@@ -26,7 +27,9 @@ from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.ai.agentserver.optimization import load_config, load_skills_from_dir
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.projects import AIProjectClient
+from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import DefaultAzureCredential
+import jwt
 from opentelemetry import trace
 from opentelemetry.trace import Span
 import yaml
@@ -43,6 +46,7 @@ DEFAULT_SKILLS_PATH = DEFAULT_OPTIMIZATION_CONFIG_PATH / "baseline" / "skills"
 DEFAULT_SKILL_RESOURCES_PATH = Path(__file__).parent / "skills" / "resources"
 _sessions: dict[str, AgentSession] = {}
 _telemetry_configured = False
+_agentic_token_claims_logged = False
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 logger = logging.getLogger(SERVICE_NAME)
@@ -117,6 +121,49 @@ def configure_telemetry() -> None:
         log_event("telemetry.local_only")
 
     _telemetry_configured = True
+
+
+def log_agentic_token_claims(credential: DefaultAzureCredential) -> None:
+    global _agentic_token_claims_logged
+    if _agentic_token_claims_logged:
+        return
+    audience = os.getenv("MCP_API_AUDIENCE")
+    if not audience:
+        raise RuntimeError("MCP_API_AUDIENCE must be set for Toolbox identity validation.")
+    try:
+        token = credential.get_token(f"{audience.rstrip('/')}/.default").token
+    except ClientAuthenticationError as exc:
+        log_event("toolbox.agentic_token_unavailable", error=str(exc))
+        return
+    claims = jwt.decode(
+        token,
+        options={
+            "verify_signature": False,
+            "verify_aud": False,
+            "verify_exp": False,
+        },
+    )
+    log_event(
+        "toolbox.agentic_token_claims",
+        aud=claims.get("aud"),
+        azp=claims.get("azp"),
+        appid=claims.get("appid"),
+        iss=claims.get("iss"),
+        ver=claims.get("ver"),
+        roles=claims.get("roles", []),
+    )
+    _agentic_token_claims_logged = True
+
+
+class ToolboxAzureAuth(httpx.Auth):
+    def __init__(self, credential: DefaultAzureCredential) -> None:
+        self.credential = credential
+
+    def auth_flow(self, request: httpx.Request):
+        log_agentic_token_claims(self.credential)
+        token = self.credential.get_token("https://ai.azure.com/.default").token
+        request.headers["Authorization"] = f"Bearer {token}"
+        yield request
 
 
 @contextmanager
@@ -241,14 +288,14 @@ def create_toolbox(
 ) -> MCPStreamableHTTPTool:
     endpoint = required_env("TOOLBOX_ENDPOINT")
 
-    def headers(_context: dict[str, Any]) -> dict[str, str]:
-        token = credential.get_token("https://ai.azure.com/.default").token
-        return {"Authorization": f"Bearer {token}"}
-
     return MCPStreamableHTTPTool(
         name=name,
         url=endpoint,
-        header_provider=headers,
+        http_client=httpx.AsyncClient(
+            auth=ToolboxAzureAuth(credential),
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, read=300.0),
+        ),
         load_tools=load_tools,
         load_prompts=False,
         approval_mode="never_require",

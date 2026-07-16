@@ -9,8 +9,8 @@ immutable Foundry skill version.
 
 The infrastructure, MCP service, Entra application, hosted agent, connection,
 skills, and toolbox versions are deployed. Toolbox v1 remains the explicit
-default. V2 was deliberately not published because its acceptance gate fails
-while the current Toolbox preview resolves the AgenticIdentity connection.
+default. V2 was deliberately not published because ACA Easy Auth rejects the
+valid v2 Entra Agent ID token with HTTP 401.
 See [DEPLOYMENT_EVIDENCE.md](DEPLOYMENT_EVIDENCE.md).
 
 Do not update the progressive-agents roadmap to mark step 10 complete until the
@@ -20,12 +20,13 @@ documented platform failure is resolved and the full acceptance path passes.
 
 - The MCP container is built from the committed `uv.lock`.
 - `/health` is separately usable, while unauthenticated `/mcp` returns 401.
-- ACA Easy Auth validates the tenant issuer and `api://<client-id>` audience and
-  uses `Return401`.
+- ACA Easy Auth is configured with the tenant v2 issuer, the observed GUID
+  token audience, the two agent-specific client IDs, and `Return401`.
 - The API service principal requires app-role assignment.
 - The Hosted Agent identity, not the project-wide identity, has the
   `Mcp.Tools.ReadWrite.All` application role.
-- A `RemoteTool` connection uses `agentic-identity`; it stores no key or secret.
+- A `RemoteTool` connection uses `agentic-identity` with the
+  `api://<client-id>` token-request audience; it stores no key or secret.
 - Toolbox v1 and v2 are immutable and pin skill versions 1 and 2.
 - Creating v2 does not implicitly change `default_version`.
 - Promotion validates the versioned candidate first and republishes the prior
@@ -36,7 +37,7 @@ documented platform failure is resolved and the full acceptance path passes.
 ## Architecture
 
 ```text
-Foundry Hosted Agent v4
+Foundry Hosted Agent v10
   |
   | Entra token for https://ai.azure.com/.default
   v
@@ -155,11 +156,23 @@ remain intentionally unclaimed.
   business capability is read-only.
 - Toolbox MCP is streaming HTTP. The smoke path does not use ping or
   prompts/list as correctness gates.
-- In the recorded extension/service versions, the Toolbox endpoint returns:
-  `AgenticIdentityToken ... requires AgentInstanceClientId and
-  AgentBlueprintClientId, or an ApplicationName` during `tools/list`, even
-  though the deployed Hosted Agent has a distinct identity and the project
-  connection uses the documented target, audience, and auth type.
+- The installed connection CLI and public ARM schema expose only auth type,
+  audience, and free-form metadata. Supplying the instance/blueprint IDs as
+  metadata does not affect connection resolution.
+- Agent Framework `header_provider` does not sign the initial MCP handshake in
+  the installed version. This step uses an authenticated `httpx.AsyncClient`
+  so every Toolbox request is signed.
+- The hosted identity token is verified in console evidence as v2 with audience
+  `7aca035b-d2bc-42b8-912c-afa1b6eb9d00`, agent instance `azp`, tenant v2
+  issuer, and `Mcp.Tools.ReadWrite.All`.
+- Azure RBAC cannot be assigned directly to these Agent ID principals in the
+  validated tenant: the instance ServiceIdentity returns HTTP 500 and the
+  blueprint returns `PrincipalTypeNotSupported`. Foundry runtime access remains
+  platform-managed; downstream MCP authorization uses Entra app roles.
+- Toolbox accepts that hosted identity token and resolves the RemoteTool
+  connection. Both the brokered request and a direct request from the Hosted
+  Agent then receive HTTP 401 from ACA Easy Auth, despite exact audience and
+  client allowlists. This is the current narrow platform blocker.
 - Sweden Central rejected new ACA environments due regional capacity, so the
   MCP Container App runs in East US 2 while Foundry and ACR remain in Sweden
   Central.
