@@ -381,6 +381,9 @@ Role Release 3.0.1 was live-validated on 2026-07-16:
 - Ran the Foundry merger/judge over the approved Role Release 3.0.0 migration packet. It proposed one consolidated Role Skill change supported by five provenance records, with zero rejections and zero conflicts.
 - Created draft [Role Release 3.1.0 pull request #3](https://github.com/tkubica12/agent-demos/pull/3).
 - Confirmed Terraform has no remaining deployment changes.
+- Approved and merged PR #3, then refreshed the live Worker to Role Release 3.1.0 at commit `60b8e7ef3fb594f386d5177032df434eb4e62917`.
+- Confirmed Personal Memory `LOTUS-81`, Private Playbook marker `MAPLE-27`, and Work History survived Worker Refresh.
+- Confirmed previous-release Candidate Improvements and provenance were archived, no Candidate Improvement files remained active, and promoted deadline-validation plus rollback-checkpoint behavior came from the Role Skill.
 
 The complete v1-to-v2 lifecycle was live-verified on 2026-07-13. Hermes installed v1.0.0 from `ecc07fad92122d6ae6d4e44bd145c1814a746071`, wrote private memory/session/local skill markers, then installed v2.0.0 from `50342bd359a3f0fce9669a43b1d6eeb4fa690900` in a replacement sandbox using the same `hermes-data` volume. The v2 distribution files changed, every private marker and native `state.db` survived, and the private incidents MCP still returned the expected five services.
 

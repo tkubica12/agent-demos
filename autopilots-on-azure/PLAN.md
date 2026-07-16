@@ -11,10 +11,10 @@ As of 2026-07-16:
 - OpenClaw and Hermes run side by side through separate bridge Container Apps and Terraform workspaces.
 - Both runtimes use Sweden Central ACA Sandboxes and Foundry `gpt-5-6-terra`.
 - Agent 365 packages, Agent Users, Teams direct-message and explicit-mention routing, reactions, Agent Identity MCP access, public shipments MCP, private incidents MCP, and Work IQ Mail are implemented.
-- Hermes Worker `hermes` is live on Role Release 3.0.1 with preserved Personal Memory, Private Playbooks, and Work History.
+- Hermes Worker `hermes` is live on Role Release 3.1.0 with preserved Personal Memory, Private Playbooks, and Work History.
 - Foreground learning, Dreaming, Role Skill/Candidate Improvement provenance, rollback, packet preparation, Ed25519 approval, export, merger/judge, and draft PR creation are implemented.
 - Collective Learning Review PR #3 was approved and merged, publishing Role Release 3.1.0.
-- The live Worker has not yet refreshed from 3.0.1 to 3.1.0.
+- Worker Refresh to 3.1.0 is complete; promoted deadline-validation and rollback-checkpoint behavior is active as Role Skill guidance.
 - Multi-Worker packet fan-in remains untested because only one Hermes Worker is currently available.
 
 ## Completed milestones
@@ -33,22 +33,22 @@ As of 2026-07-16:
 
 ### Refresh the live Worker to Role Release 3.1.0
 
-Status: Ready after user testing of the current 3.0.1 Worker.
+Status: Complete.
 
 Tasks:
 
-- Prepare and approve a current 3.0.1 Learning Packet if governed state changes after the last approval.
-- Refresh the Worker to merged Role Release 3.1.0.
-- Confirm Personal Memory, Private Playbooks, and Work History survive.
-- Confirm promoted Role Skill behavior is present.
-- Confirm previous-release Candidate Improvements and provenance are archived.
-- Re-run foreground learning, fresh-session recall, and Dreaming smoke tests.
+- Complete: approved the current 3.0.1 Learning Packet.
+- Complete: refreshed the Worker to merged Role Release 3.1.0.
+- Complete: confirmed Personal Memory, Private Playbooks, and Work History survived.
+- Complete: confirmed promoted Role Skill behavior is present.
+- Complete: confirmed previous-release Candidate Improvements and provenance are archived.
+- Complete: confirmed Terraform convergence and promoted Role Skill inference.
 
 Exit criteria:
 
-- Worker health reports Role Release 3.1.0 and its merged commit.
-- Private state is unchanged.
-- Promoted role behavior works without loading previous Candidate Improvements.
+- Met: Worker health reports Role Release 3.1.0 at commit `60b8e7ef3fb594f386d5177032df434eb4e62917`.
+- Met: private state is preserved.
+- Met: promoted role behavior works with zero active Candidate Improvement files.
 
 ### Multi-Worker Collective Learning Review
 
