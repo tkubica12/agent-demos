@@ -1,45 +1,135 @@
 # Foundry Showcase
 
-One cohesive Microsoft Foundry reference demo built from the proven Progressive Agents components.
+This project demonstrates Microsoft Foundry agent capabilities through one inspectable support-operations scenario. [PLAN.md](PLAN.md) defines the complete five-phase target.
 
-The first implementation milestone is the main Microsoft Agent Framework Hosted Agent with Responses and Invocations protocols, Foundry Memory, reusable skills, structured observability, and evaluation-ready configuration.
+## Deployed status
 
-See [PLAN.md](PLAN.md) for the complete target architecture.
+| Phase | Status | Live evidence |
+|---|---|---|
+| 1. Hosted baseline | Complete | Hosted Agent v9, Responses, Invocations, Foundry Memory, telemetry |
+| 2. Governed tools and skills | Complete | Toolbox v2, three published skills, Entra-protected case MCP, private Table Storage, approval round trip |
+| 3. Workflow and A2A | Not started | MAF workflow and LangGraph helper remain pending |
+| 4. Routines and surfaces | Not started | Routines, AG-UI, Agent 365, and Teams remain pending |
+| 5. Quality and safety | Partial | Baseline evaluation is live; optimizer review, red teaming, canary, and final promotion remain pending |
 
-## Main agent
+Current immutable assets:
 
-```powershell
-cd foundry-showcase\main-agent
-uv sync
+- Hosted Agent `foundry-showcase-main`, active version 9;
+- Toolbox `foundry-showcase-support`, default version 2;
+- skills `support-style`, `escalation-policy`, and `profile-update-policy`, version 1;
+- case MCP `ca-foundry-showcase-case-mcp` in North Europe;
+- private case data in Azure Table Storage in Sweden Central.
 
-$env:FOUNDRY_PROJECT_ENDPOINT = "https://<account>.services.ai.azure.com/api/projects/<project>"
-$env:AZURE_AI_MODEL_DEPLOYMENT_NAME = "gpt-5.4-mini"
-$env:MEMORY_STORE_NAME = "foundry-showcase-main"
+## Architecture today
 
-uv run python scripts\setup_foundry_memory.py --name foundry-showcase-main
-uv run python main.py
+```text
+Responses / structured Invocations
+                |
+       MAF Hosted Agent v9
+          |            |
+  Foundry Memory   Toolbox v2 + skills
+                       |
+             agentic-identity connection
+                       |
+             Entra-protected case MCP
+                       |
+          private endpoint + private DNS
+                       |
+              Azure Table Storage
 ```
 
-Local validation:
+Toolbox reads and proposal creation do not require approval. `case-write___apply_case_update` always requires the Responses approval exchange. Live validation proved that the write does not run before approval, resumes from `previous_response_id`, updates Table Storage once, and can be restored through a second approved write.
+
+## Prerequisites
+
+- Python 3.11 or newer;
+- `uv`;
+- Azure CLI;
+- `azd`;
+- Terraform;
+- Microsoft Foundry CLI extension;
+- authenticated Azure CLI and `azd` sessions.
+
+## Deploy
+
+Deploy or update the Hosted Agent:
 
 ```powershell
-uv run python smoke_skills.py
-uv run python smoke_memory.py
-uv run python smoke_test.py
-uv run python smoke_invocations.py
+azd env select foundry-showcase -C foundry-showcase
+azd deploy foundry-showcase-main -C foundry-showcase --no-prompt
 ```
 
-Deploy from the showcase root:
+Provision the private MCP platform, build the image, deploy the app, create the agentic-identity connection, and publish immutable Foundry assets:
 
 ```powershell
-azd deploy -C foundry-showcase
-azd ai agent invoke foundry-showcase-main "Reply exactly: deployed showcase ok" --protocol responses -C foundry-showcase
+$projectEndpoint = "<foundry-project-endpoint>"
+uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\deploy_phase2.py `
+  --project-endpoint $projectEndpoint `
+  --auto-approve `
+  --new-toolbox-version
 ```
 
-## Current deployment
+The publication script does not promote a new Toolbox version automatically. Validate the version first, then promote it explicitly:
 
-- Hosted Agent: `foundry-showcase-main`
-- Active version: `3`
-- Protocols: Responses `2.0.0`, Invocations `1.0.0`
-- Memory store: `foundry-showcase-main`
-- Cloud evaluation baseline: 13 of 15 generated cases passed
+```powershell
+uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\publish_foundry_assets.py `
+  --project-endpoint $projectEndpoint `
+  --toolbox-version 2 `
+  --promote
+```
+
+## Validate
+
+```powershell
+Push-Location foundry-showcase\case-mcp
+uv run pytest -q
+Pop-Location
+
+Push-Location foundry-showcase\main-agent
+uv run python -m unittest discover -s tests -v
+$env:FOUNDRY_PROJECT_ENDPOINT = "<foundry-project-endpoint>"
+$env:TOOLBOX_VERSION = "2"
+uv run python smoke_toolbox.py
+Pop-Location
+
+azd ai agent invoke foundry-showcase-main `
+  "Use the case tools to get CASE-1001." `
+  --version 9 `
+  --protocol responses `
+  --new-session `
+  -C foundry-showcase
+
+azd ai agent invoke foundry-showcase-main `
+  --version 9 `
+  --protocol invocations `
+  --input-file foundry-showcase\main-agent\smoke-invocation.json `
+  --new-session `
+  -C foundry-showcase
+
+azd ai agent eval run `
+  --config eval.yaml `
+  --name foundry-showcase-v9-phase2 `
+  --no-prompt `
+  -C foundry-showcase\main-agent
+```
+
+The current Phase 2 regression is 12/12 local tests and 15/15 rows in Foundry evaluation run `evalrun_00182e08a0f84a2caf02aeabd3375edb`.
+
+## Known constraints
+
+- The subscription disables public Storage endpoints, so the Container Apps environment uses VNet integration, private DNS, and a Table private endpoint.
+- Container Apps capacity was unavailable in Sweden Central during deployment; compute is in North Europe while persistent resources remain in Sweden Central.
+- Foundry Toolbox uses the Hosted Agent instance identity, not the Agent Identity Blueprint.
+- The current upstream client drops approval responses during service-managed continuation. The main agent contains a tested narrow override until the package fixes that behavior.
+- Non-fatal hosted logs can report duplicate telemetry instrumentation and unavailable optional `agents` instrumentation.
+- Phases 3 through 5 are not implemented; the showcase does not yet meet the completion criteria in [PLAN.md](PLAN.md).
+
+## Design constraints
+
+- one primary agent and one bounded helper;
+- native Foundry capabilities before custom substitutes;
+- Terraform with `azapi`;
+- Python managed with `uv`;
+- scripts rather than portal-only operations;
+- no stored credentials;
+- no fake platform features or simulated deployment paths.

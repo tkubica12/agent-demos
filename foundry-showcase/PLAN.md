@@ -13,21 +13,28 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 
 ## Implementation status
 
-Implemented and live-validated on 2026-07-15:
+Phases 1 and 2 are deployed and live-validated:
 
-- `foundry-showcase-main` Microsoft Agent Framework Hosted Agent;
+- active Hosted Agent `foundry-showcase-main`, version 9;
 - Responses `2.0.0` and Invocations `1.0.0`;
-- dedicated `foundry-showcase-main` Foundry Memory store;
-- reusable local Agent Skills;
-- local profile, conversation, summary, and audit behavior;
+- Foundry Toolbox `foundry-showcase-support`, default version 2;
+- published skills `support-style`, `escalation-policy`, and `profile-update-policy`, version 1;
+- Entra-protected case MCP using the Hosted Agent instance identity;
+- Azure Table Storage with public access disabled, reached through a private endpoint;
+- user-scoped Foundry Memory;
+- read tools and proposal creation without approval;
+- write approval request, pre-approval blocking, successful continuation, single apply, and audit behavior;
 - OpenTelemetry and Application Insights wiring;
-- source-controlled `uv.lock`, evaluation dataset, evaluator, and `eval.yaml`;
-- active Hosted Agent version 3;
-- direct Responses and Invocations deployment smoke tests;
-- real Foundry Memory create, update, search, remember, and delete validation;
-- first cloud evaluation improved from 9/15 on version 2 to 13/15 on version 3.
+- 12/12 local MCP and approval-continuation tests;
+- deployed Responses read, skill, memory, proposal, approval, write, and restore validation;
+- deployed structured Invocations read validation;
+- Foundry evaluation `evalrun_00182e08a0f84a2caf02aeabd3375edb`: 15/15.
 
-Next implementation milestone: the governed case MCP and Foundry Toolbox, followed by the LangGraph A2A helper.
+The current Agent Framework/OpenAI client drops approval responses on service-managed continuation turns. `ApprovalContinuationFoundryChatClient` restores only the current response while continuing to suppress replayed approval history. The override is unit-tested and should be removed when the upstream package includes the fix.
+
+Hosted Toolbox token acquisition uses the Hosted Agent version's instance identity, not its Agent Identity Blueprint. Toolbox approval mappings use the composite names exposed by Foundry, such as `case-write___apply_case_update`.
+
+Phases 3 through 5 are not implemented. The next milestone is the MAF case-resolution workflow and one bounded LangGraph A2A policy helper. Routines, AG-UI, Agent 365, Teams, expanded evaluations, optimizer candidate review, red teaming, canary, and final promotion remain later work.
 
 ## Demo story
 
@@ -382,35 +389,35 @@ Use Terraform with `azapi` for Azure resources and `azd` for Hosted Agent packag
 
 ## Delivery phases
 
-### Phase 1: Consolidate the proven baseline
+### Phase 1: Consolidate the proven baseline — complete
 
 - copy the latest useful implementation from Progressive Agents;
 - remove step-specific naming and duplicated historical code;
 - deploy one clean MAF Hosted Agent;
 - establish tests, traces, and a concise README.
 
-### Phase 2: Governed tools, skills, and memory
+### Phase 2: Governed tools, skills, and memory — complete
 
 - deploy the case MCP;
 - create Toolbox and skill versions;
 - connect Foundry Memory;
 - validate identity, user scope, audit, and tool contracts.
 
-### Phase 3: Workflow and cross-framework A2A
+### Phase 3: Workflow and cross-framework A2A — next
 
 - implement the MAF case-resolution workflow;
 - deploy the LangGraph helper;
 - enable A2A and project connection;
 - validate delegation, state, confirmation, and trace correlation.
 
-### Phase 4: Routines and user surfaces
+### Phase 4: Routines and user surfaces — pending
 
 - create recurring and one-time Routines;
 - deploy the thin AG-UI BFF;
 - publish the main agent to Agent 365 and Teams;
 - validate direct, web, scheduled, and Teams paths.
 
-### Phase 5: Quality, optimization, and safety
+### Phase 5: Quality, optimization, and safety — pending
 
 - finalize golden datasets and evaluators;
 - run direct and trace evaluations;

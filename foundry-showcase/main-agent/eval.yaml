@@ -2,7 +2,7 @@ name: smoke-core
 agent:
     name: foundry-showcase-main
     kind: hosted
-    version: "3"
+    version: "9"
 dataset:
     name: smoke-core
     version: "2.0"

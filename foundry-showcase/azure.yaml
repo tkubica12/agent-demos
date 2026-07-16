@@ -1,30 +1,49 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 
+requiredVersions:
+    extensions:
+        azure.ai.agents: '>=1.0.0-beta.5'
 name: foundry-showcase
 services:
     foundry-showcase-main:
         project: main-agent
         host: azure.ai.agent
         language: python
-        config:
-            container:
-                resources:
-                    cpu: "0.5"
-                    memory: 1Gi
-            deployments:
-                - model:
-                    format: OpenAI
-                    name: gpt-5.4-mini
-                    version: "2026-03-17"
-                  name: gpt-5.4-mini
-                  sku:
-                    capacity: 603
-                    name: GlobalStandard
-                - model:
-                    format: OpenAI
-                    name: text-embedding-3-large
-                    version: "1"
-                  name: text-embedding-3-large
-                  sku:
-                    capacity: 470
-                    name: GlobalStandard
+        codeConfiguration:
+            entryPoint: main.py
+            runtime: python_3_13
+        container:
+            resources:
+                cpu: "0.5"
+                memory: 1Gi
+        description: Support operations showcase using Microsoft Agent Framework, Foundry Memory, governed Toolbox tools and skills, observability, and evaluations.
+        environmentVariables:
+            - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+              value: gpt-5.4-mini
+            - name: MEMORY_STORE_NAME
+              value: foundry-showcase-main
+            - name: MEMORY_UPDATE_DELAY_SECONDS
+              value: "1"
+            - name: MEMORY_DEFAULT_USER_ID
+              value: playground-user
+            - name: MEMORY_STORE_PATH
+              value: /files/foundry-showcase-memory-store.json
+            - name: TOOLBOX_NAME
+              value: foundry-showcase-support
+            - name: TOOLBOX_ENDPOINT
+              value: ${TOOLBOX_ENDPOINT}
+        kind: hosted
+        metadata:
+            tags:
+                - Microsoft Agent Framework
+                - Foundry Hosted Agent
+                - Responses Protocol
+                - Invocations Protocol
+                - Foundry Toolbox
+                - Foundry Memory
+        name: foundry-showcase-main
+        protocols:
+            - protocol: responses
+              version: 2.0.0
+            - protocol: invocations
+              version: 1.0.0

@@ -617,7 +617,7 @@ requires-dist = [
     { name = "agent-framework-foundry", specifier = ">=1.2.2" },
     { name = "agent-framework-foundry-hosting" },
     { name = "azure-ai-evaluation" },
-    { name = "azure-ai-projects", specifier = ">=2.2.0" },
+    { name = "azure-ai-projects", specifier = ">=2.3.0" },
     { name = "azure-identity", specifier = ">=1.25.0" },
     { name = "azure-monitor-opentelemetry" },
     { name = "httpx", specifier = "==0.28.1" },

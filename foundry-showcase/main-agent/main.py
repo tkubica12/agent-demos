@@ -3,14 +3,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
-from agent_framework import Agent, AgentSession, SkillsProvider
+from agent_framework import (
+    Agent,
+    AgentSession,
+    MCPSkillsSource,
+    Message,
+    Skill,
+    SkillsProvider,
+    SkillsSource,
+    SkillsSourceContext,
+)
 from agent_framework.foundry import FoundryChatClient
-from agent_framework_foundry_hosting import ResponsesHostServer
+from agent_framework_foundry_hosting import FoundryToolbox, ResponsesHostServer
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
@@ -24,7 +32,6 @@ from memory_store import store
 
 DEFAULT_MODEL_DEPLOYMENT = "gpt-5.4-mini"
 SERVICE_NAME = "foundry-showcase-main"
-DEFAULT_SKILLS_PATH = Path(__file__).parent / "skills" / "base"
 PERSONALITY_INSTRUCTIONS = (
     "You are a support-operations assistant for the Microsoft Foundry showcase. "
     "You are professional, calm, friendly, and concise. "
@@ -46,6 +53,44 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 logger = logging.getLogger(SERVICE_NAME)
 logger.setLevel(os.getenv("APP_LOG_LEVEL", "INFO"))
 tracer = trace.get_tracer(SERVICE_NAME)
+
+
+class TrustedToolboxSkillsSource(SkillsSource):
+    def __init__(self, toolbox: FoundryToolbox) -> None:
+        self._toolbox = toolbox
+
+    async def get_skills(self, context: SkillsSourceContext) -> list[Skill]:
+        session = self._toolbox.session
+        if session is None:
+            raise RuntimeError("Foundry Toolbox must be connected before skill discovery.")
+        return await MCPSkillsSource(client=session).get_skills(context)
+
+
+class ApprovalContinuationFoundryChatClient(FoundryChatClient):
+    """Preserve the current approval response on service-managed continuation turns."""
+
+    def _prepare_messages_for_openai(
+        self,
+        chat_messages: Sequence[Message],
+        *,
+        request_uses_service_side_storage: bool = True,
+    ) -> list[dict[str, Any]]:
+        prepared = super()._prepare_messages_for_openai(
+            chat_messages,
+            request_uses_service_side_storage=request_uses_service_side_storage,
+        )
+        if not request_uses_service_side_storage:
+            return prepared
+
+        for message in chat_messages:
+            if "_attribution" in message.additional_properties:
+                continue
+            for content in message.contents:
+                if content.type == "function_approval_response":
+                    approval_response = self._prepare_content_for_openai(message.role, content)
+                    if approval_response:
+                        prepared.append(approval_response)
+        return prepared
 
 
 def create_credential() -> DefaultAzureCredential:
@@ -134,20 +179,13 @@ def set_span_result(current_span: Span, **attributes: Any) -> None:
             current_span.set_attribute(key, value)
 
 
-def create_skills_provider() -> SkillsProvider:
-    skills_path = Path(os.getenv("LOCAL_SKILLS_PATH", str(DEFAULT_SKILLS_PATH))).resolve()
-    if not skills_path.exists():
-        raise RuntimeError(f"LOCAL_SKILLS_PATH does not exist: {skills_path}")
-    log_event("skills.local_provider_configured", skills_path=str(skills_path))
-    return SkillsProvider.from_paths(skill_paths=skills_path)
-
-
 def create_agent() -> Agent:
     configure_telemetry()
-    client = FoundryChatClient(
+    credential = create_credential()
+    client = ApprovalContinuationFoundryChatClient(
         project_endpoint=required_env("FOUNDRY_PROJECT_ENDPOINT"),
         model=os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", DEFAULT_MODEL_DEPLOYMENT),
-        credential=create_credential(),
+        credential=credential,
     )
     memory_store_name = os.getenv("MEMORY_STORE_NAME", "foundry-showcase-main")
     memory_scope = os.getenv("MEMORY_SCOPE", "{{$userId}}")
@@ -158,14 +196,36 @@ def create_agent() -> Agent:
         scope=memory_scope,
         update_delay=memory_update_delay,
     )
-    # Agent Framework currently serializes plain dict tools for Foundry preview tools.
-    tools = [memory_tool.as_dict()]
+    toolbox = FoundryToolbox(credential)
+    toolbox.approval_mode = {
+        "always_require_approval": {
+            "case-write___apply_case_update",
+        },
+        "never_require_approval": {
+            "case-read___search_cases",
+            "case-read___get_case",
+            "case-read___propose_case_update",
+        },
+    }
+    skills_provider = SkillsProvider(
+        TrustedToolboxSkillsSource(toolbox),
+        source_id="foundry-toolbox-skills",
+        disable_load_skill_approval=True,
+        disable_read_skill_resource_approval=True,
+        disable_run_skill_script_approval=True,
+    )
+    tools = [memory_tool.as_dict(), toolbox]
     log_event(
         "memory.foundry_tool_configured",
         memory_store_name=memory_store_name,
         memory_scope=memory_scope,
         memory_update_delay=memory_update_delay,
         memory_default_user_id=memory_default_user_id,
+    )
+    log_event(
+        "toolbox.foundry_configured",
+        toolbox_name=os.getenv("TOOLBOX_NAME"),
+        toolbox_endpoint=os.getenv("TOOLBOX_ENDPOINT"),
     )
 
     return Agent(
@@ -179,12 +239,16 @@ def create_agent() -> Agent:
             "You also have reusable Agent Skills. Load a skill only when the "
             "user request matches that skill's description, and read skill "
             "resources only when the loaded skill tells you they are needed. "
+            "Use the case-read tools to inspect cases and create noncommitted "
+            "update proposals. The case-write.apply_case_update tool is a "
+            "high-impact action and must run only after the client completes "
+            "the explicit Agent Framework approval exchange. "
             "For profile mutations, prefer explicit profile patch operations "
             "provided by the host API. Include correlation IDs only when "
             "explicitly asked; otherwise answer naturally."
         ),
         tools=tools,
-        context_providers=[create_skills_provider()],
+        context_providers=[skills_provider],
         default_options={
             "store": False,
             "extra_headers": {"x-memory-user-id": memory_default_user_id},
@@ -297,6 +361,7 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
         @invocations.invoke_handler
         async def handle_invoke(request: Request) -> Response:
             data = await request.json()
+            await self._ensure_agent_ready()
             correlation_id = correlation_id_from(request, data)
 
             with span(
