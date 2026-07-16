@@ -368,6 +368,20 @@ Role Release 3 refuses to silently consume A9 state. Before the first refresh:
 
 The runtime fails explicitly when legacy environment variables, manifests, or A9 artifacts remain.
 
+### A10 live evidence
+
+Role Release 3.0.1 was live-validated on 2026-07-16:
+
+- Migrated A9 private cache content into a Private Playbook and five validated A9 learnings into Candidate Improvements before removing obsolete paths.
+- Preserved the `hermes-data` volume while refreshing the Worker to Role Release `3.0.1` at commit `860b399fc4a1553874aa639b61fbbf90003e9652`.
+- Stored `LOTUS-81` in Personal Memory, `MAPLE-27` only in Private Playbook `maple-delivery`, and `decision-request-completeness` as a Candidate Improvement with accepted schema-v2 provenance.
+- Recalled all three lanes correctly in separate fresh sessions.
+- Ran Dreaming in a fresh session; it preserved private classification and created no duplicate Candidate Improvement.
+- Prepared, approved with the bridge-held Ed25519 key, and exported an attested Role Release 3.0.1 Learning Packet containing six Candidate Improvements.
+- Ran the Foundry merger/judge over the approved Role Release 3.0.0 migration packet. It proposed one consolidated Role Skill change supported by five provenance records, with zero rejections and zero conflicts.
+- Created draft [Role Release 3.1.0 pull request #3](https://github.com/tkubica12/agent-demos/pull/3).
+- Confirmed Terraform has no remaining deployment changes.
+
 The complete v1-to-v2 lifecycle was live-verified on 2026-07-13. Hermes installed v1.0.0 from `ecc07fad92122d6ae6d4e44bd145c1814a746071`, wrote private memory/session/local skill markers, then installed v2.0.0 from `50342bd359a3f0fce9669a43b1d6eeb4fa690900` in a replacement sandbox using the same `hermes-data` volume. The v2 distribution files changed, every private marker and native `state.db` survived, and the private incidents MCP still returned the expected five services.
 
 ## Prerequisites
