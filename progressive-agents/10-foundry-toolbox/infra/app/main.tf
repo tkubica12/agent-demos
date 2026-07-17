@@ -45,6 +45,36 @@ resource "azapi_resource" "app" {
         containers = [{
           name  = "support-policy-mcp"
           image = var.image
+          env = [
+            {
+              name  = "MCP_AUTH_MODE"
+              value = "entra"
+            },
+            {
+              name  = "MCP_JWKS_URL"
+              value = "https://login.microsoftonline.com/${var.tenant_id}/discovery/v2.0/keys"
+            },
+            {
+              name  = "MCP_JWT_ISSUER"
+              value = "https://login.microsoftonline.com/${var.tenant_id}/v2.0"
+            },
+            {
+              name  = "MCP_JWT_AUDIENCE"
+              value = var.mcp_api_client_id
+            },
+            {
+              name  = "MCP_REQUIRED_ROLE"
+              value = "Mcp.Tools.ReadWrite.All"
+            },
+            {
+              name  = "MCP_ALLOWED_CLIENT_IDS"
+              value = join(",", var.allowed_client_applications)
+            },
+            {
+              name  = "MCP_ALLOWED_OBJECT_IDS"
+              value = join(",", var.allowed_principal_ids)
+            },
+          ]
           resources = {
             cpu    = 0.25
             memory = "0.5Gi"
@@ -66,7 +96,7 @@ resource "azapi_resource" "auth" {
   body = {
     properties = {
       platform = {
-        enabled        = true
+        enabled        = false
         runtimeVersion = "~1"
       }
       globalValidation = {

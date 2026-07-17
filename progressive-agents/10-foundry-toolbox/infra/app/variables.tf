@@ -18,3 +18,8 @@ variable "allowed_client_applications" {
   type    = list(string)
   default = []
 }
+
+variable "allowed_principal_ids" {
+  type    = list(string)
+  default = []
+}

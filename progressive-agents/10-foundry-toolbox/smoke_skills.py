@@ -51,11 +51,10 @@ def validate_skill_files() -> None:
 
     for version, canary in (("v1", "ESC-CANARY-7742"), ("v2", "ESC-CANARY-9921")):
         skill_file = TOOLBOX_SKILLS_ROOT / version / "SKILL.md"
-        matrix = TOOLBOX_SKILLS_ROOT / version / "references" / "escalation-matrix.md"
         if read_frontmatter(skill_file).get("name") != "escalation-policy":
             raise AssertionError(f"{skill_file} must define escalation-policy.")
-        if canary not in matrix.read_text(encoding="utf-8"):
-            raise AssertionError(f"{matrix} must include {canary}.")
+        if canary not in skill_file.read_text(encoding="utf-8"):
+            raise AssertionError(f"{skill_file} must include {canary}.")
 
 
 async def validate_agent_framework_skills() -> None:

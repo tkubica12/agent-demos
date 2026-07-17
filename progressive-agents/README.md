@@ -6,4 +6,4 @@ Each numbered directory copies the previous working stage and adds one clearly i
 
 See [PLAN.md](PLAN.md) for the roadmap and boundaries. The latest implemented
 stage is
-[09 - Foundry Agent Optimizer](09-foundry-agent-optimizer/README.md).
+[10 - Foundry Toolbox](10-foundry-toolbox/README.md).

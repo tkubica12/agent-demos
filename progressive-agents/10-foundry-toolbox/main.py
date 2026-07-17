@@ -16,7 +16,8 @@ import httpx
 from agent_framework import (
     Agent,
     AgentSession,
-    MCPSkillsSource,
+    AggregatingSkillsSource,
+    FileSkillsSource,
     MCPStreamableHTTPTool,
     SkillsProvider,
     SkillsSource,
@@ -27,11 +28,10 @@ from agent_framework_foundry_hosting import ResponsesHostServer
 from azure.ai.agentserver.optimization import load_config, load_skills_from_dir
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.projects import AIProjectClient
-from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import DefaultAzureCredential
-import jwt
 from opentelemetry import trace
 from opentelemetry.trace import Span
+from pydantic import AnyUrl
 import yaml
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -44,9 +44,9 @@ SERVICE_NAME = "step-10-foundry-toolbox"
 DEFAULT_OPTIMIZATION_CONFIG_PATH = Path(__file__).parent / ".agent_configs"
 DEFAULT_SKILLS_PATH = DEFAULT_OPTIMIZATION_CONFIG_PATH / "baseline" / "skills"
 DEFAULT_SKILL_RESOURCES_PATH = Path(__file__).parent / "skills" / "resources"
+DEFAULT_TOOLBOX_SKILLS_PATH = Path(__file__).parent / "toolbox" / "skills"
 _sessions: dict[str, AgentSession] = {}
 _telemetry_configured = False
-_agentic_token_claims_logged = False
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 logger = logging.getLogger(SERVICE_NAME)
@@ -54,12 +54,17 @@ logger.setLevel(os.getenv("APP_LOG_LEVEL", "INFO"))
 tracer = trace.get_tracer(SERVICE_NAME)
 
 
-def create_credential() -> DefaultAzureCredential:
+def create_credential(
+    managed_identity_client_id: str | None = None,
+) -> DefaultAzureCredential:
     running_in_azure = any(
         os.getenv(name)
         for name in ("AGENT_NAME", "AZURE_CLIENT_ID", "MSI_ENDPOINT", "IDENTITY_ENDPOINT")
     )
-    return DefaultAzureCredential(exclude_managed_identity_credential=not running_in_azure)
+    return DefaultAzureCredential(
+        exclude_managed_identity_credential=not running_in_azure,
+        managed_identity_client_id=managed_identity_client_id,
+    )
 
 
 def required_env(name: str) -> str:
@@ -123,46 +128,21 @@ def configure_telemetry() -> None:
     _telemetry_configured = True
 
 
-def log_agentic_token_claims(credential: DefaultAzureCredential) -> None:
-    global _agentic_token_claims_logged
-    if _agentic_token_claims_logged:
-        return
-    audience = os.getenv("MCP_API_AUDIENCE")
-    if not audience:
-        raise RuntimeError("MCP_API_AUDIENCE must be set for Toolbox identity validation.")
-    try:
-        token = credential.get_token(f"{audience.rstrip('/')}/.default").token
-    except ClientAuthenticationError as exc:
-        log_event("toolbox.agentic_token_unavailable", error=str(exc))
-        return
-    claims = jwt.decode(
-        token,
-        options={
-            "verify_signature": False,
-            "verify_aud": False,
-            "verify_exp": False,
-        },
-    )
-    log_event(
-        "toolbox.agentic_token_claims",
-        aud=claims.get("aud"),
-        azp=claims.get("azp"),
-        appid=claims.get("appid"),
-        iss=claims.get("iss"),
-        ver=claims.get("ver"),
-        roles=claims.get("roles", []),
-    )
-    _agentic_token_claims_logged = True
-
-
 class ToolboxAzureAuth(httpx.Auth):
     def __init__(self, credential: DefaultAzureCredential) -> None:
         self.credential = credential
 
     def auth_flow(self, request: httpx.Request):
-        log_agentic_token_claims(self.credential)
         token = self.credential.get_token("https://ai.azure.com/.default").token
         request.headers["Authorization"] = f"Bearer {token}"
+        identity_headers = {
+            "AgentInstanceClientId": os.getenv("FOUNDRY_AGENT_INSTANCE_CLIENT_ID"),
+            "AgentBlueprintClientId": os.getenv("FOUNDRY_AGENT_BLUEPRINT_CLIENT_ID"),
+            "ApplicationName": os.getenv("AGENT_NAME"),
+        }
+        for name, value in identity_headers.items():
+            if value:
+                request.headers[name] = value
         yield request
 
 
@@ -254,30 +234,120 @@ def materialize_optimizer_skills(config) -> Path | None:
     return runtime_skills
 
 
-def create_skills_provider(skills_dir: str | None) -> SkillsProvider | None:
+def create_local_skills_source(skills_dir: str | None) -> FileSkillsSource | None:
     if not skills_dir:
         return None
     skills_path = Path(skills_dir).resolve()
     if not skills_path.exists():
         raise RuntimeError(f"Optimizer skill directory does not exist: {skills_path}")
     log_event("skills.local_provider_configured", skills_path=str(skills_path))
-    return SkillsProvider.from_paths(
-        skill_paths=skills_path,
+    return FileSkillsSource(
+        skills_path,
         resource_filter=lambda _skill_name, path: path.startswith(("references/", "assets/")),
-        disable_load_skill_approval=True,
-        disable_read_skill_resource_approval=True,
     )
 
 
 class ConnectedToolboxSkillsSource(SkillsSource):
     def __init__(self, toolbox: MCPStreamableHTTPTool) -> None:
         self.toolbox = toolbox
+        self.archive_source: FileSkillsSource | None = None
+        self.index_signature: str | None = None
 
     async def get_skills(self, context: SkillsSourceContext):
         await self.toolbox.connect()
         if self.toolbox.session is None:
             raise RuntimeError("Toolbox MCP session was not initialized.")
-        return await MCPSkillsSource(self.toolbox.session).get_skills(context)
+        resources_result = await self.toolbox.session.list_resources()
+        resource_uris = [str(resource.uri) for resource in resources_result.resources]
+        index_result = await self.toolbox.session.read_resource(AnyUrl("skill://index.json"))
+        index_text = "\n".join(
+            content.text
+            for content in index_result.contents
+            if getattr(content, "text", None)
+        )
+        index = json.loads(index_text)
+        entries = index.get("skills", [])
+        if not isinstance(entries, list) or not entries:
+            raise RuntimeError("Toolbox skill index contains no skills.")
+        if self.archive_source is not None and self.index_signature == index_text:
+            return await self.archive_source.get_skills(context)
+
+        if any(entry.get("type") not in {"skill-md", "archive"} for entry in entries):
+            raise RuntimeError("Toolbox skill index contains an unsupported skill type.")
+
+        runtime_root = Path(tempfile.mkdtemp(prefix="step10-toolbox-skills-"))
+        atexit.register(shutil.rmtree, runtime_root, ignore_errors=True)
+        for entry in entries:
+            archive_name = entry.get("name")
+            remote_description = entry.get("description")
+            if not isinstance(archive_name, str) or not isinstance(remote_description, str):
+                raise RuntimeError("Toolbox skill index entry is malformed.")
+            matches: list[Path] = []
+            for version_path in DEFAULT_TOOLBOX_SKILLS_PATH.iterdir():
+                skill_file = version_path / "SKILL.md"
+                if not skill_file.is_file():
+                    continue
+                skill_text = skill_file.read_text(encoding="utf-8")
+                frontmatter_match = re.match(
+                    r"\A---\r?\n(.*?)\r?\n---\r?\n",
+                    skill_text,
+                    re.DOTALL,
+                )
+                if not frontmatter_match:
+                    continue
+                frontmatter = yaml.safe_load(frontmatter_match.group(1))
+                if (
+                    isinstance(frontmatter, dict)
+                    and frontmatter.get("description") == remote_description
+                ):
+                    matches.append(version_path)
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"Toolbox skill metadata did not match one local version: {archive_name}"
+                )
+            selected_skill = (matches[0] / "SKILL.md").read_text(encoding="utf-8")
+            selected_frontmatter = re.match(
+                r"\A---\r?\n(.*?)\r?\n---\r?\n",
+                selected_skill,
+                re.DOTALL,
+            )
+            loaded_frontmatter = (
+                yaml.safe_load(selected_frontmatter.group(1))
+                if selected_frontmatter
+                else None
+            )
+            local_name = (
+                loaded_frontmatter.get("name")
+                if isinstance(loaded_frontmatter, dict)
+                else None
+            )
+            if not isinstance(local_name, str) or not local_name:
+                raise RuntimeError(f"Toolbox skill has no local name: {archive_name}")
+            shutil.copytree(matches[0], runtime_root / local_name)
+
+        expected_canary = os.getenv("TOOLBOX_EXPECTED_SKILL_CANARY")
+        if expected_canary:
+            skill_files = list(runtime_root.glob("*/SKILL.md"))
+            if len(skill_files) != 1 or expected_canary not in skill_files[0].read_text(
+                encoding="utf-8"
+            ):
+                raise RuntimeError(
+                    f"Toolbox skill did not contain expected canary: {expected_canary}"
+                )
+        self.archive_source = FileSkillsSource(
+            runtime_root,
+            resource_filter=lambda _skill_name, path: path.startswith(
+                ("references/", "assets/")
+            ),
+        )
+        self.index_signature = index_text
+        log_event(
+            "toolbox.skills_resources_validated",
+            resource_count=len(resource_uris),
+            expected_canary=expected_canary,
+            remote_skill_count=len(entries),
+        )
+        return await self.archive_source.get_skills(context)
 
 
 def create_toolbox(
@@ -353,14 +423,23 @@ def create_agent() -> tuple[Agent, str]:
         optimization_isolation=optimization_active,
     )
     runtime_skills_path = materialize_optimizer_skills(optimization_config)
-    skills_provider = create_skills_provider(
+    local_skills_source = create_local_skills_source(
         str(runtime_skills_path) if runtime_skills_path else None
     )
-    toolbox_skills_provider = SkillsProvider(
-        ConnectedToolboxSkillsSource(toolbox_skills_transport),
+    skills_sources = [
+        source
+        for source in (
+            local_skills_source,
+            ConnectedToolboxSkillsSource(toolbox_skills_transport),
+        )
+        if source is not None
+    ]
+    skills_provider = SkillsProvider(
+        AggregatingSkillsSource(skills_sources),
+        disable_caching=True,
         disable_load_skill_approval=True,
         disable_read_skill_resource_approval=True,
-        source_id="foundry-toolbox",
+        source_id="agent-skills",
     )
 
     return (
@@ -369,11 +448,7 @@ def create_agent() -> tuple[Agent, str]:
             name="FoundryToolboxAgent",
             instructions=optimization_config.compose_instructions(),
             tools=tools,
-            context_providers=[
-                provider
-                for provider in (skills_provider, toolbox_skills_provider)
-                if provider is not None
-            ],
+            context_providers=[skills_provider],
             default_options={
                 "store": False,
                 "extra_headers": {"x-memory-user-id": memory_default_user_id},

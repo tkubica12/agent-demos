@@ -60,26 +60,9 @@ Routine trigger        -> existing hosted agent
 | 07 | `07-foundry-memory-profile` | Foundry Memory, scoped profiles, conversation history, summaries, and audit. |
 | 08 | `08-skill-system-baseline` | Microsoft Agent Framework skills using versionable `SKILL.md` packages. |
 | 09 | `09-foundry-agent-optimizer` | Evaluation-driven optimization of instructions, skills, tools, and model selection with explicit promotion. |
+| 10 | `10-foundry-toolbox` | Versioned Foundry Toolbox with AgenticIdentity MCP tools, pinned skills, and deliberate promotion. |
 
 ## Planned stages
-
-### Step 10: Toolbox, tools, skills, and MCP governance
-
-Directory: `10-foundry-toolbox`
-
-Replace direct tool wiring with a versioned Foundry Toolbox exposed through its MCP endpoint.
-
-Demonstrate:
-
-- a toolbox definition and immutable version;
-- an Entra-protected MCP server;
-- managed authentication through Foundry connections;
-- skill references attached to the toolbox;
-- tool and skill discovery through MCP;
-- least-privilege agent identity;
-- a deliberate toolbox version promotion.
-
-Keep the business scenario small. The purpose is governance and discovery, not a large tool ecosystem.
 
 ### Step 11: Agent 365 and Teams publication
 

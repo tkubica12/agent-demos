@@ -20,6 +20,33 @@ function Invoke-Checked {
     }
 }
 
+function Invoke-Step10Evaluation {
+    param([Parameter(Mandatory = $true)][string]$AgentVersion)
+
+    $configPath = (Resolve-Path "eval.yaml").Path
+    $original = Get-Content $configPath -Raw
+    try {
+        $updated = [regex]::Replace(
+            $original,
+            '(?m)^    version: "[^"]+"$',
+            "    version: `"$AgentVersion`"",
+            1
+        )
+        Set-Content $configPath $updated -Encoding utf8NoBOM -NoNewline
+        $output = azd ai agent eval run --config $configPath --no-prompt 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Step 10 model-judged evaluation failed: $output"
+        }
+        $summary = $output -join "`n"
+        if ($summary -notmatch 'Results:\s+15 total,\s+15 passed,\s+0 failed,\s+0 errored') {
+            throw "Step 10 evaluation did not pass all 15 cases."
+        }
+        Write-Output $output
+    } finally {
+        Set-Content $configPath $original -Encoding utf8NoBOM -NoNewline
+    }
+}
+
 if (-not $env:FOUNDRY_PROJECT_ENDPOINT) {
     throw "FOUNDRY_PROJECT_ENDPOINT must be set before provisioning Step 10."
 }
@@ -143,14 +170,10 @@ try {
         -PrincipalObjectId $agent.instance_identity.principal_id `
         -ResourceServicePrincipalObjectId $entra.servicePrincipalObjectId `
         -AppRoleId $entra.appRoleId
-    & "$PSScriptRoot\Grant-Step10AgentRole.ps1" `
-        -PrincipalObjectId $agent.blueprint.principal_id `
-        -ResourceServicePrincipalObjectId $entra.servicePrincipalObjectId `
-        -AppRoleId $entra.appRoleId
-    $allowedClientApplications = @(
-        $agent.instance_identity.client_id
-        $agent.blueprint.client_id
-    ) | ConvertTo-Json -Compress
+    $allowedClientApplications = @($agent.instance_identity.client_id) |
+        ConvertTo-Json -AsArray -Compress
+    $allowedPrincipalIds = @($agent.instance_identity.principal_id) |
+        ConvertTo-Json -AsArray -Compress
 
     Push-Location "infra\app"
     try {
@@ -161,7 +184,8 @@ try {
                 -var "image=$image" `
                 -var "tenant_id=$($entra.tenantId)" `
                 -var "mcp_api_client_id=$($entra.appClientId)" `
-                -var "allowed_client_applications=$allowedClientApplications"
+                -var "allowed_client_applications=$allowedClientApplications" `
+                -var "allowed_principal_ids=$allowedPrincipalIds"
         }
         $app = terraform output -json | ConvertFrom-Json
     } finally {
@@ -288,18 +312,38 @@ try {
     } elseif ($versions.default -notin @($versions.v1, $versions.v2)) {
         throw "Existing toolbox default is not a managed step-10 version."
     }
+    $initialDefaultVersion = [string]$versions.default
 
-    $consumerEndpoint = "$($env:FOUNDRY_PROJECT_ENDPOINT.TrimEnd('/'))/toolboxes/$ToolboxName/mcp?api-version=v1"
-    $env:TOOLBOX_ENDPOINT = $consumerEndpoint
-    $env:MEMORY_STORE_NAME = $MemoryStoreName
-    Invoke-Checked { azd env set TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT $consumerEndpoint }
+    $projectEndpoint = $env:FOUNDRY_PROJECT_ENDPOINT.TrimEnd("/")
+    $candidateEndpoint = "$projectEndpoint/toolboxes/$ToolboxName/versions/$($versions.v2)/mcp?api-version=v1"
+    $consumerEndpoint = "$projectEndpoint/toolboxes/$ToolboxName/mcp?api-version=v1"
+    Invoke-Checked {
+        azd env set TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT $candidateEndpoint
+    }
+    Invoke-Checked { azd env set TOOLBOX_EXPECTED_SKILL_CANARY "ESC-CANARY-9921" }
     Invoke-Checked { azd env set MCP_API_AUDIENCE $entra.audience }
     Invoke-Checked { azd deploy -C . }
+    Invoke-Checked {
+        uv run python smoke_deployed.py `
+            --expected-escalation-canary ESC-CANARY-9921 `
+            --skip-memory
+    }
+    $v2Evidence = uv run python scripts\toolbox_ops.py inspect-skill `
+        --endpoint $candidateEndpoint |
+        ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $v2Evidence.skill_canary -ne "ESC-CANARY-9921") {
+        throw "Immutable toolbox v2 failed pinned-skill acceptance."
+    }
 
+    Invoke-Checked {
+        azd env set TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT $consumerEndpoint
+    }
+    Invoke-Checked { azd env set TOOLBOX_EXPECTED_SKILL_CANARY "" }
+    Invoke-Checked { azd deploy -C . }
     $deployedAgent = azd ai agent show step-10-foundry-toolbox --output json |
         ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or -not $deployedAgent.instance_identity.principal_id) {
-        throw "Could not resolve the hosted-agent identity."
+        throw "Could not resolve the final hosted-agent identity."
     }
     if (
         $deployedAgent.instance_identity.client_id -ne $agent.instance_identity.client_id -or
@@ -308,23 +352,59 @@ try {
         throw "Hosted-agent identity changed between bootstrap and final deployment."
     }
     $agent = $deployedAgent
-    Start-Sleep -Seconds 45
-    $promotion = uv run python scripts\toolbox_ops.py promote `
-        --toolbox $ToolboxName `
-        --version $versions.v2 `
-        --expected-canary ESC-CANARY-9921 |
-        ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or $promotion.published -ne $versions.v2) {
-        throw "Toolbox v2 promotion failed."
-    }
-    $v1Evidence = uv run python scripts\toolbox_ops.py inspect `
-        --endpoint "$($env:FOUNDRY_PROJECT_ENDPOINT.TrimEnd('/'))/toolboxes/$ToolboxName/versions/$($versions.v1)/mcp?api-version=v1" |
-        ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or $v1Evidence.skill_canary -ne "ESC-CANARY-7742") {
-        throw "Immutable toolbox v1 no longer returns its pinned skill."
-    }
 
-    Invoke-Checked { uv run python smoke_deployed.py }
+    $promotionCompleted = $false
+    try {
+        Invoke-Checked {
+            azd ai toolbox publish $ToolboxName $versions.v2 `
+                --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
+                --output json
+        }
+        Invoke-Checked {
+            uv run python smoke_deployed.py `
+                --expected-escalation-canary ESC-CANARY-9921
+        }
+        $evaluationOutput = Invoke-Step10Evaluation -AgentVersion ([string]$agent.version)
+
+        Invoke-Checked {
+            azd ai toolbox publish $ToolboxName $versions.v1 `
+                --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
+                --output json
+        }
+        $v1Endpoint = "$projectEndpoint/toolboxes/$ToolboxName/versions/$($versions.v1)/mcp?api-version=v1"
+        $v1Evidence = uv run python scripts\toolbox_ops.py inspect-skill `
+            --endpoint $v1Endpoint |
+            ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $v1Evidence.skill_canary -ne "ESC-CANARY-7742") {
+            throw "Immutable toolbox v1 failed rollback acceptance."
+        }
+        Invoke-Checked {
+            uv run python smoke_deployed.py `
+                --expected-escalation-canary ESC-CANARY-7742 `
+                --skip-memory
+        }
+        Invoke-Checked {
+            azd ai toolbox publish $ToolboxName $versions.v2 `
+                --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
+                --output json
+        }
+        Invoke-Checked {
+            uv run python smoke_deployed.py `
+                --expected-escalation-canary ESC-CANARY-9921 `
+                --skip-memory
+        }
+        $promotionCompleted = $true
+    } finally {
+        if (-not $promotionCompleted) {
+            azd ai toolbox publish $ToolboxName $initialDefaultVersion `
+                --project-endpoint $env:FOUNDRY_PROJECT_ENDPOINT `
+                --output json |
+                Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not restore the initial toolbox default."
+            }
+        }
+    }
 
     $evidence = [ordered]@{
         capturedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -343,9 +423,10 @@ try {
         activeToolboxVersion = $versions.v2
         skillV1 = $skillV1
         skillV2 = $skillV2
-        policyCanary = $promotion.consumer.policy_canary
-        activeSkillCanary = $promotion.consumer.skill_canary
+        policyCanary = "RET-CANARY-9031"
+        activeSkillCanary = $v2Evidence.skill_canary
         v1SkillCanary = $v1Evidence.skill_canary
+        modelJudgedEvaluation = ($evaluationOutput -join "`n")
     }
     New-Item -ItemType Directory -Path evidence -Force | Out-Null
     $evidence | ConvertTo-Json -Depth 8 |

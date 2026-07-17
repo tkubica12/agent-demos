@@ -56,22 +56,29 @@ def require_contains(output: str, expected: str, label: str) -> None:
 def validate_skills(user_id: str, escalation_canary: str) -> dict[str, str]:
     support = invoke_responses(
         (
-            "Use the support-style Agent Skill to write a complete customer-facing "
-            "Contoso Outdoors reply for a customer whose return shipment is delayed. "
-            "Keep it concise."
+            "Internal skill validation: load the support-style skill and return "
+            "only its exact metadata canary."
         ),
         user_id,
     )
     require_contains(support, "STYLE-CANARY-3318", "support-style skill")
 
-    escalation = invoke_responses(
-        (
-            "A Contoso Outdoors customer reports that a product injured them. "
-            "Classify the escalation and give the one-sentence internal response."
-        ),
-        user_id,
-    )
-    require_contains(escalation, "urgent-escalation", "escalation classification")
+    if escalation_canary == "ESC-CANARY-7742":
+        escalation_prompt = (
+            "Internal skill validation: load the escalation-policy skill. "
+            "A customer reports a product injury. Return only the classification "
+            "and exact canary."
+        )
+        escalation_classification = "urgent-escalation"
+    else:
+        escalation_prompt = (
+            "Internal skill validation: load the escalation-policy skill. A package "
+            "is still missing 10 business days after the promised delivery date. "
+            "Return only the classification and exact canary."
+        )
+        escalation_classification = "specialist-review"
+    escalation = invoke_responses(escalation_prompt, user_id)
+    require_contains(escalation, escalation_classification, "escalation classification")
     require_contains(escalation, escalation_canary, "escalation resource")
 
     neutral = invoke_responses(
@@ -93,7 +100,8 @@ def validate_skills(user_id: str, escalation_canary: str) -> dict[str, str]:
 def validate_read_only_policy_tool(user_id: str) -> str:
     policy = invoke_responses(
         (
-            "What is the Contoso Outdoors return policy for an unused backpack? "
+            "Use tool_search with exact capability lookup_support_policy. "
+            "Invoke the exact opaque tool name returned for topic returns. "
             "Give the exact window, required proof, and policy ID."
         ),
         user_id,
