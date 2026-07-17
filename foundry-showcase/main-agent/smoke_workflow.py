@@ -86,11 +86,35 @@ async def apply_owner(url: str, owner: str) -> dict[str, Any]:
 async def run(url: str) -> None:
     changed = await apply_owner(url, "Jordan")
     restored = await apply_owner(url, "Avery")
+    invoice, _ = await invoke(
+        url,
+        {
+            "action": "process_invoice",
+            "invoiceId": "INV-SMOKE-1",
+            "vendorId": "VENDOR-42",
+            "purchaseOrderId": "PO-9001",
+            "currency": "USD",
+            "lineItems": [
+                {
+                    "description": "Managed support service",
+                    "quantity": "2",
+                    "unit_price": "4500",
+                }
+            ],
+            "taxAmount": "900",
+            "invoiceTotal": "9900",
+            "poRemainingAmount": "20000",
+        },
+    )
+    invoice_result = invoice.get("result", {})
+    if invoice_result.get("route") != "auto_post":
+        raise AssertionError(f"Expected auto_post invoice route, got: {invoice}")
     print(
         {
             "changedWorkflowId": changed["workflow_id"],
             "restoredWorkflowId": restored["workflow_id"],
             "finalOwner": restored["result"]["case"]["owner"],
+            "invoiceRoute": invoice_result["route"],
         }
     )
 

@@ -37,6 +37,10 @@ from case_workflow import (
     CaseResolutionWorkflowService,
     MCPCaseTools,
 )
+from invoice_workflow import (
+    InvoiceProcessingRequest,
+    InvoiceProcessingWorkflowService,
+)
 from memory_store import store
 
 
@@ -226,7 +230,12 @@ def set_span_result(current_span: Span, **attributes: Any) -> None:
             current_span.set_attribute(key, value)
 
 
-def create_runtime() -> tuple[Agent, CaseResolutionWorkflowService, PolicyA2AService]:
+def create_runtime() -> tuple[
+    Agent,
+    CaseResolutionWorkflowService,
+    InvoiceProcessingWorkflowService,
+    PolicyA2AService,
+]:
     configure_telemetry()
     optimization_config = load_config()
     if optimization_config is None:
@@ -332,12 +341,13 @@ def create_runtime() -> tuple[Agent, CaseResolutionWorkflowService, PolicyA2ASer
             checkpoint_dir,
             policy_tools=policy_service,
         ),
+        InvoiceProcessingWorkflowService(),
         policy_service,
     )
 
 
 def create_agent() -> Agent:
-    agent, _, _ = create_runtime()
+    agent, _, _, _ = create_runtime()
     return agent
 
 
@@ -506,10 +516,12 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
         self,
         agent: Agent,
         case_workflow: CaseResolutionWorkflowService,
+        invoice_workflow: InvoiceProcessingWorkflowService,
         policy_delegate: PolicyA2AService,
     ) -> None:
         super().__init__(agent)
         self.case_workflow = case_workflow
+        self.invoice_workflow = invoice_workflow
         self.policy_delegate = policy_delegate
         invocations = InvocationAgentServerHost()
 
@@ -733,6 +745,36 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
                     "correlationId": correlation_id,
                 }
             )
+        if action == "process_invoice":
+            with span("workflow.start", correlation_id, workflow="process_invoice"):
+                result = await self.invoice_workflow.process(
+                    InvoiceProcessingRequest.model_validate(
+                        {
+                            "invoice_id": data.get("invoiceId"),
+                            "vendor_id": data.get("vendorId"),
+                            "purchase_order_id": data.get("purchaseOrderId"),
+                            "currency": data.get("currency"),
+                            "line_items": data.get("lineItems"),
+                            "tax_amount": data.get("taxAmount"),
+                            "invoice_total": data.get("invoiceTotal"),
+                            "po_remaining_amount": data.get("poRemainingAmount"),
+                        }
+                    )
+                )
+            log_event(
+                "workflow.invoice_processed",
+                correlation_id=correlation_id,
+                invoice_id=result.invoice_id,
+                route=result.route,
+                status=result.status,
+            )
+            return JSONResponse(
+                {
+                    "action": action,
+                    "result": result.model_dump(mode="json", exclude_none=True),
+                    "correlationId": correlation_id,
+                }
+            )
         if action == "assess_case_policy":
             policy_input = data.get("policyInput")
             if not isinstance(policy_input, dict) or not policy_input:
@@ -809,9 +851,15 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
 
 
 if __name__ == "__main__":
-    runtime_agent, runtime_workflow, runtime_policy_delegate = create_runtime()
+    (
+        runtime_agent,
+        runtime_workflow,
+        runtime_invoice_workflow,
+        runtime_policy_delegate,
+    ) = create_runtime()
     ResponsesAndInvocationsHost(
         runtime_agent,
         runtime_workflow,
+        runtime_invoice_workflow,
         runtime_policy_delegate,
     ).run()

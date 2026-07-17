@@ -21,6 +21,10 @@ EXPECTED_TOOLS = {
         "allowed_tools": {"apply_case_update"},
         "require_approval": "always",
     },
+    "foundry-iq": {
+        "allowed_tools": {"knowledge_base_retrieve"},
+        "require_approval": "never",
+    },
 }
 
 
