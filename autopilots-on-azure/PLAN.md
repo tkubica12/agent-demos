@@ -16,6 +16,7 @@ As of 2026-07-16:
 - Collective Learning Review PR #3 was approved and merged, publishing Role Release 3.1.0.
 - Worker Refresh to 3.1.0 is complete; promoted deadline-validation and rollback-checkpoint behavior is active as Role Skill guidance.
 - Direct Hermes CLI Candidate Improvements are automatically quarantined and provenance-bound on the next bridged turn or Dreaming run; this path is live-validated with `meeting-decision-record`.
+- `hermes2` uses the same Junior Project Manager Role Blueprint but a separate Agent 365 platform blueprint and bridge under ADR 0014.
 - Multi-Worker packet fan-in remains untested because only one Hermes Worker is currently available.
 
 ## Completed milestones

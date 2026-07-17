@@ -71,6 +71,8 @@ Each runtime has a separate Terraform workspace:
 - `autopilot-openclaw`;
 - `autopilot-hermes`.
 
+The current multi-Worker implementation also uses one workspace and Agent 365 platform blueprint per Worker, such as `autopilot-hermes2`. Workers may share the same Git Role Blueprint and Role Release while retaining isolated messaging endpoints, identities, bridges, Data Disks, and Sandboxes. A shared multi-Worker bridge is deliberately deferred by [ADR 0014](docs/adr/0014-per-worker-agent365-blueprints-and-bridges.md).
+
 Each workspace owns:
 
 - one bridge Container App and bridge managed identity;
@@ -415,3 +417,4 @@ OpenClaw remains on its runtime-image package plus persistent data directories. 
 - [ADR 0007](docs/adr/0007-side-by-side-autopilot-deployments.md): runtime-specific workspaces.
 - [ADR 0010](docs/adr/0010-candidate-improvements-and-collective-learning-review.md): Candidate Improvements and Collective Learning Review.
 - [ADR 0012](docs/adr/0012-mcp-identity-and-governance.md): MCP identity and governance.
+- [ADR 0014](docs/adr/0014-per-worker-agent365-blueprints-and-bridges.md): per-Worker Agent 365 platform blueprints and bridges.

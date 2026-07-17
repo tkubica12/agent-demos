@@ -55,6 +55,7 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 4. Bridge Container Apps may scale to zero.
 5. An incoming bridge request must wake or reuse the selected Sandbox and await the runtime operation.
 6. Runtime-specific Terraform workspaces must prevent OpenClaw and Hermes app state from colliding.
+7. The current implementation isolates each Worker behind its own Agent 365 platform blueprint, bridge, Terraform workspace, and Data Disk; this does not duplicate the shared Git Role Blueprint.
 
 ### Microsoft 365 and Agent 365
 
