@@ -22,6 +22,19 @@ class DeployAppsRuntimeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     load_runtime_tfvars("hermes")
 
+    def test_custom_worker_state_uses_separate_tfvars_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "hermes2" / "generated.app.auto.tfvars.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                json.dumps({"agent_runtime": "hermes", "autopilot_name": "hermes2"}),
+                encoding="utf-8",
+            )
+            with patch.object(deploy_apps_runtime, "runtime_app_tfvars_path", return_value=path):
+                payload = load_runtime_tfvars("hermes", "hermes2")
+
+        self.assertEqual(payload["autopilot_name"], "hermes2")
+
     def test_activate_runtime_tfvars_writes_active_runtime_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

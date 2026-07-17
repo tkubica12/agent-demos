@@ -208,6 +208,10 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(runtime_workspace("hermes"), Path.cwd() / ".local" / "hermes" / "apps")
         self.assertEqual(runtime_app_tfvars_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "generated.app.auto.tfvars.json")
         self.assertEqual(runtime_outputs_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "terraform-outputs.json")
+        self.assertEqual(
+            runtime_app_tfvars_path("hermes", "hermes2"),
+            Path.cwd() / ".local" / "hermes2" / "apps" / "generated.app.auto.tfvars.json",
+        )
 
     def test_hermes_existing_tfvars_ignore_active_openclaw_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -223,6 +227,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
 
             with patch.object(setup_app_tfvars, "REPO_ROOT", root), patch.object(setup_app_tfvars, "APPS_DIR", apps_dir):
                 self.assertEqual(existing_app_tfvars("hermes"), {})
+                self.assertEqual(existing_app_tfvars("hermes", "hermes2"), {})
 
     def test_runtime_does_not_reuse_other_runtime_default_volume(self):
         self.assertEqual(reusable_data_volume_name("hermes", "openclaw-kind-data"), "")

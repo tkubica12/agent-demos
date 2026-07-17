@@ -23,12 +23,12 @@ SHIPMENTS_APP_ROLE = "Shipments.Read.All"
 SHIPMENTS_DELEGATED_SCOPE = "Shipments.Read"
 
 
-def runtime_app_tfvars_path(runtime: str) -> Path:
-    return REPO_ROOT / ".local" / runtime / "apps" / "generated.app.auto.tfvars.json"
+def runtime_app_tfvars_path(runtime: str, state_name: str = "") -> Path:
+    return REPO_ROOT / ".local" / (state_name or runtime) / "apps" / "generated.app.auto.tfvars.json"
 
 
-def generated_blueprint_id(runtime: str) -> str:
-    payload = load_json(agent365_workspace(runtime) / "a365.generated.config.json")
+def generated_blueprint_id(runtime: str, state_name: str = "") -> str:
+    payload = load_json(agent365_workspace(state_name or runtime) / "a365.generated.config.json")
     value = str(payload.get("agentBlueprintId", "")).strip()
     if not value:
         raise KeyError(f"Agent 365 generated config for {runtime} does not contain agentBlueprintId.")
@@ -353,12 +353,13 @@ def ensure_agent_user_delegated_grant(
 def update_runtime_tfvars(
     *,
     runtime: str,
+    state_name: str = "",
     identity_state: dict[str, Any],
     api_state: dict[str, str],
     public_api_state: dict[str, str],
     tenant_id: str,
 ) -> dict[str, Any]:
-    runtime_path = runtime_app_tfvars_path(runtime)
+    runtime_path = runtime_app_tfvars_path(runtime, state_name)
     if not runtime_path.exists():
         raise FileNotFoundError(f"{runtime_path} does not exist. Run scripts.setup_app_tfvars first.")
     tfvars = load_json(runtime_path)
@@ -379,8 +380,8 @@ def update_runtime_tfvars(
     return tfvars
 
 
-def workiq_permissions_configured(runtime: str) -> bool:
-    generated_path = agent365_workspace(runtime) / "a365.generated.config.json"
+def workiq_permissions_configured(runtime: str, state_name: str = "") -> bool:
+    generated_path = agent365_workspace(state_name or runtime) / "a365.generated.config.json"
     if not generated_path.exists():
         return False
     generated = load_json(generated_path)
@@ -400,10 +401,16 @@ def workiq_permissions_configured(runtime: str) -> bool:
     return True
 
 
-def configure_workiq_permissions(runtime: str, *, dry_run: bool, force: bool = False) -> None:
-    workspace = agent365_workspace(runtime)
+def configure_workiq_permissions(
+    runtime: str,
+    *,
+    state_name: str = "",
+    dry_run: bool,
+    force: bool = False,
+) -> None:
+    workspace = agent365_workspace(state_name or runtime)
     shutil.copyfile(TOOLING_MANIFEST, workspace / "ToolingManifest.json")
-    if not force and not dry_run and workiq_permissions_configured(runtime):
+    if not force and not dry_run and workiq_permissions_configured(runtime, state_name):
         print(f"Work IQ MCP permissions are already configured for {runtime}; skipping interactive admin consent.")
         return
     manifest = load_json(TOOLING_MANIFEST)
@@ -478,6 +485,7 @@ def sandbox_group_principal_id(platform_outputs: dict[str, Any]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure milestone A7 Agent Identity, Agent User, and private MCP permissions.")
     parser.add_argument("--runtime", choices=["openclaw", "hermes"], required=True)
+    parser.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     parser.add_argument("--mail-nickname", default="")
     parser.add_argument("--state-file", default="")
     parser.add_argument("--api-state-file", default=str(A7_API_STATE))
@@ -490,6 +498,7 @@ def main() -> None:
     args = parser.parse_args()
 
     runtime = args.runtime
+    state_name = args.state_name or runtime
     mail_nickname = args.mail_nickname or f"{runtime}1"
     instance_path = Path(args.state_file) if args.state_file else state_file(runtime, mail_nickname)
     identity_state = load_state(instance_path)
@@ -519,13 +528,13 @@ def main() -> None:
     if not args.dry_run:
         write_json(public_api_state_path, public_api_state)
 
-    blueprint_client_id = generated_blueprint_id(runtime)
+    blueprint_client_id = generated_blueprint_id(runtime, state_name)
     blueprint_object_id = blueprint_application_object_id(graph, blueprint_client_id)
     ensure_federated_credential(
         graph,
         blueprint_object_id=blueprint_object_id,
         tenant_id=tenant_id,
-        name=f"a7-{runtime}-sandbox",
+        name=f"a7-{state_name}-sandbox",
         managed_identity_principal_id=sandbox_principal_id,
     )
     ensure_app_role_assignment(
@@ -543,6 +552,7 @@ def main() -> None:
     if not args.skip_workiq_permissions:
         configure_workiq_permissions(
             runtime,
+            state_name=state_name,
             dry_run=args.dry_run,
             force=args.force_workiq_permissions,
         )
@@ -551,6 +561,7 @@ def main() -> None:
     if not args.dry_run:
         tfvars = update_runtime_tfvars(
             runtime=runtime,
+            state_name=state_name,
             identity_state=identity_state,
             api_state=api_state,
             public_api_state=public_api_state,

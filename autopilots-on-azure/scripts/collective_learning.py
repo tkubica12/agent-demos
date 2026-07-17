@@ -23,9 +23,10 @@ def _operator_request(
     method: str,
     body: dict[str, Any] | None = None,
     timeout: int = 600,
+    state_name: str = "",
 ) -> dict[str, Any]:
-    outputs = _load_json(runtime_outputs_path("hermes"))
-    tfvars = _load_json(runtime_app_tfvars_path("hermes"))
+    outputs = _load_json(runtime_outputs_path("hermes", state_name))
+    tfvars = _load_json(runtime_app_tfvars_path("hermes", state_name))
     bridge_url = str(outputs.get("bridge_url") or "").rstrip("/")
     api_key = str(tfvars.get("api_server_key") or "")
     if not bridge_url or not api_key:
@@ -52,6 +53,7 @@ def _operator_request(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Operate Hermes Collective Learning Review.")
+    parser.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     prepare = subparsers.add_parser("prepare", help="Prepare a fail-closed Learning Packet summary.")
     prepare.add_argument("--timeout", type=int, default=600)
@@ -70,6 +72,7 @@ def main() -> None:
             method="POST",
             body={},
             timeout=args.timeout,
+            state_name=args.state_name,
         )
     elif args.command == "approve":
         result = _operator_request(
@@ -80,15 +83,17 @@ def main() -> None:
                 "approvedBy": args.approved_by,
             },
             timeout=args.timeout,
+            state_name=args.state_name,
         )
     else:
         result = _operator_request(
             "/internal/collective-learning/export",
             method="GET",
             timeout=args.timeout,
+            state_name=args.state_name,
         )
         worker_id = str((result.get("packet") or {}).get("worker", {}).get("workerId") or "")
-        tfvars = _load_json(runtime_app_tfvars_path("hermes"))
+        tfvars = _load_json(runtime_app_tfvars_path("hermes", args.state_name))
         public_key = str(tfvars.get("collective_learning_approval_public_key") or "")
         if not worker_id or not public_key:
             raise RuntimeError("Worker ID and Collective Learning approval public key are required.")

@@ -67,8 +67,8 @@ def unprotect_windows_secret(protected_value: str) -> str:
     return result.stdout
 
 
-def load_agent365_auth(runtime: str) -> dict[str, str]:
-    generated_path = REPO_ROOT / ".local" / runtime / "agent365" / "a365.generated.config.json"
+def load_agent365_auth(runtime: str, state_name: str = "") -> dict[str, str]:
+    generated_path = REPO_ROOT / ".local" / (state_name or runtime) / "agent365" / "a365.generated.config.json"
     if not generated_path.exists():
         return {}
     generated = json.loads(generated_path.read_text(encoding="utf-8"))
@@ -80,24 +80,30 @@ def load_agent365_auth(runtime: str) -> dict[str, str]:
     return {"client_id": client_id, "client_secret": secret}
 
 
-def runtime_workspace(runtime: str) -> Path:
-    return REPO_ROOT / ".local" / runtime / "apps"
+def runtime_workspace(runtime: str, state_name: str = "") -> Path:
+    return REPO_ROOT / ".local" / (state_name or runtime) / "apps"
 
 
-def runtime_app_tfvars_path(runtime: str) -> Path:
-    return runtime_workspace(runtime) / "generated.app.auto.tfvars.json"
+def runtime_app_tfvars_path(runtime: str, state_name: str = "") -> Path:
+    return runtime_workspace(runtime, state_name) / "generated.app.auto.tfvars.json"
 
 
-def runtime_outputs_path(runtime: str) -> Path:
-    return runtime_workspace(runtime) / "terraform-outputs.json"
+def runtime_outputs_path(runtime: str, state_name: str = "") -> Path:
+    return runtime_workspace(runtime, state_name) / "terraform-outputs.json"
 
 
-def existing_app_tfvars(runtime: str) -> dict[str, Any]:
-    runtime_path = runtime_app_tfvars_path(runtime)
+def existing_app_tfvars(runtime: str, state_name: str = "") -> dict[str, Any]:
+    runtime_path = runtime_app_tfvars_path(runtime, state_name)
     path = APPS_DIR / "generated.app.auto.tfvars.json"
     precedence_path = APPS_DIR / "generated.runtime.auto.tfvars.json"
     legacy_path = APPS_DIR / "generated.bridge.auto.tfvars.json"
-    for candidate in (runtime_path, precedence_path, path, legacy_path):
+    candidates = (runtime_path,) if state_name and state_name != runtime else (
+        runtime_path,
+        precedence_path,
+        path,
+        legacy_path,
+    )
+    for candidate in candidates:
         if not candidate.exists():
             continue
         payload = json.loads(candidate.read_text(encoding="utf-8"))
@@ -131,8 +137,8 @@ def reusable_data_volume_name(runtime: str, value: str) -> str:
     return value
 
 
-def default_device_identity_path(*, runtime: str, suffix: str) -> Path:
-    runtime_path = runtime_workspace(runtime) / "openclaw-bridge-device.json"
+def default_device_identity_path(*, runtime: str, suffix: str, state_name: str = "") -> Path:
+    runtime_path = runtime_workspace(runtime, state_name) / "openclaw-bridge-device.json"
     legacy_path = REPO_ROOT / ".local" / suffix / "openclaw-bridge-device.json"
     if not runtime_path.exists() and legacy_path.exists():
         return legacy_path
@@ -153,6 +159,7 @@ def build_tfvars(
     runtime_disk_image_name: str = "",
     bridge_image: str = "",
     private_mcp_image: str = "",
+    public_shipments_mcp_image: str = "",
     agent365_client_id: str = "",
     agent365_client_secret: str = "",
     agent365_tenant_id: str = "",
@@ -269,16 +276,23 @@ def build_tfvars(
         tfvars["agent365_tenant_id"] = resolved_agent365_tenant_id
     resolved_bridge_image = bridge_image or previous.get("bridge_image", "")
     resolved_private_mcp_image = private_mcp_image or previous.get("private_mcp_image", "")
+    resolved_public_shipments_mcp_image = (
+        public_shipments_mcp_image
+        or previous.get("public_shipments_mcp_image", "")
+    )
     if resolved_bridge_image:
         tfvars["bridge_image"] = resolved_bridge_image
     if resolved_private_mcp_image:
         tfvars["private_mcp_image"] = resolved_private_mcp_image
+    if resolved_public_shipments_mcp_image:
+        tfvars["public_shipments_mcp_image"] = resolved_public_shipments_mcp_image
     return tfvars
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare runtime-specific app bootstrap values and write apps generated tfvars.")
     parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
+    parser.add_argument("--state-name", default="", help="Local state directory under .local. Defaults to the runtime name.")
     parser.add_argument("--autopilot-name", default="")
     parser.add_argument("--data-volume-name", default="")
     parser.add_argument("--gateway-token", default="")
@@ -296,6 +310,7 @@ def main() -> None:
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
     parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
     parser.add_argument("--private-mcp-image", default="", help="Private incidents MCP image digest.")
+    parser.add_argument("--public-shipments-mcp-image", default="", help="Public shipments MCP image digest.")
     parser.add_argument("--agent365-client-id", default="", help="Agent 365 blueprint app ID for Microsoft Agents SDK auth.")
     parser.add_argument("--agent365-client-secret", default="", help="Agent 365 blueprint client secret for Microsoft Agents SDK auth.")
     parser.add_argument("--agent365-tenant-id", default="", help="Tenant ID for Microsoft Agents SDK auth. Defaults to tenant if omitted by Terraform.")
@@ -309,10 +324,11 @@ def main() -> None:
     platform = terraform_output(PLATFORM_DIR)
     suffix = platform["suffix"]
     runtime = args.runtime
+    state_name = args.state_name or runtime
     autopilot_name = args.autopilot_name or default_autopilot_name(runtime)
 
-    previous = existing_app_tfvars(runtime)
-    agent365_auth = load_agent365_auth(runtime) if args.agent365_from_generated else {}
+    previous = existing_app_tfvars(runtime, state_name)
+    agent365_auth = load_agent365_auth(runtime, state_name) if args.agent365_from_generated else {}
     data_volume_name = (
         args.data_volume_name
         or reusable_data_volume_name(runtime, previous.get("runtime_data_volume_name") or "")
@@ -321,7 +337,11 @@ def main() -> None:
     device: dict[str, str] | None = None
     device_path: Path | None = None
     if runtime == "openclaw":
-        device_path = Path(args.device_identity_file) if args.device_identity_file else default_device_identity_path(runtime=runtime, suffix=suffix)
+        device_path = Path(args.device_identity_file) if args.device_identity_file else default_device_identity_path(
+            runtime=runtime,
+            suffix=suffix,
+            state_name=state_name,
+        )
         device = load_or_create_device(device_path)
     collective_identity: dict[str, str] = {}
     collective_identity_path: Path | None = None
@@ -329,7 +349,7 @@ def main() -> None:
         collective_identity_path = (
             Path(args.collective_approval_identity_file)
             if args.collective_approval_identity_file
-            else runtime_workspace(runtime) / "collective-learning-approval.json"
+            else runtime_workspace(runtime, state_name) / "collective-learning-approval.json"
         )
         collective_identity = load_or_create_collective_approval_identity(collective_identity_path)
 
@@ -346,6 +366,7 @@ def main() -> None:
         runtime_disk_image_name=args.runtime_disk_image_name,
         bridge_image=args.bridge_image,
         private_mcp_image=args.private_mcp_image,
+        public_shipments_mcp_image=args.public_shipments_mcp_image,
         agent365_client_id=args.agent365_client_id or agent365_auth.get("client_id", ""),
         agent365_client_secret=args.agent365_client_secret or agent365_auth.get("client_secret", ""),
         agent365_tenant_id=args.agent365_tenant_id,
@@ -358,7 +379,7 @@ def main() -> None:
         collective_approval_private_key=collective_identity.get("privateKey", ""),
         collective_approval_public_key=collective_identity.get("publicKey", ""),
     )
-    runtime_path = runtime_app_tfvars_path(runtime)
+    runtime_path = runtime_app_tfvars_path(runtime, state_name)
     write_tfvars(runtime_path, tfvars)
     active_path = APPS_DIR / "generated.app.auto.tfvars.json"
     precedence_path = APPS_DIR / "generated.runtime.auto.tfvars.json"
@@ -369,6 +390,7 @@ def main() -> None:
         json.dumps(
             {
                 "runtime": runtime,
+                "stateName": state_name,
                 "workerId": autopilot_name,
                 "dataVolumeName": data_volume_name,
                 "runtimeTfvarsFile": str(runtime_path),

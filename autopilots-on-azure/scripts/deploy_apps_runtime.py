@@ -25,8 +25,8 @@ def select_or_create_workspace(workspace: str) -> None:
     run(["terraform", "workspace", "new", workspace], cwd=APPS_DIR)
 
 
-def load_runtime_tfvars(runtime: str) -> dict[str, Any]:
-    path = runtime_app_tfvars_path(runtime)
+def load_runtime_tfvars(runtime: str, state_name: str = "") -> dict[str, Any]:
+    path = runtime_app_tfvars_path(runtime, state_name)
     if not path.exists():
         raise FileNotFoundError(
             f"{path} does not exist. Run `uv run python -m scripts.setup_app_tfvars --runtime {runtime}` first."
@@ -37,18 +37,18 @@ def load_runtime_tfvars(runtime: str) -> dict[str, Any]:
     return payload
 
 
-def activate_runtime_tfvars(runtime: str) -> dict[str, Any]:
-    tfvars = load_runtime_tfvars(runtime)
+def activate_runtime_tfvars(runtime: str, state_name: str = "") -> dict[str, Any]:
+    tfvars = load_runtime_tfvars(runtime, state_name)
     write_tfvars(APPS_DIR / "generated.app.auto.tfvars.json", tfvars)
     write_tfvars(APPS_DIR / "generated.runtime.auto.tfvars.json", tfvars)
     return tfvars
 
 
-def capture_runtime_outputs(runtime: str, workspace: str) -> Path:
+def capture_runtime_outputs(runtime: str, workspace: str, state_name: str = "") -> Path:
     outputs = terraform_output(APPS_DIR)
     outputs["terraform_workspace"] = workspace
     outputs["captured_agent_runtime"] = runtime
-    output_path = runtime_outputs_path(runtime)
+    output_path = runtime_outputs_path(runtime, state_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(outputs, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {output_path}", flush=True)
@@ -60,6 +60,7 @@ def main() -> None:
         description="Deploy or plan one runtime-specific apps stack using a dedicated Terraform workspace."
     )
     parser.add_argument("--runtime", choices=["openclaw", "hermes"], required=True)
+    parser.add_argument("--state-name", default="", help="Local state directory under .local. Defaults to the runtime name.")
     parser.add_argument("--workspace", default="", help="Terraform workspace name. Defaults to autopilot-<runtime>.")
     parser.add_argument("--plan", action="store_true", help="Run terraform plan for this runtime.")
     parser.add_argument("--apply", action="store_true", help="Run terraform apply for this runtime.")
@@ -69,7 +70,8 @@ def main() -> None:
     args = parser.parse_args()
 
     workspace = args.workspace or terraform_workspace_name(args.runtime)
-    activate_runtime_tfvars(args.runtime)
+    state_name = args.state_name or args.runtime
+    activate_runtime_tfvars(args.runtime, state_name)
 
     if not args.skip_init:
         run(["terraform", "init"], cwd=APPS_DIR)
@@ -87,15 +89,16 @@ def main() -> None:
         run(command, cwd=APPS_DIR)
         args.capture = True
     if args.capture:
-        capture_runtime_outputs(args.runtime, workspace)
+        capture_runtime_outputs(args.runtime, workspace, state_name)
 
     print(
         json.dumps(
             {
                 "runtime": args.runtime,
+                "stateName": state_name,
                 "terraformWorkspace": workspace,
-                "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime)),
-                "runtimeOutputsFile": str(runtime_outputs_path(args.runtime)),
+                "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime, state_name)),
+                "runtimeOutputsFile": str(runtime_outputs_path(args.runtime, state_name)),
                 "next": f"Run Agent 365 setup for {args.runtime}; it will use the captured endpoint when present.",
             },
             indent=2,

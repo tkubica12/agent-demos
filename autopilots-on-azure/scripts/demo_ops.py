@@ -225,9 +225,9 @@ def az_rest_json(url: str, *, method: str = "get", resource: str = SANDBOX_RESOU
     return {"ok": True, "body": json.loads(raw) if raw else {}}
 
 
-def health_check(runtime: str, *, timeout: int = 120) -> dict[str, Any]:
+def health_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> dict[str, Any]:
     try:
-        outputs = load_json(runtime_outputs_path(runtime))
+        outputs = load_json(runtime_outputs_path(runtime, state_name))
         url = bridge_url(outputs)
     except Exception as exc:
         return {"runtime": runtime, "check": "health", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
@@ -236,9 +236,9 @@ def health_check(runtime: str, *, timeout: int = 120) -> dict[str, Any]:
     return {"runtime": runtime, "check": "health", "url": f"{url}/health", **result}
 
 
-def invoke_check(runtime: str, *, message: str = "", timeout: int = 120) -> dict[str, Any]:
+def invoke_check(runtime: str, *, message: str = "", timeout: int = 120, state_name: str = "") -> dict[str, Any]:
     try:
-        outputs = load_json(runtime_outputs_path(runtime))
+        outputs = load_json(runtime_outputs_path(runtime, state_name))
         url = bridge_url(outputs)
     except Exception as exc:
         return {"runtime": runtime, "check": "invoke", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
@@ -257,11 +257,11 @@ def invoke_check(runtime: str, *, message: str = "", timeout: int = 120) -> dict
     }
 
 
-def dream_check(*, focus: str = "", max_records: int = 5, timeout: int = 900) -> dict[str, Any]:
+def dream_check(*, focus: str = "", max_records: int = 5, timeout: int = 900, state_name: str = "") -> dict[str, Any]:
     runtime = "hermes"
     try:
-        outputs = load_json(runtime_outputs_path(runtime))
-        tfvars = load_json(runtime_app_tfvars_path(runtime))
+        outputs = load_json(runtime_outputs_path(runtime, state_name))
+        tfvars = load_json(runtime_app_tfvars_path(runtime, state_name))
         url = bridge_url(outputs)
         api_key = str(tfvars.get("api_server_key") or "")
         if not api_key:
@@ -279,9 +279,9 @@ def dream_check(*, focus: str = "", max_records: int = 5, timeout: int = 900) ->
     return {"runtime": runtime, "check": "dream", "url": f"{url}/internal/dream", **result}
 
 
-def diag_check(runtime: str, *, timeout: int = 120) -> dict[str, Any]:
+def diag_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> dict[str, Any]:
     try:
-        outputs = load_json(runtime_outputs_path(runtime))
+        outputs = load_json(runtime_outputs_path(runtime, state_name))
         url = bridge_url(outputs)
     except Exception as exc:
         return {"runtime": runtime, "check": "diag", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
@@ -339,8 +339,8 @@ def lookup_resource_group(app_name: str) -> str:
     return value
 
 
-def runtime_app_name(runtime: str, app: str) -> str:
-    outputs = load_json(runtime_outputs_path(runtime))
+def runtime_app_name(runtime: str, app: str, state_name: str = "") -> str:
+    outputs = load_json(runtime_outputs_path(runtime, state_name))
     key = "private_mcp_app_name" if app == "private-mcp" else "bridge_app_name"
     value = str(outputs.get(key) or "")
     if not value:
@@ -355,34 +355,42 @@ def print_json(payload: Any) -> None:
 def run_status(args: argparse.Namespace) -> int:
     results: list[dict[str, Any]] = []
     for runtime in runtime_list(args.runtime):
-        results.append(health_check(runtime, timeout=args.timeout))
+        results.append(health_check(runtime, timeout=args.timeout, state_name=args.state_name))
         if args.invoke:
-            results.append(invoke_check(runtime, timeout=args.timeout))
+            results.append(invoke_check(runtime, timeout=args.timeout, state_name=args.state_name))
         if args.diag:
-            results.append(diag_check(runtime, timeout=args.timeout))
+            results.append(diag_check(runtime, timeout=args.timeout, state_name=args.state_name))
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
 
 
 def run_smoke(args: argparse.Namespace) -> int:
-    results = [invoke_check(runtime, message=args.message, timeout=args.timeout) for runtime in runtime_list(args.runtime)]
+    results = [
+        invoke_check(runtime, message=args.message, timeout=args.timeout, state_name=args.state_name)
+        for runtime in runtime_list(args.runtime)
+    ]
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
 
 
 def run_dream(args: argparse.Namespace) -> int:
-    result = dream_check(focus=args.focus, max_records=args.max_records, timeout=args.timeout)
+    result = dream_check(
+        focus=args.focus,
+        max_records=args.max_records,
+        timeout=args.timeout,
+        state_name=args.state_name,
+    )
     print_json(result)
     return 0 if result.get("ok") else 1
 
 
 def run_activate(args: argparse.Namespace) -> int:
-    activate_runtime_tfvars(args.runtime)
+    activate_runtime_tfvars(args.runtime, args.state_name)
     print_json(
         {
             "runtime": args.runtime,
             "terraformWorkspace": terraform_workspace_name(args.runtime),
-            "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime)),
+            "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime, args.state_name)),
             "activeTfvarsFiles": [
                 "terraform\\apps\\generated.app.auto.tfvars.json",
                 "terraform\\apps\\generated.runtime.auto.tfvars.json",
@@ -397,7 +405,7 @@ def run_activate(args: argparse.Namespace) -> int:
 
 
 def run_logs(args: argparse.Namespace) -> int:
-    app_name = runtime_app_name(args.runtime, args.app)
+    app_name = runtime_app_name(args.runtime, args.app, args.state_name)
     resource_group = args.resource_group or lookup_resource_group(app_name)
     command = az_log_command(app_name, resource_group, tail=args.tail, follow=args.follow)
     if not args.execute:
@@ -408,7 +416,7 @@ def run_logs(args: argparse.Namespace) -> int:
 
 def run_reset_sandbox(args: argparse.Namespace) -> int:
     platform = terraform_outputs(PLATFORM_DIR)
-    outputs = load_json(runtime_outputs_path(args.runtime))
+    outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
     base_url = sandbox_group_url(platform, az_account_id())
     selector = runtime_sandbox_selector(args.runtime, outputs)
     listed = az_rest_json(f"{base_url}/sandboxes", timeout=args.timeout)
@@ -487,6 +495,7 @@ def main() -> None:
 
     status = subparsers.add_parser("status", help="Check bridge health, optionally /invoke and Teams diagnostics.")
     status.add_argument("--runtime", choices=[*RUNTIMES, "both"], default="both")
+    status.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     status.add_argument("--invoke", action="store_true", help="Also run the runtime-specific direct /invoke smoke prompt.")
     status.add_argument("--diag", action="store_true", help="Also read /diag/teams when bridge debug is enabled.")
     status.add_argument("--timeout", type=int, default=120)
@@ -494,11 +503,13 @@ def main() -> None:
 
     smoke = subparsers.add_parser("smoke", help="Run direct /invoke smoke prompts.")
     smoke.add_argument("--runtime", choices=[*RUNTIMES, "both"], default="both")
+    smoke.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     smoke.add_argument("--message", default="", help="Override the default runtime smoke prompt. Expected-marker checks are skipped.")
     smoke.add_argument("--timeout", type=int, default=120)
     smoke.set_defaults(func=run_smoke)
 
     dream = subparsers.add_parser("dream", help="Run a secured local Hermes reflection and return its redacted learning packet.")
+    dream.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     dream.add_argument("--focus", default="", help="Optional reflection focus. Defaults to recent meaningful work.")
     dream.add_argument("--max-records", type=int, choices=range(1, 11), default=5)
     dream.add_argument("--timeout", type=int, default=900)
@@ -506,10 +517,12 @@ def main() -> None:
 
     activate = subparsers.add_parser("activate", help="Make one runtime's tfvars active for Terraform operations.")
     activate.add_argument("--runtime", choices=RUNTIMES, required=True)
+    activate.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     activate.set_defaults(func=run_activate)
 
     logs = subparsers.add_parser("logs", help="Print or run the Azure Container Apps log command for a runtime app.")
     logs.add_argument("--runtime", choices=RUNTIMES, required=True)
+    logs.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     logs.add_argument("--app", choices=["bridge", "private-mcp"], default="bridge")
     logs.add_argument("--resource-group", default="", help="Skip Azure lookup and use this resource group.")
     logs.add_argument("--tail", type=int, default=80)
@@ -519,6 +532,7 @@ def main() -> None:
 
     reset = subparsers.add_parser("reset-sandbox", help="Delete one runtime sandbox while keeping its data volume.")
     reset.add_argument("--runtime", choices=RUNTIMES, required=True)
+    reset.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     reset.add_argument("--execute", action="store_true", help="Actually delete the sandbox. Omitted means dry-run.")
     reset.add_argument("--timeout", type=int, default=300)
     reset.set_defaults(func=run_reset_sandbox)
