@@ -13,21 +13,52 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 
 ## Implementation status
 
-Implemented and live-validated on 2026-07-15:
+All implementation compatible with the repository's secretless architecture is deployed and live-validated:
 
-- `foundry-showcase-main` Microsoft Agent Framework Hosted Agent;
+- active Hosted Agent `foundry-showcase-main`, only retained version 28;
+- active LangGraph Hosted Agent `foundry-showcase-policy-helper`, version 2;
 - Responses `2.0.0` and Invocations `1.0.0`;
-- dedicated `foundry-showcase-main` Foundry Memory store;
-- reusable local Agent Skills;
-- local profile, conversation, summary, and audit behavior;
-- OpenTelemetry and Application Insights wiring;
-- source-controlled `uv.lock`, evaluation dataset, evaluator, and `eval.yaml`;
-- active Hosted Agent version 3;
-- direct Responses and Invocations deployment smoke tests;
-- real Foundry Memory create, update, search, remember, and delete validation;
-- first cloud evaluation improved from 9/15 on version 2 to 13/15 on version 3.
+- Foundry Toolbox `foundry-showcase-support`, default version 3;
+- published skills `support-style`, `escalation-policy`, and `profile-update-policy`, version 1;
+- Entra-protected case MCP using the Hosted Agent instance identity;
+- Azure Table Storage with public access disabled, reached through a private endpoint;
+- user-scoped Foundry Memory;
+- read tools and proposal creation without approval;
+- write approval request, pre-approval blocking, successful continuation, single apply, and audit behavior;
+- OpenTelemetry wired to showcase-owned Application Insights `appi-foundry-showcase-vz5kj8` and Log Analytics `log-foundry-showcase-vz5kj8`;
+- 10/10 local MCP tests, 20/20 main-agent tests, 4/4 helper tests, and 3/3 AG-UI tests;
+- deployed Responses read, skill, memory, proposal, approval, write, and restore validation;
+- deployed structured Invocations read validation;
+- promoted-version evaluation `evalrun_ee8329679c7340d2a95047229a347878`: 30 cases, with 23 domain-rubric, 17 task-adherence, and 12 intent-resolution passes; two cases retain upstream Hosted Agent content-filter enum failures;
+- checkpointed MAF case-resolution workflow with deterministic risk branching and restoration;
+- authenticated RemoteA2A project connection and policy-delegation Toolbox;
+- exact policy delegation from the workflow and structured Invocations;
+- policy contradictions rejected before proposal creation;
+- correlated trace operation spanning the primary agent, A2A Toolbox call, and helper;
+- recurring weekday and one-time Routines with completed manual and timer-delivered runs;
+- Entra-authenticated AG-UI web client and thin Container Apps BFF;
+- secretless managed-identity federation and OBO exchange for delegated Foundry access;
+- authenticated AG-UI smoke response `AG-UI showcase ready`.
+- Agent 365 Activity endpoint, Bot Service Teams channel, AgentData permission grant, and publication `1.0.2`;
+- bounded optimizer operation `opt_8e32d2e5f7344b2ab65c2689acd5e9ea`: baseline `0.5259027`, candidate `0.512111`, baseline retained;
+- final optimizer canary and baseline promotion as version 26, followed by portal-experience and observability expansions through version 28;
+- Application Insights operational metric export for latency, reliability, token use, and helper-call rate;
+- cloud AI red-team run `evalrun_d78033e5c5a746c1a238ad23d7ad79dc` with a reviewed taxonomy and real tool descriptions.
+- 12 Stored Completions and runtime-aligned persistent Memory records for Tomas;
+- custom Guardrail `foundry-showcase-sensitive-data` with validated blocking;
+- validated Purview, deterministic synthetic PII blocking, and dedicated Task Adherence preview behavior;
+- two rich PDF assets analyzed by Content Understanding with figure verbalization and chart extraction;
+- Foundry IQ document and web sources, Search index, knowledge base, MCP connection, Toolbox integration, and cited retrieval;
+- sequential `process_invoice` workflow alongside the durable human-in-the-loop case workflow;
+- portal-visible local red-team run `7627b190-4823-44f6-b265-2cb33da7836f` with six genuine version-27 conversations and 33.33% ASR.
+- successful immediate and scheduled quality evaluations, provisioned daily schedule, continuous rule, and Azure Monitor Task Adherence score alert;
+- successful Qwen3-32B Global Standard SFT job `ftjob-d6e97df9e4cd4766ba81e754c848b635`, producing retained model `qwen3-32b.ft-d6e97df9e4cd4766ba81e754c848b635-foundry-showcase` without a persistent hosting deployment.
 
-Next implementation milestone: the governed case MCP and Foundry Toolbox, followed by the LangGraph A2A helper.
+The current Agent Framework/OpenAI client drops approval responses on service-managed continuation turns. `ApprovalContinuationFoundryChatClient` restores only the current response while continuing to suppress replayed approval history. The override is unit-tested and should be removed when the upstream package includes the fix.
+
+Hosted Toolbox token acquisition uses the Hosted Agent version's instance identity, not its Agent Identity Blueprint. Toolbox approval mappings use the composite names exposed by Foundry, such as `case-write___apply_case_update`.
+
+Tenant-admin approval remains the Phase 4 dependency before Agent 365 registry, Agent User, and Teams interaction can be validated. The trace-derived dataset curator still reports no traces despite corrected RBAC and queryable content-rich telemetry. Continuous evaluation triggers, but its worker receives `session_not_accessible` while retrieving the stored response. Work IQ is not added because its supported Foundry connection requires delegated admin consent and a stored OAuth client secret, while application-only authentication is unsupported. Harm-category requests also retain the upstream `'ContentFiltered' is not a valid ContentFilterCodes` defect. These are recorded as product or security boundaries rather than hidden behind simulated behavior.
 
 ## Demo story
 
@@ -59,7 +90,7 @@ Teams / Microsoft 365                 AG-UI web or TUI
                           |
                           v
         Main Foundry Hosted Agent - Microsoft Agent Framework
-        Responses + Invocations
+        Responses + Invocations + Activity
         - conversation and policy reasoning
         - Foundry Memory
         - MAF declarative/code-first workflow
@@ -71,7 +102,7 @@ Teams / Microsoft 365                 AG-UI web or TUI
       tools + skills      user scoped         Hosted Agent + A2A
              |
              +--> case MCP
-             +--> policy/search tools
+             +--> Foundry IQ document + web retrieval
              +--> controlled case-update tool
 
 Foundry Routine -> Main Agent -> daily review workflow
@@ -138,18 +169,24 @@ The primary MAF agent calls it through a Foundry A2A project connection and reta
 | A2A | Main MAF agent delegates policy analysis to the LangGraph helper. |
 | Agent identity | Per-agent Entra identities with least-privilege access. |
 | Foundry Memory | Per-user profile, durable preferences, and summarized case context. |
+| Stored Completions | Twelve real retained Responses completions visible in the Data tab. |
+| Guardrails | Purview policy, deterministic synthetic PII blocklist, and dedicated Task Adherence preview with aligned and misaligned validation. |
+| Content Understanding | Rich PDFs analyzed with figure verbalization, chart extraction, and model aliases. |
+| Foundry IQ | Search index, document and web knowledge sources, knowledge base, MCP connection, and Toolbox tool. |
 | Sessions and conversations | Platform conversation continuity plus explicit user isolation. |
 | Toolbox | Versioned collection of tools, MCP connections, and skills. |
 | MCP | Entra-protected case service consumed through the Toolbox MCP endpoint. |
 | Skills | Versioned support style, escalation policy, and profile-update policy packages. |
-| Workflows | MAF declarative or code-first workflow hosted inside the main agent. |
+| Workflows | Durable HIL case workflow plus sequential invoice prepare, validate, and route workflow hosted inside the main agent. |
 | Routines | Recurring daily support-quality review and one-time follow-up example. |
-| Observability | End-to-end traces across BFF, main agent, workflow nodes, MCP, memory, and A2A helper. |
-| Evaluations | Golden datasets, generated suites, built-in and custom evaluators, and trace evaluation. |
-| Optimization | Foundry Agent Optimizer compares instruction, skill, tool-description, and model candidates. |
-| Red teaming | Foundry AI Red Teaming Agent scans the main Hosted Agent in a safe test environment. |
+| Observability | Showcase-owned Application Insights and Log Analytics, end-to-end traces, and an evaluation-score alert with email action group. |
+| Evaluations | Golden datasets, generated suites, successful immediate and scheduled runs, a daily schedule, continuous rule, and explicit preview failure evidence. |
+| Fine-tuning | One-epoch Qwen3-32B Global Standard SFT over a small support-policy style dataset, retained without a paid hosting deployment. |
+| Optimization | Foundry Agent Optimizer reviewed an instruction candidate; its regression was rejected and the baseline was promoted. |
+| Red teaming | Cloud taxonomy run plus a portal-visible local scan with six genuine Hosted Agent conversations and inspectable ASR findings. |
+| Work IQ | Delegated access works for Tomas, but Foundry integration is blocked by the documented client-secret requirement and secretless repository policy. |
 | Versioning | Baseline, candidate, canary, and promoted Hosted Agent versions. |
-| Agent 365 | Registry, identity governance, observability, autopilot publication, and Teams surface. |
+| Agent 365 | Identity governance, Activity bridge, Bot Service, Teams channel, and autopilot publication are deployed; tenant approval remains external. |
 
 ## Tools and Toolbox
 
@@ -211,7 +248,7 @@ validate request
   -> record audit and memory summary
 ```
 
-The workflow demonstrates deterministic state, branching, tool boundaries, and human confirmation. It deliberately avoids group-chat orchestration.
+The workflow demonstrates deterministic state, branching, tool boundaries, and human confirmation. A second `process_invoice` workflow runs prepare, validate, and route stages and produces `auto_post`, `finance_review`, or `rejected` outcomes. Both deliberately avoid group-chat orchestration.
 
 ## Routine design
 
@@ -271,7 +308,7 @@ Instrument:
 - model name, latency, tokens, and estimated cost;
 - confirmation and policy outcomes.
 
-Use W3C trace context and one correlation ID across the full request. Hosted Agent protocol libraries provide OpenTelemetry integration and Foundry injects Application Insights configuration.
+Use W3C trace context and one correlation ID across the full request. Hosted Agent protocol libraries provide OpenTelemetry integration and Foundry injects the showcase-owned Application Insights configuration.
 
 The demo dashboard should answer:
 
@@ -355,6 +392,8 @@ Current platform constraints must shape the test:
 
 Where a full live-tool red-team path is unsupported, test the core Hosted Agent with supported synthetic tools and separately run deterministic policy tests against the real MCP contracts.
 
+The version 26 cloud run used seven enabled prohibited-action categories, direct and indirect attack strategies, and descriptions of the real case, memory, and A2A tools. The service completed with zero output items and no error. Version 27 was then scanned locally through its real Responses endpoint. Portal run `7627b190-4823-44f6-b265-2cb33da7836f` contains six baseline and tense attacks: protected material and code vulnerability passed, while two ungrounded-attribute attacks succeeded. The local runner rejects callback error placeholders so platform failures cannot be misreported as safe responses.
+
 ## Infrastructure and repository shape
 
 Proposed structure:
@@ -382,41 +421,45 @@ Use Terraform with `azapi` for Azure resources and `azd` for Hosted Agent packag
 
 ## Delivery phases
 
-### Phase 1: Consolidate the proven baseline
+### Phase 1: Consolidate the proven baseline — complete
 
 - copy the latest useful implementation from Progressive Agents;
 - remove step-specific naming and duplicated historical code;
 - deploy one clean MAF Hosted Agent;
 - establish tests, traces, and a concise README.
 
-### Phase 2: Governed tools, skills, and memory
+### Phase 2: Governed tools, skills, and memory — complete
 
 - deploy the case MCP;
 - create Toolbox and skill versions;
 - connect Foundry Memory;
 - validate identity, user scope, audit, and tool contracts.
 
-### Phase 3: Workflow and cross-framework A2A
+### Phase 3: Workflow and cross-framework A2A — complete
 
 - implement the MAF case-resolution workflow;
 - deploy the LangGraph helper;
 - enable A2A and project connection;
 - validate delegation, state, confirmation, and trace correlation.
 
-### Phase 4: Routines and user surfaces
+### Phase 4: Routines and user surfaces — external approval pending
 
-- create recurring and one-time Routines;
-- deploy the thin AG-UI BFF;
-- publish the main agent to Agent 365 and Teams;
-- validate direct, web, scheduled, and Teams paths.
+- create recurring and one-time Routines — complete;
+- deploy the thin AG-UI BFF — complete;
+- publish the main agent to Agent 365 and Teams — publication submitted;
+- validate direct, web, scheduled, and Teams paths — direct, web, scheduled, Activity configuration, and Teams channel complete; tenant approval blocks Teams conversation validation.
 
-### Phase 5: Quality, optimization, and safety
+### Phase 5: Quality, optimization, safety, and portal experiences — complete with preview limitations
 
-- finalize golden datasets and evaluators;
-- run direct and trace evaluations;
-- run Agent Optimizer and review candidates;
-- run AI Red Teaming Agent scans;
-- canary and promote the best approved version.
+- finalized a 30-case generated dataset and three pinned evaluators;
+- ran direct quality evaluation and exported trace metrics; two cases retain upstream Hosted Agent content-filter enum failures;
+- ran Agent Optimizer, rejected the regressing candidate, and retained the baseline;
+- submitted reviewed AI Red Teaming Agent scans and uploaded a six-conversation local scan with actionable findings;
+- canary-tested the baseline winner, then promoted the observability expansion as immutable version 28;
+- populated Stored Completions, Memory, Guardrails, Content Understanding, and Foundry IQ;
+- deployed immediate, scheduled, and continuous evaluation configuration plus a score alert;
+- ran a bounded Qwen3-32B SFT without creating persistent hosting cost;
+- investigated trace curation, continuous evaluation, and Work IQ to their supported product and security boundaries.
 
 ## Completion criteria
 
@@ -430,10 +473,12 @@ The showcase is complete when:
 6. both Routine types run and have inspectable history and traces;
 7. end-to-end traces connect ingress, memory, tools, workflow, and helper;
 8. evaluation results compare immutable versions reproducibly;
-9. an optimizer candidate is reviewed, deployed, and canary-tested without automatic promotion;
+9. optimizer candidates are reviewed and only an approved winner is deployed and canary-tested without automatic promotion;
 10. red-team findings and mitigations are documented;
 11. Agent 365 registration, governance, and Teams interaction are validated;
 12. no classic bot fallback, stored secret, simulated platform feature, or Autopilots runtime code is present.
+
+Criteria 2 through 10 and 12 are satisfied. Criteria 1 and 11 await tenant-admin approval for Agent 365 and Teams. Trace-derived dataset generation remains blocked by the preview curator, continuous evaluation remains blocked by the response-session ownership defect, and Work IQ remains excluded because the only documented Foundry connection requires a stored client secret.
 
 ## Research conclusions
 
@@ -445,6 +490,7 @@ The showcase is complete when:
 - The Agent Optimizer can improve instructions, skills, tool descriptions, and model choice from evaluation signal.
 - Direct target evaluations fit synchronous Responses and Invocations; A2A, Activity, streaming, and complex trajectories should use trace evaluation.
 - AI Red Teaming supports Hosted Agents, but tool and workflow support has important preview constraints that must be demonstrated honestly.
+- Work IQ uses delegated user authorization and honors Microsoft 365 permissions, but its current Foundry connection does not support application-only or managed-identity authentication.
 
 ## Primary references
 
@@ -457,4 +503,5 @@ The showcase is complete when:
 - [Foundry Agent Optimizer](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-optimizer-overview)
 - [Agent evaluations with azd](https://learn.microsoft.com/azure/foundry/observability/how-to/azure-developer-cli-evaluation)
 - [AI Red Teaming Agent](https://learn.microsoft.com/azure/foundry/concepts/ai-red-teaming-agent)
+- [Connect Foundry to Work IQ](https://learn.microsoft.com/microsoft-365/copilot/extensibility/work-iq/mcp/quickstart/foundry)
 - [Agent 365 integration with Foundry](https://learn.microsoft.com/azure/foundry/agents/concepts/agent-365-integration)

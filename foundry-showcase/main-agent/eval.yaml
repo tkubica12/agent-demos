@@ -1,16 +1,18 @@
-name: smoke-core
+name: foundry-showcase-phase5
 agent:
     name: foundry-showcase-main
     kind: hosted
-    version: "3"
+    version: "26"
+    model: gpt-5.4-mini
+    config: .agent_configs\baseline\metadata.yaml
 dataset:
-    name: smoke-core
-    version: "2.0"
-    local_uri: datasets\smoke-core
+    local_uri: datasets\foundry-showcase-phase5\foundry-showcase-phase5_dg.jsonl
 evaluators:
-    - name: smoke-core
-      version: "2"
-      local_uri: evaluators\smoke-core\rubric_dimensions.json
+    - builtin.task_adherence
+    - builtin.intent_resolution
+    - name: foundry-showcase-phase5
+      version: "3"
+      local_uri: evaluators\foundry-showcase-phase5\rubric_dimensions.json
 options:
     eval_model: gpt-5.4-mini
-max_samples: 15
+max_samples: 30

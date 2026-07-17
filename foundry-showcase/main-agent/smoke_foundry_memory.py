@@ -12,7 +12,7 @@ from azure.ai.projects.models import (
     MemoryStoreDefaultDefinition,
     MemoryStoreDefaultOptions,
 )
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
+from azure.core.exceptions import HttpResponseError
 from azure.identity import DefaultAzureCredential
 
 
@@ -84,6 +84,37 @@ def ensure_memory_store(client: AIProjectClient, name: str) -> dict[str, Any]:
     return model_dump(created)
 
 
+def delete_scope_memories(
+    client: AIProjectClient,
+    memory_store_name: str,
+    scope: str,
+) -> None:
+    empty_polls = 0
+    for _ in range(12):
+        remaining = retry_foundry_operation(
+            lambda: list(
+                client.beta.memory_stores.list_memories(
+                    name=memory_store_name,
+                    scope=scope,
+                )
+            ),
+            delay_seconds=2,
+        )
+        if not remaining:
+            empty_polls += 1
+            if empty_polls == 2:
+                return
+        else:
+            empty_polls = 0
+            for item in remaining:
+                client.beta.memory_stores.delete_memory(
+                    name=memory_store_name,
+                    memory_id=memory_id_of(item),
+                )
+        time.sleep(5)
+    raise RuntimeError("Foundry Memory smoke items were not fully deleted.")
+
+
 def main() -> None:
     memory_store_name = os.getenv("MEMORY_STORE_NAME", "foundry-showcase-main")
     scope = os.getenv("MEMORY_SCOPE_TEST", f"showcase-smoke-{uuid.uuid4()}")
@@ -97,130 +128,131 @@ def main() -> None:
     )
     store_info = ensure_memory_store(client, memory_store_name)
 
-    memory_item = retry_foundry_operation(
-        lambda: client.beta.memory_stores.create_memory(
+    try:
+        memory_item = retry_foundry_operation(
+            lambda: client.beta.memory_stores.create_memory(
                 name=memory_store_name,
                 scope=scope,
                 content=f"User profile marker: {marker}. User prefers concise progress reports.",
                 kind="user_profile",
-        )
-    )
-    created_item_id = memory_id_of(memory_item)
-    listed = []
-    for _ in range(6):
-        listed = list(
-            client.beta.memory_stores.list_memories(
-                name=memory_store_name,
-                scope=scope,
-                kind="user_profile",
             )
         )
-        if any(memory_id_of(item) == created_item_id for item in listed):
-            break
-        time.sleep(2)
-    if not any(memory_id_of(item) == created_item_id for item in listed):
-        raise RuntimeError("Created Foundry Memory item was not returned by list_memories.")
-
-    updated_content = f"Updated user profile marker: {marker}. User prefers direct status."
-    updated = retry_foundry_operation(
-        lambda: client.beta.memory_stores.update_memory(
-            name=memory_store_name,
-            memory_id=created_item_id,
-            content=updated_content,
-        )
-    )
-
-    update_poller = retry_foundry_operation(
-        lambda: client.beta.memory_stores.begin_update_memories(
-            name=memory_store_name,
-            scope=scope,
-            items=f"In project {marker}, remember that the preferred codename is greenfield.",
-            update_delay=0,
-        )
-    )
-    update_result = update_poller.result()
-
-    search = retry_foundry_operation(
-        lambda: client.beta.memory_stores.search_memories(
-            name=memory_store_name,
-            scope=scope,
-            items=f"What is the codename for {marker}?",
-            options=MemorySearchOptions(max_memories=5),
-        )
-    )
-    search_payload = model_dump(search)
-    if marker not in json.dumps(search_payload, default=str):
-        raise RuntimeError("Foundry Memory search did not return the smoke marker.")
-
-    openai_client = client.get_openai_client()
-    tools = [
-        {
-            "type": "memory_search_preview",
-            "memory_store_name": memory_store_name,
-            "scope": scope,
-            "update_delay": 0,
-        }
-    ]
-    command_items = []
-    remember_response_payload: dict[str, Any] = {}
-    for prompt in (
-        f"Remember that my Foundry Showcase smoke marker is {marker}.",
-        f"Use the memory tool to remember exactly this fact: my Foundry Showcase smoke marker is {marker}.",
-        f"Please store this in memory now: Foundry Showcase smoke marker = {marker}.",
-    ):
-        remember_response = retry_foundry_operation(
-            lambda: openai_client.responses.create(
-                model=chat_model,
-                tools=tools,
-                input=prompt,
+        created_item_id = memory_id_of(memory_item)
+        listed = []
+        for _ in range(6):
+            listed = list(
+                client.beta.memory_stores.list_memories(
+                    name=memory_store_name,
+                    scope=scope,
+                    kind="user_profile",
+                )
             )
-        )
-        remember_response_payload = model_dump(remember_response)
-        command_items = [
-            item
-            for item in getattr(remember_response, "output", [])
-            if isinstance(getattr(item, "type", None), str)
-            and getattr(item, "type").startswith("memory_command")
-            and not getattr(item, "type").endswith("_output")
-        ]
-        if command_items:
-            break
-    if not command_items:
-        raise RuntimeError(
-            "Direct remember did not produce a memory command call. "
-            f"Response output: {json.dumps(remember_response_payload, default=str)}"
-        )
+            if any(memory_id_of(item) == created_item_id for item in listed):
+                break
+            time.sleep(2)
+        if not any(memory_id_of(item) == created_item_id for item in listed):
+            raise RuntimeError(
+                "Created Foundry Memory item was not returned by list_memories."
+            )
 
-    time.sleep(1)
-    client.beta.memory_stores.delete_memory(
-        name=memory_store_name,
-        memory_id=created_item_id,
-    )
-    deleted = False
-    for _ in range(6):
-        try:
-            client.beta.memory_stores.get_memory(
+        updated_content = (
+            f"Updated user profile marker: {marker}. User prefers direct status."
+        )
+        updated = retry_foundry_operation(
+            lambda: client.beta.memory_stores.update_memory(
                 name=memory_store_name,
                 memory_id=created_item_id,
+                content=updated_content,
             )
-            time.sleep(2)
-        except ResourceNotFoundError:
-            deleted = True
-            break
-    if not deleted:
-        raise RuntimeError("Deleted Foundry Memory item is still readable.")
+        )
+
+        update_poller = retry_foundry_operation(
+            lambda: client.beta.memory_stores.begin_update_memories(
+                name=memory_store_name,
+                scope=scope,
+                items=(
+                    f"In project {marker}, remember that the preferred codename "
+                    "is greenfield."
+                ),
+                update_delay=0,
+            )
+        )
+        update_result = update_poller.result()
+
+        search = retry_foundry_operation(
+            lambda: client.beta.memory_stores.search_memories(
+                name=memory_store_name,
+                scope=scope,
+                items=f"What is the codename for {marker}?",
+                options=MemorySearchOptions(max_memories=5),
+            )
+        )
+        search_payload = model_dump(search)
+        if marker not in json.dumps(search_payload, default=str):
+            raise RuntimeError("Foundry Memory search did not return the smoke marker.")
+
+        openai_client = client.get_openai_client()
+        tools = [
+            {
+                "type": "memory_search_preview",
+                "memory_store_name": memory_store_name,
+                "scope": scope,
+                "update_delay": 0,
+            }
+        ]
+        command_items = []
+        remember_response_payload: dict[str, Any] = {}
+        for prompt in (
+            f"Remember that my Foundry Showcase smoke marker is {marker}.",
+            (
+                "Use the memory tool to remember exactly this fact: my Foundry "
+                f"Showcase smoke marker is {marker}."
+            ),
+            (
+                "Please store this in memory now: Foundry Showcase smoke marker "
+                f"= {marker}."
+            ),
+        ):
+            remember_response = retry_foundry_operation(
+                lambda: openai_client.responses.create(
+                    model=chat_model,
+                    tools=tools,
+                    input=prompt,
+                )
+            )
+            remember_response_payload = model_dump(remember_response)
+            command_items = [
+                item
+                for item in getattr(remember_response, "output", [])
+                if isinstance(getattr(item, "type", None), str)
+                and getattr(item, "type").startswith("memory_command")
+                and not getattr(item, "type").endswith("_output")
+            ]
+            if command_items:
+                break
+        if not command_items:
+            raise RuntimeError(
+                "Direct remember did not produce a memory command call. "
+                f"Response output: {json.dumps(remember_response_payload, default=str)}"
+            )
+
+        result = {
+            "memoryStore": store_info.get("name", memory_store_name),
+            "scope": scope,
+            "createdItemId": created_item_id,
+            "updatedItemContent": getattr(updated, "content", updated_content),
+            "updateOperations": model_dump(
+                getattr(update_result, "memory_operations", [])
+            ),
+            "search": search_payload,
+            "directRememberCommands": [model_dump(item) for item in command_items],
+        }
+    finally:
+        delete_scope_memories(client, memory_store_name, scope)
 
     print(
         json.dumps(
-            {
-                "memoryStore": store_info.get("name", memory_store_name),
-                "scope": scope,
-                "createdItemId": created_item_id,
-                "updatedItemContent": getattr(updated, "content", updated_content),
-                "updateOperations": model_dump(getattr(update_result, "memory_operations", [])),
-                "search": search_payload,
-                "directRememberCommands": [model_dump(item) for item in command_items],
-            },
+            result,
             indent=2,
             default=str,
         )

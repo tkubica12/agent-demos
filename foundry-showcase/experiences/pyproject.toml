@@ -1,0 +1,21 @@
+[project]
+name = "foundry-showcase-experiences"
+version = "0.1.0"
+description = "Provisioning and data scripts for inspectable Microsoft Foundry preview experiences."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "azure-ai-evaluation[redteam]",
+    "azure-ai-projects>=2.3.0",
+    "azure-identity>=1.25.0",
+    "httpx==0.28.1",
+    "matplotlib>=3.10",
+    "pillow>=11.0",
+    "reportlab>=4.4",
+    "seaborn>=0.13",
+]
+
+[tool.uv]
+prerelease = "if-necessary-or-explicit"
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]

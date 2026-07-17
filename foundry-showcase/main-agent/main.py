@@ -3,14 +3,26 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncGenerator
+import tempfile
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agent_framework import Agent, AgentSession, SkillsProvider
+from agent_framework import (
+    Agent,
+    AgentSession,
+    MCPSkillsSource,
+    Message,
+    Skill,
+    SkillsProvider,
+    SkillsSource,
+    SkillsSourceContext,
+)
 from agent_framework.foundry import FoundryChatClient
-from agent_framework_foundry_hosting import ResponsesHostServer
+from agent_framework_foundry_hosting import FoundryToolbox, ResponsesHostServer
+from azure.ai.agentserver.optimization import load_config
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
@@ -19,26 +31,21 @@ from opentelemetry.trace import Span
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from case_workflow import (
+    CaseResolutionApprovalResponse,
+    CaseResolutionRequest,
+    CaseResolutionWorkflowService,
+    MCPCaseTools,
+)
+from invoice_workflow import (
+    InvoiceProcessingRequest,
+    InvoiceProcessingWorkflowService,
+)
 from memory_store import store
 
 
 DEFAULT_MODEL_DEPLOYMENT = "gpt-5.4-mini"
 SERVICE_NAME = "foundry-showcase-main"
-DEFAULT_SKILLS_PATH = Path(__file__).parent / "skills" / "base"
-PERSONALITY_INSTRUCTIONS = (
-    "You are a support-operations assistant for the Microsoft Foundry showcase. "
-    "You are professional, calm, friendly, and concise. "
-    "Lead with the direct answer and normally stay within six sentences or five bullets. "
-    "Use plain language. Do not produce hype, promotional narration, or theatrical claims, "
-    "even when the user asks for them; offer a factual neutral version instead. "
-    "Do not imply that you can see live infrastructure, traces, memory, tenant data, "
-    "or deployment state unless those facts were supplied in the current request. "
-    "Refuse requests for unauthorized or sensitive data briefly and give the safest "
-    "practical verification path. "
-    "Distinguish verified case or policy facts from assumptions. "
-    "Never claim that a case was changed unless a tool confirms the change. "
-    "When unsure, acknowledge uncertainty briefly and suggest the next practical step."
-)
 _sessions: dict[str, AgentSession] = {}
 _telemetry_configured = False
 
@@ -46,6 +53,95 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "WARNING"))
 logger = logging.getLogger(SERVICE_NAME)
 logger.setLevel(os.getenv("APP_LOG_LEVEL", "INFO"))
 tracer = trace.get_tracer(SERVICE_NAME)
+
+
+class TrustedToolboxSkillsSource(SkillsSource):
+    def __init__(self, toolbox: FoundryToolbox) -> None:
+        self._toolbox = toolbox
+
+    async def get_skills(self, context: SkillsSourceContext) -> list[Skill]:
+        session = self._toolbox.session
+        if session is None:
+            raise RuntimeError("Foundry Toolbox must be connected before skill discovery.")
+        return await MCPSkillsSource(client=session).get_skills(context)
+
+
+class PolicyA2AService:
+    def __init__(self, toolbox: FoundryToolbox) -> None:
+        self.toolbox = toolbox
+
+    async def assess(self, policy_input: dict[str, str]) -> dict[str, Any]:
+        await self.toolbox.connect()
+        candidates = [
+            function
+            for function in self.toolbox.functions
+            if function.name == "SendMessage"
+            or function.name.endswith("___SendMessage")
+            or (function.additional_properties or {}).get("_mcp_remote_name") == "SendMessage"
+        ]
+        if len(candidates) != 1:
+            names = sorted(function.name for function in self.toolbox.functions)
+            raise RuntimeError(
+                f"Expected one A2A SendMessage function, found {len(candidates)} in {names}."
+            )
+        contents = await candidates[0].invoke(
+            arguments={
+                "message": {
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": json.dumps(policy_input, sort_keys=True),
+                        }
+                    ]
+                }
+            }
+        )
+        for content in reversed(contents):
+            text = getattr(content, "text", None)
+            if not isinstance(text, str):
+                continue
+            try:
+                task = json.loads(text)
+                parts = task["artifacts"][-1]["parts"]
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                continue
+            for part in reversed(parts):
+                if part.get("kind") != "text" or not isinstance(part.get("text"), str):
+                    continue
+                try:
+                    assessment = json.loads(part["text"])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(assessment, dict):
+                    return assessment
+        raise RuntimeError("A2A policy helper returned no structured assessment.")
+
+
+class ApprovalContinuationFoundryChatClient(FoundryChatClient):
+    """Preserve the current approval response on service-managed continuation turns."""
+
+    def _prepare_messages_for_openai(
+        self,
+        chat_messages: Sequence[Message],
+        *,
+        request_uses_service_side_storage: bool = True,
+    ) -> list[dict[str, Any]]:
+        prepared = super()._prepare_messages_for_openai(
+            chat_messages,
+            request_uses_service_side_storage=request_uses_service_side_storage,
+        )
+        if not request_uses_service_side_storage:
+            return prepared
+
+        for message in chat_messages:
+            if "_attribution" in message.additional_properties:
+                continue
+            for content in message.contents:
+                if content.type == "function_approval_response":
+                    approval_response = self._prepare_content_for_openai(message.role, content)
+                    if approval_response:
+                        prepared.append(approval_response)
+        return prepared
 
 
 def create_credential() -> DefaultAzureCredential:
@@ -134,20 +230,33 @@ def set_span_result(current_span: Span, **attributes: Any) -> None:
             current_span.set_attribute(key, value)
 
 
-def create_skills_provider() -> SkillsProvider:
-    skills_path = Path(os.getenv("LOCAL_SKILLS_PATH", str(DEFAULT_SKILLS_PATH))).resolve()
-    if not skills_path.exists():
-        raise RuntimeError(f"LOCAL_SKILLS_PATH does not exist: {skills_path}")
-    log_event("skills.local_provider_configured", skills_path=str(skills_path))
-    return SkillsProvider.from_paths(skill_paths=skills_path)
-
-
-def create_agent() -> Agent:
+def create_runtime() -> tuple[
+    Agent,
+    CaseResolutionWorkflowService,
+    InvoiceProcessingWorkflowService,
+    PolicyA2AService,
+]:
     configure_telemetry()
-    client = FoundryChatClient(
+    optimization_config = load_config()
+    if optimization_config is None:
+        raise RuntimeError("Optimizer baseline configuration could not be loaded.")
+    model = (
+        optimization_config.model
+        or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME")
+        or DEFAULT_MODEL_DEPLOYMENT
+    )
+    instructions = optimization_config.compose_instructions()
+    logger.info(
+        "Optimization config source=%s model=%s prompt_len=%d",
+        optimization_config.source,
+        model,
+        len(instructions),
+    )
+    credential = create_credential()
+    client = ApprovalContinuationFoundryChatClient(
         project_endpoint=required_env("FOUNDRY_PROJECT_ENDPOINT"),
-        model=os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", DEFAULT_MODEL_DEPLOYMENT),
-        credential=create_credential(),
+        model=model,
+        credential=credential,
     )
     memory_store_name = os.getenv("MEMORY_STORE_NAME", "foundry-showcase-main")
     memory_scope = os.getenv("MEMORY_SCOPE", "{{$userId}}")
@@ -158,8 +267,38 @@ def create_agent() -> Agent:
         scope=memory_scope,
         update_delay=memory_update_delay,
     )
-    # Agent Framework currently serializes plain dict tools for Foundry preview tools.
-    tools = [memory_tool.as_dict()]
+    toolbox = FoundryToolbox(credential)
+    toolbox.approval_mode = {
+        "always_require_approval": {
+            "case-write___apply_case_update",
+        },
+        "never_require_approval": {
+            "case-read___search_cases",
+            "case-read___get_case",
+            "case-read___propose_case_update",
+        },
+    }
+    skills_provider = SkillsProvider(
+        TrustedToolboxSkillsSource(toolbox),
+        source_id="foundry-toolbox-skills",
+        disable_load_skill_approval=True,
+        disable_read_skill_resource_approval=True,
+        disable_run_skill_script_approval=True,
+    )
+    policy_toolbox_name = os.getenv(
+        "POLICY_TOOLBOX_NAME",
+        "foundry-showcase-policy-tools",
+    )
+    policy_toolbox = FoundryToolbox(
+        credential,
+        url=(
+            f"{required_env('FOUNDRY_PROJECT_ENDPOINT').rstrip('/')}/toolboxes/"
+            f"{policy_toolbox_name}/mcp?api-version=v1"
+        ),
+        name="policy-delegation",
+    )
+    policy_service = PolicyA2AService(policy_toolbox)
+    tools = [memory_tool.as_dict(), toolbox, policy_toolbox]
     log_event(
         "memory.foundry_tool_configured",
         memory_store_name=memory_store_name,
@@ -167,29 +306,49 @@ def create_agent() -> Agent:
         memory_update_delay=memory_update_delay,
         memory_default_user_id=memory_default_user_id,
     )
+    log_event(
+        "toolbox.foundry_configured",
+        toolbox_name=os.getenv("TOOLBOX_NAME"),
+        toolbox_endpoint=os.getenv("TOOLBOX_ENDPOINT"),
+    )
+    log_event(
+        "a2a.policy_helper_configured",
+        policy_toolbox_name=policy_toolbox_name,
+        policy_toolbox_endpoint=policy_toolbox.url,
+    )
 
-    return Agent(
+    agent = Agent(
         client=client,
         name="FoundryShowcaseAgent",
-        instructions=(
-            f"{PERSONALITY_INSTRUCTIONS} "
-            "You run as the primary Foundry Hosted Agent for a support-operations "
-            "demonstration. You receive compact persistent user context before "
-            "the current user message. Use it quietly and naturally. "
-            "You also have reusable Agent Skills. Load a skill only when the "
-            "user request matches that skill's description, and read skill "
-            "resources only when the loaded skill tells you they are needed. "
-            "For profile mutations, prefer explicit profile patch operations "
-            "provided by the host API. Include correlation IDs only when "
-            "explicitly asked; otherwise answer naturally."
-        ),
+        instructions=instructions,
         tools=tools,
-        context_providers=[create_skills_provider()],
+        context_providers=[skills_provider],
         default_options={
             "store": False,
             "extra_headers": {"x-memory-user-id": memory_default_user_id},
         },
     )
+    checkpoint_dir = Path(
+        os.getenv(
+            "WORKFLOW_CHECKPOINT_DIR",
+            str(Path(tempfile.gettempdir()) / "foundry-showcase-workflows"),
+        )
+    )
+    return (
+        agent,
+        CaseResolutionWorkflowService(
+            MCPCaseTools(toolbox),
+            checkpoint_dir,
+            policy_tools=policy_service,
+        ),
+        InvoiceProcessingWorkflowService(),
+        policy_service,
+    )
+
+
+def create_agent() -> Agent:
+    agent, _, _, _ = create_runtime()
+    return agent
 
 
 def correlation_id_from(request: Request, data: dict) -> str:
@@ -289,15 +448,94 @@ def foundry_memory_options(user_id: str) -> dict[str, Any]:
     return {"extra_headers": {"x-memory-user-id": user_id}}
 
 
+def parse_invocation_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        if "action" not in value and "message" not in value and "input" in value:
+            return parse_invocation_payload(value["input"])
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {"message": value}
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("Invocation payload must be an object or a JSON object string.")
+
+
+def build_quality_digest(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    priority_counts: dict[str, int] = {}
+    owner_counts: dict[str, int] = {}
+    for case in cases:
+        priority = str(case.get("priority", "unknown"))
+        owner = str(case.get("owner", "unassigned"))
+        priority_counts[priority] = priority_counts.get(priority, 0) + 1
+        owner_counts[owner] = owner_counts.get(owner, 0) + 1
+    return {
+        "unresolvedCount": len(cases),
+        "priorityCounts": priority_counts,
+        "ownerCounts": owner_counts,
+        "cases": [
+            {
+                key: case.get(key)
+                for key in (
+                    "case_id",
+                    "title",
+                    "status",
+                    "priority",
+                    "owner",
+                    "updated_at",
+                )
+            }
+            for case in cases
+        ],
+    }
+
+
+def build_follow_up(case: dict[str, Any]) -> dict[str, Any]:
+    status = case.get("status")
+    if status == "resolved":
+        recommendation = "No follow-up is required unless the customer reports recurrence."
+    elif status == "pending_customer":
+        recommendation = "Contact the customer for the missing information and keep the case open."
+    elif status == "escalated":
+        recommendation = "Review the escalation owner and confirm the next internal checkpoint."
+    else:
+        recommendation = "Review current evidence with the owner and define the next customer update."
+    return {
+        "caseId": case.get("case_id"),
+        "status": status,
+        "priority": case.get("priority"),
+        "owner": case.get("owner"),
+        "recommendation": recommendation,
+    }
+
+
 class ResponsesAndInvocationsHost(ResponsesHostServer):
-    def __init__(self, agent: Agent) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        case_workflow: CaseResolutionWorkflowService,
+        invoice_workflow: InvoiceProcessingWorkflowService,
+        policy_delegate: PolicyA2AService,
+    ) -> None:
         super().__init__(agent)
+        self.case_workflow = case_workflow
+        self.invoice_workflow = invoice_workflow
+        self.policy_delegate = policy_delegate
         invocations = InvocationAgentServerHost()
 
         @invocations.invoke_handler
         async def handle_invoke(request: Request) -> Response:
-            data = await request.json()
+            data = parse_invocation_payload(await request.json())
             correlation_id = correlation_id_from(request, data)
+            log_event(
+                "invocation.payload_parsed",
+                correlation_id=correlation_id,
+                keys=sorted(data),
+                action=data.get("action"),
+                message_type=type(data.get("message")).__name__,
+            )
 
             with span(
                 "request.received",
@@ -329,6 +567,17 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
         stream = data.get("stream", False)
         user_id = user_id_from(request, data)
         try:
+            workflow_response = await self._handle_workflow_action(
+                data,
+                user_id=user_id,
+                correlation_id=correlation_id,
+            )
+        except (ValueError, KeyError) as exc:
+            log_event("workflow.action_invalid", correlation_id=correlation_id, error=str(exc))
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if workflow_response is not None:
+            return workflow_response
+        try:
             action_response = handle_memory_action(user_id, session_id, data)
         except (KeyError, ValueError) as exc:
             log_event("memory.action_invalid", correlation_id=correlation_id, error=str(exc))
@@ -336,6 +585,7 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
         if action_response is not None:
             return action_response
 
+        await self._ensure_agent_ready()
         user_message = data.get("message")
         if not isinstance(user_message, str) or not user_message.strip():
             log_event("request.invalid", correlation_id=correlation_id, reason="missing_message")
@@ -425,6 +675,191 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             pass
         return JSONResponse({"response": response.text, "correlationId": correlation_id})
 
+    async def _handle_workflow_action(
+        self,
+        data: dict,
+        *,
+        user_id: str,
+        correlation_id: str,
+    ) -> JSONResponse | None:
+        action = data.get("action")
+        if action == "start_case_resolution":
+            changes = data.get("changes")
+            if not isinstance(changes, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in changes.items()
+            ):
+                raise ValueError("changes must be an object with string values.")
+            with span("workflow.start", correlation_id, workflow="resolve_support_case"):
+                envelope = await self.case_workflow.start(
+                    CaseResolutionRequest(
+                        case_id=data.get("caseId", ""),
+                        changes=changes,
+                        reason=data.get("reason", ""),
+                        requested_by=data.get("requestedBy") or user_id,
+                    )
+                )
+            log_event(
+                "workflow.started",
+                correlation_id=correlation_id,
+                workflow_id=envelope.workflow_id,
+                state=envelope.state,
+            )
+            return JSONResponse(
+                {
+                    **envelope.model_dump(mode="json", exclude_none=True),
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "resume_case_resolution":
+            workflow_id = data.get("workflowId")
+            checkpoint_id = data.get("checkpointId")
+            request_id = data.get("requestId")
+            for name, value in (
+                ("workflowId", workflow_id),
+                ("checkpointId", checkpoint_id),
+                ("requestId", request_id),
+            ):
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"{name} must be a non-empty string.")
+            with span("workflow.resume", correlation_id, workflow="resolve_support_case"):
+                envelope = await self.case_workflow.resume(
+                    workflow_id=workflow_id,
+                    checkpoint_id=checkpoint_id,
+                    request_id=request_id,
+                    response=CaseResolutionApprovalResponse(
+                        approved=data.get("approved"),
+                        confirmation_id=data.get("confirmationId"),
+                        comment=data.get("comment", ""),
+                    ),
+                )
+            log_event(
+                "workflow.resumed",
+                correlation_id=correlation_id,
+                workflow_id=envelope.workflow_id,
+                state=envelope.state,
+            )
+            return JSONResponse(
+                {
+                    **envelope.model_dump(mode="json", exclude_none=True),
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "process_invoice":
+            with span("workflow.start", correlation_id, workflow="process_invoice"):
+                result = await self.invoice_workflow.process(
+                    InvoiceProcessingRequest.model_validate(
+                        {
+                            "invoice_id": data.get("invoiceId"),
+                            "vendor_id": data.get("vendorId"),
+                            "purchase_order_id": data.get("purchaseOrderId"),
+                            "currency": data.get("currency"),
+                            "line_items": data.get("lineItems"),
+                            "tax_amount": data.get("taxAmount"),
+                            "invoice_total": data.get("invoiceTotal"),
+                            "po_remaining_amount": data.get("poRemainingAmount"),
+                        }
+                    )
+                )
+            log_event(
+                "workflow.invoice_processed",
+                correlation_id=correlation_id,
+                invoice_id=result.invoice_id,
+                route=result.route,
+                status=result.status,
+            )
+            return JSONResponse(
+                {
+                    "action": action,
+                    "result": result.model_dump(mode="json", exclude_none=True),
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "assess_case_policy":
+            policy_input = data.get("policyInput")
+            if not isinstance(policy_input, dict) or not policy_input:
+                raise ValueError("policyInput must be a non-empty object.")
+            if not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in policy_input.items()
+            ):
+                raise ValueError("policyInput keys and values must be strings.")
+            with span("a2a.policy_assessment", correlation_id, worker="policy-helper"):
+                assessment = await self.policy_delegate.assess(policy_input)
+            log_event(
+                "a2a.policy_assessment_completed",
+                correlation_id=correlation_id,
+                decision=assessment.get("decision"),
+                risk=assessment.get("risk"),
+            )
+            return JSONResponse(
+                {
+                    "assessment": assessment,
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "daily_support_quality_review":
+            with span(
+                "routine.daily_support_quality_review",
+                correlation_id,
+                routine="daily-support-quality-review",
+            ):
+                cases = await self.case_workflow.tools.search_cases(limit=50)
+                unresolved = [
+                    case for case in cases if case.get("status") != "resolved"
+                ]
+                digest = build_quality_digest(unresolved)
+            log_event(
+                "routine.daily_support_quality_review_completed",
+                correlation_id=correlation_id,
+                unresolved_count=digest["unresolvedCount"],
+            )
+            return JSONResponse(
+                {
+                    "action": action,
+                    "generatedAt": datetime.now(UTC).isoformat(),
+                    "digest": digest,
+                    "correlationId": correlation_id,
+                }
+            )
+        if action == "case_follow_up_reminder":
+            case_id = data.get("caseId")
+            if not isinstance(case_id, str) or not case_id.strip():
+                raise ValueError("caseId must be a non-empty string.")
+            with span(
+                "routine.case_follow_up_reminder",
+                correlation_id,
+                routine="case-follow-up-reminder",
+                case_id=case_id,
+            ):
+                case = await self.case_workflow.tools.get_case(case_id)
+                follow_up = build_follow_up(case)
+            log_event(
+                "routine.case_follow_up_reminder_completed",
+                correlation_id=correlation_id,
+                case_id=case_id,
+            )
+            return JSONResponse(
+                {
+                    "action": action,
+                    "generatedAt": datetime.now(UTC).isoformat(),
+                    "followUp": follow_up,
+                    "correlationId": correlation_id,
+                }
+            )
+        return None
+
 
 if __name__ == "__main__":
-    ResponsesAndInvocationsHost(create_agent()).run()
+    (
+        runtime_agent,
+        runtime_workflow,
+        runtime_invoice_workflow,
+        runtime_policy_delegate,
+    ) = create_runtime()
+    ResponsesAndInvocationsHost(
+        runtime_agent,
+        runtime_workflow,
+        runtime_invoice_workflow,
+        runtime_policy_delegate,
+    ).run()
