@@ -33,6 +33,7 @@ from learning import (  # noqa: E402
     assert_legacy_state_migrated,
     begin_learning_turn,
     build_learning_status,
+    initialize_governed_state,
     reconcile_learning_turn,
     stored_learning_records,
     validate_skill_namespaces,
@@ -454,6 +455,44 @@ class HermesRuntimeTests(unittest.TestCase):
             ["skills/candidates/deadline-verification/SKILL.md"],
         )
         self.assertEqual(recovered_content, original)
+
+    def test_quarantined_cli_candidate_can_be_reconciled_with_provenance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, profile, _ = self._installed_profile(root)
+            initialize_governed_state(profile)
+            candidate = profile / "skills" / "candidates" / "meeting-decision-record" / "SKILL.md"
+            candidate.parent.mkdir(parents=True)
+            content = (
+                "---\nname: meeting-decision-record\n"
+                "description: Record complete meeting decisions.\n---\n"
+            )
+            candidate.write_text(content, encoding="utf-8")
+
+            turn = begin_learning_turn(profile)
+            self.assertFalse(candidate.exists())
+            candidate.parent.mkdir(parents=True)
+            candidate.write_text(content, encoding="utf-8")
+            result = reconcile_learning_turn(
+                profile,
+                token=turn["token"],
+                provenance=[
+                    self._provenance(
+                        "skills/candidates/meeting-decision-record"
+                    )
+                ],
+            )
+            quarantine_path = next(
+                (profile / "learning" / "quarantine").glob("unprovenanced-*.json")
+            )
+            quarantine = json.loads(quarantine_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            turn["recoveredUnprovenancedFiles"],
+            ["skills/candidates/meeting-decision-record/SKILL.md"],
+        )
+        self.assertEqual(len(result["accepted"]), 1)
+        self.assertEqual(quarantine["status"], "reconciled")
 
     def test_duplicate_provenance_without_content_change_is_skipped(self):
         with tempfile.TemporaryDirectory() as temp_dir:

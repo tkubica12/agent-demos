@@ -290,6 +290,7 @@ def _recover_unprovenanced_drift(profile_home: Path) -> list[str]:
             json.dumps(
                 {
                     "quarantineVersion": "1.0",
+                    "status": "pending",
                     "createdAt": utc_now(),
                     "changedFiles": changed,
                     "observedFiles": {
@@ -307,6 +308,44 @@ def _recover_unprovenanced_drift(profile_home: Path) -> list[str]:
         )
         _restore_governed_files(profile_home, expected)
     return changed
+
+
+def _pending_quarantine(profile_home: Path) -> tuple[list[str], list[str]]:
+    quarantine = profile_home / "learning" / "quarantine"
+    entries: list[str] = []
+    changed_files: set[str] = set()
+    if not quarantine.exists():
+        return entries, []
+    for path in sorted(quarantine.glob("unprovenanced-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if payload.get("status", "pending") != "pending":
+            continue
+        entries.append(path.relative_to(profile_home).as_posix())
+        changed_files.update(
+            value
+            for value in payload.get("changedFiles") or []
+            if isinstance(value, str)
+        )
+    return entries, sorted(changed_files)
+
+
+def _resolve_quarantine(
+    profile_home: Path,
+    entries: list[str],
+    *,
+    status: str,
+) -> None:
+    for relative in entries:
+        path = profile_home.joinpath(*PurePosixPath(relative).parts)
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["status"] = status
+        payload["resolvedAt"] = utc_now()
+        _write_json_atomic(path, payload)
 
 
 def _decoded_snapshot(snapshot: dict[str, str]) -> dict[str, bytes]:
@@ -461,12 +500,15 @@ def begin_learning_turn(profile_home: Path) -> dict[str, Any]:
         for path in pending_paths:
             _recover_pending_transaction(profile_home, path)
         recovered = _recover_unprovenanced_drift(profile_home)
+        quarantine_entries, pending_quarantine_files = _pending_quarantine(profile_home)
+        recovered = sorted(set(recovered) | set(pending_quarantine_files))
         validate_skill_namespaces(profile_home)
         payload = {
             "snapshotVersion": "1.0",
             "token": token,
             "createdAt": utc_now(),
             "files": _file_snapshot(profile_home),
+            "quarantineFiles": quarantine_entries,
         }
         path = profile_home / "learning" / "pending" / f"{token}.json"
         _write_json_atomic(path, payload)
@@ -792,6 +834,15 @@ def reconcile_learning_turn(
         _append_records_atomic(profile_home, records_to_append)
         accepted = records_to_append
     _update_governed_ledger(profile_home)
+    _resolve_quarantine(
+        profile_home,
+        [
+            value
+            for value in snapshot.get("quarantineFiles") or []
+            if isinstance(value, str)
+        ],
+        status="rejected" if rejected else "reconciled",
+    )
     pending_path.unlink()
     _release_lease(profile_home, token)
     return {

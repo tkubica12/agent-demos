@@ -213,6 +213,7 @@ The journal explains *why* behavior changed. The skill tree is the actual Worker
 4. Interrupted transactions must recover atomically without retaining malformed provenance.
 5. Asynchronous governed drift must be quarantined and restored to the last committed state.
 6. Personal Memory and Private Playbook writes remain local and do not require transferable provenance.
+7. Governed skills written directly through `hermes --cli` are not immediately provenance-bound; the next bridged turn or Dreaming run must quarantine, classify, safely recreate, and reconcile them before Collective Learning Review.
 
 ### Dreaming
 

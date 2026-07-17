@@ -172,6 +172,8 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
         labels["worker"] = config.worker_id
     if config.runtime_config_revision:
         labels["runtimeConfigRevision"] = config.runtime_config_revision
+    if config.disk_image_name:
+        labels["runtimeImage"] = config.disk_image_name
     labels.update(config.labels)
     return labels
 

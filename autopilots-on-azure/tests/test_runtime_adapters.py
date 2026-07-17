@@ -700,6 +700,101 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(maximum_active, 1)
 
+    def test_next_bridge_turn_reconciles_quarantined_cli_candidate(self):
+        calls: list[dict] = []
+        provenance = (
+            "<LEARNING_PROVENANCE_RECORDS>"
+            '[{"classification":"candidate_improvement",'
+            '"artifactPath":"skills/candidates/meeting-decision-record","action":"create",'
+            '"title":"Meeting decision record",'
+            '"generalizedLearning":"Record the decision, owner, effective date, and affected commitments.",'
+            '"rationale":"Complete decision records improve follow-through.",'
+            '"evidence":[{"sourceType":"tool_result","summary":"A direct CLI skill write was quarantined for review."}],'
+            '"confidence":0.9,"sourceStage":"operator"}]'
+            "</LEARNING_PROVENANCE_RECORDS>"
+        )
+        post_responses = [
+            (200, {"output": f"Recovered.{provenance}"}),
+            (
+                200,
+                {
+                    "output": (
+                        "Normal answer."
+                        "<LEARNING_PROVENANCE_RECORDS>[]</LEARNING_PROVENANCE_RECORDS>"
+                    )
+                },
+            ),
+        ]
+        reconciliation_responses = [
+            {
+                "accepted": [{"recordId": "lr-recovered"}],
+                "rejected": [],
+                "privatePlaybooksChanged": [],
+                "governedArtifactsChanged": ["skills/candidates/meeting-decision-record"],
+                "rolledBack": False,
+            },
+            {
+                "accepted": [],
+                "rejected": [],
+                "privatePlaybooksChanged": [],
+                "governedArtifactsChanged": [],
+                "rolledBack": False,
+            },
+        ]
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(
+                    calls,
+                    post_responses,
+                    reconciliation_response=reconciliation_responses,
+                    recovered_unprovenanced=[
+                        "skills/candidates/meeting-decision-record/SKILL.md"
+                    ],
+                    **kwargs,
+                ),
+            )
+            result = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="Continue with an ordinary task.",
+                        conversation_id="session-1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
+        session_posts = [call for call in calls if "/api/sessions/" in call["url"]]
+        self.assertEqual(len(turn_posts), 2)
+        self.assertEqual(len(session_posts), 2)
+        self.assertIn("learning/quarantine", session_posts[0]["json"]["instructions"])
+        self.assertEqual(
+            result.raw["quarantineRecovery"]["accepted"][0]["recordId"],
+            "lr-recovered",
+        )
+        self.assertEqual(result.text, "Normal answer.")
+
     def test_hermes_aborts_learning_transaction_when_model_invocation_fails(self):
         calls: list[dict] = []
 
@@ -743,7 +838,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                 os.environ["API_SERVER_KEY"] = previous
 
         abort = next(call for call in calls if call["url"].endswith("/internal/learning/abort"))
-        self.assertEqual(abort["json"], {"token": "lt-test"})
+        self.assertEqual(abort["json"], {"token": "lt-test-1"})
 
     def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
         config = openclaw_sandbox_config(
@@ -818,6 +913,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(runtime_labels(config)["roleRelease"], "3.0.0")
         self.assertEqual(runtime_labels(config)["roleReleaseCommit"], "a" * 40)
         self.assertEqual(runtime_labels(config)["worker"], "worker-1")
+        self.assertEqual(runtime_labels(config)["runtimeImage"], "hermes-api-server-image")
 
     def test_environment_config_uses_bridge_registry_credentials(self):
         previous = {key: os.environ.get(key) for key in ["AGENT_RUNTIME_REGISTRY_USERNAME", "AGENT_RUNTIME_REGISTRY_PASSWORD"]}
@@ -902,6 +998,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                             "app": "autopilots-on-azure",
                             "kind": "openclaw",
                             "identityArchitecture": "agent-federation-v1",
+                            "runtimeImage": config.disk_image_name,
                         },
                         "volumes": [{"volumeName": "openclaw-data"}],
                     },
@@ -942,6 +1039,7 @@ class FakeHermesClient:
         calls: list[dict],
         post_responses: list[tuple[int, dict]],
         reconciliation_response: dict | list[dict] | None = None,
+        recovered_unprovenanced: list[str] | None = None,
         **kwargs,
     ):
         self.calls = calls
@@ -953,6 +1051,8 @@ class FakeHermesClient:
             "governedArtifactsChanged": ["skills/candidates/action-ownership"],
             "rolledBack": False,
         }
+        self.recovered_unprovenanced = list(recovered_unprovenanced or [])
+        self.begin_count = 0
         self.kwargs = kwargs
 
     async def __aenter__(self):
@@ -999,9 +1099,18 @@ class FakeHermesClient:
     async def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
         if url.endswith("/internal/learning/turns"):
+            self.begin_count = sum(
+                1
+                for call in self.calls
+                if call["url"].endswith("/internal/learning/turns")
+            )
+            recovered = self.recovered_unprovenanced if self.begin_count == 1 else []
             return httpx.Response(
                 200,
-                json={"token": "lt-test"},
+                json={
+                    "token": f"lt-test-{self.begin_count}",
+                    "recoveredUnprovenancedFiles": recovered,
+                },
                 request=httpx.Request("POST", url),
             )
         if url.endswith("/internal/learning/reconcile"):

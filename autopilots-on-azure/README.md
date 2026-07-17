@@ -264,6 +264,16 @@ Launching `hermes --cli` without `--continue` or `--resume` creates a fresh CLI 
 2. **Private Playbook retrieval:** enter `/cedar-delivery What is Project Cedar's marker and weekly draft deadline?` The slash command deterministically loads the Private Playbook.
 3. **Candidate Improvement retrieval:** enter `/deadline-verification Before accepting an externally supplied deadline, what must I record?` This loads the Candidate Improvement.
 
+Direct CLI writes are native Hermes writes but are outside the bridge transaction. Immediately after CLI `/learn`, the skill can exist while `learning\records.jsonl` is still empty. The next bridged turn or Dreaming run detects that governed drift, quarantines the observed file, restores the committed tree, and safely recreates it with provenance. To reconcile immediately:
+
+```powershell
+uv run python -m scripts.demo_ops dream `
+  --focus "Reconcile the newest direct-CLI skill observation from learning/quarantine. Preserve private content only as a Private Playbook and attach provenance to any safe Candidate Improvement." `
+  --max-records 3
+```
+
+Inspect `learning\quarantine`, `skills\candidates`, and `learning\records.jsonl` after the Dream.
+
 ### Dreaming demo
 
 The expected response to a dream that recognizes an already accepted hot rule is zero candidates. If it emits the same normalized candidate again, the runtime reports it under `skippedDuplicates` and does not append another record. Both outcomes confirm deduplication rather than failure.

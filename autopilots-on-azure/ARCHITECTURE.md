@@ -380,6 +380,8 @@ A10 in Role Release 3 retires the generated aggregate skill and connects Hermes-
 
 Learning transactions are serialized both in the bridge and by a profile-local lease. The runtime snapshots governed skills before each turn, verifies post-turn artifacts against returned provenance, and atomically commits the journal plus governed-state ledger. Invalid or unprovenanced Role Skill and Candidate Improvement changes are rolled back. Asynchronous governed drift is quarantined for later Dreaming and restored to the last committed state.
 
+Direct `hermes --cli` sessions do not pass through the bridge transaction wrapper. A governed skill created there can exist briefly without a provenance record. At the next bridged turn or Dreaming run, the runtime detects the drift, stores the observed content under `learning/quarantine`, restores the committed skill tree, and runs a constrained recovery pass. Safe generalized content is recreated with provenance; private content becomes a Private Playbook; rejected content remains quarantined. Therefore an empty `records.jsonl` immediately after direct CLI `/learn` is expected until reconciliation occurs.
+
 Learning Packet approval is independent of the Worker. The bridge owns an Ed25519 private key and signs the exact prepared packet digest only after explicit operator approval. The Worker and central Collective Learning Review hold trusted public keys only. Worker Refresh validates the signed packet and current governed-state hash before the old Sandbox is deleted.
 
 ### Role Blueprint and Worker state boundary
