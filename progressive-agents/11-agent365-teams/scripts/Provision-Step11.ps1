@@ -397,6 +397,16 @@ try {
     }
 
     $externalBoundaries = [System.Collections.Generic.List[string]]::new()
+    $blueprintAccess = $null
+    try {
+        $blueprintAccess = & "$PSScriptRoot\Grant-Agent365BlueprintAccess.ps1" `
+            -BlueprintClientId $agent.blueprint.client_id |
+            ConvertFrom-Json
+    } catch {
+        $externalBoundaries.Add(
+            "Agent 365 blueprint ownership and Messaging Bot API consent: $($_.Exception.Message)"
+        )
+    }
     $observabilityAssignment = $null
     try {
         $observabilityAssignment = & "$PSScriptRoot\Grant-Agent365Observability.ps1" `
@@ -525,6 +535,7 @@ try {
         hostedAgentBlueprintPrincipalId = $agent.blueprint.principal_id
         hostedAgentBlueprintClientId = $agent.blueprint.client_id
         hostedAgentBlueprintReference = $agent.blueprint_reference
+        blueprintAccess = $blueprintAccess
         activityBot = $agent365Infrastructure
         observabilityAssignment = $observabilityAssignment
         publication = $publication

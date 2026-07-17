@@ -50,6 +50,26 @@ submitted title is absent.
 Teams Developer Portal backend configuration was attempted with the existing
 authenticated tenant session and returned 403 before admin activation.
 
+After blueprint approval:
+
+- `tomas@tomasonline.net` and `admin@tomasonline.net` were verified as
+  blueprint application owners.
+- `tomas@tomasonline.net` received the Agent ID Developer directory role.
+- The blueprint received the least-privilege Messaging Bot API delegated grant
+  `AgentData.ReadWrite`:
+  `BLJTnzgKqUy5HTeDEjZG2y2xswkqNrVAmA_tG0WigWo`.
+- Developer Portal was configured manually as Bot-based with blueprint client
+  ID `24caa4d2-df05-404b-b0f4-a75ae7322d6a`.
+- The tenant has four consumed `AGENT_365` subscriptions. Tomas has
+  `AGENT_365`, Microsoft 365 Copilot, and Teams Enterprise service plans.
+
+Teams-admin assignment and normal **Add** installation were tested four times.
+Each Activity reached Hosted Agent v7, but carried
+`activity.is_agentic_request=false`. The latest operation
+`9d5579869e047c1191a18aed673bd062` failed outbound Connector authorization.
+This proves the normal organization app is not an Agent 365 instance and must
+not be used as the Teams completion test.
+
 ## Identity and observability
 
 The Hosted Agent instance has:
@@ -112,9 +132,11 @@ step-11-agent365-teams/...:azd-deploy-1784265095
 
 ## Exact remaining gate
 
-An AI Administrator or Global Administrator must approve and activate title
-`T_ae0abc46-8730-8012-81c2-86837ea1df3e` in Microsoft 365 admin center. After
-that, configure the blueprint backend, create a Teams agent instance, and run
-real 1:1 plus channel-mention acceptance. Until those actions complete, step 11
-is intentionally not marked complete and the root progressive plan/readme are
-unchanged.
+Title `T_ae0abc46-8730-8012-81c2-86837ea1df3e` is approved and active. The
+user must next select **Request instance** from the **Agents for your team**
+category, an admin must approve that separate instance request, and the user
+must select **Create instance**. No supported Agent 365 CLI or Graph operation
+performs these Teams onboarding actions. Run real 1:1 and channel-mention
+acceptance only against the resulting agent user. Until those actions
+complete, step 11 is intentionally not marked complete and the root progressive
+plan/readme are unchanged.

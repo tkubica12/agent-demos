@@ -62,6 +62,7 @@ Activity path
 | `infra/agent365` | Terraform/azapi collection setting, Bot Service relay, and Teams channel. |
 | `scripts/Publish-Agent365.ps1` | Dual-protocol endpoint patch and native Foundry autopilot submission. |
 | `scripts/Grant-Agent365Observability.ps1` | Hosted Agent identity role assignment. |
+| `scripts/Grant-Agent365BlueprintAccess.ps1` | Blueprint ownership and least-privilege Messaging Bot API grant. |
 | `scripts/Get-Agent365State.ps1` | Foundry, Entra blueprint, Bot, Teams, and registry evidence. |
 | `scripts/Configure-TeamsBlueprint.ps1` | Supported Teams Developer Portal backend configuration after approval. |
 | `scripts/Provision-Step11.ps1` | No-argument classroom provisioning, validation, publication, and evidence flow. |
@@ -127,12 +128,14 @@ With no existing azd environment, the script creates
    rollback;
 5. enables Foundry Agent 365 collection;
 6. provisions the native Bot Service relay and Teams channel;
-7. grants Agent 365 observability to the Hosted Agent identity;
-8. patches the endpoint to retain Responses plus Activity and submits the
+7. grants the operator blueprint ownership and `AgentData.ReadWrite` on the
+   Messaging Bot API;
+8. grants Agent 365 observability to the Hosted Agent identity;
+9. patches the endpoint to retain Responses plus Activity and submits the
    tenant-scoped autopilot request;
-9. attempts supported Teams blueprint configuration and registry reads;
-10. runs deployed behavior and model-judged evaluations; and
-11. writes `evidence\deployment.json`, then exits nonzero if a real external
+10. attempts supported Teams blueprint configuration and registry reads;
+11. runs deployed behavior and model-judged evaluations; and
+12. writes `evidence\deployment.json`, then exits nonzero if a real external
     approval, license, consent, or client boundary remains.
 
 No failure is converted into a successful Teams result.
@@ -160,6 +163,24 @@ In Teams, create an agent instance from **Apps > Agents for your team**. Validat
 These are manual acceptance steps because no supported CLI/API creates the
 Teams agent instance or sends an interactive user chat before approval.
 
+Instance onboarding has two distinct approval stages:
+
+1. Open **Teams desktop > Apps** and select the **Agents for your team**
+   category. Do not install the similarly named organization app from normal
+   app search.
+2. Open the agent template. The correct button is **Request instance**, not
+   **Add** or **Open**.
+3. An admin approves the instance request at
+   `https://admin.cloud.microsoft/#/agents/all/requested`.
+4. Return to the same template and select **Create instance**.
+5. Give the agent a name without spaces or special characters, select an
+   allowed domain, and save.
+6. Wait for the new agent user to contact its supervisor in Teams, then test
+   that new chat.
+
+An **Add/Open** chat is a classic organization-app installation. Its Activity
+has `activity.is_agentic_request=false` and is not evidence for this step.
+
 ## Cleanup
 
 ```powershell
@@ -173,12 +194,14 @@ the script does not pretend to remove a title it cannot query.
 ## Current deployed boundary
 
 The live deployment and autopilot submission succeeded. Foundry reports Agent
-365 enabled and the observability role is assigned. Microsoft 365 Package
-Management reads are denied because the available first-party CLI clients lack
-the required preauthorized `CopilotPackages.Read.All` token, and Teams
-Developer Portal backend configuration returns 403 before admin activation.
-Consequently, 1:1 chat, channel mention, and Activity-export trace validation
-are not claimed complete. See `DEPLOYMENT_EVIDENCE.md`.
+365 enabled and the observability role is assigned. Tenant and test user both
+have `AGENT_365`; the test user also has Microsoft 365 Copilot and Teams.
+Microsoft 365 Package Management reads remain denied because the available
+first-party CLI clients lack the required preauthorized
+`CopilotPackages.Read.All` token. A classic **Add** installation was proven to
+reach the Hosted Agent but cannot send replies and is not the Agent 365
+instance flow. Consequently, 1:1 chat, channel mention, and Activity-export
+trace validation are not claimed complete. See `DEPLOYMENT_EVIDENCE.md`.
 
 ## Next capability
 
