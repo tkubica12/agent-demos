@@ -264,13 +264,12 @@ def create_app(
                     current.set_attribute("correlation.id", correlation_id)
                     current.set_attribute("user.tenant_id", user.tenant_id)
                     async with app.state.client_factory() as client:
-                        async with client.stream(
-                            "POST",
+                        response = await client.post(
                             target,
                             headers=headers,
                             json={
                                 "message": message,
-                                "stream": True,
+                                "stream": False,
                                 "threadId": thread_id,
                                 "runId": run_id,
                                 "user": {
@@ -280,23 +279,25 @@ def create_app(
                                     "authSource": user.source,
                                 },
                             },
-                        ) as response:
-                            if response.status_code >= 400:
-                                body = await response.aread()
-                                raise RuntimeError(
-                                    f"Foundry invocation failed with status "
-                                    f"{response.status_code}: "
-                                    f"{body.decode('utf-8', errors='replace')}"
-                                )
-                            async for chunk in response.aiter_text():
-                                if chunk:
-                                    yield sse(
-                                        {
-                                            "type": "TEXT_MESSAGE_CONTENT",
-                                            "messageId": message_id,
-                                            "delta": chunk,
-                                        }
-                                    )
+                        )
+                        if response.status_code >= 400:
+                            raise RuntimeError(
+                                f"Foundry invocation failed with status "
+                                f"{response.status_code}: {response.text}"
+                            )
+                        foundry_payload = response.json()
+                        assistant_text = foundry_payload.get("response")
+                        if not isinstance(assistant_text, str):
+                            raise RuntimeError(
+                                "Foundry invocation response is missing text."
+                            )
+                        yield sse(
+                            {
+                                "type": "TEXT_MESSAGE_CONTENT",
+                                "messageId": message_id,
+                                "delta": assistant_text,
+                            }
+                        )
             except Exception as exc:
                 yield sse(
                     {

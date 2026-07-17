@@ -38,9 +38,13 @@ def test_agui_streams_foundry_text(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(app, "foundry_headers", fake_headers)
-    transport = httpx.MockTransport(
-        lambda request: httpx.Response(200, text="hello from Foundry")
-    )
+    def foundry_handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is False
+        assert payload["message"] == "hello"
+        return httpx.Response(200, json={"response": "hello from Foundry"})
+
+    transport = httpx.MockTransport(foundry_handler)
     application = app.create_app(
         client_factory=lambda: httpx.AsyncClient(transport=transport)
     )

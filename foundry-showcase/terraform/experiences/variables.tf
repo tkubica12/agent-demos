@@ -14,6 +14,12 @@ variable "location" {
   default     = "swedencentral"
 }
 
+variable "task_adherence_location" {
+  type        = string
+  description = "Azure Content Safety region used by the Task Adherence preview."
+  default     = "eastus"
+}
+
 variable "foundry_account_id" {
   type        = string
   description = "Resource ID of the existing Microsoft Foundry account."
@@ -23,6 +29,12 @@ variable "foundry_account_name" {
   type        = string
   description = "Name of the existing Microsoft Foundry account."
   default     = "tomaskubica-foundry-resource"
+}
+
+variable "foundry_project_name" {
+  type        = string
+  description = "Name of the Microsoft Foundry project connected to observability."
+  default     = "tomaskubica-foundry-project"
 }
 
 variable "foundry_resource_group_name" {
@@ -41,14 +53,10 @@ variable "portal_user_object_id" {
   description = "Object ID of the user who inspects traces and portal demonstrations."
 }
 
-variable "application_insights_id" {
+variable "evaluation_alert_email" {
   type        = string
-  description = "Resource ID of the Application Insights component connected to Foundry."
-}
-
-variable "log_analytics_workspace_id" {
-  type        = string
-  description = "Resource ID of the Log Analytics workspace linked to Application Insights."
+  description = "Email receiver for continuous evaluation score alerts."
+  default     = "tomas@tomasonline.net"
 }
 
 variable "guardrail_model_name" {

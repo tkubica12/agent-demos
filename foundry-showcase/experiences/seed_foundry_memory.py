@@ -33,6 +33,23 @@ CONVERSATIONS = (
     ),
 )
 
+PROCEDURAL_MEMORIES = (
+    {
+        "applicable_to": "Reporting whether a Foundry showcase deployment is complete.",
+        "instruction": (
+            "Verify live deployment evidence before reporting the demo as complete, "
+            "and state unsupported preview behavior explicitly."
+        ),
+    },
+    {
+        "applicable_to": "Applying a governed support-case write.",
+        "instruction": (
+            "Create a noncommitted proposal first and require explicit human "
+            "confirmation before applying the change."
+        ),
+    },
+)
+
 
 def dump(value: Any) -> Any:
     if hasattr(value, "as_dict"):
@@ -51,7 +68,7 @@ def main() -> None:
     parser.add_argument("--store-name", default="foundry-showcase-main")
     parser.add_argument("--scope", default=os.getenv("MEMORY_SCOPE"))
     parser.add_argument("--owner", default=MEMORY_OWNER)
-    parser.add_argument("--model", default="gpt-5.4-mini")
+    parser.add_argument("--replace", action="store_true")
     args = parser.parse_args()
     if not args.project_endpoint:
         parser.error("--project-endpoint or FOUNDRY_PROJECT_ENDPOINT is required.")
@@ -61,11 +78,17 @@ def main() -> None:
             "to match the deployed AG-UI identity."
         )
 
+    credential = DefaultAzureCredential(process_timeout=60)
     client = AIProjectClient(
         endpoint=args.project_endpoint,
-        credential=DefaultAzureCredential(),
+        credential=credential,
         allow_preview=True,
     )
+    if args.replace:
+        client.beta.memory_stores.delete_scope(
+            name=args.store_name,
+            scope=args.scope,
+        )
     existing = list(
         client.beta.memory_stores.list_memories(
             name=args.store_name,
@@ -103,32 +126,19 @@ def main() -> None:
             ).result()
             extraction_operations.extend(getattr(result, "memory_operations", []))
 
-    procedural_prompts = (
-        "Remember this procedure: always verify live deployment evidence before reporting a Foundry demo as complete.",
-        "Remember this procedure: for governed writes, create a proposal first and require explicit human confirmation before applying it.",
-    )
-    response_commands = []
-    if not has_chat_summaries:
-        openai_client = client.get_openai_client()
-        for prompt in procedural_prompts:
-            response = openai_client.responses.create(
-                model=args.model,
-                tools=[
-                    {
-                        "type": "memory_search_preview",
-                        "memory_store_name": args.store_name,
-                        "scope": args.scope,
-                        "update_delay": 0,
-                    }
-                ],
-                input=prompt,
+    created_procedures = []
+    for procedure in PROCEDURAL_MEMORIES:
+        content = json.dumps(procedure, separators=(",", ":"))
+        if content in existing_content:
+            continue
+        created_procedures.append(
+            client.beta.memory_stores.create_memory(
+                name=args.store_name,
+                scope=args.scope,
+                content=content,
+                kind="procedural",
             )
-            response_commands.extend(
-                item
-                for item in getattr(response, "output", [])
-                if str(getattr(item, "type", "")).startswith("memory_command")
-                and not str(getattr(item, "type", "")).endswith("_output")
-            )
+        )
 
     listed = list(
         client.beta.memory_stores.list_memories(
@@ -150,7 +160,7 @@ def main() -> None:
                 "owner": args.owner,
                 "createdProfiles": dump(created_profiles),
                 "extractionOperations": dump(extraction_operations),
-                "proceduralCommands": dump(response_commands),
+                "createdProcedures": dump(created_procedures),
                 "memoryCount": len(listed),
                 "kinds": sorted(
                     {
@@ -164,6 +174,8 @@ def main() -> None:
             default=str,
         )
     )
+    client.close()
+    credential.close()
 
 
 if __name__ == "__main__":

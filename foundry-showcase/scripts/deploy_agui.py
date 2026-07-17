@@ -122,7 +122,17 @@ def main() -> int:
     parser.add_argument("--foundry-project-name", required=True)
     parser.add_argument(
         "--application-insights-name",
-        default="step06-foundry-observability-evals-ai",
+        help=(
+            "Application Insights component name. Defaults to the Foundry project's "
+            "single AppInsights connection."
+        ),
+    )
+    parser.add_argument(
+        "--application-insights-resource-group",
+        help=(
+            "Resource group containing an explicitly named Application Insights "
+            "component. Defaults to --foundry-resource-group."
+        ),
     )
     parser.add_argument("--auto-approve", action="store_true")
     args = parser.parse_args()
@@ -155,6 +165,46 @@ def main() -> int:
         f"{args.foundry_resource_group}/providers/Microsoft.CognitiveServices/"
         f"accounts/{args.foundry_account_name}/projects/{args.foundry_project_name}"
     )
+    application_insights_name = args.application_insights_name
+    application_insights_resource_group = (
+        args.application_insights_resource_group or args.foundry_resource_group
+    )
+    if application_insights_name is None:
+        connections = run_json(
+            [
+                "az",
+                "rest",
+                "--method",
+                "get",
+                "--url",
+                (
+                    f"https://management.azure.com{foundry_project_id}/connections"
+                    "?api-version=2025-04-01-preview"
+                ),
+            ]
+        )
+        app_insights_connections = [
+            connection
+            for connection in connections.get("value", [])
+            if connection.get("properties", {}).get("category") == "AppInsights"
+        ]
+        if len(app_insights_connections) != 1:
+            raise RuntimeError(
+                "Expected one Foundry project AppInsights connection, found "
+                f"{len(app_insights_connections)}."
+            )
+        target = app_insights_connections[0].get("properties", {}).get("target")
+        if not target:
+            raise RuntimeError("The Foundry AppInsights connection has no target.")
+        target_parts = target.strip("/").split("/")
+        try:
+            resource_group_index = target_parts.index("resourceGroups") + 1
+            application_insights_resource_group = target_parts[resource_group_index]
+        except (ValueError, IndexError) as exc:
+            raise RuntimeError(
+                f"Cannot resolve the AppInsights resource group from target {target}."
+            ) from exc
+        application_insights_name = target_parts[-1]
     role = run_json(
         [
             "az",
@@ -177,9 +227,9 @@ def main() -> int:
             "component",
             "show",
             "--app",
-            args.application_insights_name,
+            application_insights_name,
             "--resource-group",
-            args.foundry_resource_group,
+            application_insights_resource_group,
         ]
     )["connectionString"]
 
