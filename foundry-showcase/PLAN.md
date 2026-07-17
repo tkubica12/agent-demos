@@ -13,9 +13,9 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 
 ## Implementation status
 
-Phases 1 through 3 and the Routines and AG-UI portions of Phase 4 are deployed and live-validated:
+All implementation that can be completed without tenant-admin action is deployed and live-validated:
 
-- active Hosted Agent `foundry-showcase-main`, version 22;
+- active Hosted Agent `foundry-showcase-main`, version 26, with all obsolete versions removed;
 - active LangGraph Hosted Agent `foundry-showcase-policy-helper`, version 2;
 - Responses `2.0.0` and Invocations `1.0.0`;
 - Foundry Toolbox `foundry-showcase-support`, default version 2;
@@ -26,10 +26,10 @@ Phases 1 through 3 and the Routines and AG-UI portions of Phase 4 are deployed a
 - read tools and proposal creation without approval;
 - write approval request, pre-approval blocking, successful continuation, single apply, and audit behavior;
 - OpenTelemetry and Application Insights wiring;
-- 12/12 local MCP tests and 17/17 main-agent tests;
+- 10/10 local MCP tests, 17/17 main-agent tests, 4/4 helper tests, and 3/3 AG-UI tests;
 - deployed Responses read, skill, memory, proposal, approval, write, and restore validation;
 - deployed structured Invocations read validation;
-- Foundry evaluation `evalrun_00182e08a0f84a2caf02aeabd3375edb`: 15/15.
+- promoted-version evaluation `evalrun_ee8329679c7340d2a95047229a347878`: 30 cases, with 23 domain-rubric, 17 task-adherence, and 12 intent-resolution passes; two cases retain upstream Hosted Agent content-filter enum failures;
 - checkpointed MAF case-resolution workflow with deterministic risk branching and restoration;
 - authenticated RemoteA2A project connection and policy-delegation Toolbox;
 - exact policy delegation from the workflow and structured Invocations;
@@ -39,12 +39,17 @@ Phases 1 through 3 and the Routines and AG-UI portions of Phase 4 are deployed a
 - Entra-authenticated AG-UI web client and thin Container Apps BFF;
 - secretless managed-identity federation and OBO exchange for delegated Foundry access;
 - authenticated AG-UI smoke response `AG-UI showcase ready`.
+- Agent 365 Activity endpoint, Bot Service Teams channel, AgentData permission grant, and publication `1.0.1`;
+- bounded optimizer operation `opt_8e32d2e5f7344b2ab65c2689acd5e9ea`: baseline `0.5259027`, candidate `0.512111`, baseline retained;
+- final multi-protocol canary and promotion as version 26;
+- Application Insights operational metric export for latency, reliability, token use, and helper-call rate;
+- cloud AI red-team run `evalrun_d78033e5c5a746c1a238ad23d7ad79dc` with a reviewed taxonomy and real tool descriptions.
 
 The current Agent Framework/OpenAI client drops approval responses on service-managed continuation turns. `ApprovalContinuationFoundryChatClient` restores only the current response while continuing to suppress replayed approval history. The override is unit-tested and should be removed when the upstream package includes the fix.
 
 Hosted Toolbox token acquisition uses the Hosted Agent version's instance identity, not its Agent Identity Blueprint. Toolbox approval mappings use the composite names exposed by Foundry, such as `case-write___apply_case_update`.
 
-Agent 365 and Teams remain in Phase 4. Expanded evaluations, optimizer candidate review, red teaming, canary, and final promotion remain in Phase 5.
+Tenant-admin approval is the only remaining Phase 4 dependency before Agent 365 registry, Agent User, and Teams interaction can be validated. Phase 5 is complete with two upstream preview limitations: two evaluation requests fail with `'ContentFiltered' is not a valid ContentFilterCodes`, and the cloud red-team run reports completion with zero attack items and no service error. The repository retains both operational failures and deterministic tests for the real MCP, identity, confirmation, and policy boundaries rather than substituting easier prompts or simulated platform behavior.
 
 ## Demo story
 
@@ -163,10 +168,10 @@ The primary MAF agent calls it through a Foundry A2A project connection and reta
 | Routines | Recurring daily support-quality review and one-time follow-up example. |
 | Observability | End-to-end traces across BFF, main agent, workflow nodes, MCP, memory, and A2A helper. |
 | Evaluations | Golden datasets, generated suites, built-in and custom evaluators, and trace evaluation. |
-| Optimization | Foundry Agent Optimizer compares instruction, skill, tool-description, and model candidates. |
-| Red teaming | Foundry AI Red Teaming Agent scans the main Hosted Agent in a safe test environment. |
+| Optimization | Foundry Agent Optimizer reviewed an instruction candidate; its regression was rejected and the baseline was promoted. |
+| Red teaming | Foundry AI Red Teaming Agent receives a reviewed prohibited-action taxonomy; the preview service currently completes without emitting attack items. |
 | Versioning | Baseline, candidate, canary, and promoted Hosted Agent versions. |
-| Agent 365 | Registry, identity governance, observability, autopilot publication, and Teams surface. |
+| Agent 365 | Identity governance, Activity bridge, Bot Service, Teams channel, and autopilot publication are deployed; tenant approval remains external. |
 
 ## Tools and Toolbox
 
@@ -372,6 +377,8 @@ Current platform constraints must shape the test:
 
 Where a full live-tool red-team path is unsupported, test the core Hosted Agent with supported synthetic tools and separately run deterministic policy tests against the real MCP contracts.
 
+The version 26 cloud run used seven enabled prohibited-action categories, direct and indirect attack strategies, and descriptions of the real case, memory, and A2A tools. The service completed with zero output items and no error. This is recorded as a preview-service limitation; no success-shaped fallback or synthetic tool surface was added.
+
 ## Infrastructure and repository shape
 
 Proposed structure:
@@ -420,20 +427,20 @@ Use Terraform with `azapi` for Azure resources and `azd` for Hosted Agent packag
 - enable A2A and project connection;
 - validate delegation, state, confirmation, and trace correlation.
 
-### Phase 4: Routines and user surfaces — in progress
+### Phase 4: Routines and user surfaces — external approval pending
 
 - create recurring and one-time Routines — complete;
 - deploy the thin AG-UI BFF — complete;
-- publish the main agent to Agent 365 and Teams;
-- validate direct, web, scheduled, and Teams paths — direct, web, and scheduled complete.
+- publish the main agent to Agent 365 and Teams — publication submitted;
+- validate direct, web, scheduled, and Teams paths — direct, web, scheduled, Activity configuration, and Teams channel complete; tenant approval blocks Teams conversation validation.
 
-### Phase 5: Quality, optimization, and safety — pending
+### Phase 5: Quality, optimization, and safety — complete with preview limitations
 
-- finalize golden datasets and evaluators;
-- run direct and trace evaluations;
-- run Agent Optimizer and review candidates;
-- run AI Red Teaming Agent scans;
-- canary and promote the best approved version.
+- finalized a 30-case generated dataset and three pinned evaluators;
+- ran direct quality evaluation and exported trace metrics; two cases retain upstream Hosted Agent content-filter enum failures;
+- ran Agent Optimizer, rejected the regressing candidate, and retained the baseline;
+- submitted reviewed AI Red Teaming Agent scans; the preview service emitted zero items;
+- canary-tested and promoted the baseline winner as immutable version 26.
 
 ## Completion criteria
 
@@ -447,10 +454,12 @@ The showcase is complete when:
 6. both Routine types run and have inspectable history and traces;
 7. end-to-end traces connect ingress, memory, tools, workflow, and helper;
 8. evaluation results compare immutable versions reproducibly;
-9. an optimizer candidate is reviewed, deployed, and canary-tested without automatic promotion;
+9. optimizer candidates are reviewed and only an approved winner is deployed and canary-tested without automatic promotion;
 10. red-team findings and mitigations are documented;
 11. Agent 365 registration, governance, and Teams interaction are validated;
 12. no classic bot fallback, stored secret, simulated platform feature, or Autopilots runtime code is present.
+
+Criteria 2 through 9 and 12 are satisfied. Criteria 1 and 11 await tenant-admin approval for Agent 365 and Teams. Criterion 10 has reproducible cloud-run evidence, but effective Attack Success Rate review is blocked by the preview service returning zero items; deterministic real-boundary safety tests pass.
 
 ## Research conclusions
 

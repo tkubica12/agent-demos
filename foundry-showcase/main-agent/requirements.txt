@@ -1,6 +1,7 @@
 agent-framework-core>=1.2.2
 agent-framework-foundry>=1.2.2
 agent-framework-foundry-hosting
+azure-ai-agentserver-optimization>=1.0.0b1
 azure-ai-evaluation
 azure-ai-projects>=2.3.0
 azure-identity>=1.25.0

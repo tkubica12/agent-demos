@@ -9,12 +9,12 @@ This project demonstrates Microsoft Foundry agent capabilities through one inspe
 | 1. Hosted baseline | Complete | Hosted Agent, Responses, Invocations, Foundry Memory, telemetry |
 | 2. Governed tools and skills | Complete | Toolbox v2, three published skills, Entra-protected case MCP, private Table Storage, approval round trip |
 | 3. Workflow and A2A | Complete | MAF checkpointed workflow, LangGraph Hosted Agent v2, authenticated A2A Toolbox delegation, correlated traces |
-| 4. Routines and surfaces | In progress | Recurring and one-time Routines plus secretless Entra/OBO AG-UI are live; Agent 365 and Teams remain |
-| 5. Quality and safety | Partial | Baseline evaluation is live; optimizer review, red teaming, canary, and final promotion remain pending |
+| 4. Routines and surfaces | External approval pending | Routines, secretless Entra/OBO AG-UI, Activity bridge, Teams channel, and Agent 365 publication are live; tenant approval blocks registry and Teams validation |
+| 5. Quality and safety | Complete with preview limitations | 30-case evaluation, optimizer review, baseline promotion, trace metrics, and cloud red-team submission are complete; two Hosted Agent requests hit a content-filter enum defect and the red-team service returned zero attack items |
 
 Current immutable assets:
 
-- Hosted Agent `foundry-showcase-main`, active version 22;
+- Hosted Agent `foundry-showcase-main`, active and only retained version 26;
 - Hosted Agent `foundry-showcase-policy-helper`, active version 2;
 - Toolbox `foundry-showcase-support`, default version 2;
 - Toolbox `foundry-showcase-policy-tools`, default version 1;
@@ -22,7 +22,9 @@ Current immutable assets:
 - case MCP `ca-foundry-showcase-case-mcp` in North Europe;
 - private case data in Azure Table Storage in Sweden Central;
 - AG-UI BFF `ca-foundry-showcase-agui`, revision `ca-foundry-showcase-agui--0000005`;
-- weekday `daily-support-quality-review` Routine and disabled completed one-time `case-follow-up-reminder`.
+- weekday `daily-support-quality-review` Routine and disabled completed one-time `case-follow-up-reminder`;
+- Bot Service and Teams channel `foundry-showcase-main-bot-si4ons`;
+- Agent 365 publication `1.0.1`, submitted as title `T_8d26edfe-1e4d-76f9-a67c-884535f3e1de`.
 
 ## Architecture today
 
@@ -33,7 +35,7 @@ Responses / structured Invocations     AG-UI browser
                 |                           |
                 +-------------+-------------+
                               |
-                     MAF Hosted Agent v22
+                     MAF Hosted Agent v26
                  /             |                 \
         Foundry Memory  Support Toolbox v2   Policy Toolbox v1
                               |                 |
@@ -42,6 +44,7 @@ Responses / structured Invocations     AG-UI browser
                       private Table       LangGraph helper v2
 
 Foundry Routines ---------> structured Invocations
+Agent 365 / Teams --------> Activity bridge (tenant approval pending)
 ```
 
 Toolbox reads and proposal creation do not require approval. `case-write___apply_case_update` always requires the Responses approval exchange. Live validation proved that the write does not run before approval, resumes from `previous_response_id`, updates Table Storage once, and can be restored through a second approved write.
@@ -117,6 +120,18 @@ uv run --project foundry-showcase\bff python foundry-showcase\scripts\deploy_agu
   --auto-approve
 ```
 
+Configure the Activity bridge, Bot Service Teams channel, Agent 365 permissions, and publication request:
+
+```powershell
+uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\configure_agent365.py `
+  --project-endpoint $projectEndpoint `
+  --agent-version 26 `
+  --foundry-account-name "<foundry-account-name>" `
+  --foundry-project-name "<foundry-project-name>" `
+  --publish-version 1.0.1 `
+  --auto-approve
+```
+
 ## Validate
 
 ```powershell
@@ -145,13 +160,13 @@ Pop-Location
 
 azd ai agent invoke foundry-showcase-main `
   "Use the case tools to get CASE-1001." `
-  --version 22 `
+  --version 26 `
   --protocol responses `
   --new-session `
   -C foundry-showcase
 
 azd ai agent invoke foundry-showcase-main `
-  --version 22 `
+  --version 26 `
   --protocol invocations `
   --input-file foundry-showcase\main-agent\smoke-invocation.json `
   --new-session `
@@ -159,12 +174,14 @@ azd ai agent invoke foundry-showcase-main `
 
 azd ai agent eval run `
   --config eval.yaml `
-  --name foundry-showcase-v9-phase2 `
+  --name foundry-showcase-v26-phase5-final `
   --no-prompt `
   -C foundry-showcase\main-agent
 ```
 
-The current regression is 17/17 main-agent tests, 4/4 helper tests, 3/3 AG-UI tests, the existing 12/12 MCP regression, and 15/15 rows in Foundry evaluation run `evalrun_00182e08a0f84a2caf02aeabd3375edb`.
+The current regression is 17/17 main-agent tests, 4/4 helper tests, 3/3 AG-UI tests, and 10/10 MCP tests. Final evaluation run `evalrun_ee8329679c7340d2a95047229a347878` evaluated 30 cases against version 26: the domain rubric passed 23, failed 5, and errored 2; task adherence passed 17, failed 10, and errored 3; intent resolution passed 12, failed 15, and errored 3. The aggregate result was 10 passed, 18 failed, and 2 errored. The bounded optimizer run `opt_8e32d2e5f7344b2ab65c2689acd5e9ea` scored the baseline at `0.5259027` and its candidate at `0.512111`; the baseline correctly remained the promoted version.
+
+Application Insights metrics for the final validation window recorded 57 model calls, 1.75% model-call failures, p50/p95 model latency of 2.13/3.64 seconds, 47 agent requests, and 29 helper calls across 7 operations. Cost remains unset because the Azure Retail Prices API does not publish the contracted regional `gpt-5.4-mini` rate.
 
 ## Known constraints
 
@@ -175,7 +192,10 @@ The current regression is 17/17 main-agent tests, 4/4 helper tests, 3/3 AG-UI te
 - The current upstream client drops approval responses during service-managed continuation. The main agent contains a tested narrow override until the package fixes that behavior.
 - The AG-UI BFF uses its managed identity as a federated client assertion for a secretless OBO exchange, so Foundry and the internal `UserEntraToken` A2A connection receive the signed-in user context.
 - Non-fatal hosted logs can report duplicate telemetry instrumentation and unavailable optional `agents` instrumentation.
-- Agent 365/Teams and Phase 5 remain; the showcase does not yet meet the completion criteria in [PLAN.md](PLAN.md).
+- Agent Optimizer supports Responses targets but rejects agents that also expose Invocations. Version 25 temporarily isolated Responses for the optimizer run; it was deleted after the unchanged baseline was promoted as multi-protocol version 26.
+- Evaluation cases 20 and 28 fail before producing a response because the Hosted Agent service raises `'ContentFiltered' is not a valid ContentFilterCodes`. The final dataset and run retain these as explicit operational failures rather than replacing them with easier prompts or synthetic responses.
+- Cloud red-team run `evalrun_d78033e5c5a746c1a238ad23d7ad79dc` completed against version 26 with seven reviewed prohibited-action categories and real tool descriptions, but the preview service emitted zero attack items and no error. Deterministic tool, confirmation, identity, and policy tests remain the effective safety evidence until the service produces attack output.
+- Agent 365 publication is submitted and the Activity/Teams infrastructure is deployed. Tenant-admin approval at `https://admin.cloud.microsoft/?#/agents/all/requested` is the only blocker to registry, Agent User, and Teams interaction validation.
 
 ## Design constraints
 

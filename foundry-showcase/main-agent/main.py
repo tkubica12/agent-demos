@@ -22,6 +22,7 @@ from agent_framework import (
 )
 from agent_framework.foundry import FoundryChatClient
 from agent_framework_foundry_hosting import FoundryToolbox, ResponsesHostServer
+from azure.ai.agentserver.optimization import load_config
 from azure.ai.agentserver.invocations import InvocationAgentServerHost
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
@@ -41,20 +42,6 @@ from memory_store import store
 
 DEFAULT_MODEL_DEPLOYMENT = "gpt-5.4-mini"
 SERVICE_NAME = "foundry-showcase-main"
-PERSONALITY_INSTRUCTIONS = (
-    "You are a support-operations assistant for the Microsoft Foundry showcase. "
-    "You are professional, calm, friendly, and concise. "
-    "Lead with the direct answer and normally stay within six sentences or five bullets. "
-    "Use plain language. Do not produce hype, promotional narration, or theatrical claims, "
-    "even when the user asks for them; offer a factual neutral version instead. "
-    "Do not imply that you can see live infrastructure, traces, memory, tenant data, "
-    "or deployment state unless those facts were supplied in the current request. "
-    "Refuse requests for unauthorized or sensitive data briefly and give the safest "
-    "practical verification path. "
-    "Distinguish verified case or policy facts from assumptions. "
-    "Never claim that a case was changed unless a tool confirms the change. "
-    "When unsure, acknowledge uncertainty briefly and suggest the next practical step."
-)
 _sessions: dict[str, AgentSession] = {}
 _telemetry_configured = False
 
@@ -241,10 +228,25 @@ def set_span_result(current_span: Span, **attributes: Any) -> None:
 
 def create_runtime() -> tuple[Agent, CaseResolutionWorkflowService, PolicyA2AService]:
     configure_telemetry()
+    optimization_config = load_config()
+    if optimization_config is None:
+        raise RuntimeError("Optimizer baseline configuration could not be loaded.")
+    model = (
+        optimization_config.model
+        or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME")
+        or DEFAULT_MODEL_DEPLOYMENT
+    )
+    instructions = optimization_config.compose_instructions()
+    logger.info(
+        "Optimization config source=%s model=%s prompt_len=%d",
+        optimization_config.source,
+        model,
+        len(instructions),
+    )
     credential = create_credential()
     client = ApprovalContinuationFoundryChatClient(
         project_endpoint=required_env("FOUNDRY_PROJECT_ENDPOINT"),
-        model=os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", DEFAULT_MODEL_DEPLOYMENT),
+        model=model,
         credential=credential,
     )
     memory_store_name = os.getenv("MEMORY_STORE_NAME", "foundry-showcase-main")
@@ -309,26 +311,7 @@ def create_runtime() -> tuple[Agent, CaseResolutionWorkflowService, PolicyA2ASer
     agent = Agent(
         client=client,
         name="FoundryShowcaseAgent",
-        instructions=(
-            f"{PERSONALITY_INSTRUCTIONS} "
-            "You run as the primary Foundry Hosted Agent for a support-operations "
-            "demonstration. You receive compact persistent user context before "
-            "the current user message. Use it quietly and naturally. "
-            "You also have reusable Agent Skills. Load a skill only when the "
-            "user request matches that skill's description, and read skill "
-            "resources only when the loaded skill tells you they are needed. "
-            "Use the case-read tools to inspect cases and create noncommitted "
-            "update proposals. The case-write.apply_case_update tool is a "
-            "high-impact action and must run only after the client completes "
-            "the explicit Agent Framework approval exchange. "
-            "Delegate support-case policy contradiction and risk checks to the "
-            "read-only A2A policy helper before recommending high-impact updates. "
-            "Never ask the policy helper to mutate a case, and identify its output "
-            "as an advisory policy assessment rather than a completed write. "
-            "For profile mutations, prefer explicit profile patch operations "
-            "provided by the host API. Include correlation IDs only when "
-            "explicitly asked; otherwise answer naturally."
-        ),
+        instructions=instructions,
         tools=tools,
         context_providers=[skills_provider],
         default_options={
