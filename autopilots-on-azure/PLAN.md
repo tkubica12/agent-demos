@@ -17,7 +17,8 @@ As of 2026-07-16:
 - Worker Refresh to 3.1.0 is complete; promoted deadline-validation and rollback-checkpoint behavior is active as Role Skill guidance.
 - Direct Hermes CLI Candidate Improvements are automatically quarantined and provenance-bound on the next bridged turn or Dreaming run; this path is live-validated with `meeting-decision-record`.
 - `hermes2` uses the same Junior Project Manager Role Blueprint but a separate Agent 365 platform blueprint and bridge under ADR 0014.
-- Multi-Worker packet fan-in remains untested because only one Hermes Worker is currently available.
+- `hermes2` is provisioned on Role Release 3.1.0 with an isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
+- Multi-Worker packet fan-in is ready for divergent learning and consolidation testing.
 
 ## Completed milestones
 
@@ -54,15 +55,16 @@ Exit criteria:
 
 ### Multi-Worker Collective Learning Review
 
-Status: Pending a second Worker.
+Status: In progress; `hermes2` infrastructure and identity are ready.
 
 Tasks:
 
-- Provision a second Worker from the same Role Release.
+- Complete: provision a second Worker from the same Role Release.
 - Produce independent, attested Learning Packets from both Workers.
 - Exercise repeated support, conflicting evidence, outliers, and rejection rationale.
 - Verify central review rejects duplicate Worker IDs and mixed Role Releases.
 - Create and review a multi-Worker draft Promotion PR.
+- Restore the temporarily transferred Teams Enterprise license to `openclaw1` after the Teams phase of the test.
 
 Exit criteria:
 

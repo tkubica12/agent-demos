@@ -398,22 +398,32 @@ def main() -> None:
     parser.add_argument(
         "--worker-public-keys",
         type=Path,
+        action="append",
         required=True,
-        help="Local JSON object mapping trusted Worker IDs to Ed25519 approval public keys.",
+        help="Local JSON object mapping trusted Worker IDs to Ed25519 approval public keys. Repeat per Worker.",
     )
     parser.add_argument("--model", default="gpt-5-6-terra")
     parser.add_argument("--decision-output", type=Path, required=True)
     parser.add_argument("--create-pr", action="store_true")
     parser.add_argument("--ready", action="store_true", help="Create a ready PR instead of a draft.")
     args = parser.parse_args()
-    worker_public_keys = json.loads(args.worker_public_keys.read_text(encoding="utf-8"))
-    if not isinstance(worker_public_keys, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) and value.strip()
-        for key, value in worker_public_keys.items()
-    ):
-        raise CollectiveReviewError(
-            "--worker-public-keys must contain one JSON object of non-empty string keys."
-        )
+    worker_public_keys: dict[str, str] = {}
+    for path in args.worker_public_keys:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) and value.strip()
+            for key, value in payload.items()
+        ):
+            raise CollectiveReviewError(
+                "--worker-public-keys must contain JSON objects of non-empty string keys."
+            )
+        for worker_id, public_key in payload.items():
+            existing = worker_public_keys.get(worker_id)
+            if existing and existing != public_key:
+                raise CollectiveReviewError(
+                    f"Conflicting trusted public keys were supplied for Worker {worker_id}."
+                )
+            worker_public_keys[worker_id] = public_key
     packets = load_packets(args.packet, worker_public_keys=worker_public_keys)
     validate_next_role_release(packets, args.next_role_release)
     platform = terraform_output(PLATFORM_DIR)

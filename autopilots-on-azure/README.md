@@ -364,6 +364,32 @@ uv run python -m scripts.collective_review `
 
 Add `--create-pr` to create a draft Role Blueprint pull request. Add `--ready` only when the PR should immediately enter normal human review.
 
+For multi-Worker review, operate each Worker's isolated state and repeat packet/key arguments:
+
+```powershell
+# Worker hermes
+uv run python -m scripts.collective_learning --state-name hermes prepare
+uv run python -m scripts.collective_learning --state-name hermes approve `
+  --packet-digest "<hermes-digest>" --approved-by "<operator-alias>"
+uv run python -m scripts.collective_learning --state-name hermes export `
+  --output .local\collective-learning\hermes.packet.json
+
+# Worker hermes2
+uv run python -m scripts.collective_learning --state-name hermes2 prepare
+uv run python -m scripts.collective_learning --state-name hermes2 approve `
+  --packet-digest "<hermes2-digest>" --approved-by "<operator-alias>"
+uv run python -m scripts.collective_learning --state-name hermes2 export `
+  --output .local\collective-learning\hermes2.packet.json
+
+uv run python -m scripts.collective_review `
+  --packet .local\collective-learning\hermes.packet.json `
+  --packet .local\collective-learning\hermes2.packet.json `
+  --worker-public-keys .local\collective-learning\hermes.packet.worker-public-keys.json `
+  --worker-public-keys .local\collective-learning\hermes2.packet.worker-public-keys.json `
+  --next-role-release 3.2.0 `
+  --decision-output .local\collective-learning\role-release-3.2.0-decision.json
+```
+
 Worker Refresh validates the approved packet, its digest, the bridge signature, Worker identity, Role Release commit, and current governed-state hash before replacing Role Skills. The current Worker remains running if preflight validation fails.
 
 ### One-time A9 to A10 transition
