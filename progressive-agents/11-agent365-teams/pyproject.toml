@@ -1,0 +1,36 @@
+[project]
+name = "agent365-teams"
+version = "0.1.0"
+description = "Foundry Hosted Agent published natively through Agent 365 to Teams."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "agent-framework-core>=1.2.2",
+    "agent-framework-foundry>=1.2.2",
+    "agent-framework-foundry-hosting",
+    "a2a-sdk==1.0.2",
+    "azure-ai-evaluation",
+    "azure-ai-agentserver-optimization",
+    "azure-ai-projects>=2.2.0",
+    "azure-identity>=1.25.0",
+    "azure-monitor-opentelemetry",
+    "fastapi",
+    "fastmcp",
+    "httpx==0.28.1",
+    "mcp",
+    "opentelemetry-api",
+    "pyjwt[crypto]",
+    "pyyaml",
+    "textual",
+    "uvicorn",
+    "microsoft-agents-hosting-fastapi==1.1.0",
+    "microsoft-agents-a365-runtime==1.0.0",
+    "microsoft-agents-a365-observability-core==1.0.0",
+    "microsoft-agents-authentication-msal==1.1.0",
+]
+
+[tool.uv]
+prerelease = "if-necessary-or-explicit"
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
