@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import scripts.register_a7_byo_mcp as byo
-import scripts.setup_a7_identity as a7
+import scripts.register_byo_mcp as byo
+import scripts.setup_identity as identity
 
 
 class FakeGraph:
@@ -21,7 +21,7 @@ class FakeGraph:
         return self.payload
 
 
-class A7SetupTests(unittest.TestCase):
+class IdentitySetupTests(unittest.TestCase):
     def test_application_discovery_recovers_without_local_state(self) -> None:
         graph = FakeGraph(
             {
@@ -35,7 +35,7 @@ class A7SetupTests(unittest.TestCase):
             }
         )
 
-        app = a7.application_by_display_name(graph, "Autopilots Private Incidents MCP")
+        app = identity.application_by_display_name(graph, "Autopilots Private Incidents MCP")
 
         self.assertEqual(app["id"], "app-object-1")
         self.assertIn("$filter=displayName%20eq%20'Autopilots%20Private%20Incidents%20MCP'", graph.paths[0])
@@ -76,10 +76,10 @@ class A7SetupTests(unittest.TestCase):
             )
 
             with (
-                patch.object(a7, "TOOLING_MANIFEST", manifest),
-                patch.object(a7, "agent365_workspace", return_value=workspace),
+                patch.object(identity, "TOOLING_MANIFEST", manifest),
+                patch.object(identity, "agent365_workspace", return_value=workspace),
             ):
-                self.assertTrue(a7.workiq_permissions_configured("openclaw"))
+                self.assertTrue(identity.workiq_permissions_configured("openclaw"))
 
     def test_catalog_detection_recovers_approved_byo_registration(self) -> None:
         output = """

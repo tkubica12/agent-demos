@@ -27,7 +27,7 @@ Continue with one isolated Agent 365 platform blueprint and bridge per Worker fo
 
 The platform blueprint is a deployment envelope, not the Worker role definition. Collective Learning Review groups Workers by `roleBlueprint`, `roleRelease`, and release commit, regardless of which Agent 365 platform blueprint or bridge delivered their activities.
 
-Do not implement a shared multi-Worker bridge during the current A10 validation. Record it as a future option and reconsider it only against explicit scale, cost, routing, and isolation requirements.
+Do not implement a shared multi-Worker bridge during the current Collective Learning Review validation. Record it as a future option and reconsider it only against explicit scale, cost, routing, and isolation requirements.
 
 ## Current isolated model
 

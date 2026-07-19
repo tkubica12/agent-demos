@@ -14,8 +14,8 @@ from scripts.setup_agent365 import agent365_workspace, load_json, write_json
 from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, output, resolve_executable, terraform_output, write_tfvars
 
 
-A7_API_STATE = REPO_ROOT / ".local" / "a7-private-mcp-api.json"
-A7_PUBLIC_API_STATE = REPO_ROOT / ".local" / "a7-public-shipments-mcp-api.json"
+PRIVATE_API_STATE = REPO_ROOT / ".local" / "private-mcp-api.json"
+PUBLIC_API_STATE = REPO_ROOT / ".local" / "public-shipments-mcp-api.json"
 TOOLING_MANIFEST = REPO_ROOT / "agent365" / "ToolingManifest.json"
 INCIDENTS_APP_ROLE = "Incidents.Read.All"
 INCIDENTS_DELEGATED_SCOPE = "Incidents.Read"
@@ -483,13 +483,13 @@ def sandbox_group_principal_id(platform_outputs: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Configure milestone A7 Agent Identity, Agent User, and private MCP permissions.")
+    parser = argparse.ArgumentParser(description="Configure Agent Identity, Agent User, and MCP permissions.")
     parser.add_argument("--runtime", choices=["openclaw", "hermes"], required=True)
     parser.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     parser.add_argument("--mail-nickname", default="")
     parser.add_argument("--state-file", default="")
-    parser.add_argument("--api-state-file", default=str(A7_API_STATE))
-    parser.add_argument("--public-api-state-file", default=str(A7_PUBLIC_API_STATE))
+    parser.add_argument("--api-state-file", default=str(PRIVATE_API_STATE))
+    parser.add_argument("--public-api-state-file", default=str(PUBLIC_API_STATE))
     parser.add_argument("--api-display-name", default="Autopilots Private Incidents MCP")
     parser.add_argument("--public-api-display-name", default="Autopilots Public Shipments MCP")
     parser.add_argument("--skip-workiq-permissions", action="store_true")
@@ -534,7 +534,7 @@ def main() -> None:
         graph,
         blueprint_object_id=blueprint_object_id,
         tenant_id=tenant_id,
-        name=f"a7-{state_name}-sandbox",
+        name=f"identity-{state_name}-sandbox",
         managed_identity_principal_id=sandbox_principal_id,
     )
     ensure_app_role_assignment(

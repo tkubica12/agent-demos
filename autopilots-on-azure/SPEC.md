@@ -2,11 +2,11 @@
 
 ## Document role
 
-This is the normative product specification for Autopilots on Azure.
+This is the authoritative product and architecture specification for Autopilots on Azure.
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) describes component boundaries, trust boundaries, and implemented design.
-- [PLAN.md](PLAN.md) tracks milestones, current status, and future work.
-- [README.md](README.md) contains deployment, operation, validation, and demonstration procedures.
+- [PLAN.md](PLAN.md) tracks delivery status, history, and future work.
+- [DEPLOYMENT.md](DEPLOYMENT.md) contains deployment, update, validation, and cleanup procedures.
+- [DEMO.md](DEMO.md) contains classroom and product demonstration scenarios.
 - [`docs\adr`](docs/adr) records consequential decisions.
 - [`docs\runbooks`](docs/runbooks) contains repeatable multi-control-plane procedures.
 
@@ -22,6 +22,214 @@ Autopilots on Azure hosts durable digital Workers behind Microsoft Agent 365. A 
 - can submit governed Candidate Improvements for human-reviewed Promotion.
 
 Hermes is the primary implementation for durable Worker memory, native skills, Dreaming, and Collective Learning Review. OpenClaw remains a peer runtime behind the same bridge and identity contract but does not yet implement the complete Role Blueprint lifecycle.
+
+## Architecture principles
+
+1. Agent 365 is the only Microsoft 365 packaging and messaging lifecycle.
+2. OpenClaw and Hermes are peer runtimes behind one bridge and Sandbox contract.
+3. The public bridge handles ingress and Sandbox lifecycle, not MCP data-plane proxying.
+4. Private tools stay private; network reachability and authorization are separate controls.
+5. Agent Identity is the authorization principal for autonomous work.
+6. Agent User is used only for resources owned by the digital Worker.
+7. Human OBO is per-user and per-turn; it is never ambient authorization for autonomous or shared-conversation work.
+8. Platform-managed identity and short-lived tokens replace shared application keys.
+9. Preview services are isolated behind small adapters so runtime code remains portable.
+10. Local learning optimizes one Worker; shared learning changes only through reviewed Promotion.
+
+## System context
+
+```text
+Microsoft Teams / Agent 365 / operator /invoke
+                    |
+                    v
+       per-Worker bridge Container App
+       - Microsoft 365 Agents SDK ingress
+       - authorization-boundary envelope
+       - Sandbox lifecycle and invocation
+                    |
+                    v
+              ACA Sandbox
+       +---------------------------+
+       | OpenClaw or Hermes         |
+       | Foundry token adapter      |
+       | Agent Identity MCP adapter |
+       +---------------------------+
+          |          |          |
+          |          |          +--> Work IQ Mail MCP
+          |          +-------------> public shipments MCP
+          +------------------------> private incidents MCP
+                                      through customer VNet
+```
+
+## Deployment topology
+
+### Shared platform layer
+
+The platform Terraform state owns:
+
+- the Sweden Central Foundry account, project, and `gpt-5.6-terra` Global Standard deployment;
+- the Sweden Central Sandbox VNet, delegated subnet, Sandbox Group, and managed identity;
+- the North Europe application VNet, internal private-MCP ACA environment, public bridge ACA environment, and Azure Container Registry;
+- global VNet peering between the regional VNets;
+- private MCP DNS linked to both VNets.
+
+The split is intentional. Sweden Central remains the runtime and model region. North Europe hosts Container Apps because Azure rejected new Sweden Central managed environments with `ManagedEnvironmentCapacityHeavyUsageError`. Sandbox-to-private-MCP traffic stays private across the peered VNets. [ADR 0013](docs/adr/0013-regional-placement-and-capacity-fallback.md) records the regional selection and fallback order.
+
+### Worker application layers
+
+Every deployed Worker uses a separate Terraform workspace, bridge, Agent 365 platform blueprint, messaging endpoint, identity, Data Disk, and Sandbox lifecycle. Example workspaces are:
+
+- `autopilot-openclaw`;
+- `autopilot-hermes`;
+- `autopilot-hermes2`.
+
+Multiple Workers can use the same Git Role Blueprint and Role Release without sharing private state. A shared multi-Worker bridge is deliberately deferred by [ADR 0014](docs/adr/0014-per-worker-agent365-blueprints-and-bridges.md).
+
+Each workspace owns:
+
+- one bridge Container App and bridge managed identity;
+- one private incidents MCP Container App;
+- one public shipments MCP Container App;
+- Worker-specific settings and image digests.
+
+The current public shipments deployment is repeated per workspace. Moving shared public tools to a separate Terraform state remains a possible future simplification rather than an accepted design.
+
+## Component responsibilities
+
+### Bridge
+
+The bridge:
+
+- receives `/invoke` and Agent 365 `/api/messages`;
+- translates activities into a runtime-neutral request contract;
+- adds the authorization boundary: selected identity mode, invoking human, Agent Identity/User identifiers, and conversation privacy boundary;
+- creates, resumes, or reuses the Worker Sandbox;
+- serializes Hermes learning operations per Worker;
+- forwards turns to the runtime port;
+- returns messages and Teams reactions through Microsoft 365 Agents SDK.
+
+Bridge Container Apps scale to zero. The full `/invoke`, Agent 365 message, reaction, Dreaming, or approval operation remains awaited inside the incoming HTTP request so the scaler observes active work.
+
+The bridge does not:
+
+- proxy MCP data-plane traffic;
+- hold private MCP API keys;
+- impersonate Agent User for arbitrary Microsoft 365 tools;
+- provide ambient human OBO.
+
+For governed Hermes learning, the bridge owns the Ed25519 approval private key. Workers and central review receive public keys only.
+
+### Sandbox runtime
+
+Both runtimes receive the same categories of configuration:
+
+- Foundry endpoint and model deployment;
+- runtime image and persistent Data Disk volume;
+- Sandbox customer VNet connection;
+- Agent 365 tenant, platform blueprint, Agent Identity, and Agent User identifiers;
+- fixed upstream MCP endpoints and required scopes.
+
+The runtime calls only loopback MCP endpoints. `autopilots_identity.mcp_proxy` acquires and refreshes upstream tokens without changing OpenClaw or Hermes authentication internals.
+
+### Runtime ownership
+
+OpenClaw and Hermes own agent behavior, tools, memory, and their native runtime state. The bridge remains a thin protocol, identity-boundary, and lifecycle adapter.
+
+Hermes additionally owns the local Role Blueprint profile, native memory, progressive-disclosure skills, Work History, learning transactions, Dreaming, and Learning Packet preparation.
+
+## Identity and authorization model
+
+### Workload credential
+
+The Sandbox Group system-assigned managed identity proves where code is executing. ACA Sandboxes expose it through `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`; Azure Identity uses that endpoint.
+
+The managed identity is not the business authorization principal.
+
+### Agent Identity federation
+
+```text
+Sandbox Group managed identity
+  -> api://AzureADTokenExchange token
+  -> Agent 365 platform blueprint federated identity credential
+  -> blueprint token with fmi_path=<Agent Identity client ID>
+  -> Agent Identity token for the target resource
+```
+
+Custom MCP servers authorize:
+
+- tenant and issuer;
+- exact target audience;
+- Agent Identity client or object identifier when the server is Worker-specific;
+- application role such as `Incidents.Read.All` or `Shipments.Read.All`.
+
+### Agent User
+
+For Worker-owned Microsoft 365 data:
+
+```text
+managed identity -> platform blueprint -> Agent Identity exchange token
+  -> user_fic for the fixed Agent User
+  -> delegated Work IQ token with idtyp=user
+```
+
+Work IQ Mail acts as the Agent User mailbox, not as the invoking human. The Agent User needs an individual service license for every Microsoft 365 workload it accesses.
+
+### Human OBO
+
+OBO requires a token and consent for the invoking human. It is valid only for an explicit user-owned-resource request. A group chat does not make one user's delegated token group-wide, and Teams channel scope does not provide normal Teams SSO.
+
+Human OBO is intentionally not implemented yet.
+
+## Network boundaries
+
+### Private MCP
+
+`Microsoft.App/sandboxGroups/vnetConnections` attaches Sandbox network interfaces to the delegated subnet. It provides routing and private DNS only.
+
+The private incidents MCP runs in an internal ACA environment with public network access disabled. The Sandbox calls it through the VNet. Entra authorization remains mandatory.
+
+### Public MCP
+
+The shipments MCP is a public HTTPS ACA endpoint with scale-to-zero. It accepts:
+
+- Agent Identity application role `Shipments.Read.All` for direct runtime access;
+- delegated `Shipments.Read` for Agent 365 BYO OAuth.
+
+### Egress proxy
+
+Sandbox egress inspection remains enabled. Python HTTP clients use the system certificate store through `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` because the Sandbox egress proxy terminates and re-establishes inspected TLS.
+
+## MCP integration strategy
+
+| Tool category | Preferred integration |
+| --- | --- |
+| Microsoft 365 | Agent 365 Tooling catalog and `ToolingManifest.json`; Agent User or explicit OBO. |
+| Private custom MCP | Direct Sandbox VNet access plus Agent Identity application authorization. |
+| Public custom MCP used by runtimes | Direct Agent Identity authorization through the Sandbox-local adapter. |
+| Public custom MCP governance demonstration | Agent 365 BYO registration, admin approval, supported-client invocation, and Defender telemetry. |
+
+Agent 365 BYO currently requires a public endpoint and supported-client connection/OAuth behavior. Approval and gateway initialization were proven; a raw generic MCP client does not implement the supported-client handshake.
+
+## State ownership
+
+| State | Owner |
+| --- | --- |
+| Azure resources | Terraform platform and application states. |
+| Runtime filesystem | Sandbox Data Disk volume. |
+| Role Blueprint source | Commit-pinned Git repository and `distribution.yaml`. |
+| Active Hermes Worker profile | `/data/hermes/profiles/<role-blueprint>` on the Data Disk. |
+| Worker manifest | `<profile>\local\worker.json`. |
+| Personal Memory | `<profile>\memories\USER.md` and `MEMORY.md`. |
+| Private Playbooks | `<profile>\skills\private\`. |
+| Work History | `<profile>\state.db` plus Hermes session data. |
+| Role Skills | `<profile>\skills\role\`, inherited from the Role Release and locally patchable. |
+| Candidate Improvements | `<profile>\skills\candidates\`, scoped to the current Role Release. |
+| Learning provenance | `<profile>\learning\records.jsonl`. |
+| Agent 365 platform blueprint files | `.local\<worker>\agent365`. |
+| Agent User and identity discovery state | `.local\<worker>\agent365\instance.*.json`. |
+| Durable design rationale | `docs\adr`. |
+
+Local state accelerates operation but must not be the only source of truth for cloud-object discovery.
 
 ## Vocabulary
 
@@ -151,6 +359,38 @@ The canonical manifest path is:
 
 ## Worker memory and learning
 
+### Design stance
+
+Hermes is the Worker's local learning engine. Autopilots uses its native memory, progressive skill disclosure, `/learn`, `skill_manage`, background review, and curator rather than replacing them with a parallel learning runtime.
+
+Autopilots adds the boundaries Hermes does not provide across Workers:
+
+- durable classification of private and potentially transferable adaptation;
+- provenance linked to actual local skill changes;
+- deterministic allowlists, privacy checks, and redaction;
+- Role Release lifecycle for inherited and Worker-authored skills;
+- Collective Learning Review across Workers;
+- human-reviewed Git Promotion.
+
+Local learning and Collective Learning Review have different goals:
+
+- local learning optimizes one Worker and may be narrow, wrong, or private;
+- Collective Learning Review compares Workers, generalizes patterns, rejects outliers, and proposes a future Role Release;
+- only Worker Refresh replaces local release-scoped adaptations with reviewed shared behavior.
+
+### Memory and learning planes
+
+| Plane | Canonical store | Use | Worker Refresh | Learning Packet |
+| --- | --- | --- | --- | --- |
+| Personal Memory | `memories\USER.md`, `memories\MEMORY.md` | Frozen fresh-session injection | Preserve | Never |
+| Private Playbook | `skills\private\<name>` | Progressive disclosure or slash command | Preserve | Never |
+| Work History | Hermes SQLite sessions and indexes | Recall, search, and Dreaming evidence | Preserve | Never raw |
+| Role Skill | `skills\role\<name>` | Inherited, progressive-disclosure behavior | Replace with next Role Release | Recorded local diff only |
+| Candidate Improvement | `skills\candidates\<name>` | New reusable local behavior | Archive or retire | Artifact plus provenance |
+| Learning provenance | `learning\records.jsonl` | Why governed behavior changed | Archive per Role Release | Matching eligible records |
+
+All private stores remain private even when Dreaming uses them as evidence. Dreaming may derive a separate generalized Candidate Improvement, but it never moves, promotes, deletes, or exposes the private source.
+
 ### Personal Memory
 
 1. `USER.md` stores identity, preferences, communication style, and expectations.
@@ -230,7 +470,47 @@ Dreaming may:
 
 Dreaming must use a fresh isolated session and must not expose private source content in transferable artifacts or provenance.
 
+For every observation, Dreaming chooses one outcome:
+
+| Observation | Allowed outcome |
+| --- | --- |
+| Critical personal preference or compact private fact | Add or consolidate Personal Memory |
+| Rich assignment-specific fact or procedure | Create or patch a Private Playbook |
+| Reusable correction to inherited behavior | Patch a Role Skill and append linked provenance |
+| New reusable procedure or capability | Create a Candidate Improvement and append linked provenance |
+| Already represented learning | No artifact change or duplicate suppression |
+| Secret, raw customer data, noise, or weak speculation | Do not store |
+
 ## Collective Learning Review
+
+```text
+reviewed Role Release N
+           |
+           v
+Workers receive Role Skills
+           |
+           v
+Hermes learns locally in each Worker
+       | private                    | reusable
+       v                            v
+Personal Memory,              Candidate Improvement
+Private Playbooks,            or Role Skill patch
+Work History                         |
+       | excluded                    v
+       |                    approved Learning Packet
+       |                            |
+       +----------------------------v
+                   Collective Learning Review
+                              |
+                              v
+                      Promotion pull request
+                              |
+                              v
+                    reviewed Role Release N+1
+                              |
+                              v
+                       Worker Refresh
+```
 
 ### Learning Packet preparation
 
@@ -283,6 +563,15 @@ Dreaming must use a fresh isolated session and must not expose private source co
 4. API-key rotation must force controlled Sandbox replacement and may use the previous key only for refresh preflight.
 5. Terraform must converge after deployment.
 6. Runtime health must report Worker ID, Role Blueprint, Role Release, release commit, and gateway status.
+
+## Observability
+
+1. Bridge diagnostics record the selected authorization mode and privacy boundary, never tokens.
+2. Agent 365 Observability permission is configured on every platform blueprint.
+3. ACA and Sandbox diagnostics cover bridge, runtime, networking, and MCP behavior.
+4. Agent 365 BYO gateway execution is observable through Microsoft Defender when invoked from a supported client.
+5. System snapshots must redact Azure, Entra, Agent 365, and local secrets before comparison or retention.
+6. Learning diagnostics expose transaction state, quarantine, reconciliation, provenance, packet validation, and Worker Refresh receipts without revealing private artifact content.
 
 ## Current product constraints
 

@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-An autopilot runtime can already participate in Teams through the bridge. The next product milestone is Agent 365 identity, followed by Work IQ MCP access to Microsoft 365 data and actions.
+An autopilot runtime can already participate in Teams through the bridge. The next dependency is Agent 365 identity, followed by Work IQ MCP access to Microsoft 365 data and actions.
 
 In collaborative Teams contexts, one conversation contains many people, but one incoming activity has one sender. OBO access is for the invoking or consenting human user, not for every participant. Agent-owned actions should use the agent identity, not a random user's OBO token.
 
@@ -21,7 +21,7 @@ Adding Work IQ MCP before resolving identity would risk confusing:
 
 Implement Agent 365 identity and explicit auth-boundary metadata before broad Work IQ MCP integration.
 
-Milestone order:
+Delivery order:
 
 1. Register/create the Agent 365 blueprint and instance for each deployed bridge endpoint.
 2. Capture agent instance/user identifiers and lifecycle ownership.

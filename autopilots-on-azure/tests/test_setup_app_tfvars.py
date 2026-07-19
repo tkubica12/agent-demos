@@ -164,7 +164,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["api_server_key"], "new-key")
         self.assertEqual(tfvars["previous_api_server_key"], "old-key")
 
-    def test_runtime_tfvars_preserve_a7_identity_and_mcp_values(self):
+    def test_runtime_tfvars_preserve_identity_and_mcp_values(self):
         tfvars = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",

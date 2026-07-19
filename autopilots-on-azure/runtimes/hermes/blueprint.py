@@ -95,7 +95,7 @@ def role_release_settings_from_environment() -> RoleReleaseSettings | None:
     ]
     if legacy:
         raise ValueError(
-            "A9 Hermes blueprint environment is not accepted by Role Release 3. "
+            "Legacy Hermes blueprint environment is not accepted by Role Release 3. "
             f"Configure the HERMES_ROLE_* and WORKER_* settings explicitly; found: {', '.join(legacy)}."
         )
     source = os.getenv("HERMES_ROLE_BLUEPRINT_SOURCE", "").strip()
@@ -503,7 +503,7 @@ def install_or_refresh_role_release(
     legacy_manifest = profile_home / "local" / "autopilots-instance.json"
     if legacy_manifest.exists() and not manifest_path.exists():
         raise RuntimeError(
-            "A9 Worker profile migration is required before installing Role Release 3. "
+            "Legacy Worker profile migration is required before installing Role Release 3. "
             "Convert private-cache.md to a Private Playbook, convert hot-learning to Candidate Improvements, "
             "and remove legacy distribution-owned skill paths."
         )

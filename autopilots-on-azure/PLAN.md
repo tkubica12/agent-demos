@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file tracks delivery status and future work. Product requirements belong in [SPEC.md](SPEC.md), architecture in [ARCHITECTURE.md](ARCHITECTURE.md), and operator procedures in [README.md](README.md).
+This file tracks delivery status and future work. Product requirements and architecture belong in [SPEC.md](SPEC.md), deployment procedures in [DEPLOYMENT.md](DEPLOYMENT.md), demonstrations in [DEMO.md](DEMO.md), and the concise project entry point in [README.md](README.md).
 
 ## Current snapshot
 
@@ -19,6 +19,7 @@ As of 2026-07-16:
 - `hermes2` uses the same Junior Project Manager Role Blueprint but a separate Agent 365 platform blueprint and bridge under ADR 0014.
 - `hermes2` is provisioned on Role Release 3.1.0 with an isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
 - Multi-Worker packet fan-in is ready for divergent learning and consolidation testing.
+- Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
 ## Completed milestones
 
@@ -60,6 +61,10 @@ Status: In progress; `hermes2` infrastructure and identity are ready.
 Tasks:
 
 - Complete: provision a second Worker from the same Role Release.
+- Complete: provision Hermes 2 Agent Identity, Agent User, Agent 365 platform blueprint, consent, bridge, Data Disk, and Role Release 3.1.0.
+- Complete: assign Agent 365, Flow, and a temporarily transferred Teams Enterprise license to Hermes 2.
+- Confirm Hermes 2 is discoverable and responsive in Teams after service propagation.
+- Teach Hermes 2 the divergent `dependency-handoff-contract` Candidate Improvement.
 - Produce independent, attested Learning Packets from both Workers.
 - Exercise repeated support, conflicting evidence, outliers, and rejection rationale.
 - Verify central review rejects duplicate Worker IDs and mixed Role Releases.

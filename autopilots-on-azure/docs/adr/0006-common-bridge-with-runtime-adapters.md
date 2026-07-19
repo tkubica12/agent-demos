@@ -16,7 +16,7 @@ The bridge already owns the project-specific Microsoft 365 behavior:
 - Agent 365-compatible endpoint shape.
 - `/invoke` smoke-test endpoint.
 
-Hermes has its own native Teams adapter, but using it first would create a second Microsoft 365 boundary with different routing, context, and Agent 365 behavior. That would bypass the milestone 3.5 work already built into the bridge and make OpenClaw and Hermes demos behave differently.
+Hermes has its own native Teams adapter, but using it first would create a second Microsoft 365 boundary with different routing, context, and Agent 365 behavior. That would bypass the existing bridge investment and make OpenClaw and Hermes demonstrations behave differently.
 
 ## Decision
 

@@ -21,7 +21,7 @@ from scripts.setup_agent365 import (
     setup_command,
     update_endpoint_command,
 )
-from scripts.setup_a7_identity import ensure_federated_credential
+from scripts.setup_identity import ensure_federated_credential
 
 
 class Agent365SetupTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class Agent365SetupTests(unittest.TestCase):
                         "value": [
                             {
                                 "id": "credential-1",
-                                "name": "a7-hermes-sandbox",
+                                "name": "identity-hermes-sandbox",
                                 "issuer": "https://login.microsoftonline.com/tenant-1/v2.0",
                                 "subject": "old-sandbox-principal",
                             }
@@ -48,7 +48,7 @@ class Agent365SetupTests(unittest.TestCase):
             Graph(),
             blueprint_object_id="blueprint-object-1",
             tenant_id="tenant-1",
-            name="a7-hermes-sandbox",
+            name="identity-hermes-sandbox",
             managed_identity_principal_id="new-sandbox-principal",
         )
 

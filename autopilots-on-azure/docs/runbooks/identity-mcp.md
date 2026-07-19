@@ -1,4 +1,4 @@
-# A7 identity and MCP runbook
+# Identity and MCP runbook
 
 This runbook captures the repeatable first-time and recovery procedures for Agent Identity, Agent User, Work IQ Mail, private MCP, public MCP, and Agent 365 BYO registration.
 
@@ -17,11 +17,11 @@ Normal reruns of the setup scripts should not request consent again.
 ## First-time sequence
 
 1. Ensure both Agent 365 blueprints and instances exist.
-2. Configure A7 for both runtimes:
+2. Configure identity and MCP permissions for both runtimes:
 
    ```powershell
-   uv run python -m scripts.setup_a7_identity --runtime openclaw
-   uv run python -m scripts.setup_a7_identity --runtime hermes
+   uv run python -m scripts.setup_identity --runtime openclaw
+   uv run python -m scripts.setup_identity --runtime hermes
    ```
 
 3. Build and deploy each runtime:
@@ -52,8 +52,8 @@ Normal reruns of the setup scripts should not request consent again.
 
    ```powershell
    terraform -chdir=terraform\apps workspace select autopilot-openclaw
-   uv run python -m scripts.register_a7_byo_mcp --runtime openclaw --dry-run
-   uv run python -m scripts.register_a7_byo_mcp --runtime openclaw
+   uv run python -m scripts.register_byo_mcp --runtime openclaw --dry-run
+   uv run python -m scripts.register_byo_mcp --runtime openclaw
    ```
 
 7. Approve `ext_Shipments` in Microsoft 365 admin center:
@@ -65,12 +65,12 @@ Normal reruns of the setup scripts should not request consent again.
 8. Persist approval state:
 
    ```powershell
-   uv run python -m scripts.register_a7_byo_mcp --runtime openclaw --mark-approved
+   uv run python -m scripts.register_byo_mcp --runtime openclaw --mark-approved
    ```
 
 ## Idempotent reruns
 
-`scripts.setup_a7_identity`:
+`scripts.setup_identity`:
 
 - recovers the private/public MCP Entra applications by display name when `.local` state is absent;
 - reuses service principals;
@@ -80,7 +80,7 @@ Normal reruns of the setup scripts should not request consent again.
 
 Use `--force-workiq-permissions` only when the Tooling manifest or blueprint permissions intentionally changed.
 
-`scripts.register_a7_byo_mcp`:
+`scripts.register_byo_mcp`:
 
 - returns the recorded registration when local state exists;
 - recovers an existing registration from Entra backing applications and the Agent 365 catalog when local state is absent;
@@ -92,7 +92,7 @@ Use `--force-workiq-permissions` only when the Tooling manifest or blueprint per
 ### Work IQ permission changed
 
 ```powershell
-uv run python -m scripts.setup_a7_identity `
+uv run python -m scripts.setup_identity `
   --runtime openclaw `
   --force-workiq-permissions
 ```
@@ -100,7 +100,7 @@ uv run python -m scripts.setup_a7_identity `
 ### BYO consent fails
 
 ```powershell
-uv run python -m scripts.register_a7_byo_mcp `
+uv run python -m scripts.register_byo_mcp `
   --runtime openclaw `
   --repair-consent
 ```
@@ -152,4 +152,4 @@ After major identity changes:
 uv run python -m scripts.snapshot_system
 ```
 
-The A7 implementation snapshot is under `.local\snapshots\20260710-143241Z`.
+The first validated identity implementation snapshot is under `.local\snapshots\20260710-143241Z`.

@@ -60,7 +60,7 @@ Changing the pinned commit changes the ACA Sandbox labels. The bridge deletes th
 
 The runtime owns a small effective-config merge at startup. Blueprint defaults are loaded first, then Azure-required model, API server, path, and loopback MCP settings are applied. Existing `.env` content is preserved except for the explicit runtime-managed keys that must follow the current sandbox configuration.
 
-OpenClaw is an explicit A8 exception. It keeps the lighter runtime-image plus persistent `/data/home` and `/data/workspace` model because it does not currently expose a Hermes-equivalent, reviewed Git profile-distribution lifecycle with clear distribution-owned update semantics. Do not create a second custom package manager for OpenClaw in this milestone.
+OpenClaw is an explicit Role Blueprint lifecycle exception. It keeps the lighter runtime-image plus persistent `/data/home` and `/data/workspace` model because it does not currently expose a Hermes-equivalent, reviewed Git profile-distribution lifecycle with clear distribution-owned update semantics. Do not create a second custom package manager for OpenClaw.
 
 Do not introduce a project database for Hermes core memory or blueprint skill storage in the first implementation. Databases remain appropriate for external business data, policy corpora, data-agent backends, fleet dashboards, audit search, or an admin UI, but those are not Hermes core storage.
 

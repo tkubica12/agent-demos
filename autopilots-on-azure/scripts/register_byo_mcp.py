@@ -14,7 +14,7 @@ from scripts.setup_agent365 import agent365_workspace, load_json, write_json
 from scripts.tf_helpers import APPS_DIR, REPO_ROOT, resolve_executable, terraform_output
 
 
-PUBLIC_API_STATE = REPO_ROOT / ".local" / "a7-public-shipments-mcp-api.json"
+PUBLIC_API_STATE = REPO_ROOT / ".local" / "public-shipments-mcp-api.json"
 
 
 def registration_state_path(runtime: str) -> Path:

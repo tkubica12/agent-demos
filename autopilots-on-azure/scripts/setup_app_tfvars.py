@@ -245,7 +245,7 @@ def build_tfvars(
         }
         if legacy_configured and not any(role_values.values()):
             raise ValueError(
-                "A9 Hermes blueprint tfvars require explicit --role-blueprint, "
+                "Legacy Hermes blueprint tfvars require explicit --role-blueprint, "
                 "--role-blueprint-source, --role-release, and --role-release-commit migration values."
             )
         required_role_values = {

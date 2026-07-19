@@ -675,7 +675,7 @@ class HermesRuntimeTests(unittest.TestCase):
         os.environ["HERMES_BLUEPRINT_SOURCE"] = "https://example.com/legacy.git"
         os.environ.pop("HERMES_ROLE_BLUEPRINT_SOURCE", None)
         try:
-            with self.assertRaisesRegex(ValueError, "A9 Hermes blueprint environment"):
+            with self.assertRaisesRegex(ValueError, "Legacy Hermes blueprint environment"):
                 role_release_settings_from_environment()
         finally:
             for name, value in previous.items():
@@ -702,7 +702,7 @@ class HermesRuntimeTests(unittest.TestCase):
             self._git(repo, "config", "user.name", "Hermes Test")
             commit = self._commit_role_release(repo, "3.0.0", "release-3")
 
-            with self.assertRaisesRegex(RuntimeError, "A9 Worker profile migration"):
+            with self.assertRaisesRegex(RuntimeError, "Legacy Worker profile migration"):
                 install_or_refresh_role_release(
                     home,
                     self._settings(repo, "3.0.0", commit),

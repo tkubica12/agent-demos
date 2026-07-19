@@ -318,7 +318,7 @@ def main() -> None:
     parser.add_argument(
         "--blueprint-agent",
         action="store_true",
-        help="Use blueprint-agent mode instead of the AI teammate flow. AI teammate is the milestone 4 default.",
+        help="Use blueprint-agent mode instead of the AI teammate flow. AI teammate is the default.",
     )
     parser.add_argument("--run-setup", action="store_true", help="Run `a365 setup all` after preparing the local workspace.")
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to `a365 setup all`.")
