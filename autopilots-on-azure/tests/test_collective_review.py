@@ -10,8 +10,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from scripts.collective_review import (
     CollectiveReviewError,
+    judge_prompt,
     load_packets,
     remove_embedded_role_release,
+    role_blueprint_context_from_root,
     update_distribution_owned,
     validate_decision,
     validate_next_role_release,
@@ -218,6 +220,35 @@ class CollectiveReviewTests(unittest.TestCase):
         }
 
         self.assertEqual(validate_decision(decision, packets=packets), decision)
+
+    def test_merger_prompt_includes_existing_role_blueprint_and_quality_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            role_root = Path(temp_dir)
+            (role_root / "skills" / "role" / "existing").mkdir(parents=True)
+            (role_root / "SOUL.md").write_text(
+                "# Role\n\nKeep commitments traceable.\n",
+                encoding="utf-8",
+            )
+            (role_root / "distribution.yaml").write_text(
+                "role_blueprint: junior-project-manager\n"
+                "role_release: 3.0.0\n"
+                "distribution_owned:\n"
+                "- SOUL.md\n"
+                "- skills/role/existing\n",
+                encoding="utf-8",
+            )
+            (role_root / "skills" / "role" / "existing" / "SKILL.md").write_text(
+                "---\nname: existing\ndescription: Track commitments.\n---\n",
+                encoding="utf-8",
+            )
+
+            context = role_blueprint_context_from_root(role_root)
+            prompt = judge_prompt([self._packet()], "3.1.0", context)
+
+        self.assertIn("Keep commitments traceable.", prompt)
+        self.assertIn("skills/role/existing/SKILL.md", prompt)
+        self.assertIn("concrete, non-overlapping progressive-disclosure trigger", prompt)
+        self.assertIn("self-contained and executable when loaded alone", prompt)
 
     def test_promotion_adds_proposed_role_skills_to_distribution(self):
         distribution = {

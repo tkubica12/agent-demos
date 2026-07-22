@@ -19,6 +19,10 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
+network:
+  allowed:
+    - defaults
+    - local
 tools:
   github:
     toolsets: [pull_requests, repos]

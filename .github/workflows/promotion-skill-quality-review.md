@@ -19,6 +19,10 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
+network:
+  allowed:
+    - defaults
+    - local
 tools:
   github:
     toolsets: [pull_requests, repos]
@@ -63,7 +67,20 @@ Check each proposed `SKILL.md` for:
 - vague slogans, excessive prose, fake capabilities, unsupported tools, or non-testable requirements;
 - consistency between the proposed skill, `distribution.yaml` Role Release, and review decision.
 
-For at most three concrete changed-line defects, create inline review comments with actionable fixes.
+Read earlier Skill Quality reviews on this PR before deciding. Verify that previously reported defects are fixed and do not replace them with progressively stricter wording preferences.
+
+Use `skill-quality-risk` only for a concrete operational defect that would cause at least one of:
+
+- the Role Skill is not packaged or cannot load;
+- routine unrelated work activates the skill because its discovery trigger covers most of the role;
+- contradictory or undefined fields, states, gates, or escalation outputs produce inconsistent behavior;
+- the skill depends on unavailable tools or another skill's body to execute;
+- promoted content materially exceeds or contradicts the retained decision;
+- the retained decision, distribution, and actual skill disagree.
+
+Treat stylistic alternatives, minor wording improvements, optional examples, and equivalent field names as non-blocking when execution semantics are already clear. A new finding after an earlier review must describe a concrete failure scenario, not merely a preferred formulation.
+
+For at most three concrete changed-line operational defects, create inline review comments with actionable fixes.
 
 If any material issue exists:
 

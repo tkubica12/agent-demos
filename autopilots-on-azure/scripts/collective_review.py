@@ -25,6 +25,7 @@ from scripts.tf_helpers import PLATFORM_DIR, terraform_output
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 ROLE_SKILL_PATH = re.compile(r"^skills/role/[a-z0-9][a-z0-9-]{0,62}/SKILL\.md$")
 ROLE_RELEASE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+MAX_ROLE_BLUEPRINT_CONTEXT_CHARS = 100_000
 
 
 class CollectiveReviewError(ValueError):
@@ -180,7 +181,54 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     return payload
 
 
-def judge_prompt(packets: list[dict[str, Any]], next_role_release: str) -> str:
+def role_blueprint_context_from_root(role_root: Path) -> dict[str, Any]:
+    soul_path = role_root / "SOUL.md"
+    distribution_path = role_root / "distribution.yaml"
+    if not soul_path.is_file() or not distribution_path.is_file():
+        raise CollectiveReviewError("Role Blueprint context requires SOUL.md and distribution.yaml.")
+    role_skills = {
+        path.relative_to(role_root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted((role_root / "skills" / "role").glob("*/SKILL.md"))
+    }
+    context = {
+        "soul": soul_path.read_text(encoding="utf-8"),
+        "distribution": yaml.safe_load(distribution_path.read_text(encoding="utf-8")),
+        "roleSkills": role_skills,
+    }
+    if len(_canonical_json(context)) > MAX_ROLE_BLUEPRINT_CONTEXT_CHARS:
+        raise CollectiveReviewError("Role Blueprint context exceeds the merger/judge size limit.")
+    return context
+
+
+def load_role_blueprint_context(packets: list[dict[str, Any]]) -> dict[str, Any]:
+    baseline = packets[0]["roleRelease"]
+    repository_path = PurePosixPath(str(baseline["path"]).replace("\\", "/"))
+    if repository_path.is_absolute() or ".." in repository_path.parts:
+        raise CollectiveReviewError("Role Blueprint repository path is unsafe.")
+    with tempfile.TemporaryDirectory(prefix="collective-learning-context-") as temp_dir:
+        checkout = Path(temp_dir) / "repository"
+        _run(
+            [
+                "git",
+                "clone",
+                "--filter=blob:none",
+                "--no-checkout",
+                str(baseline["source"]),
+                str(checkout),
+            ],
+            cwd=Path(temp_dir),
+        )
+        _run(["git", "checkout", "--detach", str(baseline["commit"])], cwd=checkout)
+        return role_blueprint_context_from_root(
+            checkout.joinpath(*repository_path.parts)
+        )
+
+
+def judge_prompt(
+    packets: list[dict[str, Any]],
+    next_role_release: str,
+    role_blueprint_context: dict[str, Any],
+) -> str:
     baseline = packets[0]["roleRelease"]
     return (
         "You are the expert merger/judge for Collective Learning Review.\n"
@@ -198,6 +246,19 @@ def judge_prompt(packets: list[dict[str, Any]], next_role_release: str) -> str:
         "and listing its records under rejected. targetPath must contain exactly one lowercase kebab-case skill-name segment "
         "between skills/role and SKILL.md, for example skills/role/delivery-commitment-control/SKILL.md. Never prefix or nest "
         "the target under the Role Blueprint name. Do not modify SOUL.md, configuration, memory, or non-role paths.\n\n"
+        "Quality contract:\n"
+        "- Compare every proposal with the existing SOUL and Role Skills supplied below.\n"
+        "- Prefer a focused patch to an existing Role Skill when the learning belongs to its current discovery trigger.\n"
+        "- Create a new Role Skill only when it has a concrete, non-overlapping progressive-disclosure trigger.\n"
+        "- A new skill must be self-contained and executable when loaded alone. Define every required field, state, verification "
+        "gate, failure condition, and domain-specific escalation output it introduces.\n"
+        "- Do not duplicate SOUL guidance or generic procedures from an existing Role Skill. Add only the specialist behavior.\n"
+        "- Keep descriptions discovery-oriented: name the concrete events that should load the skill, not the entire job domain.\n"
+        "- Keep the summary and rationale exactly aligned with the proposed content and retained evidence.\n"
+        "- Use consistent terms and required fields across overlapping procedures.\n\n"
+        "Existing reviewed Role Blueprint context:\n"
+        + json.dumps(role_blueprint_context, indent=2, ensure_ascii=True)
+        + "\n\n"
         "Approved Learning Packets:\n"
         + json.dumps(_review_payload(packets), indent=2, ensure_ascii=True)
     )
@@ -210,6 +271,7 @@ def run_merger_judge(
     model: str,
     base_url: str,
 ) -> dict[str, Any]:
+    role_blueprint_context = load_role_blueprint_context(packets)
     token = AzureCliCredential().get_token(TOKEN_SCOPE).token
     response = httpx.post(
         f"{base_url.rstrip('/')}/responses",
@@ -219,7 +281,11 @@ def run_merger_judge(
         },
         json={
             "model": model,
-            "input": judge_prompt(packets, next_role_release),
+            "input": judge_prompt(
+                packets,
+                next_role_release,
+                role_blueprint_context,
+            ),
         },
         timeout=600,
     )

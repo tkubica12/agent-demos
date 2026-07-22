@@ -536,6 +536,8 @@ Work History                         |
 4. Only privacy-scanned minimized packet content may be sent to the model.
 5. Proposed files must be restricted to `skills\role\<name>\SKILL.md`.
 6. The complete decision, including summary, conflicts, and rejection reasons, must pass privacy checks.
+7. The merger/judge must receive the reviewed current `SOUL.md`, distribution metadata, and Role Skills so it can patch existing behavior or avoid semantic duplication.
+8. A new Role Skill must have a concrete progressive-disclosure trigger, remain executable when loaded alone, and define every field, state, verification gate, failure condition, and domain-specific escalation output it introduces.
 
 ### Promotion
 

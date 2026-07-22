@@ -70,6 +70,7 @@ Tasks:
 - Complete: enforce rejection of duplicate Worker IDs, mixed Role Releases, malformed envelopes, unknown Workers, and unsafe proposal paths.
 - Complete: create draft Promotion PR #5 for Role Release 3.2.0.
 - Complete: add strict GitHub Agentic Workflow gates for Promotion triage, privacy, Role Blueprint alignment, learning evidence, and skill quality using `GITHUB_TOKEN` inference and permission-separated safe outputs.
+- Complete: align the merger/judge and Skill Quality contracts so generation sees existing Role Skills and semantic review blocks concrete operational defects rather than editorial preferences.
 - Review and merge PR #5, then refresh both Workers to Role Release 3.2.0.
 - Restore the temporarily transferred Teams Enterprise license to `openclaw1` after the Teams phase of the test.
 
