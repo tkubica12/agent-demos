@@ -6,19 +6,20 @@ This file tracks delivery status and future work. Product requirements and archi
 
 ## Current snapshot
 
-As of 2026-07-16:
+As of 2026-07-22:
 
 - OpenClaw and Hermes run side by side through separate bridge Container Apps and Terraform workspaces.
 - Both runtimes use Sweden Central ACA Sandboxes and Foundry `gpt-5-6-terra`.
 - Agent 365 packages, Agent Users, Teams direct-message and explicit-mention routing, reactions, Agent Identity MCP access, public shipments MCP, private incidents MCP, and Work IQ Mail are implemented.
-- Hermes Worker `hermes` is live on Role Release 3.1.0 with preserved Personal Memory, Private Playbooks, and Work History.
+- Hermes Workers `hermes` and `hermes2` are live on Role Release 3.2.0 at commit `2156bee66cb42008a6b75296f44f0d2f9a4a85fb`.
 - Foreground learning, Dreaming, Role Skill/Candidate Improvement provenance, rollback, packet preparation, Ed25519 approval, export, merger/judge, and draft PR creation are implemented.
-- Collective Learning Review PR #3 was approved and merged, publishing Role Release 3.1.0.
-- Worker Refresh to 3.1.0 is complete; promoted deadline-validation and rollback-checkpoint behavior is active as Role Skill guidance.
+- Two independent Worker Learning Packets were consolidated, reviewed by five GitHub Agentic Workflow gates, and promoted through PR #6.
+- Worker Refresh to 3.2.0 is complete; both Workers use `delivery-commitment-control`, retain private state, and have zero active previous-release Candidate Improvements.
 - Direct Hermes CLI Candidate Improvements are automatically quarantined and provenance-bound on the next bridged turn or Dreaming run; this path is live-validated with `meeting-decision-record`.
 - `hermes2` uses the same Junior Project Manager Role Blueprint but a separate Agent 365 platform blueprint and bridge under ADR 0014.
-- `hermes2` is provisioned on Role Release 3.1.0 with an isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
-- Multi-Worker packet fan-in is ready for divergent learning and consolidation testing.
+- `hermes2` retains its isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
+- Both Hermes bridges use the runtime-specific wake/readiness and transient Worker Refresh preflight fixes; Terraform workspaces converge.
+- The Teams Enterprise license temporarily transferred for the multi-Worker test is restored to `openclaw1`.
 - Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
 ## Completed milestones
@@ -31,7 +32,7 @@ As of 2026-07-16:
 | A7 - Identity and MCP model | Complete | Agent Identity federation for autonomous MCP, Agent User Work IQ Mail, explicit OBO boundary, private and public MCP paths. |
 | A8 - Role Blueprint distribution | Complete | Commit-pinned Hermes distribution, Worker manifest, persistent profile, and transactional Worker Refresh. |
 | A9 - Local learning bridge | Superseded | Proved private classification, Dreaming, validated journal records, and generated hot learning before A10 native skills. |
-| A10 - Native skill evolution and Collective Learning Review | Complete for one Worker | Private Playbooks, Role Skill patches, Candidate Improvements, schema-v2 provenance, attested packets, merger/judge, and merged Promotion PR. |
+| A10 - Native skill evolution and Collective Learning Review | Complete | Multi-Worker Private Playbooks, Role Skill patches, Candidate Improvements, schema-v2 provenance, attested packets, merger/judge, Agentic Promotion gates, merged Promotion, and Worker Refresh. |
 
 ## Immediate work
 
@@ -56,7 +57,7 @@ Exit criteria:
 
 ### Multi-Worker Collective Learning Review
 
-Status: In progress; two-Worker review completed and draft Promotion PR #5 is awaiting human review.
+Status: Complete.
 
 Tasks:
 
@@ -68,18 +69,22 @@ Tasks:
 - Complete: produce independent, operator-approved, attested Learning Packets from both Workers.
 - Complete: merge complementary evidence from both Workers into one `delivery-commitment-control` Role Skill proposal with explicit support and empty conflict/rejection sets.
 - Complete: enforce rejection of duplicate Worker IDs, mixed Role Releases, malformed envelopes, unknown Workers, and unsafe proposal paths.
-- Complete: create draft Promotion PR #5 for Role Release 3.2.0.
+- Complete: close superseded PR #5 and create one-commit Promotion PR #6 for Role Release 3.2.0.
 - Complete: add strict GitHub Agentic Workflow gates for Promotion triage, privacy, Role Blueprint alignment, learning evidence, and skill quality using `GITHUB_TOKEN` inference and permission-separated safe outputs.
 - Complete: align the merger/judge and Skill Quality contracts so generation sees existing Role Skills and semantic review blocks concrete operational defects rather than editorial preferences.
 - Complete: replace agent-driven PR discovery with one deterministic PR-head snapshot shared by every Promotion reviewer.
-- Review and merge PR #5, then refresh both Workers to Role Release 3.2.0.
-- Restore the temporarily transferred Teams Enterprise license to `openclaw1` after the Teams phase of the test.
+- Complete: pass all Agentic Promotion gates, merge PR #6, and refresh both Workers to Role Release 3.2.0.
+- Complete: preserve Personal Memory `LOTUS-81`, Private Playbook `CEDAR-42`, Work History, Worker IDs, assignments, and Data Disks.
+- Complete: archive previous-release Candidate Improvements and provenance; both Workers report zero active learning records.
+- Complete: deploy the wake/readiness and transient refresh-preflight bridge fixes and confirm Terraform convergence.
+- Complete: restore the Teams Enterprise license to `openclaw1`.
 
 Exit criteria:
 
-- At least two independent Worker packets contribute to one Collective Learning Review.
-- The decision reports support counts, conflicts, and rejected records.
-- No Personal Memory, Private Playbook, or Work History content appears in the PR.
+- Met: two independent Worker packets contributed to one Collective Learning Review.
+- Met: the decision reports supporting Workers and records, conflicts, and rejected records.
+- Met: no Personal Memory, Private Playbook, or Work History content appears in the Promotion.
+- Met: privacy, Role Blueprint alignment, evidence, and skill quality gates all passed against one deterministic PR-head snapshot.
 
 ## Next milestones
 
