@@ -1,0 +1,2345 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Visual guide to Autopilots on Azure with Hermes: architecture, identity, memory, learning, Promotion, and Worker Refresh.">
+  <title>Hermes on Azure — Visual Learning Guide</title>
+  <style>
+    :root {
+      --bg: #f3f3f0;
+      --surface: #ffffff;
+      --surface-2: #e9e9e5;
+      --surface-3: #dcdcd6;
+      --ink: #11110f;
+      --muted: #65645f;
+      --soft: #8b8a84;
+      --line: #cecec7;
+      --line-strong: #a9a9a1;
+      --accent: #df6300;
+      --accent-strong: #b84c00;
+      --accent-soft: #fff0e4;
+      --accent-faint: #fff8f2;
+      --shadow: 0 18px 50px rgba(17, 17, 15, 0.09);
+      --radius: 18px;
+      --radius-sm: 10px;
+      --max: 1440px;
+      --nav: 250px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    html[data-theme="dark"] {
+      --bg: #0d0d0c;
+      --surface: #171716;
+      --surface-2: #222220;
+      --surface-3: #30302d;
+      --ink: #f5f4ef;
+      --muted: #aaa9a2;
+      --soft: #7e7d77;
+      --line: #343431;
+      --line-strong: #53534e;
+      --accent: #ff8426;
+      --accent-strong: #ff9b50;
+      --accent-soft: #382113;
+      --accent-faint: #21160f;
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 86px;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 88% 8%, var(--accent-soft), transparent 25rem),
+        var(--bg);
+      font-family: var(--font);
+      line-height: 1.58;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    button {
+      color: inherit;
+      font: inherit;
+    }
+
+    code,
+    pre {
+      font-family: var(--mono);
+    }
+
+    code {
+      padding: 0.12em 0.34em;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface-2);
+      font-size: 0.9em;
+    }
+
+    pre {
+      margin: 0;
+      padding: 18px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--ink);
+      background: var(--surface-2);
+      font-size: 0.82rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 1000;
+      top: 8px;
+      left: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: var(--surface);
+      background: var(--ink);
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .topbar {
+      position: sticky;
+      z-index: 100;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 66px;
+      padding: 10px clamp(16px, 3vw, 42px);
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 86%, transparent);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+      font-weight: 900;
+      letter-spacing: -0.06em;
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .brand-copy strong,
+    .brand-copy span {
+      display: block;
+      white-space: nowrap;
+    }
+
+    .brand-copy strong {
+      font-size: 0.94rem;
+    }
+
+    .brand-copy span {
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+    }
+
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 38px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    .icon-button:hover,
+    .icon-button:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: var(--nav) minmax(0, 1fr);
+      width: min(100%, var(--max));
+      margin: 0 auto;
+    }
+
+    .side-nav {
+      position: sticky;
+      top: 66px;
+      align-self: start;
+      height: calc(100vh - 66px);
+      padding: 28px 22px 40px;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+    }
+
+    .side-nav p {
+      margin: 0 0 10px;
+      color: var(--soft);
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .side-nav a {
+      display: block;
+      margin: 2px 0;
+      padding: 7px 10px;
+      border-left: 2px solid transparent;
+      border-radius: 0 8px 8px 0;
+      color: var(--muted);
+      font-size: 0.84rem;
+      text-decoration: none;
+    }
+
+    .side-nav a:hover,
+    .side-nav a:focus-visible,
+    .side-nav a.active {
+      border-left-color: var(--accent);
+      color: var(--ink);
+      background: var(--accent-faint);
+      outline: none;
+    }
+
+    main {
+      min-width: 0;
+      padding: 28px clamp(18px, 4vw, 64px) 110px;
+    }
+
+    .hero {
+      position: relative;
+      display: grid;
+      min-height: min(760px, calc(100vh - 110px));
+      align-content: center;
+      padding: clamp(30px, 7vw, 92px) 0;
+    }
+
+    .hero::before {
+      position: absolute;
+      z-index: -1;
+      top: 8%;
+      right: 0;
+      width: min(42vw, 520px);
+      height: min(42vw, 520px);
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, transparent 44%, var(--accent-soft) 45%, transparent 46%),
+        radial-gradient(circle, transparent 63%, var(--line) 64%, transparent 65%);
+      content: "";
+      opacity: 0.72;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      width: fit-content;
+      margin-bottom: 18px;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 28px;
+      height: 2px;
+      background: currentColor;
+      content: "";
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+      margin: 0;
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+    }
+
+    h1 {
+      max-width: 930px;
+      font-size: clamp(3rem, 7.5vw, 7.5rem);
+      letter-spacing: -0.075em;
+    }
+
+    h1 em {
+      color: var(--accent);
+      font-style: normal;
+    }
+
+    .hero-lead {
+      max-width: 760px;
+      margin: 28px 0 0;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.4rem);
+    }
+
+    .hero-pills,
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .hero-pills {
+      margin-top: 28px;
+    }
+
+    .pill,
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 29px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      font-size: 0.72rem;
+      font-weight: 750;
+    }
+
+    .pill.accent,
+    .tag.accent {
+      border-color: var(--accent);
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+    }
+
+    .hero-note {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 13px;
+      max-width: 760px;
+      margin-top: 34px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--surface) 78%, transparent);
+    }
+
+    .hero-note b {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+    }
+
+    .hero-note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    section {
+      padding: 78px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.8fr) minmax(280px, 1.2fr);
+      gap: clamp(24px, 6vw, 90px);
+      align-items: end;
+      margin-bottom: 38px;
+    }
+
+    .section-number {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      font-weight: 900;
+    }
+
+    h2 {
+      font-size: clamp(2.2rem, 4.5vw, 4.7rem);
+    }
+
+    .section-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .grid-2,
+    .grid-3,
+    .grid-4 {
+      display: grid;
+      gap: 16px;
+    }
+
+    .grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .grid-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .card {
+      min-width: 0;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: 0 0 0 transparent;
+      transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    }
+
+    .card:hover {
+      border-color: var(--line-strong);
+      box-shadow: var(--shadow);
+      transform: translateY(-2px);
+    }
+
+    .card h3 {
+      margin-bottom: 10px;
+      font-size: 1.25rem;
+    }
+
+    .card p,
+    .card li {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .card p:last-child,
+    .card ul:last-child {
+      margin-bottom: 0;
+    }
+
+    .card-index {
+      display: inline-flex;
+      margin-bottom: 16px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 900;
+    }
+
+    .accent-card {
+      border-color: var(--accent);
+      background: var(--accent-faint);
+    }
+
+    .story-card {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .story-card::after {
+      position: absolute;
+      right: -22px;
+      bottom: -40px;
+      color: var(--accent-soft);
+      content: attr(data-step);
+      font-size: 8rem;
+      font-weight: 950;
+      line-height: 1;
+    }
+
+    .story-card > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .flow {
+      display: grid;
+      gap: 12px;
+      padding: clamp(18px, 3vw, 34px);
+      border: 1px solid var(--line);
+      border-radius: calc(var(--radius) + 6px);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .flow-row.four {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .flow-node {
+      position: relative;
+      display: flex;
+      min-height: 112px;
+      flex-direction: column;
+      justify-content: center;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .flow-node strong {
+      margin-bottom: 5px;
+      font-size: 0.95rem;
+    }
+
+    .flow-node span {
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .flow-node.accent {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .flow-node.dark {
+      border-color: var(--ink);
+      color: var(--surface);
+      background: var(--ink);
+    }
+
+    html[data-theme="dark"] .flow-node.dark {
+      color: var(--ink);
+      background: #050505;
+    }
+
+    .flow-arrow {
+      display: grid;
+      min-height: 35px;
+      place-items: center;
+      color: var(--accent);
+      font-size: 1.4rem;
+      font-weight: 900;
+    }
+
+    .flow-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--soft);
+      font-size: 0.7rem;
+      font-weight: 850;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .flow-label::after {
+      height: 1px;
+      flex: 1;
+      background: var(--line);
+      content: "";
+    }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 5px 1fr;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .callout::before {
+      background: var(--accent);
+      content: "";
+    }
+
+    .callout > div {
+      padding: 17px 18px;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .callout p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .teams-window {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .teams-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 17px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+
+    .teams-avatar {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+      font-weight: 900;
+    }
+
+    .teams-title strong,
+    .teams-title span {
+      display: block;
+    }
+
+    .teams-title span {
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+
+    .teams-body {
+      display: grid;
+      gap: 18px;
+      min-height: 390px;
+      padding: 24px;
+      align-content: center;
+    }
+
+    .message {
+      max-width: 78%;
+      padding: 13px 15px;
+      border-radius: 16px 16px 16px 3px;
+      background: var(--surface-2);
+      font-size: 0.86rem;
+    }
+
+    .message.me {
+      justify-self: end;
+      border-radius: 16px 16px 3px 16px;
+      color: #fff;
+      background: var(--accent);
+    }
+
+    .message small {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--soft);
+      font-weight: 800;
+    }
+
+    .message.me small {
+      color: rgba(255, 255, 255, 0.75);
+    }
+
+    .identity-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .identity-row {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 14px;
+      align-items: center;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .identity-row b {
+      color: var(--accent);
+      font-size: 0.76rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .identity-row strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .identity-row span {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .vocab-card {
+      display: grid;
+      min-height: 180px;
+      align-content: space-between;
+    }
+
+    .vocab-card strong {
+      color: var(--accent);
+      font-size: 1.05rem;
+    }
+
+    .vocab-card p {
+      margin: 20px 0 0;
+    }
+
+    .memory-map {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 84px minmax(0, 1fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .memory-lane {
+      display: grid;
+      gap: 12px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .memory-lane.private {
+      border-top: 5px solid var(--ink);
+    }
+
+    .memory-lane.shared {
+      border-top: 5px solid var(--accent);
+    }
+
+    .memory-lane h3 {
+      font-size: 1.3rem;
+    }
+
+    .memory-lane > p {
+      margin: 0 0 5px;
+      color: var(--muted);
+      font-size: 0.83rem;
+    }
+
+    .memory-item {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+    }
+
+    .memory-item strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 0.9rem;
+    }
+
+    .memory-item span {
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .privacy-wall {
+      display: grid;
+      place-items: center;
+      border: 1px dashed var(--accent);
+      border-radius: 999px;
+      color: var(--accent);
+      background: var(--accent-faint);
+      font-size: 0.68rem;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      text-align: center;
+      text-transform: uppercase;
+      writing-mode: vertical-rl;
+    }
+
+    .decision-tree {
+      display: grid;
+      gap: 10px;
+      max-width: 880px;
+      margin: 0 auto;
+    }
+
+    .decision-question {
+      display: grid;
+      grid-template-columns: 42px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .decision-question b {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+      font-family: var(--mono);
+    }
+
+    .decision-question span {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .decision-result {
+      min-width: 170px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      background: var(--surface-2);
+      font-size: 0.72rem;
+      font-weight: 850;
+      text-align: center;
+    }
+
+    .skill-index {
+      display: grid;
+      grid-template-columns: 0.85fr 1.15fr;
+      gap: 18px;
+    }
+
+    .skill-list,
+    .skill-detail {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .skill-list {
+      display: grid;
+      gap: 9px;
+      align-content: start;
+    }
+
+    .skill-button {
+      display: grid;
+      gap: 3px;
+      width: 100%;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--ink);
+      background: var(--surface-2);
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .skill-button strong {
+      font-size: 0.86rem;
+    }
+
+    .skill-button span {
+      color: var(--muted);
+      font-size: 0.7rem;
+    }
+
+    .skill-button.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .skill-detail {
+      min-height: 360px;
+    }
+
+    .skill-detail h3 {
+      margin-bottom: 8px;
+      color: var(--accent);
+      font-size: 1.5rem;
+    }
+
+    .skill-detail p,
+    .skill-detail li {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .skill-detail .path {
+      display: inline-flex;
+      margin-bottom: 18px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 16px;
+      padding-left: 30px;
+    }
+
+    .timeline::before {
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: 8px;
+      width: 2px;
+      background: var(--line);
+      content: "";
+    }
+
+    .timeline-item {
+      position: relative;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .timeline-item::before {
+      position: absolute;
+      top: 23px;
+      left: -29px;
+      width: 14px;
+      height: 14px;
+      border: 3px solid var(--bg);
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+    }
+
+    .timeline-item strong {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .timeline-item p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.83rem;
+    }
+
+    .gate-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .gate {
+      min-height: 190px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .gate .status {
+      display: inline-flex;
+      margin-bottom: 18px;
+      padding: 4px 8px;
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      font-size: 0.66rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .gate h3 {
+      margin-bottom: 8px;
+      font-size: 1rem;
+    }
+
+    .gate p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .refresh-table {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .refresh-column {
+      padding: 22px;
+    }
+
+    .refresh-column + .refresh-column {
+      border-left: 1px solid var(--line);
+    }
+
+    .refresh-column h3 {
+      margin-bottom: 16px;
+      font-size: 1.2rem;
+    }
+
+    .refresh-item {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.83rem;
+    }
+
+    .refresh-item:last-child {
+      border-bottom: 0;
+    }
+
+    .refresh-item b {
+      display: grid;
+      width: 23px;
+      height: 23px;
+      flex: 0 0 23px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+      font-size: 0.72rem;
+    }
+
+    .demo-strip {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .demo-step {
+      min-height: 150px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .demo-step b {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .demo-step strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.86rem;
+    }
+
+    .demo-step span {
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+
+    details {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    summary {
+      padding: 14px 16px;
+      cursor: pointer;
+      font-weight: 800;
+    }
+
+    details > div {
+      padding: 0 16px 16px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .two-tone {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .two-tone > div {
+      min-height: 260px;
+      padding: 24px;
+    }
+
+    .two-tone .black {
+      color: #fff;
+      background: #11110f;
+    }
+
+    .two-tone .orange {
+      color: #fff;
+      background: var(--accent);
+    }
+
+    .two-tone h3 {
+      margin-bottom: 12px;
+      font-size: 1.5rem;
+    }
+
+    .two-tone p {
+      color: inherit;
+      opacity: 0.78;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding-top: 40px;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    body.presentation .side-nav {
+      display: none;
+    }
+
+    body.presentation .layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    body.presentation main {
+      max-width: 1320px;
+      margin: 0 auto;
+    }
+
+    body.presentation section,
+    body.presentation .hero {
+      min-height: calc(100vh - 66px);
+      align-content: center;
+      scroll-snap-align: start;
+    }
+
+    body.presentation {
+      scroll-snap-type: y proximity;
+    }
+
+    @media (max-width: 1120px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .side-nav {
+        display: none;
+      }
+
+      .gate-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .demo-strip {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .brand-copy span,
+      .button-label {
+        display: none;
+      }
+
+      main {
+        padding-right: 16px;
+        padding-left: 16px;
+      }
+
+      .section-head,
+      .grid-2,
+      .grid-3,
+      .grid-4,
+      .flow-row,
+      .flow-row.four,
+      .skill-index,
+      .refresh-table,
+      .two-tone {
+        grid-template-columns: 1fr;
+      }
+
+      .memory-map {
+        grid-template-columns: 1fr;
+      }
+
+      .privacy-wall {
+        min-height: 50px;
+        writing-mode: horizontal-tb;
+      }
+
+      .identity-row {
+        grid-template-columns: 1fr;
+      }
+
+      .decision-question {
+        grid-template-columns: 34px 1fr;
+      }
+
+      .decision-result {
+        grid-column: 1 / -1;
+      }
+
+      .gate-grid,
+      .demo-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .refresh-column + .refresh-column {
+        border-top: 1px solid var(--line);
+        border-left: 0;
+      }
+
+      .hero::before {
+        opacity: 0.36;
+      }
+    }
+
+    @media print {
+      :root {
+        --bg: #fff;
+        --surface: #fff;
+        --surface-2: #f2f2f2;
+        --ink: #111;
+        --muted: #444;
+        --line: #bbb;
+        --accent: #c65300;
+        --accent-soft: #fff2e8;
+        --accent-faint: #fff8f3;
+        --shadow: none;
+      }
+
+      .topbar,
+      .side-nav,
+      .toolbar {
+        display: none !important;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      main {
+        padding: 0;
+      }
+
+      section,
+      .hero {
+        min-height: auto !important;
+        break-inside: avoid;
+        padding: 35px 0;
+      }
+
+      .card,
+      .flow,
+      .teams-window {
+        box-shadow: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.001ms !important;
+        animation-duration: 0.001ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">H</div>
+      <div class="brand-copy">
+        <strong>Hermes on Azure</strong>
+        <span>Architecture &amp; collective learning</span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button class="icon-button" id="presentationToggle" type="button" aria-pressed="false" title="Presentation mode (P)">
+        <span aria-hidden="true">▣</span>
+        <span class="button-label">Present</span>
+      </button>
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Switch color theme" title="Light / dark mode">
+        <span id="themeIcon" aria-hidden="true">◐</span>
+        <span class="button-label">Theme</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="side-nav" aria-label="Guide sections">
+      <p>Start simple</p>
+      <a href="#story">The 90-second story</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#teams">What people see</a>
+      <a href="#identity">Identity</a>
+      <p>How learning works</p>
+      <a href="#vocabulary">Vocabulary</a>
+      <a href="#memory">Memory planes</a>
+      <a href="#remembering">Remembering</a>
+      <a href="#skills">Skills</a>
+      <a href="#dreaming">Dreaming</a>
+      <p>Shared evolution</p>
+      <a href="#collective">Collective learning</a>
+      <a href="#promotion">Promotion gates</a>
+      <a href="#refresh">Worker Refresh</a>
+      <a href="#demo">Demo lifecycle</a>
+      <a href="#deeper">Deeper details</a>
+    </nav>
+
+    <main id="main">
+      <div class="hero" id="top">
+        <span class="eyebrow">Autopilots on Azure</span>
+        <h1>A digital Worker that learns <em>without leaking.</em></h1>
+        <p class="hero-lead">
+          Hermes gives each Worker durable memory and native skills. Azure gives it hosting, identity,
+          networking, and lifecycle. GitHub turns selected local lessons into reviewed Role Releases.
+        </p>
+        <div class="hero-pills" aria-label="Key capabilities">
+          <span class="pill accent">Microsoft Agent 365</span>
+          <span class="pill">ACA Sandboxes</span>
+          <span class="pill">Hermes-native learning</span>
+          <span class="pill">Entra identity</span>
+          <span class="pill">GitHub Promotion</span>
+        </div>
+        <div class="hero-note">
+          <b>!</b>
+          <p>
+            We do not call shared versions “generations.” The agreed term is <strong>Role Release</strong>.
+            A named digital teammate is a <strong>Worker</strong>, and adopting a newer Role Release is
+            <strong>Worker Refresh</strong>.
+          </p>
+        </div>
+      </div>
+
+      <section id="story">
+        <div class="section-head">
+          <div>
+            <span class="section-number">01 / START HERE</span>
+            <h2>The 90-second story</h2>
+          </div>
+          <p>
+            One shared job definition creates multiple private digital teammates. They learn locally,
+            but only approved, generalized evidence can improve the next shared release.
+          </p>
+        </div>
+        <div class="grid-4">
+          <article class="card story-card" data-step="1">
+            <span class="card-index">01</span>
+            <h3>Born from a role</h3>
+            <p>A Worker starts from an immutable Role Release containing reviewed instructions and Role Skills.</p>
+          </article>
+          <article class="card story-card" data-step="2">
+            <span class="card-index">02</span>
+            <h3>Works privately</h3>
+            <p>Its Personal Memory, Private Playbooks, Work History, identity, and Data Disk belong only to that Worker.</p>
+          </article>
+          <article class="card story-card" data-step="3">
+            <span class="card-index">03</span>
+            <h3>Learns locally</h3>
+            <p>Hermes can create Candidate Improvements or patch Role Skills while preserving provenance and privacy boundaries.</p>
+          </article>
+          <article class="card story-card accent-card" data-step="4">
+            <span class="card-index">04</span>
+            <h3>Improves together</h3>
+            <p>Selected lessons become signed Learning Packets, pass Collective Learning Review, and enter a human-reviewed Promotion PR.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="architecture">
+        <div class="section-head">
+          <div>
+            <span class="section-number">02 / RUNTIME</span>
+            <h2>Architecture at a glance</h2>
+          </div>
+          <p>
+            The public bridge is a thin control plane. The actual Worker lives in a stateful Sandbox.
+            Tools are called directly from the Sandbox through local identity adapters.
+          </p>
+        </div>
+
+        <div class="flow" role="img" aria-label="Teams and Agent 365 send messages to a per-Worker bridge, which wakes a Hermes Sandbox and connects to Foundry and MCP tools.">
+          <div class="flow-label">Human and platform entry points</div>
+          <div class="flow-row">
+            <div class="flow-node">
+              <strong>Microsoft Teams</strong>
+              <span>Direct chat, explicit mention, reactions</span>
+            </div>
+            <div class="flow-node">
+              <strong>Agent 365</strong>
+              <span>Agent User, package, Activity Protocol</span>
+            </div>
+            <div class="flow-node">
+              <strong>Operator / scheduler</strong>
+              <span>Direct invoke, Dreaming, packet preparation</span>
+            </div>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">↓</div>
+          <div class="flow-label">Per-Worker public control plane</div>
+          <div class="flow-node accent">
+            <strong>Bridge Container App</strong>
+            <span>Messaging adapter · authorization boundary · Sandbox wake/reuse · serialized learning · approval signature</span>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">↓</div>
+          <div class="flow-label">Stateful Worker runtime</div>
+          <div class="flow-row">
+            <div class="flow-node">
+              <strong>ACA Sandbox</strong>
+              <span>Isolated compute with lifecycle and ports</span>
+            </div>
+            <div class="flow-node dark">
+              <strong>Hermes Gateway</strong>
+              <span>Sessions · tools · native skills · Dreaming</span>
+            </div>
+            <div class="flow-node">
+              <strong>Persistent Data Disk</strong>
+              <span>Memory · playbooks · history · candidates</span>
+            </div>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">↓</div>
+          <div class="flow-label">Direct data plane</div>
+          <div class="flow-row four">
+            <div class="flow-node">
+              <strong>Azure Foundry</strong>
+              <span>Managed-identity model inference</span>
+            </div>
+            <div class="flow-node">
+              <strong>Private MCP</strong>
+              <span>VNet path + Agent Identity role</span>
+            </div>
+            <div class="flow-node">
+              <strong>Public MCP</strong>
+              <span>HTTPS + Entra audience and role</span>
+            </div>
+            <div class="flow-node">
+              <strong>Work IQ</strong>
+              <span>Worker-owned Microsoft 365 data</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-top: 18px;">
+          <div class="callout">
+            <div>
+              <strong>Bridge ≠ Hermes Gateway</strong>
+              <p>The bridge translates protocols and manages lifecycle. Hermes Gateway owns agent sessions, tool use, memory, and skills.</p>
+            </div>
+          </div>
+          <div class="callout">
+            <div>
+              <strong>The bridge does not proxy MCP traffic</strong>
+              <p>The Sandbox calls MCP servers through loopback identity adapters, keeping the bridge thin and the data plane explicit.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="teams">
+        <div class="section-head">
+          <div>
+            <span class="section-number">03 / EXPERIENCE</span>
+            <h2>What people see in Teams</h2>
+          </div>
+          <p>
+            To a colleague, the Worker looks like a digital teammate. Behind that simple chat are
+            a dedicated Agent User, a per-Worker bridge, an isolated Sandbox, and a private profile.
+          </p>
+        </div>
+        <div class="grid-2">
+          <div class="teams-window" aria-label="Illustrative Teams chat with Hermes">
+            <div class="teams-bar">
+              <div class="teams-avatar">H</div>
+              <div class="teams-title">
+                <strong>Hermes 2</strong>
+                <span>Digital Worker · Junior Project Manager</span>
+              </div>
+            </div>
+            <div class="teams-body">
+              <div class="message me">
+                <small>You</small>
+                For the handoff to Finance, what must we record?
+              </div>
+              <div class="message">
+                <small>Hermes 2</small>
+                Record the provider, receiver, deliverable, acceptance criteria, needed-by date,
+                verification status, and linked control record.
+              </div>
+              <div class="message me">
+                <small>You</small>
+                The needed-by date is at risk. Escalate it.
+              </div>
+              <div class="message">
+                <small>Hermes 2</small>
+                I will include the affected commitment, delivery impact, unmet criteria, accountable
+                parties, latest safe resolution date, and immediate next action.
+              </div>
+            </div>
+          </div>
+
+          <div class="identity-stack">
+            <div class="identity-row">
+              <b>Presence</b>
+              <div>
+                <strong>Agent User</strong>
+                <span>The account people chat with, add to Teams, and license for Microsoft 365 workloads.</span>
+              </div>
+            </div>
+            <div class="identity-row">
+              <b>Delivery</b>
+              <div>
+                <strong>Agent 365 platform blueprint</strong>
+                <span>Defines the endpoint, package, permissions, and messaging registration for this Worker.</span>
+              </div>
+            </div>
+            <div class="identity-row">
+              <b>Runtime</b>
+              <div>
+                <strong>Hermes Worker</strong>
+                <span>The actual behavior, memory, sessions, and tools running in the ACA Sandbox.</span>
+              </div>
+            </div>
+            <div class="identity-row">
+              <b>Boundary</b>
+              <div>
+                <strong>Targeted delivery</strong>
+                <span>Direct messages and explicit mentions are supported. Unmentioned channel traffic is not assumed.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="identity">
+        <div class="section-head">
+          <div>
+            <span class="section-number">04 / TRUST</span>
+            <h2>Three identities, three jobs</h2>
+          </div>
+          <p>
+            “Who is calling?” depends on the operation. We separate workload location, autonomous
+            business authorization, and Microsoft 365 ownership.
+          </p>
+        </div>
+
+        <div class="grid-3">
+          <article class="card">
+            <span class="card-index">WHERE</span>
+            <h3>Managed Identity</h3>
+            <p>Proves that code runs in the expected Azure Sandbox Group. It is the workload credential, not the business principal.</p>
+            <div class="tag-row">
+              <span class="tag">Azure-hosted</span>
+              <span class="tag">Short-lived token</span>
+            </div>
+          </article>
+          <article class="card accent-card">
+            <span class="card-index">WHO</span>
+            <h3>Agent Identity</h3>
+            <p>Represents the autonomous Worker when calling private or public tools. MCP servers validate audience, role, and identity.</p>
+            <div class="tag-row">
+              <span class="tag accent">Incidents.Read.All</span>
+              <span class="tag accent">Shipments.Read.All</span>
+            </div>
+          </article>
+          <article class="card">
+            <span class="card-index">WHOSE DATA</span>
+            <h3>Agent User</h3>
+            <p>Owns the Worker’s Microsoft 365 mailbox and presence. It needs service licenses for the workloads it accesses.</p>
+            <div class="tag-row">
+              <span class="tag">Teams</span>
+              <span class="tag">Work IQ</span>
+            </div>
+          </article>
+        </div>
+
+        <div class="flow" style="margin-top: 18px;">
+          <div class="flow-label">Autonomous token exchange</div>
+          <div class="flow-row four">
+            <div class="flow-node">
+              <strong>Sandbox managed identity</strong>
+              <span>Location proof</span>
+            </div>
+            <div class="flow-node">
+              <strong>Agent 365 blueprint</strong>
+              <span>Federated credential</span>
+            </div>
+            <div class="flow-node accent">
+              <strong>Agent Identity</strong>
+              <span>Business authorization principal</span>
+            </div>
+            <div class="flow-node">
+              <strong>Target resource</strong>
+              <span>Audience + app role</span>
+            </div>
+          </div>
+        </div>
+
+        <details>
+          <summary>Why not use the human’s Teams token for everything?</summary>
+          <div>
+            Human delegated access is valid only for an explicit user-owned request and consented turn.
+            A group chat cannot make one person’s delegated token ambient authorization for everyone.
+            Autonomous work therefore uses Agent Identity; Worker-owned Microsoft 365 data uses Agent User.
+          </div>
+        </details>
+      </section>
+
+      <section id="vocabulary">
+        <div class="section-head">
+          <div>
+            <span class="section-number">05 / LANGUAGE</span>
+            <h2>The naming convention</h2>
+          </div>
+          <p>
+            Consistent words make the lifecycle understandable to non-technical audiences and precise
+            enough for implementation.
+          </p>
+        </div>
+        <div class="grid-4">
+          <article class="card vocab-card"><strong>Role Blueprint</strong><p>The reviewed central definition of a job: instructions, Role Skills, tools, and release metadata.</p></article>
+          <article class="card vocab-card"><strong>Role Release</strong><p>An immutable semantic version of a Role Blueprint, pinned to an exact Git commit.</p></article>
+          <article class="card vocab-card"><strong>Worker</strong><p>A named digital teammate with its own identity, assignment, private state, and local learning.</p></article>
+          <article class="card vocab-card"><strong>Personal Memory</strong><p>Small private facts and preferences injected into every fresh session.</p></article>
+          <article class="card vocab-card"><strong>Private Playbook</strong><p>Rich assignment-specific knowledge loaded only when relevant.</p></article>
+          <article class="card vocab-card"><strong>Work History</strong><p>Private sessions, messages, tool calls, and search indexes used for recall and Dreaming.</p></article>
+          <article class="card vocab-card"><strong>Role Skill</strong><p>A reviewed reusable skill inherited from a Role Release.</p></article>
+          <article class="card vocab-card"><strong>Candidate Improvement</strong><p>A local reusable capability that may—but does not have to—benefit other Workers.</p></article>
+          <article class="card vocab-card"><strong>Dreaming</strong><p>Offline reflection across Work History, outcomes, memory, and skills.</p></article>
+          <article class="card vocab-card"><strong>Learning Packet</strong><p>An approved-boundary export containing allowed artifacts plus provenance.</p></article>
+          <article class="card vocab-card"><strong>Promotion</strong><p>Human-reviewed acceptance of shared learning into a new Role Release.</p></article>
+          <article class="card vocab-card"><strong>Worker Refresh</strong><p>Forward-only adoption of a newer Role Release while preserving private Worker state.</p></article>
+        </div>
+      </section>
+
+      <section id="memory">
+        <div class="section-head">
+          <div>
+            <span class="section-number">06 / MEMORY</span>
+            <h2>Private state vs. shareable learning</h2>
+          </div>
+          <p>
+            The central idea is not “public memory.” Private information stays private. A separate,
+            generalized artifact may become a Candidate Improvement.
+          </p>
+        </div>
+
+        <div class="memory-map">
+          <div class="memory-lane private">
+            <div>
+              <h3>Private Worker plane</h3>
+              <p>Survives Worker Refresh. Never exported raw.</p>
+            </div>
+            <div class="memory-item">
+              <strong>Personal Memory</strong>
+              <span><code>USER.md</code> + <code>MEMORY.md</code> · always injected</span>
+            </div>
+            <div class="memory-item">
+              <strong>Private Playbooks</strong>
+              <span><code>skills/private/</code> · progressive disclosure</span>
+            </div>
+            <div class="memory-item">
+              <strong>Work History</strong>
+              <span>SQLite sessions and indexes · recall + Dreaming evidence</span>
+            </div>
+            <div class="memory-item">
+              <strong>Assignment workspace</strong>
+              <span>Documents, working files, caches, and local operational state</span>
+            </div>
+          </div>
+
+          <div class="privacy-wall">Privacy boundary</div>
+
+          <div class="memory-lane shared">
+            <div>
+              <h3>Governed learning plane</h3>
+              <p>Generalized, provenance-bound, and reviewable.</p>
+            </div>
+            <div class="memory-item">
+              <strong>Role Skill patch</strong>
+              <span>Local diff against the immutable Role Release baseline</span>
+            </div>
+            <div class="memory-item">
+              <strong>Candidate Improvement</strong>
+              <span><code>skills/candidates/</code> · active locally first</span>
+            </div>
+            <div class="memory-item">
+              <strong>Learning provenance</strong>
+              <span><code>learning/records.jsonl</code> · why, evidence, hashes, confidence</span>
+            </div>
+            <div class="memory-item">
+              <strong>Learning Packet</strong>
+              <span>Fail-closed allowlist + privacy scan + human digest approval</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout" style="margin-top: 18px;">
+          <div>
+            <strong><code>records.jsonl</code> is not the Worker’s behavior</strong>
+            <p>The skill tree contains behavior. The journal explains why an eligible skill changed and binds that change to evidence, hashes, Worker identity, and Role Release.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="remembering">
+        <div class="section-head">
+          <div>
+            <span class="section-number">07 / CLASSIFICATION</span>
+            <h2>How Hermes decides what to remember</h2>
+          </div>
+          <p>
+            Every durable observation is classified before storage. The safest useful store wins;
+            uncertain or secret material is not stored as reusable learning.
+          </p>
+        </div>
+
+        <div class="decision-tree">
+          <div class="decision-question">
+            <b>1</b>
+            <div><strong>Is it a small personal preference or critical private fact?</strong><span>Identity, style, harmless marker, compact environment fact.</span></div>
+            <div class="decision-result">Personal Memory</div>
+          </div>
+          <div class="decision-question">
+            <b>2</b>
+            <div><strong>Is it rich assignment-, customer-, project-, manager-, or team-specific context?</strong><span>Named procedures, schedules, reference material, private templates.</span></div>
+            <div class="decision-result">Private Playbook</div>
+          </div>
+          <div class="decision-question">
+            <b>3</b>
+            <div><strong>Is it a reusable correction to inherited role behavior?</strong><span>A better version of an existing reviewed procedure.</span></div>
+            <div class="decision-result">Patch Role Skill</div>
+          </div>
+          <div class="decision-question">
+            <b>4</b>
+            <div><strong>Is it a new, general, reusable capability?</strong><span>Useful locally now; potentially useful to peer Workers later.</span></div>
+            <div class="decision-result">Candidate Improvement</div>
+          </div>
+          <div class="decision-question">
+            <b>5</b>
+            <div><strong>Is it secret, raw customer data, noise, or weak speculation?</strong><span>No trustworthy durable behavior should be created.</span></div>
+            <div class="decision-result">Do not store</div>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-top: 22px;">
+          <article class="card">
+            <span class="card-index">FOREGROUND</span>
+            <h3>Immediate learning</h3>
+            <p>An explicit lesson in one turn can create a Private Playbook, patch a Role Skill, or create a Candidate Improvement immediately.</p>
+          </article>
+          <article class="card">
+            <span class="card-index">BACKGROUND</span>
+            <h3>Dream-time learning</h3>
+            <p>Dreaming compares several sessions, corrections, outcomes, and tool traces to detect patterns that were not obvious in one turn.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="skills">
+        <div class="section-head">
+          <div>
+            <span class="section-number">08 / PROGRESSIVE DISCLOSURE</span>
+            <h2>Skills load only when useful</h2>
+          </div>
+          <p>
+            Hermes indexes skill names and descriptions. Full instructions are loaded only when the
+            task matches—or when a user invokes a skill explicitly with <code>/name</code>.
+          </p>
+        </div>
+
+        <div class="skill-index">
+          <div class="skill-list" aria-label="Skill types">
+            <button class="skill-button active" type="button" data-skill="role">
+              <strong>Role Skill</strong>
+              <span>Reviewed shared behavior</span>
+            </button>
+            <button class="skill-button" type="button" data-skill="private">
+              <strong>Private Playbook</strong>
+              <span>Assignment-specific procedure</span>
+            </button>
+            <button class="skill-button" type="button" data-skill="candidate">
+              <strong>Candidate Improvement</strong>
+              <span>Local reusable behavior</span>
+            </button>
+            <button class="skill-button" type="button" data-skill="dream">
+              <strong>Dream reflection</strong>
+              <span>Offline classification procedure</span>
+            </button>
+          </div>
+
+          <div class="skill-detail" id="skillDetail" aria-live="polite">
+            <span class="path">skills/role/delivery-commitment-control/SKILL.md</span>
+            <h3>Role Skill</h3>
+            <p>Inherited from an immutable Role Release. This example loads when a formal decision or dependency handoff affects delivery.</p>
+            <ul>
+              <li>Defines required decision and handoff fields.</li>
+              <li>Defines verification states: pending, accepted, rejected.</li>
+              <li>Defines when and how to escalate.</li>
+              <li>Can be patched locally, but the baseline in Git remains immutable.</li>
+            </ul>
+          </div>
+        </div>
+
+        <details>
+          <summary>What if someone creates a skill directly with <code>hermes --cli</code>?</summary>
+          <div>
+            Direct CLI writes bypass the bridge transaction. On the next bridged turn or Dreaming run,
+            governed drift is quarantined, the committed tree is restored, and safe content is recreated
+            with provenance. Private content becomes a Private Playbook; rejected content stays quarantined.
+          </div>
+        </details>
+      </section>
+
+      <section id="dreaming">
+        <div class="section-head">
+          <div>
+            <span class="section-number">09 / REFLECTION</span>
+            <h2>Dreaming expands the evidence horizon</h2>
+          </div>
+          <p>
+            Dreaming is not “always create a skill.” It is a scheduled or manual reflection that may
+            consolidate private memory, improve a playbook, create transferable learning, suppress a duplicate,
+            or intentionally store nothing.
+          </p>
+        </div>
+
+        <div class="timeline">
+          <div class="timeline-item">
+            <strong>1. Wake or reuse the Worker</strong>
+            <p>The bridge manages the ACA Sandbox lifecycle and waits for real Hermes API readiness.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>2. Open an isolated Dream session</strong>
+            <p>Dreaming uses a fresh session with a bounded focus and maximum artifact count.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>3. Compare Work History and local state</strong>
+            <p>Hermes can reason across outcomes, corrections, tool traces, Personal Memory, Private Playbooks, Role Skills, and candidates.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>4. Classify every observation</strong>
+            <p>Private facts remain private. Reusable behavior becomes a Role Skill patch or Candidate Improvement with provenance.</p>
+          </div>
+          <div class="timeline-item">
+            <strong>5. Optionally prepare a packet</strong>
+            <p>Scheduled learning may prepare an approval-required digest when transferable records exist—but cannot approve or export it.</p>
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-top: 22px;">
+          <article class="card">
+            <span class="card-index">CLASSROOM PATH</span>
+            <h3>Bridge-owned timer</h3>
+            <p>Simple and inspectable. One bridge replica remains active and runs the same serialized Worker learning transaction.</p>
+          </article>
+          <article class="card accent-card">
+            <span class="card-index">PRODUCTION PATH</span>
+            <h3>ACA scheduled Job</h3>
+            <p>A managed-identity Job calls a protected bridge operation. No Worker key or bridge API key is stored in the Job.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="collective">
+        <div class="section-head">
+          <div>
+            <span class="section-number">10 / COLLECTIVE LEARNING</span>
+            <h2>From local lessons to shared behavior</h2>
+          </div>
+          <p>
+            Local learning is fast and allowed to be imperfect. Collective Learning Review is slower,
+            compares multiple Workers, minimizes evidence, resolves conflicts, and proposes the smallest coherent shared change.
+          </p>
+        </div>
+
+        <div class="flow">
+          <div class="flow-label">Independent Workers on the same Role Release</div>
+          <div class="flow-row">
+            <div class="flow-node">
+              <strong>Worker: Hermes</strong>
+              <span>Candidate: meeting decision record</span>
+            </div>
+            <div class="flow-node accent">
+              <strong>Shared immutable baseline</strong>
+              <span>Junior Project Manager · Role Release 3.1.0</span>
+            </div>
+            <div class="flow-node">
+              <strong>Worker: Hermes 2</strong>
+              <span>Candidate: dependency handoff contract</span>
+            </div>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-label">Fail-closed export boundary</div>
+          <div class="flow-row">
+            <div class="flow-node">
+              <strong>Privacy scan</strong>
+              <span>Exclude Personal Memory, Playbooks, History, secrets, paths</span>
+            </div>
+            <div class="flow-node">
+              <strong>Human digest approval</strong>
+              <span>Binds Worker, Role Release, governed-state hash, exact packet</span>
+            </div>
+            <div class="flow-node">
+              <strong>Ed25519 attestation</strong>
+              <span>Bridge signs; Worker and central review hold public keys only</span>
+            </div>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-label">Central reasoning</div>
+          <div class="flow-node accent">
+            <strong>Merger / judge</strong>
+            <span>Sees minimized packets + current SOUL + distribution + existing Role Skills · finds support, conflict, outliers, and the smallest coherent proposal</span>
+          </div>
+          <div class="flow-arrow">↓</div>
+          <div class="flow-label">Governed output</div>
+          <div class="flow-row">
+            <div class="flow-node">
+              <strong>Rejected records</strong>
+              <span>Private, weak, conflicting, narrow, or unsupported</span>
+            </div>
+            <div class="flow-node accent">
+              <strong>Draft Promotion PR</strong>
+              <span>Role Skill proposal + rationale + supporting Workers and records</span>
+            </div>
+            <div class="flow-node">
+              <strong>Human expert review</strong>
+              <span>No autonomous merge into the Role Blueprint</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout" style="margin-top: 18px;">
+          <div>
+            <strong>Two Workers do not automatically equal consensus</strong>
+            <p>Evidence can be repeated, complementary, conflicting, or unrelated. The retained decision must say which—and never claim more support than the packets provide.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="promotion">
+        <div class="section-head">
+          <div>
+            <span class="section-number">11 / GITHUB GOVERNANCE</span>
+            <h2>The PR is reviewed twice</h2>
+          </div>
+          <p>
+            Deterministic code validates signatures, hashes, paths, schemas, and versions. Independent
+            GitHub Agentic Workflows review semantic quality using read-only reasoning and permission-separated safe outputs.
+          </p>
+        </div>
+
+        <div class="gate-grid">
+          <article class="gate">
+            <span class="status">Triage</span>
+            <h3>Promotion Triage</h3>
+            <p>Labels the PR and summarizes release scope, Workers, records, conflicts, and required gates.</p>
+          </article>
+          <article class="gate">
+            <span class="status">Privacy</span>
+            <h3>Privacy Guardian</h3>
+            <p>Checks for people, projects, identifiers, raw messages, private instructions, and reconstructable source detail.</p>
+          </article>
+          <article class="gate">
+            <span class="status">Mission</span>
+            <h3>Role Alignment</h3>
+            <p>Compares the proposal with the Role Blueprint mission and rejects unrelated or overpowered capabilities.</p>
+          </article>
+          <article class="gate">
+            <span class="status">Evidence</span>
+            <h3>Evidence Auditor</h3>
+            <p>Verifies that claims remain within retained Worker evidence and account for conflicts and rejections.</p>
+          </article>
+          <article class="gate">
+            <span class="status">Quality</span>
+            <h3>Skill Quality</h3>
+            <p>Checks packaging, discovery trigger, standalone execution, fields, states, gates, overlap, and consistency.</p>
+          </article>
+        </div>
+
+        <div class="two-tone" style="margin-top: 20px;">
+          <div class="black">
+            <h3>Agent job</h3>
+            <p>Read-only repository and PR context. It can reason, but cannot directly modify the repository or merge the Promotion.</p>
+          </div>
+          <div class="orange">
+            <h3>Safe output job</h3>
+            <p>Applies only allowlisted labels, comments, and reviews after threat detection and structural validation.</p>
+          </div>
+        </div>
+
+        <details>
+          <summary>Why create a draft PR instead of a ready PR?</summary>
+          <div>
+            The merger/judge is proposing generalized behavior, not approving it. Draft status communicates that
+            semantic gates and human expert review must finish before Promotion. The automation cannot mark the PR
+            ready, merge it, or perform Worker Refresh.
+          </div>
+        </details>
+      </section>
+
+      <section id="refresh">
+        <div class="section-head">
+          <div>
+            <span class="section-number">12 / FORWARD-ONLY ADOPTION</span>
+            <h2>Worker Refresh changes the role, not the person</h2>
+          </div>
+          <p>
+            After Promotion merges, each Worker adopts the strictly newer Role Release. Reviewed shared behavior is
+            replaced; private state stays with the Worker.
+          </p>
+        </div>
+
+        <div class="refresh-table">
+          <div class="refresh-column">
+            <h3>Preserved</h3>
+            <div class="refresh-item"><b>✓</b> Worker ID and assignment</div>
+            <div class="refresh-item"><b>✓</b> Agent Identity and Agent User</div>
+            <div class="refresh-item"><b>✓</b> Personal Memory</div>
+            <div class="refresh-item"><b>✓</b> Private Playbooks</div>
+            <div class="refresh-item"><b>✓</b> Work History and Data Disk</div>
+          </div>
+          <div class="refresh-column">
+            <h3>Replaced or archived</h3>
+            <div class="refresh-item"><b>→</b> Role Skills replaced by the new reviewed baseline</div>
+            <div class="refresh-item"><b>→</b> Previous Candidate Improvements archived</div>
+            <div class="refresh-item"><b>→</b> Previous-release provenance archived</div>
+            <div class="refresh-item"><b>→</b> Fresh sessions use the new skill index</div>
+            <div class="refresh-item"><b>→</b> New Sandbox may reuse the same Data Disk</div>
+          </div>
+        </div>
+
+        <div class="flow" style="margin-top: 20px;">
+          <div class="flow-row four">
+            <div class="flow-node">
+              <strong>Preflight</strong>
+              <span>Newer semantic version + approved export if governed state changed</span>
+            </div>
+            <div class="flow-node">
+              <strong>Verify</strong>
+              <span>Digest + signature + Worker + release + current state hash</span>
+            </div>
+            <div class="flow-node accent">
+              <strong>Refresh</strong>
+              <span>Transactional profile update with recoverable backup</span>
+            </div>
+            <div class="flow-node">
+              <strong>Validate</strong>
+              <span>Authoritative health + fresh-session behavior + private markers</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout" style="margin-top: 18px;">
+          <div>
+            <strong>Failure is safe</strong>
+            <p>If preflight, signature, state, or copy validation fails, the current Worker remains available. Refresh never silently discards local learning.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="demo">
+        <div class="section-head">
+          <div>
+            <span class="section-number">13 / CLASSROOM</span>
+            <h2>A repeatable full-lifecycle demo</h2>
+          </div>
+          <p>
+            Long-lived Workers move forward only. Repeatable demonstrations use a disposable <code>demo-*</code>
+            cohort pinned to an immutable baseline.
+          </p>
+        </div>
+
+        <div class="demo-strip">
+          <div class="demo-step"><b>01</b><strong>Baseline</strong><span>Provision two demo Workers from one immutable Role Release.</span></div>
+          <div class="demo-step"><b>02</b><strong>Diverge</strong><span>Teach each Worker a different reusable lesson.</span></div>
+          <div class="demo-step"><b>03</b><strong>Dream</strong><span>Show foreground and scheduled retrospective learning.</span></div>
+          <div class="demo-step"><b>04</b><strong>Review</strong><span>Approve packets and run Collective Learning Review.</span></div>
+          <div class="demo-step"><b>05</b><strong>Promote</strong><span>Open a disposable draft PR and show automated semantic gates.</span></div>
+          <div class="demo-step"><b>06</b><strong>Reset</strong><span>Delete only demo Sandboxes and Data Disks; recreate the baseline.</span></div>
+        </div>
+
+        <div class="grid-2" style="margin-top: 20px;">
+          <article class="card accent-card">
+            <span class="card-index">RESET ALLOWED</span>
+            <h3>Disposable cohort</h3>
+            <p>Worker ID, Data Disk, state directory, and Terraform workspace must all begin with <code>demo-</code>. Reset is dry-run by default.</p>
+          </article>
+          <article class="card">
+            <span class="card-index">RESET FORBIDDEN</span>
+            <h3>Long-lived Workers</h3>
+            <p><code>hermes</code> and <code>hermes2</code> use normal forward-only Worker Refresh. Their private history is never wiped to replay a demo.</p>
+          </article>
+        </div>
+
+        <details>
+          <summary>Suggested teaching sequence</summary>
+          <div>
+            <ol>
+              <li>Start with the 90-second story and architecture.</li>
+              <li>Show the Worker in Teams, then explain the three identities.</li>
+              <li>Teach one Personal Memory fact and one Private Playbook.</li>
+              <li>Create distinct Candidate Improvements in two Workers.</li>
+              <li>Run Dreaming and inspect canonical files plus provenance.</li>
+              <li>Prepare, approve, and export both Learning Packets.</li>
+              <li>Show the merger/judge decision and draft Promotion PR.</li>
+              <li>Walk through the five Agentic Promotion gates.</li>
+              <li>Refresh both Workers and prove private state survived.</li>
+              <li>Reset the disposable cohort for the next audience.</li>
+            </ol>
+          </div>
+        </details>
+      </section>
+
+      <section id="deeper">
+        <div class="section-head">
+          <div>
+            <span class="section-number">14 / DETAILS</span>
+            <h2>The important invariants</h2>
+          </div>
+          <p>
+            These are the rules that make the demonstration more than an AI story: they are enforced
+            by code, cryptography, namespaces, Terraform state, and explicit human gates.
+          </p>
+        </div>
+
+        <div class="grid-3">
+          <article class="card"><h3>Single writer</h3><p>Learning operations serialize per Worker because Hermes uses SQLite and transactional skill state.</p></article>
+          <article class="card"><h3>Immutable baseline</h3><p>Every Role Release is a semantic version pinned to a full Git commit with baseline Role Skill hashes.</p></article>
+          <article class="card"><h3>Fail-closed export</h3><p>Only allowlisted Role Skill diffs and Candidate Improvements with matching current-hash provenance can enter a packet.</p></article>
+          <article class="card"><h3>Independent approval</h3><p>The bridge holds the Ed25519 private key. The Worker cannot forge human packet approval.</p></article>
+          <article class="card"><h3>Deterministic review context</h3><p>Every semantic PR reviewer receives the exact same prefetched PR-head metadata, diff, history, and Role Blueprint snapshot.</p></article>
+          <article class="card"><h3>No automatic Promotion</h3><p>Dreaming, packet preparation, merger/judge, and Agentic reviewers cannot merge or refresh Workers.</p></article>
+        </div>
+
+        <div class="grid-2" style="margin-top: 20px;">
+          <div>
+            <h3 style="margin-bottom: 12px;">Canonical Hermes profile</h3>
+            <pre>/data/hermes/profiles/junior-project-manager/
+├── memories/
+│   ├── USER.md
+│   └── MEMORY.md
+├── skills/
+│   ├── role/
+│   ├── private/
+│   └── candidates/
+├── learning/
+│   ├── records.jsonl
+│   ├── exports/
+│   ├── quarantine/
+│   └── archive/
+├── state.db
+├── workspace/
+└── local/worker.json</pre>
+          </div>
+          <div>
+            <h3 style="margin-bottom: 12px;">Role Blueprint distribution</h3>
+            <pre>blueprints/junior-project-manager/
+├── distribution.yaml
+├── SOUL.md
+├── config.yaml
+├── mcp.json
+├── skills/role/
+│   ├── junior-project-manager/
+│   ├── dream-reflection/
+│   └── delivery-commitment-control/
+└── schemas/</pre>
+          </div>
+        </div>
+
+        <details>
+          <summary>What is deliberately not in the shared distribution?</summary>
+          <div>
+            Credentials, environment files, Personal Memory, Work History, sessions, logs, workspace files,
+            Private Playbooks, Candidate Improvements, and Worker-local learning state. Git owns reviewed role
+            behavior; the Data Disk owns private Worker continuity.
+          </div>
+        </details>
+      </section>
+
+      <footer class="footer">
+        <span>Autopilots on Azure · Hermes learning path</span>
+        <span>Role Release 3.2.0 example · Updated 2026-07-22</span>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const root = document.documentElement;
+    const themeToggle = document.getElementById("themeToggle");
+    const presentationToggle = document.getElementById("presentationToggle");
+    const storedTheme = localStorage.getItem("hermes-guide-theme");
+    const preferredDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = storedTheme || (preferredDark ? "dark" : "light");
+
+    themeToggle.addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      localStorage.setItem("hermes-guide-theme", root.dataset.theme);
+    });
+
+    presentationToggle.addEventListener("click", () => {
+      const enabled = document.body.classList.toggle("presentation");
+      presentationToggle.setAttribute("aria-pressed", String(enabled));
+    });
+
+    const skills = {
+      role: {
+        path: "skills/role/delivery-commitment-control/SKILL.md",
+        title: "Role Skill",
+        intro: "Inherited from an immutable Role Release. This example loads when formal decisions or dependency handoffs affect delivery.",
+        points: [
+          "Defines required decision and handoff fields.",
+          "Defines verification states: pending, accepted, rejected.",
+          "Defines when and how to escalate.",
+          "Can be patched locally while Git remains the immutable baseline."
+        ]
+      },
+      private: {
+        path: "skills/private/cedar-delivery/SKILL.md",
+        title: "Private Playbook",
+        intro: "Rich assignment-specific knowledge for one Worker. It survives Worker Refresh and never enters a Learning Packet.",
+        points: [
+          "Discovered progressively by name and description.",
+          "May include references, templates, scripts, and named facts.",
+          "Can be created with native /learn or skill_manage.",
+          "Dreaming may improve it without making it shareable."
+        ]
+      },
+      candidate: {
+        path: "skills/candidates/dependency-handoff-contract/SKILL.md",
+        title: "Candidate Improvement",
+        intro: "New reusable behavior created by one Worker. It is active locally first and scoped to the current Role Release.",
+        points: [
+          "Requires provenance bound to actual file hashes.",
+          "May be rejected, narrowed, combined, or promoted.",
+          "Is archived during Worker Refresh.",
+          "Does not become shared behavior until Promotion."
+        ]
+      },
+      dream: {
+        path: "skills/role/dream-reflection/SKILL.md",
+        title: "Dream reflection",
+        intro: "A reviewed procedure that tells Hermes how to classify observations during offline reflection.",
+        points: [
+          "Uses a wider evidence horizon than one foreground turn.",
+          "May update private stores or create generalized learning.",
+          "Suppresses duplicates and weak speculation.",
+          "Never approves or promotes its own output."
+        ]
+      }
+    };
+
+    const skillDetail = document.getElementById("skillDetail");
+    document.querySelectorAll(".skill-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".skill-button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        const skill = skills[button.dataset.skill];
+        skillDetail.innerHTML = `
+          <span class="path">${skill.path}</span>
+          <h3>${skill.title}</h3>
+          <p>${skill.intro}</p>
+          <ul>${skill.points.map((point) => `<li>${point}</li>`).join("")}</ul>
+        `;
+      });
+    });
+
+    const navLinks = [...document.querySelectorAll(".side-nav a")];
+    const sections = navLinks
+      .map((link) => document.querySelector(link.getAttribute("href")))
+      .filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      navLinks.forEach((link) => {
+        link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`);
+      });
+    }, { rootMargin: "-20% 0px -60% 0px", threshold: [0.05, 0.25, 0.6] });
+    sections.forEach((section) => observer.observe(section));
+
+    function presentationMove(direction) {
+      if (!document.body.classList.contains("presentation")) return;
+      const all = [document.querySelector(".hero"), ...document.querySelectorAll("main > section")];
+      const current = all.reduce((best, item, index) => {
+        const distance = Math.abs(item.getBoundingClientRect().top - 66);
+        return distance < best.distance ? { index, distance } : best;
+      }, { index: 0, distance: Infinity }).index;
+      const target = all[Math.max(0, Math.min(all.length - 1, current + direction))];
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.target.matches("input, textarea, button, summary")) return;
+      if (event.key.toLowerCase() === "p") {
+        presentationToggle.click();
+      } else if (event.key === "ArrowRight" || event.key === "PageDown") {
+        presentationMove(1);
+      } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        presentationMove(-1);
+      }
+    });
+  </script>
+</body>
+</html>

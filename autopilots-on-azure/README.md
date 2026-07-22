@@ -64,6 +64,7 @@ uv run python -m scripts.demo_ops smoke `
 | [SPEC.md](SPEC.md) | Product requirements, terminology, architecture, security, and lifecycle contracts |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | First deployment, additional Workers, updates, validation, and cleanup |
 | [DEMO.md](DEMO.md) | Teams demonstrations, memory/skills, Dreaming, and Collective Learning Review |
+| [Hermes visual guide](docs/hermes-learning-guide.html) | Offline presentation-ready HTML explanation of architecture, identity, memory, learning, Promotion, and Worker Refresh |
 | [PLAN.md](PLAN.md) | Delivery status, history, next work, and deferred items |
 | [`docs\adr`](docs/adr) | Decisions and reconsideration triggers |
 | [`docs\runbooks`](docs/runbooks) | Detailed identity or preview-service procedures |
