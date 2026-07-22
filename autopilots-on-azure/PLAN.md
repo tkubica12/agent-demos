@@ -122,7 +122,31 @@ Exit criteria:
 - Candidate Improvements can reach approval preparation without interactive Sandbox access.
 - A disposable demo cohort can be reset and replayed without touching long-lived Worker state.
 
-### A12 - Agent 365 workload notifications
+### A12 - Document-aware work and attachments
+
+Goal: let Workers safely receive, open, reason over, create, and comment on Microsoft 365 documents while preserving identity and privacy boundaries.
+
+Tasks:
+
+- Preserve attachment metadata from Teams and Agent 365 activities instead of reducing every turn to plain text.
+- Validate secure file download for Teams/Microsoft 365 attachments; investigate Python SDK parity with the documented JavaScript `M365AttachmentDownloader`.
+- Add MIME type, extension, size, and count allowlists plus explicit failure messages for unsupported or inaccessible files.
+- Prefer Work IQ Word `WordGetDocumentContent` for OneDrive/SharePoint sharing URLs so the Worker receives extracted text, comments, and document IDs rather than raw DOCX bytes.
+- Validate Work IQ Word document creation, content retrieval, comment creation, and comment replies.
+- Confirm the current preview limitation: Work IQ Word does not expose arbitrary in-place document-body editing; do not claim unsupported editing.
+- Define when access uses Agent User, an attachment-scoped Agents SDK token, or explicit human OBO.
+- Keep downloaded documents, extracted text, and comments in private Worker context; never emit document excerpts into Candidate Improvements or Learning Packets.
+- Add a Sandbox attachment contract for content that cannot be handled solely through a sharing URL and Work IQ MCP.
+- Validate Word first, then assess Excel, PowerPoint, PDF, images, and other Office attachments.
+
+Exit criteria:
+
+- A Teams or Agent 365 turn with a Word attachment reaches the selected Worker with stable metadata and authorized content access.
+- The Worker can summarize a document and its comments, create a new Word document, add a comment, and reply to a comment through Work IQ.
+- Unsupported or unauthorized attachments fail explicitly without leaking content.
+- Document content remains private and excluded from Collective Learning Review.
+
+### A13 - Agent 365 workload notifications
 
 Goal: add non-Teams Microsoft 365 event inputs while retaining Teams Activity Protocol for chat.
 
@@ -131,6 +155,7 @@ Tasks:
 - Validate Agent 365 Email and Word comment notifications first.
 - Add bridge sources such as `a365_email` and `a365_word_comment`.
 - Use stable Work History keys based on message, document, thread, or comment identifiers.
+- Use attachment/document handling from A12 for WPX comment payloads, which include document URLs and IDs.
 - Reply through the originating workload rather than Teams.
 - Add Excel and PowerPoint comments after Email and Word.
 - Preserve runtime selection, identity, privacy, and learning boundaries.
@@ -138,6 +163,7 @@ Tasks:
 Exit criteria:
 
 - Email and Word notifications reach the selected Worker.
+- The Worker resolves the referenced document through the A12 document contract.
 - The Worker responds or acts through the correct Microsoft 365 workload.
 - Required permissions remain least privilege.
 

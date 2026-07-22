@@ -51,6 +51,18 @@ The scheduled Job uses the existing per-Worker bridge managed identity. A dedica
 
 Use event-driven ACA Jobs later when there is a real queue-driven need, such as processing large export batches or fan-out consolidation work. Do not use Service Connector as a scheduler; use it only when helpful for service-to-service wiring.
 
+Service Bus does not directly wake an ACA Sandbox. If queue-driven Dreaming is introduced, the supported topology is:
+
+```text
+Service Bus message
+  -> KEDA-triggered ACA Job execution
+  -> managed-identity bridge request
+  -> bridge wakes or reuses ACA Sandbox
+  -> Hermes Dreaming
+```
+
+An alternative is a Service Bus scaler and queue consumer inside the bridge Container App, but the bridge must then own message settlement, retries, dead-letter handling, and idempotency. The event-driven Job keeps that queue concern outside the public message bridge and is preferred for future fleet fan-out.
+
 ## Consequences
 
 - ACA Sandbox remains the stateful worker runtime, not the scheduler.
@@ -58,4 +70,10 @@ Use event-driven ACA Jobs later when there is a real queue-driven need, such as 
 - Bridge-owned cron is acceptable for v1 but requires the bridge to be alive.
 - ACA scheduled Jobs provide the production cloud-native timer path and are modeled with Terraform/azapi in this repository.
 - Event-driven Jobs remain available for future queue-based fleet workflows.
+- Neither scheduled nor event-driven ACA Jobs host Hermes; they run the finite control-plane client that invokes the bridge.
 - Dreaming runs can be audited and throttled centrally rather than hidden inside individual worker sandboxes.
+
+## References
+
+- [Jobs in Azure Container Apps](https://learn.microsoft.com/azure/container-apps/jobs)
+- [Azure Container Apps Sandboxes overview](https://learn.microsoft.com/azure/container-apps/sandbox-overview)

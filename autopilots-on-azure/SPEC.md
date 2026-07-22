@@ -292,6 +292,22 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 4. Work IQ Mail acts as the Worker Agent User mailbox.
 5. Agent 365 BYO MCP registration is a governance and supported-client surface; runtimes may use direct Agent Identity access where appropriate.
 
+### Documents and attachments
+
+1. Teams and Agent 365 attachment metadata must survive bridge normalization, including name, content type, content URL, document ID, comment ID, and originating workload when supplied.
+2. Attachment access must use the narrowest valid identity boundary:
+   - attachment-scoped Agents SDK authorization for files supplied in the current turn;
+   - Agent User for Worker-owned or Worker-shared Microsoft 365 content;
+   - explicit human OBO for private human-owned resources when implemented.
+3. One user's delegated document access must never become ambient authorization in a group or channel.
+4. OneDrive or SharePoint sharing URLs should use managed Work IQ document tools before introducing custom DOCX parsing or storage.
+5. Work IQ Word preview capabilities are limited to creating documents, retrieving extracted content/comments, adding comments, and replying to comments. The product must not claim arbitrary existing-document body editing until a supported tool exists.
+6. The bridge must enforce file count, size, MIME type, and extension limits before forwarding or staging content.
+7. Unsupported, inaccessible, oversized, or unsafe documents must fail explicitly.
+8. Raw documents and extracted excerpts are private Worker context and are excluded from Role Skills, Candidate Improvements, provenance, and Learning Packets.
+9. Temporary attachment files must use Worker-private storage with bounded retention and must not be committed to the Role Blueprint.
+10. Office comment notifications must reuse the same document access contract rather than creating a second attachment path.
+
 ## Role Blueprint and Worker lifecycle
 
 ### Role Blueprint distribution
@@ -609,6 +625,8 @@ Work History                         |
 - Multi-Worker Collective Learning Review is implemented but has only been live-validated with one Worker packet.
 - Scheduled Dreaming automation is not yet implemented.
 - Agent 365 Email and Office comment notifications are not yet implemented.
+- Teams and Agent 365 document attachment ingestion is not yet implemented.
+- Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.
 
 ## Non-goals
 
