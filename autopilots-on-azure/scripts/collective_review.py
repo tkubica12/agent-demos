@@ -195,7 +195,9 @@ def judge_prompt(packets: list[dict[str, Any]], next_role_release: str) -> str:
         '"content":"complete SKILL.md","rationale":"...","supportingRecordIds":["lr-..."],'
         '"supportingWorkers":["worker-id"]}],"rejected":[{"recordId":"lr-...","reason":"..."}],"conflicts":["..."]}\n'
         "Each proposal content must be a complete agentskills.io-compatible SKILL.md. Use action reject by omitting a proposal "
-        "and listing its records under rejected. Do not modify SOUL.md, configuration, memory, or non-role paths.\n\n"
+        "and listing its records under rejected. targetPath must contain exactly one lowercase kebab-case skill-name segment "
+        "between skills/role and SKILL.md, for example skills/role/delivery-commitment-control/SKILL.md. Never prefix or nest "
+        "the target under the Role Blueprint name. Do not modify SOUL.md, configuration, memory, or non-role paths.\n\n"
         "Approved Learning Packets:\n"
         + json.dumps(_review_payload(packets), indent=2, ensure_ascii=True)
     )

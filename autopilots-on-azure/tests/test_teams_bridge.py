@@ -12,8 +12,8 @@ from bridge.app import (
     delete_message_reaction,
     format_teams_context,
     format_teams_event_prompt,
-    memory_has_openclaw_message_id,
-    openclaw_memory_record,
+    agent_memory_record,
+    memory_has_agent_message_id,
     reacted_message_id,
     response_has_visible_text,
     remember_teams_event,
@@ -82,6 +82,25 @@ class TeamsBridgeTests(unittest.TestCase):
     def tearDown(self):
         _teams_memory.clear()
         _teams_diag.clear()
+
+    def test_runtime_display_name_is_used_for_hermes_memory(self):
+        previous = {
+            "AGENT_RUNTIME": os.environ.get("AGENT_RUNTIME"),
+            "AUTOPILOT_TEAMS_NAME": os.environ.get("AUTOPILOT_TEAMS_NAME"),
+        }
+        os.environ["AGENT_RUNTIME"] = "hermes"
+        os.environ["AUTOPILOT_TEAMS_NAME"] = "Hermes 2"
+        try:
+            record = agent_memory_record("Ahoj")
+            self.assertEqual(bridge_app.runtime_display_name(), "Hermes 2")
+            self.assertEqual(record["role"], "agent")
+            self.assertEqual(record["sender"], "Hermes 2")
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
     def test_internal_dream_requires_operator_key_and_returns_packet(self):
         class Adapter:
@@ -232,7 +251,7 @@ class TeamsBridgeTests(unittest.TestCase):
                 response_contract=teams_response_contract(root, teams_signal_type(root)),
             ),
         )
-        remember_teams_event(session_key, openclaw_memory_record("Previous OpenClaw answer"))
+        remember_teams_event(session_key, agent_memory_record("Previous OpenClaw answer"))
 
         context = format_teams_context(
             session_key,
@@ -377,7 +396,7 @@ class TeamsBridgeTests(unittest.TestCase):
 
     def test_thanks_in_active_thread_can_be_acknowledged_with_reaction(self):
         session_key = "teams:channel:conversation-1;messageid=root-message:thread:root-message"
-        remember_teams_event(session_key, openclaw_memory_record("Ahoj, slyším tě."))
+        remember_teams_event(session_key, agent_memory_record("Ahoj, slyším tě."))
 
         self.assertTrue(should_acknowledge_with_reaction("díky!", "reply_in_thread_without_bot_mention", session_key))
         self.assertFalse(should_acknowledge_with_reaction("díky OpenClaw", "textual_bot_name_mention", session_key))
@@ -436,7 +455,7 @@ class TeamsBridgeTests(unittest.TestCase):
             entities=[],
         )
         session_key = teams_session_key(activity)
-        remember_teams_event(session_key, openclaw_memory_record("Ahoj, slyším tě."))
+        remember_teams_event(session_key, agent_memory_record("Ahoj, slyším tě."))
         signal_type = teams_signal_type(activity, message=teams_prompt_text(activity))
         response_contract = teams_response_contract(activity, signal_type, session_key=session_key)
 
@@ -444,12 +463,12 @@ class TeamsBridgeTests(unittest.TestCase):
         self.assertEqual(signal_type, "reply_in_thread_without_bot_mention")
         self.assertEqual(response_contract, "must_answer")
 
-    def test_openclaw_message_id_memory_filters_reactions(self):
+    def test_agent_message_id_memory_filters_reactions(self):
         session_key = "teams:channel:conversation-1;messageid=root-message:thread:root-message"
-        remember_teams_event(session_key, openclaw_memory_record("Ahoj, slyším tě.", "bot-message-1"))
+        remember_teams_event(session_key, agent_memory_record("Ahoj, slyším tě.", "bot-message-1"))
 
-        self.assertTrue(memory_has_openclaw_message_id(session_key, "bot-message-1"))
-        self.assertFalse(memory_has_openclaw_message_id(session_key, "human-message-1"))
+        self.assertTrue(memory_has_agent_message_id(session_key, "bot-message-1"))
+        self.assertFalse(memory_has_agent_message_id(session_key, "human-message-1"))
 
     def test_reaction_target_uses_reply_to_id(self):
         activity = ns(reply_to_id="bot-message-1")

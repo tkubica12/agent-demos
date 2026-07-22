@@ -51,6 +51,17 @@ def _operator_request(
     return payload
 
 
+def attested_envelope(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    packet = result.get("packet")
+    receipt = result.get("receipt")
+    if not isinstance(packet, dict) or not isinstance(receipt, dict):
+        raise RuntimeError("Collective Learning export did not return an attested packet and receipt.")
+    return {
+        "packet": packet,
+        "receipt": receipt,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Operate Hermes Collective Learning Review.")
     parser.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
@@ -92,13 +103,14 @@ def main() -> None:
             timeout=args.timeout,
             state_name=args.state_name,
         )
-        worker_id = str((result.get("packet") or {}).get("worker", {}).get("workerId") or "")
+        envelope = attested_envelope(result)
+        worker_id = str(envelope["packet"].get("worker", {}).get("workerId") or "")
         tfvars = _load_json(runtime_app_tfvars_path("hermes", args.state_name))
         public_key = str(tfvars.get("collective_learning_approval_public_key") or "")
         if not worker_id or not public_key:
             raise RuntimeError("Worker ID and Collective Learning approval public key are required.")
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        args.output.write_text(json.dumps(envelope, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         public_keys_path = args.output.with_suffix(".worker-public-keys.json")
         public_keys_path.write_text(
             json.dumps({worker_id: public_key}, indent=2, sort_keys=True) + "\n",
@@ -107,8 +119,8 @@ def main() -> None:
         result = {
             "output": str(args.output),
             "workerPublicKeys": str(public_keys_path),
-            "packetVersion": (result.get("packet") or {}).get("packetVersion"),
-            "improvementCount": len((result.get("packet") or {}).get("improvements") or []),
+            "packetVersion": envelope["packet"].get("packetVersion"),
+            "improvementCount": len(envelope["packet"].get("improvements") or []),
         }
     print(json.dumps(result, indent=2, sort_keys=True))
 

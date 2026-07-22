@@ -259,7 +259,7 @@ class HermesRuntimeAdapter:
 
         base_url = sandbox.endpoint_url.rstrip("/")
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
-        await self._wait_for_health(base_url)
+        await self._wait_for_health(base_url, api_key)
         snapshot_token, recovered_unprovenanced = await self._begin_learning_turn(base_url, api_key)
         quarantine_recovery = None
         quarantine_recovery_error = None
@@ -455,8 +455,8 @@ class HermesRuntimeAdapter:
         if not sandbox.endpoint_url:
             raise RuntimeError(f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port.")
         base_url = sandbox.endpoint_url.rstrip("/")
-        await self._wait_for_health(base_url)
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        await self._wait_for_health(base_url, api_key)
         async with self._client_factory(timeout=60) as client:
             response = await client.request(
                 method,
@@ -585,19 +585,27 @@ class HermesRuntimeAdapter:
             provenance[:3],
         )
 
-    async def _wait_for_health(self, base_url: str) -> None:
+    async def _wait_for_health(self, base_url: str, api_key: str) -> None:
         deadline = time.time() + int(_env_optional("HERMES_HEALTH_TIMEOUT_SECONDS", default="120"))
         async with self._client_factory(timeout=10) as client:
-            last_error: Exception | None = None
+            last_error: Exception | str | None = None
             while time.time() < deadline:
                 try:
-                    response = await client.get(f"{base_url}/health")
-                    if response.status_code == 200:
+                    health_response = await client.get(f"{base_url}/health")
+                    models_response = await client.get(
+                        f"{base_url}/v1/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                    )
+                    if health_response.status_code == 200 and models_response.status_code == 200:
                         return
+                    last_error = (
+                        f"health={health_response.status_code}, "
+                        f"models={models_response.status_code}"
+                    )
                 except Exception as exc:
                     last_error = exc
                 await asyncio.sleep(2)
-        raise TimeoutError(f"Timed out waiting for Hermes health at {base_url}/health: {last_error}")
+        raise TimeoutError(f"Timed out waiting for Hermes API readiness at {base_url}: {last_error}")
 
     def _headers(self, api_key: str, request: AgentRequest) -> dict[str, str]:
         return {

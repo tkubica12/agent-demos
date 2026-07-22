@@ -56,19 +56,21 @@ Exit criteria:
 
 ### Multi-Worker Collective Learning Review
 
-Status: In progress; `hermes2` infrastructure and identity are ready.
+Status: In progress; two-Worker review completed and draft Promotion PR #5 is awaiting human review.
 
 Tasks:
 
 - Complete: provision a second Worker from the same Role Release.
 - Complete: provision Hermes 2 Agent Identity, Agent User, Agent 365 platform blueprint, consent, bridge, Data Disk, and Role Release 3.1.0.
 - Complete: assign Agent 365, Flow, and a temporarily transferred Teams Enterprise license to Hermes 2.
-- Confirm Hermes 2 is discoverable and responsive in Teams after service propagation.
-- Teach Hermes 2 the divergent `dependency-handoff-contract` Candidate Improvement.
-- Produce independent, attested Learning Packets from both Workers.
-- Exercise repeated support, conflicting evidence, outliers, and rejection rationale.
-- Verify central review rejects duplicate Worker IDs and mixed Role Releases.
-- Create and review a multi-Worker draft Promotion PR.
+- Complete: confirm Hermes 2 is discoverable and responsive in Teams after service propagation.
+- Complete: teach Hermes 2 the divergent `dependency-handoff-contract` Candidate Improvement.
+- Complete: produce independent, operator-approved, attested Learning Packets from both Workers.
+- Complete: merge complementary evidence from both Workers into one `delivery-commitment-control` Role Skill proposal with explicit support and empty conflict/rejection sets.
+- Complete: enforce rejection of duplicate Worker IDs, mixed Role Releases, malformed envelopes, unknown Workers, and unsafe proposal paths.
+- Complete: create draft Promotion PR #5 for Role Release 3.2.0.
+- Complete: add strict GitHub Agentic Workflow gates for Promotion triage, privacy, Role Blueprint alignment, learning evidence, and skill quality using `GITHUB_TOKEN` inference and permission-separated safe outputs.
+- Review and merge PR #5, then refresh both Workers to Role Release 3.2.0.
 - Restore the temporarily transferred Teams Enterprise license to `openclaw1` after the Teams phase of the test.
 
 Exit criteria:

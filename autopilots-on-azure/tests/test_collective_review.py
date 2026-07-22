@@ -14,6 +14,7 @@ from scripts.collective_review import (
     validate_decision,
     validate_next_role_release,
 )
+from scripts.collective_learning import attested_envelope
 
 
 class CollectiveReviewTests(unittest.TestCase):
@@ -24,6 +25,22 @@ class CollectiveReviewTests(unittest.TestCase):
             format=serialization.PublicFormat.Raw,
         )
     ).decode("ascii")
+
+    def test_operator_export_removes_bridge_transport_metadata(self):
+        packet = {"packetVersion": "1.0"}
+        receipt = {"approved": True}
+
+        envelope = attested_envelope(
+            {
+                "packet": packet,
+                "receipt": receipt,
+                "sandboxId": "sandbox-1",
+                "gatewayUrl": "https://sandbox.example",
+                "reusedExistingSandbox": True,
+            }
+        )
+
+        self.assertEqual(envelope, {"packet": packet, "receipt": receipt})
 
     def _packet(self, worker_id: str = "worker-1") -> dict:
         record_id = f"lr-{worker_id}"

@@ -22,7 +22,7 @@ from microsoft_agents.hosting.fastapi import CloudAdapter, start_agent_process
 from pydantic import BaseModel, Field
 
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
-from bridge.runtime.factory import create_runtime_adapter
+from bridge.runtime.factory import create_runtime_adapter, runtime_kind_from_env
 
 
 app = FastAPI(title="Autopilot Azure Container Apps bridge")
@@ -243,7 +243,7 @@ def is_gratitude_message(message: str) -> bool:
 def should_acknowledge_with_reaction(message: str, signal_type: str, session_key: str | None) -> bool:
     if signal_type in {"explicit_bot_mention", "targeted_private_message", "textual_bot_name_mention"}:
         return False
-    return is_gratitude_message(message) and memory_has_openclaw_response(session_key)
+    return is_gratitude_message(message) and memory_has_agent_response(session_key)
 
 
 def normalize_requested_reaction(value: str) -> str | None:
@@ -261,6 +261,16 @@ def split_teams_response_instructions(response: str) -> tuple[str, str | None]:
             continue
         visible_lines.append(line)
     return "\n".join(visible_lines).strip(), reaction
+
+
+def runtime_display_name() -> str:
+    configured = env_optional("AUTOPILOT_TEAMS_NAME", "OPENCLAW_TEAMS_NAME")
+    if configured:
+        return configured
+    return {
+        "hermes": "Hermes",
+        "openclaw": "OpenClaw",
+    }.get(runtime_kind_from_env(), "Autopilot")
 
 
 def env_int(name: str, default: int) -> int:
@@ -362,9 +372,9 @@ def message_mentions_bot_name(activity: Activity, message: str | None = None) ->
     if not text:
         return False
     aliases = {
-        "openclaw",
+        runtime_kind_from_env(),
+        runtime_display_name().lower(),
         str(field_value(activity, "recipient", "name") or "").lower(),
-        env_optional("AUTOPILOT_TEAMS_NAME", "OPENCLAW_TEAMS_NAME", default="OpenClaw").lower(),
     }
     normalized = text.lower()
     return any(alias and re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases)
@@ -382,16 +392,16 @@ def activity_is_channel_thread_reply(activity: Activity) -> bool:
     return bool(root_id and activity_id and activity_id != root_id)
 
 
-def memory_has_openclaw_response(session_key: str | None) -> bool:
+def memory_has_agent_response(session_key: str | None) -> bool:
     if not session_key:
         return False
-    return any(event.get("role") == "openclaw" and not response_should_be_suppressed(str(event.get("text") or "")) for event in teams_memory(session_key))
+    return any(event.get("role") == "agent" and not response_should_be_suppressed(str(event.get("text") or "")) for event in teams_memory(session_key))
 
 
-def memory_has_openclaw_message_id(session_key: str | None, message_id: str | None) -> bool:
+def memory_has_agent_message_id(session_key: str | None, message_id: str | None) -> bool:
     if not session_key or not message_id:
         return False
-    return any(event.get("role") == "openclaw" and event.get("activityId") == message_id for event in teams_memory(session_key))
+    return any(event.get("role") == "agent" and event.get("activityId") == message_id for event in teams_memory(session_key))
 
 
 def reacted_message_id(activity: MessageReactionActivity) -> str:
@@ -453,7 +463,7 @@ def teams_signal_type(activity: Activity, *, message: str | None = None, reactio
 def teams_response_contract(activity: Activity, signal_type: str, *, session_key: str | None = None) -> str:
     if signal_type in {"explicit_bot_mention", "targeted_private_message", "textual_bot_name_mention"} or teams_conversation_type(activity) == "personal":
         return "must_answer"
-    if signal_type == "reply_in_thread_without_bot_mention" and memory_has_openclaw_response(session_key):
+    if signal_type == "reply_in_thread_without_bot_mention" and memory_has_agent_response(session_key):
         return "must_answer"
     return "observe_then_maybe_answer"
 
@@ -530,7 +540,7 @@ def format_teams_context(
     anchors: list[dict[str, Any]] = []
     if reply_to_id:
         anchors.extend(event for event in memory if event.get("activityId") == reply_to_id)
-    anchors.extend(event for event in reversed(memory) if event.get("role") == "openclaw")  # latest OpenClaw response first
+    anchors.extend(event for event in reversed(memory) if event.get("role") == "agent")
 
     by_key: dict[str, dict[str, Any]] = {}
     for event in [*anchors[:3], *selected]:
@@ -542,7 +552,7 @@ def format_teams_context(
     max_chars = env_int("OPENCLAW_TEAMS_CONTEXT_MAX_CHARS", 12000)
     context = (
         "Bridge-observed context window:\n"
-        f"- Memory policy: bounded local window, reply/reaction anchor if known, latest OpenClaw answer if known, max {max_chars} chars.\n"
+        f"- Memory policy: bounded local window, reply/reaction anchor if known, latest {runtime_display_name()} answer if known, max {max_chars} chars.\n"
         f"- Stored events for this session/thread: {len(memory)}\n"
         f"- Known participants in stored window: {', '.join(participant_names) if participant_names else 'unknown'}\n"
         + "\n".join(rendered_events)
@@ -576,13 +586,13 @@ def teams_event_memory_record(
     }
 
 
-def openclaw_memory_record(response: str, activity_id: str | None = None) -> dict[str, Any]:
+def agent_memory_record(response: str, activity_id: str | None = None) -> dict[str, Any]:
     return {
-        "role": "openclaw",
+        "role": "agent",
         "event": "response",
         "signalType": "agent_response",
         "activityId": activity_id or "",
-        "sender": "OpenClaw",
+        "sender": runtime_display_name(),
         "text": response,
     }
 
@@ -607,7 +617,7 @@ def format_teams_event_prompt(
     auth_context = agent_auth_context(activity)
     reaction_line = f"\nReaction types: {', '.join(reactions)}" if reactions else ""
     return (
-        "You are OpenClaw participating in a Microsoft Teams group conversation.\n"
+        f"You are {runtime_display_name()} participating in a Microsoft Teams conversation.\n"
         f"Event: {event}\n"
         f"Signal type: {signal_type}\n"
         f"Response contract: {response_contract}\n"
@@ -818,7 +828,7 @@ async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
         }
     )
     if conversation_type not in _SUPPORTED_TEAMS_CONVERSATION_TYPES:
-        await ctx.send_activity(f"OpenClaw does not support Teams conversation type '{conversation_type or 'unknown'}' yet.")
+        await ctx.send_activity(f"{runtime_display_name()} does not support Teams conversation type '{conversation_type or 'unknown'}' yet.")
         return
 
     if conversation_type != "personal" and not mentioned and not targeted and not should_observe_unmentioned_messages():
@@ -828,9 +838,10 @@ async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
     message = teams_prompt_text(ctx.activity)
     if not message:
         if conversation_type == "personal":
-            await ctx.send_activity("Send a text prompt for OpenClaw.")
+            await ctx.send_activity(f"Send a text prompt for {runtime_display_name()}.")
         else:
-            await ctx.send_activity("Mention OpenClaw with a text prompt, for example: @OpenClaw list services from private incidents MCP.")
+            name = runtime_display_name()
+            await ctx.send_activity(f"Mention {name} with a text prompt, for example: @{name} list services from private incidents MCP.")
         return
 
     session_key = teams_session_key(ctx.activity)
@@ -912,8 +923,8 @@ async def handle_teams_message_reaction(ctx: TurnContext, _state: TurnState) -> 
         return
 
     session_key = teams_session_key(ctx.activity)
-    if not memory_has_openclaw_message_id(session_key, reacted_to_id):
-        record_teams_diag({"event": "ignoredReactionToNonOpenClawMessage", "conversationId": conversation_id, "reactedToId": reacted_to_id})
+    if not memory_has_agent_message_id(session_key, reacted_to_id):
+        record_teams_diag({"event": "ignoredReactionToNonAgentMessage", "conversationId": conversation_id, "reactedToId": reacted_to_id})
         return
     signal_type = teams_signal_type(ctx.activity, reactions=added)
     response_contract = teams_response_contract(ctx.activity, signal_type, session_key=session_key)
@@ -1125,15 +1136,15 @@ async def run_agent_runtime_for_teams(
         if response_should_be_suppressed(result.text) or (requested_reaction and not response_has_visible_text(result.text)):
             record_teams_diag({"event": "responseSuppressed", "conversationId": conversation_id})
             if memory_session_key:
-                remember_teams_event(memory_session_key, openclaw_memory_record(visible_response or _NO_RESPONSE))
+                remember_teams_event(memory_session_key, agent_memory_record(visible_response or _NO_RESPONSE))
         elif not streamed:
             sent_activity_id = await send_teams_response(ctx, visible_response, targeted_response=targeted_response)
             if memory_session_key:
-                remember_teams_event(memory_session_key, openclaw_memory_record(visible_response, sent_activity_id))
+                remember_teams_event(memory_session_key, agent_memory_record(visible_response, sent_activity_id))
         else:
             record_teams_diag({"event": "streamCloseSkipped", "conversationId": conversation_id, "reason": "agent365"})
             if memory_session_key:
-                remember_teams_event(memory_session_key, openclaw_memory_record(visible_response or _NO_RESPONSE))
+                remember_teams_event(memory_session_key, agent_memory_record(visible_response or _NO_RESPONSE))
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
     except Exception as exc:
         if status_reaction_message_id:
@@ -1147,7 +1158,7 @@ async def run_agent_runtime_for_teams(
             }
         )
         try:
-            await ctx.send_activity(f"OpenClaw could not complete this request: {exc}")
+            await ctx.send_activity(f"{runtime_display_name()} could not complete this request: {exc}")
         except Exception as send_exc:
             record_teams_diag(
                 {
@@ -1167,10 +1178,10 @@ async def run_agent_runtime_for_teams(
 
 async def send_stream_progress_updates(ctx: TurnContext, conversation_id: str, done: asyncio.Event) -> None:
     try:
-        record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": "Waking OpenClaw sandbox..."})
+        record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": f"Waking {runtime_display_name()} Sandbox..."})
         await asyncio.wait_for(done.wait(), timeout=int(env_optional("AUTOPILOT_TEAMS_PROGRESS_DELAY_SECONDS", "OPENCLAW_TEAMS_PROGRESS_DELAY_SECONDS", default="10")))
     except asyncio.TimeoutError:
-        record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": "OpenClaw is still working..."})
+        record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": f"{runtime_display_name()} is still working..."})
     except asyncio.CancelledError:
         raise
     except Exception as exc:

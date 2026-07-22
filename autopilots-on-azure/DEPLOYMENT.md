@@ -8,6 +8,7 @@ This guide covers repeatable Azure deployment and Worker lifecycle operations. D
 - Terraform.
 - `uv`.
 - Agent 365 CLI (`a365`).
+- GitHub Agentic Workflows CLI (`gh extension install github/gh-aw`).
 - GitHub CLI for Promotion pull requests.
 - Tenant rights for Agent 365 blueprint creation, consent, Agent Identity, Agent User, licensing, and registration.
 - Available Microsoft 365 service licenses for each Agent User capability.

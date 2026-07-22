@@ -544,6 +544,9 @@ Work History                         |
 3. Human expert review is required before merge.
 4. The next Role Release must be a strictly newer semantic version.
 5. Git remains the source of truth for promoted Role Skills.
+6. Automated Promotion review must keep agent reasoning read-only and use permission-separated safe outputs for labels, comments, and reviews.
+7. Privacy, Role Blueprint alignment, learning evidence, and skill quality are independent semantic gates; they complement rather than replace deterministic signature, hash, schema, namespace, and version validation.
+8. Automated reviewers must not mark a Promotion ready, merge it, or perform Worker Refresh.
 
 ## Security and privacy requirements
 

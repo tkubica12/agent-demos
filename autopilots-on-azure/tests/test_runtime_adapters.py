@@ -217,8 +217,11 @@ class RuntimeAdapterTests(unittest.TestCase):
             restore_env(previous_env)
 
         post = next(call for call in calls if "/api/sessions/" in call["url"])
+        readiness = next(call for call in calls if call["url"].endswith("/v1/models"))
         self.assertEqual(response.text, "stateful OK")
         self.assertEqual(response.raw["hermesEndpoint"], "sessions")
+        self.assertEqual(readiness["headers"]["Authorization"], "Bearer api-key-1")
+        self.assertLess(calls.index(readiness), calls.index(post))
         self.assertEqual(post["url"], "https://hermes.example/api/sessions/teams%3Athread%3A1/chat")
         self.assertEqual(post["headers"]["Authorization"], "Bearer api-key-1")
         self.assertEqual(post["headers"]["X-Hermes-Session-Id"], "teams:thread:1")
