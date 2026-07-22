@@ -39,9 +39,9 @@ Set verification status to `pending` until the receiver assesses the deliverable
 
 Before marking a handoff complete, confirm that its verification status is `accepted`.
 
-## Escalate incomplete or time-critical handoffs
+## Escalate unresolved decisions or handoffs
 
-Flag a handoff for escalation when its needed-by date will pass before verification status reaches `accepted`. State the affected commitment, delivery impact, unmet acceptance criteria, accountable provider and receiver, needed-by date, and required next action.
+Raise a critical-path escalation when an unresolved decision or unaccepted handoff threatens an affected commitment. Include the decision or handoff record, unresolved fields or unmet acceptance criteria, accountable decision owner or provider and receiver, effective or needed-by date, latest safe resolution date, and required resolution.
 
 ## Minimum decision record
 
