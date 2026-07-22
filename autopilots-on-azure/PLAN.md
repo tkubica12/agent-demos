@@ -20,6 +20,7 @@ As of 2026-07-22:
 - `hermes2` retains its isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
 - Both Hermes bridges use the runtime-specific wake/readiness and transient Worker Refresh preflight fixes; Terraform workspaces converge.
 - The Teams Enterprise license temporarily transferred for the multi-Worker test is restored to `openclaw1`.
+- Hermes 2 runs the live bridge-owned A11 scheduler daily; an on-demand cycle successfully produced one Candidate Improvement and prepared an approval-required packet without approving or exporting it.
 - Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
 ## Completed milestones
@@ -92,6 +93,8 @@ Exit criteria:
 
 Goal: run recurring Dreaming and packet preparation without manual Sandbox access.
 
+Status: In progress; the bridge-owned classroom scheduler is live on Hermes 2, while the managed-identity ACA Job and disposable demo cohort remain.
+
 Tasks:
 
 - Choose an Azure Container Apps scheduled Job as the production scheduler.
@@ -100,6 +103,8 @@ Tasks:
 - Complete: wake or reuse Workers through the existing bridge and Worker learning transaction.
 - Complete: expose sanitized status for last Dream, packet preparation, failures, counters, and current Role Release.
 - Complete: ensure automation never approves, exports, promotes, or merges learning.
+- Complete: live-validate an on-demand Hermes 2 cycle that produced one transferable record and prepared one approval-required packet.
+- Complete: deploy the scheduler bridge with a daily interval, one-hour startup delay, retry/backoff, and Terraform convergence.
 - Add managed-identity authentication for the production ACA scheduled Job bridge endpoint without stored keys.
 - Provision the ACA scheduled Job with Terraform/azapi and validate an on-demand execution.
 - Add disposable `demo-*` Worker/Data Disk reset automation pinned to an immutable baseline.
