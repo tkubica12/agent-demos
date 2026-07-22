@@ -25,6 +25,9 @@ from azure.identity import DefaultAzureCredential
 
 OPENCLAW_GATEWAY_PORT = 18789
 HERMES_API_PORT = 8642
+WORKER_REFRESH_PREFLIGHT_TIMEOUT_SECONDS = 300
+WORKER_REFRESH_RETRY_SECONDS = 3
+WORKER_REFRESH_TRANSIENT_STATUS_CODES = {502, 503, 504}
 AGENT_MCP_PROXY_PORT = 18081
 PRIVATE_MCP_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/private-incidents"
 PUBLIC_SHIPMENTS_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/public-shipments"
@@ -244,24 +247,37 @@ def require_worker_refresh_ready(
     if not endpoint or not api_keys:
         raise RuntimeError("Worker Refresh preflight cannot reach the current Hermes Worker.")
     payload = None
-    last_error: urllib.error.HTTPError | None = None
+    last_error: Exception | None = None
+    last_detail = ""
+    deadline = time.time() + WORKER_REFRESH_PREFLIGHT_TIMEOUT_SECONDS
     for api_key in api_keys:
-        request = urllib.request.Request(
-            f"{str(endpoint).rstrip('/')}/internal/collective-learning/refresh-ready",
-            headers={"X-Autopilot-Key": api_key},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                payload = json.load(response)
-            break
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code != 401:
+        while time.time() < deadline:
+            request = urllib.request.Request(
+                f"{str(endpoint).rstrip('/')}/internal/collective-learning/refresh-ready",
+                headers={"X-Autopilot-Key": api_key},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    payload = json.load(response)
                 break
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                last_detail = exc.read().decode("utf-8", errors="replace")
+                if exc.code == 401:
+                    break
+                if exc.code not in WORKER_REFRESH_TRANSIENT_STATUS_CODES:
+                    raise RuntimeError(
+                        f"Worker Refresh is blocked by the current Worker ({exc.code}): {last_detail}"
+                    ) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_error = exc
+                last_detail = str(exc)
+            time.sleep(WORKER_REFRESH_RETRY_SECONDS)
+        if payload is not None:
+            break
     if payload is None and last_error is not None:
-        detail = last_error.read().decode("utf-8", errors="replace")
         raise RuntimeError(
-            f"Worker Refresh is blocked by the current Worker ({last_error.code}): {detail}"
+            f"Worker Refresh preflight did not become ready: {last_detail}"
         ) from last_error
     if not isinstance(payload, dict) or payload.get("ready") is not True:
         raise RuntimeError("Current Worker did not approve Worker Refresh.")

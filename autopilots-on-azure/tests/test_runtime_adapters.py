@@ -1,9 +1,12 @@
 import asyncio
 import base64
+import io
 import inspect
 import os
 import unittest
+import urllib.error
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import httpx
 
@@ -25,6 +28,7 @@ from scripts.sandbox_runtime import (
     ensure_agent_sandbox,
     hermes_sandbox_config,
     openclaw_sandbox_config,
+    require_worker_refresh_ready,
     runtime_labels,
 )
 
@@ -1029,6 +1033,72 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(result.sandbox_id, "sandbox-1")
         self.assertEqual(result.gateway_url, "https://gateway.example")
         self.assertTrue(result.reused_existing_sandbox)
+
+    def test_worker_refresh_preflight_retries_transient_gateway_failure(self):
+        config = hermes_sandbox_config(
+            subscription_id="sub-1",
+            resource_group="rg-1",
+            sandbox_group="sandbox-group-1",
+            region="swedencentral",
+            image_name="registry.example/hermes-runtime@sha256:test",
+            data_volume_name="hermes-data",
+            api_server_key="api-key-1",
+            role_blueprint="junior-project-manager",
+            role_blueprint_source="https://example.com/roles.git",
+            role_blueprint_path="roles/junior-project-manager",
+            role_release="3.2.0",
+            role_release_commit="b" * 40,
+            worker_id="worker-1",
+        )
+
+        class SandboxClient:
+            def ensure_running(self, timeout):
+                self.timeout = timeout
+
+            def get(self):
+                return SimpleNamespace(
+                    ports=[SimpleNamespace(port=8642, url="https://hermes.example")]
+                )
+
+        class Client:
+            def get_sandbox_client(self, sandbox_id):
+                self.sandbox_id = sandbox_id
+                return SandboxClient()
+
+        class JsonResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        transient = urllib.error.HTTPError(
+            "https://hermes.example/internal/collective-learning/refresh-ready",
+            502,
+            "Bad Gateway",
+            {},
+            io.BytesIO(b'{"error":"Failed to forward request"}'),
+        )
+        ready = JsonResponse(b'{"ready":true}')
+
+        with (
+            patch.object(
+                sandbox_runtime.urllib.request,
+                "urlopen",
+                side_effect=[transient, ready],
+            ) as urlopen,
+            patch.object(sandbox_runtime.time, "sleep"),
+        ):
+            require_worker_refresh_ready(
+                Client(),
+                config,
+                {
+                    "id": "sandbox-1",
+                    "labels": {"roleReleaseCommit": "a" * 40},
+                },
+            )
+
+        self.assertEqual(urlopen.call_count, 2)
 
     def test_hermes_response_text_parses_chat_completions(self):
         text = HermesRuntimeAdapter._response_text({"choices": [{"message": {"content": " hello from Hermes "}}]})
