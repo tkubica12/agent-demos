@@ -1,6 +1,6 @@
 ---
 name: delivery-commitment-control
-description: Maintain traceable delivery commitments by recording decisions, controlling dependency handoffs, managing changes, and escalating risks.
+description: Record delivery decisions and dependency handoffs with acceptance verification and escalation criteria.
 ---
 
 # Delivery Commitment Control
@@ -35,7 +35,9 @@ For each handoff, record:
 
 Do not treat a handoff as committed when any required field is missing. Record unresolved ownership, acceptance criteria, or timing as a planning risk.
 
-Before marking a handoff complete, confirm that the receiver assessed the deliverable against the recorded acceptance criteria.
+Set verification status to `pending` until the receiver assesses the deliverable. Set it to `accepted` only when every acceptance criterion is met; otherwise set it to `rejected` and record the unmet criteria.
+
+Before marking a handoff complete, confirm that its verification status is `accepted`.
 
 ## Escalate incomplete or time-critical commitments
 
