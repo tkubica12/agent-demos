@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Last reviewed 2026-07-09.
+Accepted. Last reviewed 2026-07-22.
 
 ## Context
 
@@ -24,6 +24,7 @@ The Agent 365 Notifications SDK is also not a subscription system for Teams conv
 | --- | --- | --- |
 | Teams 1:1 message | Verified | Hermes and OpenClaw live tests |
 | Explicit channel mention | Verified | Hermes and OpenClaw live tests |
+| Targeted private message in a group conversation | Public developer preview; bridge detection exists, package opt-in and live delivery pending | Teams targeted-messaging documentation requires `supportsTargetedMessages` |
 | Unmentioned channel message | Not delivered | Live bridge logs and Team/RSC inspection |
 | Unmentioned reply in a thread where the agent already replied | Not delivered | Live test showed no bridge activity |
 | Full thread history | Not pushed | Requires a separate Graph/MCP read; bridge currently keeps only delivered activities in local memory |
@@ -71,6 +72,8 @@ Eligible delivered events:
 - Temporary `eyes` are removed after the runtime finishes, including `NO_RESPONSE`.
 - Reactions remain preview functionality and require dedicated error/rate-limit handling.
 - Bridge-local memory is sufficient for the demo but not durable shared conversation state.
+- Targeted requests are private one-user/one-agent turns inside a group conversation. They expire from Teams clients after 24 hours and don't support reactions, replies, or forwarding.
+- Targeted request content must not be copied into public group context. Publishing a private result requires an explicit user approval flow and a new public message.
 
 ## Review triggers
 
@@ -82,6 +85,7 @@ Review this ADR when any of these occur:
 - Agent 365 packages begin creating an installed Teams app or an RSC grant in the target resource.
 - Microsoft publishes an Agent User-specific RSC flow.
 - Inbound `messageReaction` behavior is live-verified for these instances.
+- Agent 365 AI teammate packaging is confirmed to support the targeted-message manifest opt-in and `/AgentName` is live-verified.
 
 ## Sources
 
@@ -93,4 +97,6 @@ Review this ADR when any of these occur:
 - [Understanding Activity Protocol](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/activity-protocol)
 - [Get all channel and chat messages with RSC](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-messages-for-bots-and-agents)
 - [Build agents that use emoji reactions in Teams](https://learn.microsoft.com/en-us/microsoftteams/platform/agents-in-teams/agent-reactions)
+- [Send and receive targeted messages](https://learn.microsoft.com/en-us/microsoftteams/platform/agents-in-teams/targeted-messages)
+- [Expose slash commands from agents and apps](https://learn.microsoft.com/en-us/microsoftteams/platform/agents-in-teams/agent-slash-commands)
 - [Agent 365 Python notifications design](https://github.com/microsoft/Agent365-python/blob/main/libraries/microsoft-agents-a365-notifications/docs/design.md)

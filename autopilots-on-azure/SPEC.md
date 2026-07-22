@@ -273,6 +273,10 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 4. Direct messages, explicit mentions, and targeted activities are supported.
 5. Unmentioned Teams channel messages are not assumed to be delivered.
 6. Agent 365 notification workloads must use workload-appropriate response channels rather than being converted into Teams messages.
+7. Teams targeted messaging is a distinct private-user boundary inside a group conversation and must not be treated as a public group turn.
+8. A targeted request must produce a targeted response unless the user explicitly approves publication.
+9. Targeted requests, responses, attachments, and derived context must not enter public conversation memory or be revealed to untargeted participants.
+10. Targeted messaging must not be claimed until the Agent 365 package is confirmed to opt in with the supported equivalent of `supportsTargetedMessages`.
 
 ### Identity and authorization
 

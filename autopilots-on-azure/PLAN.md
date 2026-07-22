@@ -167,6 +167,30 @@ Exit criteria:
 - The Worker responds or acts through the correct Microsoft 365 workload.
 - Required permissions remain least privilege.
 
+### A14 - Teams targeted private messaging
+
+Goal: let a user privately invoke a Worker inside a channel, group chat, or meeting chat with `/WorkerName` while preserving the surrounding conversation context and strict user-only visibility.
+
+Tasks:
+
+- Confirm whether Agent 365 AI teammate packaging can emit the Teams manifest `bots[].supportsTargetedMessages: true` capability or requires an additional supported package surface.
+- Add discoverable agent slash commands only after targeted-message opt-in is confirmed.
+- Live-validate `/Hermes` and `/Hermes 2` in a channel, group chat, and meeting chat.
+- Verify inbound activities set `recipient.is_targeted` and map to a private-user bridge boundary.
+- Ensure a targeted request always receives a targeted response unless the user explicitly approves public sharing.
+- Keep targeted turns out of public bridge context, public Work History keys, and public channel replies.
+- Validate that files and Adaptive Cards preserve expected privacy; account for card actions that can generate public activities.
+- Handle preview constraints: targeted messages expire after 24 hours and don't support reactions, replies, or forwarding.
+- Add explicit fallback to a 1:1 chat when targeted send/receive isn't supported by the installed Agent 365 package.
+- Test update/delete behavior and confirm expired targeted messages fail explicitly.
+
+Exit criteria:
+
+- A user can invoke each Worker privately with `/WorkerName` inside a supported group conversation.
+- No untargeted participant can see the request, response, attachment, or derived context.
+- The bridge and runtime retain the correct private-user authorization boundary.
+- Unsupported clients or package configurations fall back safely to 1:1 chat.
+
 ## Deferred
 
 - Human OBO with explicit per-turn consent.
