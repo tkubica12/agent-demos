@@ -424,6 +424,7 @@ Reset is dry-run by default:
 
 ```powershell
 uv run python -m scripts.demo_cohort `
+  reset `
   --state-name demo-hermes-a `
   --workspace demo-hermes-a `
   --baseline-release 3.1.0 `
@@ -431,6 +432,22 @@ uv run python -m scripts.demo_cohort `
 ```
 
 After reviewing the exact Sandbox and Data Disk names, add `--execute`. The command refuses any resource whose state name, Worker ID, Data Disk, or workspace does not start with `demo-`.
+
+Create an ephemeral Git baseline for demonstrations that include merge and Worker Refresh:
+
+```powershell
+uv run python -m scripts.demo_cohort create-git-base `
+  --branch demo/collective-learning-class `
+  --baseline-commit 60b8e7ef3fb594f386d5177032df434eb4e62917
+```
+
+Pass `--base-branch demo/collective-learning-class` and a unique `--promotion-branch` to `scripts.collective_review`. After resetting the demo Workers, delete the lane:
+
+```powershell
+uv run python -m scripts.demo_cohort delete-git-base `
+  --branch demo/collective-learning-class `
+  --close-pull-requests
+```
 
 ## Runtime image updates
 

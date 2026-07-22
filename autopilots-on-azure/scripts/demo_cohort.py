@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from typing import Any
 
 from azure.containerapps.sandbox import SandboxGroupClient
@@ -10,7 +11,13 @@ from azure.identity import DefaultAzureCredential
 from scripts.sandbox_runtime import endpoint_for_region
 from scripts.setup_agent365 import load_json
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
-from scripts.tf_helpers import PLATFORM_DIR, output, terraform_output
+from scripts.tf_helpers import (
+    PLATFORM_DIR,
+    REPO_ROOT,
+    output,
+    resolve_executable,
+    terraform_output,
+)
 
 
 DEMO_PREFIX = "demo-"
@@ -107,11 +114,12 @@ def reset(args: argparse.Namespace) -> None:
         if not sandbox_id:
             raise RuntimeError("A matching demo Sandbox has no ID.")
         client.begin_delete_sandbox(sandbox_id, polling_timeout=600).result()
-    volume_names = {
-        str(getattr(volume, "name", "") or getattr(volume, "id", ""))
+    volume_exists = any(
+        str(getattr(volume, "name", "")) == volume_name
+        or str(getattr(volume, "id", "")).rstrip("/").endswith(f"/{volume_name}")
         for volume in client.list_volumes()
-    }
-    if volume_name in volume_names:
+    )
+    if volume_exists:
         client.begin_delete_volume(volume_name, polling_timeout=600).result()
     summary["deleted"] = True
     summary["next"] = (
@@ -121,17 +129,130 @@ def reset(args: argparse.Namespace) -> None:
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
+def require_demo_branch(branch: str) -> None:
+    if not branch.startswith("demo/") or ".." in branch or "//" in branch:
+        raise ValueError("Disposable Git branches must use the demo/* namespace.")
+
+
+def create_git_base(args: argparse.Namespace) -> None:
+    require_demo_branch(args.branch)
+    subprocess.run(
+        [
+            resolve_executable("git"),
+            "push",
+            args.remote,
+            f"{args.baseline_commit}:refs/heads/{args.branch}",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    print(
+        json.dumps(
+            {
+                "branch": args.branch,
+                "baselineCommit": args.baseline_commit,
+                "remote": args.remote,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+def delete_git_base(args: argparse.Namespace) -> None:
+    require_demo_branch(args.branch)
+    pull_requests = json.loads(
+        subprocess.run(
+            [
+                resolve_executable("gh"),
+                "pr",
+                "list",
+                "--base",
+                args.branch,
+                "--state",
+                "open",
+                "--json",
+                "number",
+            ],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        or "[]"
+    )
+    if pull_requests and not args.close_pull_requests:
+        raise RuntimeError(
+            "Disposable base branch still has open pull requests. "
+            "Use --close-pull-requests to close them before deletion."
+        )
+    for pull_request in pull_requests:
+        subprocess.run(
+            [
+                resolve_executable("gh"),
+                "pr",
+                "close",
+                str(pull_request["number"]),
+                "--comment",
+                "Disposable collective-learning demo reset.",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+    subprocess.run(
+        [
+            resolve_executable("git"),
+            "push",
+            args.remote,
+            "--delete",
+            args.branch,
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    print(
+        json.dumps(
+            {
+                "branch": args.branch,
+                "deleted": True,
+                "closedPullRequests": [
+                    pull_request["number"] for pull_request in pull_requests
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Reset disposable demo Workers to an immutable Role Release baseline."
     )
-    parser.add_argument("--state-name", required=True)
-    parser.add_argument("--workspace", required=True)
-    parser.add_argument("--baseline-release", required=True)
-    parser.add_argument("--baseline-commit", required=True)
-    parser.add_argument("--execute", action="store_true")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    reset_parser = subparsers.add_parser("reset")
+    reset_parser.add_argument("--state-name", required=True)
+    reset_parser.add_argument("--workspace", required=True)
+    reset_parser.add_argument("--baseline-release", required=True)
+    reset_parser.add_argument("--baseline-commit", required=True)
+    reset_parser.add_argument("--execute", action="store_true")
+    reset_parser.set_defaults(func=reset)
+
+    create_base = subparsers.add_parser("create-git-base")
+    create_base.add_argument("--branch", required=True)
+    create_base.add_argument("--baseline-commit", required=True)
+    create_base.add_argument("--remote", default="origin")
+    create_base.set_defaults(func=create_git_base)
+
+    delete_base = subparsers.add_parser("delete-git-base")
+    delete_base.add_argument("--branch", required=True)
+    delete_base.add_argument("--remote", default="origin")
+    delete_base.add_argument("--close-pull-requests", action="store_true")
+    delete_base.set_defaults(func=delete_git_base)
+
     args = parser.parse_args()
-    reset(args)
+    args.func(args)
 
 
 if __name__ == "__main__":

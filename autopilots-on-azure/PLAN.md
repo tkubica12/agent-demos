@@ -20,7 +20,7 @@ As of 2026-07-22:
 - `hermes2` retains its isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
 - Both Hermes bridges use the runtime-specific wake/readiness and transient Worker Refresh preflight fixes; Terraform workspaces converge.
 - The Teams Enterprise license temporarily transferred for the multi-Worker test is restored to `openclaw1`.
-- Hermes 2 runs the live bridge-owned A11 scheduler daily; an on-demand cycle successfully produced one Candidate Improvement and prepared an approval-required packet without approving or exporting it.
+- Hermes 2 runs the managed-identity ACA scheduled Job daily; an on-demand execution succeeded and reached approval-required packet preparation without approving or exporting it.
 - Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
 ## Completed milestones
@@ -93,11 +93,11 @@ Exit criteria:
 
 Goal: run recurring Dreaming and packet preparation without manual Sandbox access.
 
-Status: In progress; the bridge-owned classroom scheduler is live on Hermes 2, while the managed-identity ACA Job and disposable demo cohort remain.
+Status: Complete; Hermes 2 uses the managed-identity ACA scheduled Job, and guarded disposable Worker/Data Disk/Git reset automation is available for classroom replays.
 
 Tasks:
 
-- Choose an Azure Container Apps scheduled Job as the production scheduler.
+- Complete: choose an Azure Container Apps scheduled Job as the production scheduler.
 - Complete: retain bridge-owned scheduling as the first classroom/demo option.
 - Complete: add per-Worker enablement, initial delay, interval, focus, maximum records, retry/backoff, and packet-preparation settings.
 - Complete: wake or reuse Workers through the existing bridge and Worker learning transaction.
@@ -108,9 +108,12 @@ Tasks:
 - Complete: add managed-identity authentication and `ScheduledLearning.Run.All` for the production ACA scheduled Job bridge endpoint without stored keys.
 - Complete: model the ACA scheduled Job with Terraform/azapi and add on-demand execution/status commands.
 - Complete: add fail-closed disposable `demo-*` Worker/Data Disk reset automation pinned to an immutable baseline.
-- Provision the Entra resource API, deploy the ACA scheduled Job, and validate an on-demand execution.
-- Add a disposable Git Promotion lane so the full lifecycle can be replayed without rewriting `main`.
-- Add optional queue-driven fan-out for larger Worker populations.
+- Complete: add a guarded disposable `demo/*` Git base lane for demonstrations that include real Promotion merge and Worker Refresh.
+- Complete: provision the Entra resource API, deploy the ACA scheduled Job, and validate a successful on-demand execution.
+- Complete: verify the Job-produced Dreaming result reaches approval-required packet preparation without automatic approval or export.
+- Complete: live-validate fail-closed rejection of long-lived Worker reset and create/delete a disposable `demo/*` baseline branch.
+- Complete: confirm the Hermes 2 Job execution reports `Succeeded` and Terraform converges with the bridge returned to scale-to-zero.
+- Deferred until fleet scale requires it: queue-driven fan-out for larger Worker populations.
 
 Exit criteria:
 

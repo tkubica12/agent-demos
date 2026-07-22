@@ -1,6 +1,10 @@
 import unittest
 
-from scripts.demo_cohort import matching_sandboxes, require_demo_owned
+from scripts.demo_cohort import (
+    matching_sandboxes,
+    require_demo_branch,
+    require_demo_owned,
+)
 
 
 class DemoCohortTests(unittest.TestCase):
@@ -45,6 +49,11 @@ class DemoCohortTests(unittest.TestCase):
         )
 
         self.assertEqual([item["id"] for item in matches], ["sandbox-1"])
+
+    def test_disposable_git_base_requires_demo_namespace(self):
+        require_demo_branch("demo/collective-learning-class")
+        with self.assertRaisesRegex(ValueError, "demo"):
+            require_demo_branch("main")
 
 
 if __name__ == "__main__":

@@ -302,11 +302,22 @@ Dry-run reset:
 
 ```powershell
 uv run python -m scripts.demo_cohort `
+  reset `
   --state-name demo-hermes-a `
   --workspace demo-hermes-a `
   --baseline-release 3.1.0 `
   --baseline-commit 60b8e7ef3fb594f386d5177032df434eb4e62917
 ```
+
+For a demonstration that includes a real merge, create a disposable base branch:
+
+```powershell
+uv run python -m scripts.demo_cohort create-git-base `
+  --branch demo/collective-learning-class `
+  --baseline-commit 60b8e7ef3fb594f386d5177032df434eb4e62917
+```
+
+Target the Promotion at that branch with `--base-branch demo/collective-learning-class`. Delete the demo branch after Worker/Data Disk reset; `main` remains unchanged.
 
 ## 11. Prepare Learning Packets
 

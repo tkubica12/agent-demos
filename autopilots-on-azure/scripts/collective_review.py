@@ -25,6 +25,7 @@ from scripts.tf_helpers import PLATFORM_DIR, terraform_output
 TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 ROLE_SKILL_PATH = re.compile(r"^skills/role/[a-z0-9][a-z0-9-]{0,62}/SKILL\.md$")
 ROLE_RELEASE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+GIT_BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 MAX_ROLE_BLUEPRINT_CONTEXT_CHARS = 100_000
 
 
@@ -402,6 +403,8 @@ def create_role_release_pull_request(
     *,
     next_role_release: str,
     draft: bool,
+    base_branch: str = "",
+    promotion_branch: str = "",
 ) -> dict[str, Any]:
     validate_next_role_release(packets, next_role_release)
     baseline = packets[0]["roleRelease"]
@@ -409,7 +412,14 @@ def create_role_release_pull_request(
     repository_path = PurePosixPath(str(baseline["path"]).replace("\\", "/"))
     if repository_path.is_absolute() or ".." in repository_path.parts:
         raise CollectiveReviewError("Role Blueprint repository path is unsafe.")
-    branch = f"collective-learning/{baseline['roleBlueprint']}-{next_role_release}"
+    branch = promotion_branch or f"collective-learning/{baseline['roleBlueprint']}-{next_role_release}"
+    for name, value in (("base branch", base_branch), ("promotion branch", branch)):
+        if value and (
+            not GIT_BRANCH.fullmatch(value)
+            or ".." in value
+            or "//" in value
+        ):
+            raise CollectiveReviewError(f"Unsafe {name}: {value!r}.")
     with tempfile.TemporaryDirectory(prefix="collective-learning-review-") as temp_dir:
         checkout = Path(temp_dir) / "repository"
         _run(["git", "clone", source, str(checkout)], cwd=Path(temp_dir))
@@ -485,12 +495,15 @@ def create_role_release_pull_request(
             "--head",
             branch,
         ]
+        if base_branch:
+            command.extend(["--base", base_branch])
         if draft:
             command.append("--draft")
         url = _run(command, cwd=checkout)
     return {
         "pullRequest": url,
         "branch": branch,
+        "baseBranch": base_branch,
         "roleRelease": next_role_release,
         "proposalCount": len(decision["proposals"]),
     }
@@ -511,6 +524,8 @@ def main() -> None:
     parser.add_argument("--decision-output", type=Path, required=True)
     parser.add_argument("--create-pr", action="store_true")
     parser.add_argument("--ready", action="store_true", help="Create a ready PR instead of a draft.")
+    parser.add_argument("--base-branch", default="", help="Optional target branch. Use a disposable demo/* branch for replayable demos.")
+    parser.add_argument("--promotion-branch", default="", help="Optional source branch override.")
     args = parser.parse_args()
     worker_public_keys: dict[str, str] = {}
     for path in args.worker_public_keys:
@@ -552,6 +567,8 @@ def main() -> None:
                 decision,
                 next_role_release=args.next_role_release,
                 draft=not args.ready,
+                base_branch=args.base_branch,
+                promotion_branch=args.promotion_branch,
             )
         )
     print(json.dumps(result, indent=2, sort_keys=True))
