@@ -19,8 +19,6 @@ For each delivery-affecting decision, record:
 6. Follow-up actions: actions required to implement or verify the decision.
 7. Linked control record: the relevant plan, action tracker, change request, or dependency record.
 
-Do not silently rewrite a plan when a commitment changes. Record the requested change, impact, decision owner, decision, and effective date.
-
 ## Define dependency handoffs
 
 Use a handoff record whenever one party supplies work, information, access, a decision, or a service that another party needs to continue delivery.
@@ -32,6 +30,8 @@ For each handoff, record:
 3. Deliverable: the specific item or service to be supplied.
 4. Acceptance criteria: observable conditions the receiver will use to assess the deliverable.
 5. Needed-by date: the date by which acceptance is required to protect the dependent plan.
+6. Verification status: `pending` until assessment, `accepted` when every criterion is met, or `rejected` with unmet criteria recorded.
+7. Linked plan or change record: the control record that owns the handoff.
 
 Do not treat a handoff as committed when any required field is missing. Record unresolved ownership, acceptance criteria, or timing as a planning risk.
 
@@ -41,7 +41,7 @@ Before marking a handoff complete, confirm that its verification status is `acce
 
 ## Escalate incomplete or time-critical handoffs
 
-Flag a handoff for escalation when its needed-by date will pass before verification status reaches `accepted`. Use the standard critical-path escalation in the `junior-project-manager` Role Skill, and include the handoff record and unmet acceptance criteria as evidence.
+Flag a handoff for escalation when its needed-by date will pass before verification status reaches `accepted`. State the affected commitment, delivery impact, unmet acceptance criteria, accountable provider and receiver, needed-by date, and required next action.
 
 ## Minimum decision record
 
