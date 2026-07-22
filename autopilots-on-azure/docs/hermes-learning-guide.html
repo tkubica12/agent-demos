@@ -1165,7 +1165,7 @@
     }
 
     .decision-result small {
-      display: inline-flex;
+      display: flex;
       width: fit-content;
       margin-top: 7px;
       padding: 3px 6px;
@@ -2243,7 +2243,7 @@
             <b>PHASE 1 · WORKER-LOCAL</b>
             <h3>Select and approve</h3>
             <p>Eligible skill change + provenance → allowlist and privacy rules → exact digest reviewed by the Worker owner/operator → bridge attestation.</p>
-            <span class="artifact-chip">Artifact: <span class="term" tabindex="0" data-tip="A privacy-scanned, exact-digest-approved export of eligible skill changes plus provenance and attestation.">Learning Packet</span></span>
+            <span class="artifact-chip">Artifact:&nbsp;<span class="term" tabindex="0" data-tip="A privacy-scanned, exact-digest-approved export of eligible skill changes plus provenance and attestation.">Learning Packet</span></span>
           </article>
           <article class="phase">
             <b>PHASE 2 · CENTRAL REASONING</b>
@@ -2254,13 +2254,13 @@
               Worker Sandbox. The script calls Azure Foundry, compares approved packets with the current
               Role Blueprint, and distinguishes repeated, complementary, conflicting, or unrelated evidence.
             </p>
-            <span class="artifact-chip">Artifact: <span class="term" tabindex="0" data-tip="A draft Git pull request containing the proposed shared Role Skill changes and retained review decision.">Draft Promotion PR</span></span>
+            <span class="artifact-chip">Artifact:&nbsp;<span class="term" tabindex="0" data-tip="A draft Git pull request containing the proposed shared Role Skill changes and retained review decision.">Draft Promotion PR</span></span>
           </article>
           <article class="phase">
             <b>PHASE 3 · GITHUB GOVERNANCE</b>
             <h3>Review and promote</h3>
             <p>The PR stays draft while deterministic checks and read-only semantic agents run. A human expert is the final approval gate before merge creates the next immutable Role Release.</p>
-            <span class="artifact-chip">Artifact: <span class="term" tabindex="0" data-tip="The next immutable semantic version of the Role Blueprint after human-reviewed Promotion.">Role Release N+1</span></span>
+            <span class="artifact-chip">Artifact:&nbsp;<span class="term" tabindex="0" data-tip="The next immutable semantic version of the Role Blueprint after human-reviewed Promotion.">Role Release N+1</span></span>
           </article>
         </div>
 
