@@ -826,8 +826,362 @@
     }
 
     .decision-question span {
+      display: block;
+      margin-top: 4px;
       color: var(--muted);
       font-size: 0.82rem;
+    }
+
+    .cycle-wrap {
+      position: relative;
+      padding-bottom: 64px;
+    }
+
+    .cycle-return {
+      position: absolute;
+      right: 3%;
+      bottom: 0;
+      left: 3%;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--accent);
+      font-size: 0.76rem;
+      font-weight: 850;
+    }
+
+    .cycle-return::before {
+      height: 28px;
+      flex: 1;
+      border-bottom: 2px solid var(--accent);
+      border-left: 2px solid var(--accent);
+      border-radius: 0 0 0 20px;
+      content: "";
+    }
+
+    .cycle-return::after {
+      width: 0;
+      height: 0;
+      border-top: 6px solid transparent;
+      border-right: 10px solid var(--accent);
+      border-bottom: 6px solid transparent;
+      content: "";
+      order: -1;
+    }
+
+    .term {
+      position: relative;
+      border-bottom: 1px dashed var(--accent);
+      color: inherit;
+      cursor: help;
+      text-decoration: none;
+    }
+
+    .term::after {
+      position: absolute;
+      z-index: 50;
+      bottom: calc(100% + 9px);
+      left: 50%;
+      width: min(280px, 72vw);
+      padding: 10px 12px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      color: var(--ink);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      content: attr(data-tip);
+      font-size: 0.74rem;
+      font-weight: 600;
+      line-height: 1.4;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 5px);
+      transition: opacity 140ms ease, transform 140ms ease;
+    }
+
+    .term:hover::after,
+    .term:focus::after {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .term-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .sandbox-visual {
+      padding: 18px;
+      border: 2px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+
+    .sandbox-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .sandbox-banner strong {
+      font-size: 1rem;
+    }
+
+    .sandbox-banner span {
+      color: var(--muted);
+      font-size: 0.76rem;
+      text-align: right;
+    }
+
+    .sandbox-grid {
+      display: grid;
+      grid-template-columns: 0.8fr 1.5fr 0.8fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .sandbox-attachment,
+    .sandbox-core {
+      display: grid;
+      align-content: center;
+      min-height: 175px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .sandbox-core {
+      border-color: var(--accent);
+      background: var(--accent-faint);
+    }
+
+    .sandbox-core h3,
+    .sandbox-attachment h3 {
+      margin-bottom: 7px;
+      font-size: 1rem;
+    }
+
+    .sandbox-core p,
+    .sandbox-attachment p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .sandbox-subgrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 13px;
+    }
+
+    .sandbox-subgrid span {
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 0.7rem;
+      text-align: center;
+    }
+
+    .mode-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .mode-card {
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .mode-card strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .mode-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .mode-card .mention {
+      display: inline-flex;
+      margin-top: 11px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      color: #fff;
+      background: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+    }
+
+    .identity-use {
+      display: grid;
+      grid-template-columns: 0.8fr 1.2fr;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .identity-use > div {
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .identity-use strong {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .identity-use p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .origin-key {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px;
+      margin-bottom: 18px;
+    }
+
+    .origin {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      font-size: 0.72rem;
+      font-weight: 800;
+    }
+
+    .origin::before {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ink);
+      content: "";
+    }
+
+    .origin.added::before {
+      background: var(--accent);
+    }
+
+    .learning-methods {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+
+    .learning-method {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .learning-method h3 {
+      margin-bottom: 9px;
+      font-size: 1.25rem;
+    }
+
+    .learning-method p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .packet-formula {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px solid var(--accent);
+      border-radius: var(--radius-sm);
+      background: var(--accent-faint);
+    }
+
+    .packet-part {
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .packet-operator {
+      color: var(--accent);
+      font-weight: 950;
+    }
+
+    .phase-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .phase {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .phase b {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .phase h3 {
+      margin-bottom: 8px;
+      font-size: 1.18rem;
+    }
+
+    .phase p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .artifact-chip {
+      display: inline-flex;
+      margin-top: 14px;
+      padding: 5px 9px;
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      font-size: 0.68rem;
+      font-weight: 900;
     }
 
     .decision-result {
@@ -1216,6 +1570,22 @@
         grid-template-columns: 1fr;
       }
 
+      .sandbox-grid,
+      .mode-grid,
+      .identity-use,
+      .learning-methods,
+      .phase-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .packet-formula {
+        grid-template-columns: 1fr;
+      }
+
+      .packet-operator {
+        text-align: center;
+      }
+
       .privacy-wall {
         min-height: 50px;
         writing-mode: horizontal-tb;
@@ -1330,22 +1700,16 @@
   <div class="layout">
     <nav class="side-nav" aria-label="Guide sections">
       <p>Start simple</p>
-      <a href="#story">The 90-second story</a>
+      <a href="#story">Continuous improvement</a>
       <a href="#architecture">Architecture</a>
-      <a href="#teams">What people see</a>
+      <a href="#teams">Working in Teams</a>
       <a href="#identity">Identity</a>
       <p>How learning works</p>
-      <a href="#vocabulary">Vocabulary</a>
       <a href="#memory">Memory planes</a>
-      <a href="#remembering">Remembering</a>
-      <a href="#skills">Skills</a>
-      <a href="#dreaming">Dreaming</a>
+      <a href="#local-learning">Local learning</a>
       <p>Shared evolution</p>
-      <a href="#collective">Collective learning</a>
-      <a href="#promotion">Promotion gates</a>
+      <a href="#shared-evolution">From learning to release</a>
       <a href="#refresh">Worker Refresh</a>
-      <a href="#demo">Demo lifecycle</a>
-      <a href="#deeper">Deeper details</a>
     </nav>
 
     <main id="main">
@@ -1357,19 +1721,14 @@
           networking, and lifecycle. GitHub turns selected local lessons into reviewed Role Releases.
         </p>
         <div class="hero-pills" aria-label="Key capabilities">
-          <span class="pill accent">Microsoft Agent 365</span>
-          <span class="pill">ACA Sandboxes</span>
-          <span class="pill">Hermes-native learning</span>
+          <span class="pill">Microsoft Agent 365</span>
+          <span class="pill">Azure Container Apps Sandboxes</span>
+          <span class="pill">Hermes agent</span>
           <span class="pill">Entra identity</span>
-          <span class="pill">GitHub Promotion</span>
-        </div>
-        <div class="hero-note">
-          <b>!</b>
-          <p>
-            We do not call shared versions “generations.” The agreed term is <strong>Role Release</strong>.
-            A named digital teammate is a <strong>Worker</strong>, and adopting a newer Role Release is
-            <strong>Worker Refresh</strong>.
-          </p>
+          <span class="pill">Teams and channel UI</span>
+          <span class="pill">Continuous learning</span>
+          <span class="pill">Skill Promotion process</span>
+          <span class="pill">Memory</span>
         </div>
       </div>
 
@@ -1377,34 +1736,45 @@
         <div class="section-head">
           <div>
             <span class="section-number">01 / START HERE</span>
-            <h2>The 90-second story</h2>
+            <h2>The Continuous Improvement Loop</h2>
           </div>
           <p>
-            One shared job definition creates multiple private digital teammates. They learn locally,
-            but only approved, generalized evidence can improve the next shared release.
+            One shared <span class="term" tabindex="0" data-tip="The reviewed central definition of a job: instructions, Role Skills, tools, and release metadata.">Role Blueprint</span>
+            creates multiple private digital teammates. They learn locally, but only approved,
+            generalized evidence can improve the next shared release.
           </p>
         </div>
-        <div class="grid-4">
-          <article class="card story-card" data-step="1">
-            <span class="card-index">01</span>
-            <h3>Born from a role</h3>
-            <p>A Worker starts from an immutable Role Release containing reviewed instructions and Role Skills.</p>
-          </article>
-          <article class="card story-card" data-step="2">
-            <span class="card-index">02</span>
-            <h3>Works privately</h3>
-            <p>Its Personal Memory, Private Playbooks, Work History, identity, and Data Disk belong only to that Worker.</p>
-          </article>
-          <article class="card story-card" data-step="3">
-            <span class="card-index">03</span>
-            <h3>Learns locally</h3>
-            <p>Hermes can create Candidate Improvements or patch Role Skills while preserving provenance and privacy boundaries.</p>
-          </article>
-          <article class="card story-card accent-card" data-step="4">
-            <span class="card-index">04</span>
-            <h3>Improves together</h3>
-            <p>Selected lessons become signed Learning Packets, pass Collective Learning Review, and enter a human-reviewed Promotion PR.</p>
-          </article>
+        <div class="cycle-wrap">
+          <div class="grid-4">
+            <article class="card story-card" data-step="1">
+              <span class="card-index">01</span>
+              <h3>Born from a role</h3>
+              <p>A <strong>Worker</strong> starts from an immutable <strong>Role Release</strong> containing reviewed instructions and Role Skills.</p>
+            </article>
+            <article class="card story-card" data-step="2">
+              <span class="card-index">02</span>
+              <h3>Works privately</h3>
+              <p>Its <strong>Personal Memory, Private Playbooks, Work History, identity, and Data Disk</strong> belong only to that Worker.</p>
+            </article>
+            <article class="card story-card" data-step="3">
+              <span class="card-index">03</span>
+              <h3>Learns locally</h3>
+              <p>Hermes can create <strong>Candidate Improvements</strong> or patch Role Skills while preserving provenance and privacy boundaries.</p>
+            </article>
+            <article class="card story-card accent-card" data-step="4">
+              <span class="card-index">04</span>
+              <h3>Improves together</h3>
+              <p>Selected lessons become <strong>Learning Packets</strong>, pass Collective Learning Review, and enter a human-reviewed Promotion PR.</p>
+            </article>
+          </div>
+          <div class="cycle-return">Promotion creates the next Role Release · Workers Refresh · the cohort learns again</div>
+        </div>
+        <div class="term-strip" aria-label="Key terminology">
+          <span class="term" tabindex="0" data-tip="A named digital teammate with its own identity, assignment, private state, and local learning.">Worker</span>
+          <span class="term" tabindex="0" data-tip="An immutable semantic version of the Role Blueprint, pinned to an exact Git commit.">Role Release</span>
+          <span class="term" tabindex="0" data-tip="A local reusable capability that may benefit other Workers after review.">Candidate Improvement</span>
+          <span class="term" tabindex="0" data-tip="Human-reviewed acceptance of shared learning into a new Role Release.">Promotion</span>
+          <span class="term" tabindex="0" data-tip="Forward-only adoption of a newer Role Release while preserving private Worker state.">Worker Refresh</span>
         </div>
       </section>
 
@@ -1415,8 +1785,8 @@
             <h2>Architecture at a glance</h2>
           </div>
           <p>
-            The public bridge is a thin control plane. The actual Worker lives in a stateful Sandbox.
-            Tools are called directly from the Sandbox through local identity adapters.
+            The public bridge is a thin control plane. The Worker runs inside a strongly isolated,
+            scale-to-zero Sandbox. An attached Data Disk makes private Worker state durable.
           </p>
         </div>
 
@@ -1443,23 +1813,35 @@
             <span>Messaging adapter · authorization boundary · Sandbox wake/reuse · serialized learning · approval signature</span>
           </div>
           <div class="flow-arrow" aria-hidden="true">↓</div>
-          <div class="flow-label">Stateful Worker runtime</div>
-          <div class="flow-row">
-            <div class="flow-node">
-              <strong>ACA Sandbox</strong>
-              <span>Isolated compute with lifecycle and ports</span>
+          <div class="flow-label">Stateful, serverless-style Worker runtime</div>
+          <div class="sandbox-visual">
+            <div class="sandbox-banner">
+              <strong>Azure Container Apps Sandbox</strong>
+              <span>Strong isolation · auto-suspend · scale to zero · explicit resume · no CPU/memory charge while stopped</span>
             </div>
-            <div class="flow-node dark">
-              <strong>Hermes Gateway</strong>
-              <span>Sessions · tools · native skills · Dreaming</span>
-            </div>
-            <div class="flow-node">
-              <strong>Persistent Data Disk</strong>
-              <span>Memory · playbooks · history · candidates</span>
+            <div class="sandbox-grid">
+              <div class="sandbox-attachment">
+                <h3>Attached Data Disk</h3>
+                <p>Personal Memory, Private Playbooks, Work History, Candidate Improvements, workspace, and Worker manifest.</p>
+              </div>
+              <div class="sandbox-core">
+                <h3>Hermes runtime inside the Sandbox</h3>
+                <p>Hermes Gateway hosts the API, agent sessions, native skill discovery, tool execution, and Dreaming.</p>
+                <div class="sandbox-subgrid">
+                  <span>Gateway + API</span>
+                  <span>Agents + sessions</span>
+                  <span>Native skills</span>
+                  <span>Local identity adapter</span>
+                </div>
+              </div>
+              <div class="sandbox-attachment">
+                <h3>Sandbox networking</h3>
+                <p>VNet connection, private DNS, egress policy, TLS inspection, and exposed runtime ports.</p>
+              </div>
             </div>
           </div>
           <div class="flow-arrow" aria-hidden="true">↓</div>
-          <div class="flow-label">Direct data plane</div>
+          <div class="flow-label">Direct data plane from the Sandbox</div>
           <div class="flow-row four">
             <div class="flow-node">
               <strong>Azure Foundry</strong>
@@ -1467,15 +1849,15 @@
             </div>
             <div class="flow-node">
               <strong>Private MCP</strong>
-              <span>VNet path + Agent Identity role</span>
+              <span>VNet path + token from our local identity adapter</span>
             </div>
             <div class="flow-node">
               <strong>Public MCP</strong>
-              <span>HTTPS + Entra audience and role</span>
+              <span>HTTPS + token from the same local identity adapter</span>
             </div>
             <div class="flow-node">
               <strong>Work IQ</strong>
-              <span>Worker-owned Microsoft 365 data</span>
+              <span>Local adapter uses Agent User mode</span>
             </div>
           </div>
         </div>
@@ -1489,11 +1871,17 @@
           </div>
           <div class="callout">
             <div>
-              <strong>The bridge does not proxy MCP traffic</strong>
-              <p>The Sandbox calls MCP servers through loopback identity adapters, keeping the bridge thin and the data plane explicit.</p>
+              <strong>The loopback adapter is ours—not an ACA feature</strong>
+              <p><code>autopilots_identity.mcp_proxy</code> runs inside the Sandbox. It adds short-lived Agent Identity tokens for both private and public MCP, and an Agent User token for Work IQ.</p>
             </div>
           </div>
         </div>
+        <p style="margin: 14px 0 0; color: var(--soft); font-size: 0.72rem;">
+          Platform reference:
+          <a href="https://learn.microsoft.com/azure/container-apps/sandboxes-overview">Azure Container Apps Sandboxes overview</a>
+          and
+          <a href="https://learn.microsoft.com/azure/container-apps/sandboxes-snapshots-state-management">state management</a>.
+        </p>
       </section>
 
       <section id="teams">
@@ -1538,33 +1926,33 @@
             </div>
           </div>
 
-          <div class="identity-stack">
-            <div class="identity-row">
-              <b>Presence</b>
-              <div>
-                <strong>Agent User</strong>
-                <span>The account people chat with, add to Teams, and license for Microsoft 365 workloads.</span>
-              </div>
+          <div>
+            <div class="mode-grid">
+              <article class="mode-card">
+                <strong>1:1 chat</strong>
+                <p>The message is directly targeted to the Agent User, so a normal text prompt is enough.</p>
+                <span class="mention">Hermes, summarize my risks</span>
+              </article>
+              <article class="mode-card">
+                <strong>Group chat or channel</strong>
+                <p>The Worker receives targeted activities. Explicitly mention it; do not assume it sees every unmentioned message.</p>
+                <span class="mention">@Hermes summarize this risk</span>
+              </article>
             </div>
-            <div class="identity-row">
-              <b>Delivery</b>
-              <div>
-                <strong>Agent 365 platform blueprint</strong>
-                <span>Defines the endpoint, package, permissions, and messaging registration for this Worker.</span>
+            <div class="identity-stack" style="margin-top: 12px;">
+              <div class="identity-row">
+                <b>Presence</b>
+                <div>
+                  <strong>Agent User</strong>
+                  <span>The account people chat with, add to Teams, and license for Microsoft 365 workloads.</span>
+                </div>
               </div>
-            </div>
-            <div class="identity-row">
-              <b>Runtime</b>
-              <div>
-                <strong>Hermes Worker</strong>
-                <span>The actual behavior, memory, sessions, and tools running in the ACA Sandbox.</span>
-              </div>
-            </div>
-            <div class="identity-row">
-              <b>Boundary</b>
-              <div>
-                <strong>Targeted delivery</strong>
-                <span>Direct messages and explicit mentions are supported. Unmentioned channel traffic is not assumed.</span>
+              <div class="identity-row">
+                <b>Runtime</b>
+                <div>
+                  <strong>Hermes Worker</strong>
+                  <span>The behavior, memory, sessions, and tools running in the ACA Sandbox.</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1578,8 +1966,8 @@
             <h2>Three identities, three jobs</h2>
           </div>
           <p>
-            “Who is calling?” depends on the operation. We separate workload location, autonomous
-            business authorization, and Microsoft 365 ownership.
+            “Who is calling?” depends on the resource. Agent 365 can manage permissions at blueprint,
+            instance, and Agent User levels; our demo deliberately uses different identities for different jobs.
           </p>
         </div>
 
@@ -1593,13 +1981,13 @@
               <span class="tag">Short-lived token</span>
             </div>
           </article>
-          <article class="card accent-card">
+          <article class="card">
             <span class="card-index">WHO</span>
             <h3>Agent Identity</h3>
             <p>Represents the autonomous Worker when calling private or public tools. MCP servers validate audience, role, and identity.</p>
             <div class="tag-row">
-              <span class="tag accent">Incidents.Read.All</span>
-              <span class="tag accent">Shipments.Read.All</span>
+              <span class="tag">Incidents.Read.All</span>
+              <span class="tag">Shipments.Read.All</span>
             </div>
           </article>
           <article class="card">
@@ -1613,69 +2001,38 @@
           </article>
         </div>
 
-        <div class="flow" style="margin-top: 18px;">
-          <div class="flow-label">Autonomous token exchange</div>
-          <div class="flow-row four">
-            <div class="flow-node">
-              <strong>Sandbox managed identity</strong>
-              <span>Location proof</span>
-            </div>
-            <div class="flow-node">
-              <strong>Agent 365 blueprint</strong>
-              <span>Federated credential</span>
-            </div>
-            <div class="flow-node accent">
-              <strong>Agent Identity</strong>
-              <span>Business authorization principal</span>
-            </div>
-            <div class="flow-node">
-              <strong>Target resource</strong>
-              <span>Audience + app role</span>
-            </div>
+        <div class="identity-use">
+          <div>
+            <strong>Agent Identity in this demo</strong>
+            <p>Autonomous custom MCP access and background operations. Private and public MCP validate the target audience, application role, and allowed identity.</p>
+          </div>
+          <div>
+            <strong>Agent User in this demo</strong>
+            <p>Teams presence and Worker-owned Microsoft 365 resources. Work IQ Mail uses a user-type token for the fixed Agent User. Microsoft recommends Agent User primarily for user-like Microsoft 365 resource access.</p>
           </div>
         </div>
 
-        <details>
-          <summary>Why not use the human’s Teams token for everything?</summary>
+        <div class="callout" style="margin-top: 18px;">
           <div>
-            Human delegated access is valid only for an explicit user-owned request and consented turn.
-            A group chat cannot make one person’s delegated token ambient authorization for everyone.
-            Autonomous work therefore uses Agent Identity; Worker-owned Microsoft 365 data uses Agent User.
+            <strong>Human On-Behalf-Of is possible, but not implemented here</strong>
+            <p>
+              OBO means the Worker receives and exchanges a human’s delegated token to access that human’s
+              emails, calendar, or files. Our policy would allow it only for an explicit user-specific request,
+              per user and per turn, with consent and a private interaction context. It is never ambient
+              authorization for a group chat or channel.
+            </p>
           </div>
-        </details>
-      </section>
-
-      <section id="vocabulary">
-        <div class="section-head">
-          <div>
-            <span class="section-number">05 / LANGUAGE</span>
-            <h2>The naming convention</h2>
-          </div>
-          <p>
-            Consistent words make the lifecycle understandable to non-technical audiences and precise
-            enough for implementation.
-          </p>
         </div>
-        <div class="grid-4">
-          <article class="card vocab-card"><strong>Role Blueprint</strong><p>The reviewed central definition of a job: instructions, Role Skills, tools, and release metadata.</p></article>
-          <article class="card vocab-card"><strong>Role Release</strong><p>An immutable semantic version of a Role Blueprint, pinned to an exact Git commit.</p></article>
-          <article class="card vocab-card"><strong>Worker</strong><p>A named digital teammate with its own identity, assignment, private state, and local learning.</p></article>
-          <article class="card vocab-card"><strong>Personal Memory</strong><p>Small private facts and preferences injected into every fresh session.</p></article>
-          <article class="card vocab-card"><strong>Private Playbook</strong><p>Rich assignment-specific knowledge loaded only when relevant.</p></article>
-          <article class="card vocab-card"><strong>Work History</strong><p>Private sessions, messages, tool calls, and search indexes used for recall and Dreaming.</p></article>
-          <article class="card vocab-card"><strong>Role Skill</strong><p>A reviewed reusable skill inherited from a Role Release.</p></article>
-          <article class="card vocab-card"><strong>Candidate Improvement</strong><p>A local reusable capability that may—but does not have to—benefit other Workers.</p></article>
-          <article class="card vocab-card"><strong>Dreaming</strong><p>Offline reflection across Work History, outcomes, memory, and skills.</p></article>
-          <article class="card vocab-card"><strong>Learning Packet</strong><p>An approved-boundary export containing allowed artifacts plus provenance.</p></article>
-          <article class="card vocab-card"><strong>Promotion</strong><p>Human-reviewed acceptance of shared learning into a new Role Release.</p></article>
-          <article class="card vocab-card"><strong>Worker Refresh</strong><p>Forward-only adoption of a newer Role Release while preserving private Worker state.</p></article>
-        </div>
+        <p style="margin: 14px 0 0; color: var(--soft); font-size: 0.72rem;">
+          Platform reference:
+          <a href="https://learn.microsoft.com/microsoft-agent-365/developer/identity">Microsoft Agent 365 identity and authentication flows</a>.
+        </p>
       </section>
 
       <section id="memory">
         <div class="section-head">
           <div>
-            <span class="section-number">06 / MEMORY</span>
+            <span class="section-number">05 / MEMORY</span>
             <h2>Private state vs. shareable learning</h2>
           </div>
           <p>
@@ -1716,44 +2073,77 @@
               <p>Generalized, provenance-bound, and reviewable.</p>
             </div>
             <div class="memory-item">
-              <strong>Role Skill patch</strong>
-              <span>Local diff against the immutable Role Release baseline</span>
+              <strong>Eligible behavior change</strong>
+              <span>Role Skill patch or Candidate Improvement, active locally first</span>
             </div>
             <div class="memory-item">
-              <strong>Candidate Improvement</strong>
-              <span><code>skills/candidates/</code> · active locally first</span>
+              <strong>Context for that change</strong>
+              <span>Provenance records why, evidence summary, hashes, confidence, Worker, and Role Release</span>
             </div>
             <div class="memory-item">
-              <strong>Learning provenance</strong>
-              <span><code>learning/records.jsonl</code> · why, evidence, hashes, confidence</span>
-            </div>
-            <div class="memory-item">
-              <strong>Learning Packet</strong>
-              <span>Fail-closed allowlist + privacy scan + human digest approval</span>
+              <strong>Owner-controlled export</strong>
+              <span>The human owner/operator reviews the exact packet summary and may approve or refuse its digest</span>
             </div>
           </div>
         </div>
 
-        <div class="callout" style="margin-top: 18px;">
-          <div>
-            <strong><code>records.jsonl</code> is not the Worker’s behavior</strong>
-            <p>The skill tree contains behavior. The journal explains why an eligible skill changed and binds that change to evidence, hashes, Worker identity, and Role Release.</p>
-          </div>
+        <div class="packet-formula" aria-label="Learning Packet construction">
+          <div class="packet-part">Candidate or Role Skill diff</div>
+          <div class="packet-operator">+</div>
+          <div class="packet-part">Provenance context</div>
+          <div class="packet-operator">+</div>
+          <div class="packet-part">Allowlist + privacy rules</div>
+          <div class="packet-operator">+</div>
+          <div class="packet-part">Human digest approval → Learning Packet</div>
         </div>
       </section>
 
-      <section id="remembering">
+      <section id="local-learning">
         <div class="section-head">
           <div>
-            <span class="section-number">07 / CLASSIFICATION</span>
-            <h2>How Hermes decides what to remember</h2>
+            <span class="section-number">06 / LOCAL LEARNING</span>
+            <h2>Two ways a Worker learns locally</h2>
           </div>
           <p>
-            Every durable observation is classified before storage. The safest useful store wins;
-            uncertain or secret material is not stored as reusable learning.
+            Hermes can learn immediately during work or reflect later across several sessions.
+            Both paths use the same privacy classification and provenance rules.
           </p>
         </div>
 
+        <div class="origin-key" aria-label="Capability origin">
+          <span class="origin">Native Hermes capability</span>
+          <span class="origin added">Autopilots governance added around Hermes</span>
+        </div>
+
+        <div class="learning-methods">
+          <article class="learning-method">
+            <span class="card-index">NATIVE HERMES · FOREGROUND</span>
+            <h3>Immediate learning</h3>
+            <p>
+              An explicit correction or <code>/learn</code> request can update Personal Memory,
+              create or patch a Private Playbook, patch a Role Skill, or create a Candidate Improvement
+              during the current task.
+            </p>
+          </article>
+          <article class="learning-method">
+            <span class="card-index">NATIVE HERMES · REFLECTION</span>
+            <h3>Dream-time learning</h3>
+            <p>
+              Dreaming compares Work History, outcomes, corrections, memory, playbooks, and skills.
+              It can create a new skill, patch an existing one, consolidate private memory, suppress
+              a duplicate, or intentionally store nothing.
+            </p>
+          </article>
+        </div>
+
+        <div class="callout" style="margin-bottom: 18px;">
+          <div>
+            <strong>What Autopilots adds</strong>
+            <p>Reserved private/role/candidate namespaces, serialized transactions, snapshots and rollback, provenance bound to file hashes, quarantine, privacy-scanned Learning Packets, owner approval, and forward-only Role Releases.</p>
+          </div>
+        </div>
+
+        <h3 style="margin-bottom: 14px;">The shared classification used by both learning paths</h3>
         <div class="decision-tree">
           <div class="decision-question">
             <b>1</b>
@@ -1782,32 +2172,11 @@
           </div>
         </div>
 
-        <div class="grid-2" style="margin-top: 22px;">
-          <article class="card">
-            <span class="card-index">FOREGROUND</span>
-            <h3>Immediate learning</h3>
-            <p>An explicit lesson in one turn can create a Private Playbook, patch a Role Skill, or create a Candidate Improvement immediately.</p>
-          </article>
-          <article class="card">
-            <span class="card-index">BACKGROUND</span>
-            <h3>Dream-time learning</h3>
-            <p>Dreaming compares several sessions, corrections, outcomes, and tool traces to detect patterns that were not obvious in one turn.</p>
-          </article>
-        </div>
-      </section>
-
-      <section id="skills">
-        <div class="section-head">
-          <div>
-            <span class="section-number">08 / PROGRESSIVE DISCLOSURE</span>
-            <h2>Skills load only when useful</h2>
-          </div>
-          <p>
-            Hermes indexes skill names and descriptions. Full instructions are loaded only when the
-            task matches—or when a user invokes a skill explicitly with <code>/name</code>.
-          </p>
-        </div>
-
+        <h3 style="margin: 28px 0 14px;">Skills are progressively disclosed</h3>
+        <p style="max-width: 850px; color: var(--muted); margin: 0 0 16px;">
+          Hermes natively indexes skill names and descriptions. Full instructions load only when the
+          task matches—or when a user explicitly invokes <code>/name</code>.
+        </p>
         <div class="skill-index">
           <div class="skill-list" aria-label="Skill types">
             <button class="skill-button active" type="button" data-skill="role">
@@ -1841,154 +2210,84 @@
           </div>
         </div>
 
-        <details>
-          <summary>What if someone creates a skill directly with <code>hermes --cli</code>?</summary>
-          <div>
-            Direct CLI writes bypass the bridge transaction. On the next bridged turn or Dreaming run,
-            governed drift is quarantined, the committed tree is restored, and safe content is recreated
-            with provenance. Private content becomes a Private Playbook; rejected content stays quarantined.
-          </div>
-        </details>
-      </section>
-
-      <section id="dreaming">
-        <div class="section-head">
-          <div>
-            <span class="section-number">09 / REFLECTION</span>
-            <h2>Dreaming expands the evidence horizon</h2>
-          </div>
-          <p>
-            Dreaming is not “always create a skill.” It is a scheduled or manual reflection that may
-            consolidate private memory, improve a playbook, create transferable learning, suppress a duplicate,
-            or intentionally store nothing.
-          </p>
-        </div>
-
-        <div class="timeline">
-          <div class="timeline-item">
-            <strong>1. Wake or reuse the Worker</strong>
-            <p>The bridge manages the ACA Sandbox lifecycle and waits for real Hermes API readiness.</p>
-          </div>
-          <div class="timeline-item">
-            <strong>2. Open an isolated Dream session</strong>
-            <p>Dreaming uses a fresh session with a bounded focus and maximum artifact count.</p>
-          </div>
-          <div class="timeline-item">
-            <strong>3. Compare Work History and local state</strong>
-            <p>Hermes can reason across outcomes, corrections, tool traces, Personal Memory, Private Playbooks, Role Skills, and candidates.</p>
-          </div>
-          <div class="timeline-item">
-            <strong>4. Classify every observation</strong>
-            <p>Private facts remain private. Reusable behavior becomes a Role Skill patch or Candidate Improvement with provenance.</p>
-          </div>
-          <div class="timeline-item">
-            <strong>5. Optionally prepare a packet</strong>
-            <p>Scheduled learning may prepare an approval-required digest when transferable records exist—but cannot approve or export it.</p>
-          </div>
-        </div>
-
-        <div class="grid-2" style="margin-top: 22px;">
-          <article class="card">
-            <span class="card-index">CLASSROOM PATH</span>
-            <h3>Bridge-owned timer</h3>
-            <p>Simple and inspectable. One bridge replica remains active and runs the same serialized Worker learning transaction.</p>
-          </article>
-          <article class="card accent-card">
-            <span class="card-index">PRODUCTION PATH</span>
-            <h3>ACA scheduled Job</h3>
-            <p>A managed-identity Job calls a protected bridge operation. No Worker key or bridge API key is stored in the Job.</p>
-          </article>
+        <div class="packet-formula" style="margin-top: 18px;" aria-label="Provenance relationship">
+          <div class="packet-part">Actual skill change</div>
+          <div class="packet-operator">+</div>
+          <div class="packet-part"><code>records.jsonl</code>: why + evidence + hashes</div>
+          <div class="packet-operator">=</div>
+          <div class="packet-part">Governed local learning</div>
+          <div class="packet-operator">→</div>
+          <div class="packet-part">Eligible for owner-controlled packet preparation</div>
         </div>
       </section>
 
-      <section id="collective">
+      <section id="shared-evolution">
         <div class="section-head">
           <div>
-            <span class="section-number">10 / COLLECTIVE LEARNING</span>
-            <h2>From local lessons to shared behavior</h2>
+            <span class="section-number">07 / SHARED EVOLUTION</span>
+            <h2>From local learning to a new Role Release</h2>
           </div>
           <p>
-            Local learning is fast and allowed to be imperfect. Collective Learning Review is slower,
-            compares multiple Workers, minimizes evidence, resolves conflicts, and proposes the smallest coherent shared change.
+            Shared evolution has three explicit phases and two reviewable artifacts. Nothing moves
+            directly from a Worker into the shared Role Blueprint.
           </p>
+        </div>
+
+        <div class="phase-grid">
+          <article class="phase">
+            <b>PHASE 1 · WORKER-LOCAL</b>
+            <h3>Select and approve</h3>
+            <p>Eligible skill change + provenance → allowlist and privacy rules → exact digest reviewed by the Worker owner/operator → bridge attestation.</p>
+            <span class="artifact-chip">Artifact: Learning Packet</span>
+          </article>
+          <article class="phase">
+            <b>PHASE 2 · CENTRAL REASONING</b>
+            <h3>Merge and judge</h3>
+            <p>An operator-side review script calls Azure Foundry. It compares approved packets with the current SOUL, distribution, and Role Skills; then resolves support, conflict, and outliers.</p>
+            <span class="artifact-chip">Artifact: Draft Promotion PR</span>
+          </article>
+          <article class="phase">
+            <b>PHASE 3 · GITHUB GOVERNANCE</b>
+            <h3>Review and promote</h3>
+            <p>Deterministic validation, independent semantic agents, and a human expert review the proposal before merge creates the next immutable Role Release.</p>
+            <span class="artifact-chip">Artifact: Role Release N+1</span>
+          </article>
         </div>
 
         <div class="flow">
-          <div class="flow-label">Independent Workers on the same Role Release</div>
+          <div class="flow-label">What the central merger / judge sees</div>
           <div class="flow-row">
             <div class="flow-node">
-              <strong>Worker: Hermes</strong>
-              <span>Candidate: meeting decision record</span>
+              <strong>Learning Packet · Hermes</strong>
+              <span>Candidate + minimized provenance + Worker/release/state binding</span>
             </div>
             <div class="flow-node accent">
-              <strong>Shared immutable baseline</strong>
-              <span>Junior Project Manager · Role Release 3.1.0</span>
+              <strong>Merger / judge in central review</strong>
+              <span>Azure Foundry reasoning over packets + current Role Blueprint context</span>
             </div>
             <div class="flow-node">
-              <strong>Worker: Hermes 2</strong>
-              <span>Candidate: dependency handoff contract</span>
+              <strong>Learning Packet · Hermes 2</strong>
+              <span>Independent candidate + minimized provenance + attestation</span>
             </div>
           </div>
           <div class="flow-arrow">↓</div>
-          <div class="flow-label">Fail-closed export boundary</div>
           <div class="flow-row">
             <div class="flow-node">
-              <strong>Privacy scan</strong>
-              <span>Exclude Personal Memory, Playbooks, History, secrets, paths</span>
-            </div>
-            <div class="flow-node">
-              <strong>Human digest approval</strong>
-              <span>Binds Worker, Role Release, governed-state hash, exact packet</span>
-            </div>
-            <div class="flow-node">
-              <strong>Ed25519 attestation</strong>
-              <span>Bridge signs; Worker and central review hold public keys only</span>
-            </div>
-          </div>
-          <div class="flow-arrow">↓</div>
-          <div class="flow-label">Central reasoning</div>
-          <div class="flow-node accent">
-            <strong>Merger / judge</strong>
-            <span>Sees minimized packets + current SOUL + distribution + existing Role Skills · finds support, conflict, outliers, and the smallest coherent proposal</span>
-          </div>
-          <div class="flow-arrow">↓</div>
-          <div class="flow-label">Governed output</div>
-          <div class="flow-row">
-            <div class="flow-node">
-              <strong>Rejected records</strong>
-              <span>Private, weak, conflicting, narrow, or unsupported</span>
+              <strong>Reject or narrow</strong>
+              <span>Private, weak, conflicting, narrow, unsupported, or duplicate</span>
             </div>
             <div class="flow-node accent">
               <strong>Draft Promotion PR</strong>
-              <span>Role Skill proposal + rationale + supporting Workers and records</span>
+              <span>Complete Role Skill proposal + rationale + support/conflict/rejection accounting</span>
             </div>
             <div class="flow-node">
-              <strong>Human expert review</strong>
-              <span>No autonomous merge into the Role Blueprint</span>
+              <strong>Human decision remains</strong>
+              <span>The merger/judge cannot merge into the Role Blueprint</span>
             </div>
           </div>
         </div>
 
-        <div class="callout" style="margin-top: 18px;">
-          <div>
-            <strong>Two Workers do not automatically equal consensus</strong>
-            <p>Evidence can be repeated, complementary, conflicting, or unrelated. The retained decision must say which—and never claim more support than the packets provide.</p>
-          </div>
-        </div>
-      </section>
-
-      <section id="promotion">
-        <div class="section-head">
-          <div>
-            <span class="section-number">11 / GITHUB GOVERNANCE</span>
-            <h2>The PR is reviewed twice</h2>
-          </div>
-          <p>
-            Deterministic code validates signatures, hashes, paths, schemas, and versions. Independent
-            GitHub Agentic Workflows review semantic quality using read-only reasoning and permission-separated safe outputs.
-          </p>
-        </div>
-
+        <h3 style="margin: 28px 0 14px;">The Promotion PR approval process</h3>
         <div class="gate-grid">
           <article class="gate">
             <span class="status">Triage</span>
@@ -2017,36 +2316,31 @@
           </article>
         </div>
 
-        <div class="two-tone" style="margin-top: 20px;">
-          <div class="black">
-            <h3>Agent job</h3>
-            <p>Read-only repository and PR context. It can reason, but cannot directly modify the repository or merge the Promotion.</p>
+        <div class="grid-2" style="margin-top: 18px;">
+          <div class="callout">
+            <div>
+              <strong>Two Workers do not automatically equal consensus</strong>
+              <p>Evidence can be repeated, complementary, conflicting, or unrelated. The retained decision must say which and never claim more support than the packets provide.</p>
+            </div>
           </div>
-          <div class="orange">
-            <h3>Safe output job</h3>
-            <p>Applies only allowlisted labels, comments, and reviews after threat detection and structural validation.</p>
+          <div class="callout">
+            <div>
+              <strong>Draft by design</strong>
+              <p>Agentic reviewers reason read-only and can request only allowlisted labels, comments, and reviews. They cannot mark ready, merge, or refresh Workers.</p>
+            </div>
           </div>
         </div>
-
-        <details>
-          <summary>Why create a draft PR instead of a ready PR?</summary>
-          <div>
-            The merger/judge is proposing generalized behavior, not approving it. Draft status communicates that
-            semantic gates and human expert review must finish before Promotion. The automation cannot mark the PR
-            ready, merge it, or perform Worker Refresh.
-          </div>
-        </details>
       </section>
 
       <section id="refresh">
         <div class="section-head">
           <div>
-            <span class="section-number">12 / FORWARD-ONLY ADOPTION</span>
-            <h2>Worker Refresh changes the role, not the person</h2>
+            <span class="section-number">08 / FORWARD-ONLY ADOPTION</span>
+            <h2>Worker Refresh</h2>
           </div>
           <p>
             After Promotion merges, each Worker adopts the strictly newer Role Release. Reviewed shared behavior is
-            replaced; private state stays with the Worker.
+            replaced; the Worker’s identity and private continuity stay intact.
           </p>
         </div>
 
@@ -2069,152 +2363,17 @@
           </div>
         </div>
 
-        <div class="flow" style="margin-top: 20px;">
-          <div class="flow-row four">
-            <div class="flow-node">
-              <strong>Preflight</strong>
-              <span>Newer semantic version + approved export if governed state changed</span>
-            </div>
-            <div class="flow-node">
-              <strong>Verify</strong>
-              <span>Digest + signature + Worker + release + current state hash</span>
-            </div>
-            <div class="flow-node accent">
-              <strong>Refresh</strong>
-              <span>Transactional profile update with recoverable backup</span>
-            </div>
-            <div class="flow-node">
-              <strong>Validate</strong>
-              <span>Authoritative health + fresh-session behavior + private markers</span>
-            </div>
-          </div>
-        </div>
-
         <div class="callout" style="margin-top: 18px;">
           <div>
-            <strong>Failure is safe</strong>
-            <p>If preflight, signature, state, or copy validation fails, the current Worker remains available. Refresh never silently discards local learning.</p>
+            <strong>The implementation is intentionally robust</strong>
+            <p>
+              Before replacing anything, Refresh requires a strictly newer semantic release and—when local
+              governed learning exists—an approved packet bound to the exact Worker, release, signature, and
+              current state hash. The profile update uses a recoverable backup. If preflight or copy validation
+              fails, the current Worker remains available.
+            </p>
           </div>
         </div>
-      </section>
-
-      <section id="demo">
-        <div class="section-head">
-          <div>
-            <span class="section-number">13 / CLASSROOM</span>
-            <h2>A repeatable full-lifecycle demo</h2>
-          </div>
-          <p>
-            Long-lived Workers move forward only. Repeatable demonstrations use a disposable <code>demo-*</code>
-            cohort pinned to an immutable baseline.
-          </p>
-        </div>
-
-        <div class="demo-strip">
-          <div class="demo-step"><b>01</b><strong>Baseline</strong><span>Provision two demo Workers from one immutable Role Release.</span></div>
-          <div class="demo-step"><b>02</b><strong>Diverge</strong><span>Teach each Worker a different reusable lesson.</span></div>
-          <div class="demo-step"><b>03</b><strong>Dream</strong><span>Show foreground and scheduled retrospective learning.</span></div>
-          <div class="demo-step"><b>04</b><strong>Review</strong><span>Approve packets and run Collective Learning Review.</span></div>
-          <div class="demo-step"><b>05</b><strong>Promote</strong><span>Open a disposable draft PR and show automated semantic gates.</span></div>
-          <div class="demo-step"><b>06</b><strong>Reset</strong><span>Delete only demo Sandboxes and Data Disks; recreate the baseline.</span></div>
-        </div>
-
-        <div class="grid-2" style="margin-top: 20px;">
-          <article class="card accent-card">
-            <span class="card-index">RESET ALLOWED</span>
-            <h3>Disposable cohort</h3>
-            <p>Worker ID, Data Disk, state directory, and Terraform workspace must all begin with <code>demo-</code>. Reset is dry-run by default.</p>
-          </article>
-          <article class="card">
-            <span class="card-index">RESET FORBIDDEN</span>
-            <h3>Long-lived Workers</h3>
-            <p><code>hermes</code> and <code>hermes2</code> use normal forward-only Worker Refresh. Their private history is never wiped to replay a demo.</p>
-          </article>
-        </div>
-
-        <details>
-          <summary>Suggested teaching sequence</summary>
-          <div>
-            <ol>
-              <li>Start with the 90-second story and architecture.</li>
-              <li>Show the Worker in Teams, then explain the three identities.</li>
-              <li>Teach one Personal Memory fact and one Private Playbook.</li>
-              <li>Create distinct Candidate Improvements in two Workers.</li>
-              <li>Run Dreaming and inspect canonical files plus provenance.</li>
-              <li>Prepare, approve, and export both Learning Packets.</li>
-              <li>Show the merger/judge decision and draft Promotion PR.</li>
-              <li>Walk through the five Agentic Promotion gates.</li>
-              <li>Refresh both Workers and prove private state survived.</li>
-              <li>Reset the disposable cohort for the next audience.</li>
-            </ol>
-          </div>
-        </details>
-      </section>
-
-      <section id="deeper">
-        <div class="section-head">
-          <div>
-            <span class="section-number">14 / DETAILS</span>
-            <h2>The important invariants</h2>
-          </div>
-          <p>
-            These are the rules that make the demonstration more than an AI story: they are enforced
-            by code, cryptography, namespaces, Terraform state, and explicit human gates.
-          </p>
-        </div>
-
-        <div class="grid-3">
-          <article class="card"><h3>Single writer</h3><p>Learning operations serialize per Worker because Hermes uses SQLite and transactional skill state.</p></article>
-          <article class="card"><h3>Immutable baseline</h3><p>Every Role Release is a semantic version pinned to a full Git commit with baseline Role Skill hashes.</p></article>
-          <article class="card"><h3>Fail-closed export</h3><p>Only allowlisted Role Skill diffs and Candidate Improvements with matching current-hash provenance can enter a packet.</p></article>
-          <article class="card"><h3>Independent approval</h3><p>The bridge holds the Ed25519 private key. The Worker cannot forge human packet approval.</p></article>
-          <article class="card"><h3>Deterministic review context</h3><p>Every semantic PR reviewer receives the exact same prefetched PR-head metadata, diff, history, and Role Blueprint snapshot.</p></article>
-          <article class="card"><h3>No automatic Promotion</h3><p>Dreaming, packet preparation, merger/judge, and Agentic reviewers cannot merge or refresh Workers.</p></article>
-        </div>
-
-        <div class="grid-2" style="margin-top: 20px;">
-          <div>
-            <h3 style="margin-bottom: 12px;">Canonical Hermes profile</h3>
-            <pre>/data/hermes/profiles/junior-project-manager/
-├── memories/
-│   ├── USER.md
-│   └── MEMORY.md
-├── skills/
-│   ├── role/
-│   ├── private/
-│   └── candidates/
-├── learning/
-│   ├── records.jsonl
-│   ├── exports/
-│   ├── quarantine/
-│   └── archive/
-├── state.db
-├── workspace/
-└── local/worker.json</pre>
-          </div>
-          <div>
-            <h3 style="margin-bottom: 12px;">Role Blueprint distribution</h3>
-            <pre>blueprints/junior-project-manager/
-├── distribution.yaml
-├── SOUL.md
-├── config.yaml
-├── mcp.json
-├── skills/role/
-│   ├── junior-project-manager/
-│   ├── dream-reflection/
-│   └── delivery-commitment-control/
-└── schemas/</pre>
-          </div>
-        </div>
-
-        <details>
-          <summary>What is deliberately not in the shared distribution?</summary>
-          <div>
-            Credentials, environment files, Personal Memory, Work History, sessions, logs, workspace files,
-            Private Playbooks, Candidate Improvements, and Worker-local learning state. Git owns reviewed role
-            behavior; the Data Disk owns private Worker continuity.
-          </div>
-        </details>
       </section>
 
       <footer class="footer">
@@ -2282,7 +2441,8 @@
         intro: "A reviewed procedure that tells Hermes how to classify observations during offline reflection.",
         points: [
           "Uses a wider evidence horizon than one foreground turn.",
-          "May update private stores or create generalized learning.",
+          "May create or patch Private Playbooks, Role Skills, and Candidate Improvements.",
+          "May consolidate Personal Memory without exporting its private source.",
           "Suppresses duplicates and weak speculation.",
           "Never approves or promotes its own output."
         ]
