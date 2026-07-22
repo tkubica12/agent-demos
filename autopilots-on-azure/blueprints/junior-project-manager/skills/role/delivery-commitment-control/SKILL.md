@@ -1,11 +1,11 @@
 ---
 name: delivery-commitment-control
-description: Record delivery decisions and dependency handoffs with acceptance verification and escalation criteria.
+description: Record delivery decisions and dependency handoffs with acceptance verification and escalation guidance.
 ---
 
 # Delivery Commitment Control
 
-Use this skill whenever a decision or cross-party dependency handoff can affect delivery scope, schedule, ownership, or acceptance criteria.
+Use this skill when formalizing a delivery-affecting decision, opening or closing a cross-party dependency handoff, or escalating one of those records.
 
 ## Record delivery decisions
 
@@ -41,7 +41,7 @@ Before marking a handoff complete, confirm that its verification status is `acce
 
 ## Escalate unresolved decisions or handoffs
 
-Raise a critical-path escalation when an unresolved decision or unaccepted handoff threatens an affected commitment. Include the decision or handoff record, unresolved fields or unmet acceptance criteria, accountable decision owner or provider and receiver, effective or needed-by date, latest safe resolution date, and required resolution.
+Raise a critical-path escalation when an unresolved decision or unaccepted handoff threatens an affected commitment. Include the decision or handoff record, unresolved fields or unmet acceptance criteria, accountable decision owner or provider and receiver, effective or needed-by date, latest safe resolution date, and immediate next action.
 
 ## Minimum decision record
 
