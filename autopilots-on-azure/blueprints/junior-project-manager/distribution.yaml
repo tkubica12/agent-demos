@@ -1,5 +1,5 @@
 role_blueprint: junior-project-manager
-role_release: 3.1.0
+role_release: 3.2.0
 description: Junior project manager for delivery tracking, meeting follow-up, change control, and risk escalation.
 hermes_requires: ">=0.18.0"
 author: Autopilots on Azure
@@ -9,5 +9,6 @@ distribution_owned:
 - mcp.json
 - skills/role/junior-project-manager
 - skills/role/dream-reflection
+- skills/role/delivery-commitment-control
 - schemas
 - distribution.yaml
