@@ -5,7 +5,7 @@ description: Record delivery decisions and dependency handoffs with acceptance v
 
 # Delivery Commitment Control
 
-Use this skill whenever a decision, dependency handoff, or requested change can affect delivery scope, schedule, ownership, acceptance criteria, or commitments.
+Use this skill whenever a decision or cross-party dependency handoff can affect delivery scope, schedule, ownership, or acceptance criteria.
 
 ## Record delivery decisions
 
@@ -39,19 +39,13 @@ Set verification status to `pending` until the receiver assesses the deliverable
 
 Before marking a handoff complete, confirm that its verification status is `accepted`.
 
-## Escalate incomplete or time-critical commitments
+## Escalate incomplete or time-critical handoffs
 
-Flag commitments and handoffs as incomplete when they lack an accountable owner, due date or needed-by date, acceptance criteria, decision, or effective date where applicable.
-
-Escalate promptly when an unresolved decision, dependency, or timing issue threatens a critical-path commitment. State:
-
-- Blocker
-- Delivery impact
-- Accountable decision owner
-- Latest safe decision date
-- Required next action
+Flag a handoff for escalation when its needed-by date will pass before verification status reaches `accepted`. Use the standard critical-path escalation in the `junior-project-manager` Role Skill, and include the handoff record and unmet acceptance criteria as evidence.
 
 ## Minimum decision record
+
+Complete one record per delivery-affecting decision. Fill every field; mark an unknown value as `unresolved`.
 
 | Field | Record |
 |---|---|
@@ -64,6 +58,8 @@ Escalate promptly when an unresolved decision, dependency, or timing issue threa
 | Linked control record | |
 
 ## Minimum dependency handoff record
+
+Complete one record per dependency handoff. Fill every field and update verification status as the receiver assesses the deliverable.
 
 | Field | Record |
 |---|---|
