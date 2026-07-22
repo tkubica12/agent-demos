@@ -85,3 +85,11 @@ output "scheduled_learning_enabled" {
 output "scheduled_learning_interval_seconds" {
   value = var.scheduled_learning_interval_seconds
 }
+
+output "scheduled_learning_job_enabled" {
+  value = var.agent_runtime == "hermes" && var.scheduled_learning_job_enabled
+}
+
+output "scheduled_learning_job_name" {
+  value = var.agent_runtime == "hermes" && var.scheduled_learning_job_enabled ? azapi_resource.scheduled_learning_job[0].name : ""
+}

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.factory import create_runtime_adapter, runtime_kind_from_env
+from bridge.scheduler_auth import require_scheduler_identity
 from bridge.scheduled_learning import (
     RETRYABLE_ERRORS,
     ScheduledLearningCoordinator,
@@ -834,6 +835,18 @@ async def export_collective_learning(http_request: Request) -> dict[str, Any]:
 @app.post("/internal/scheduled-learning/run")
 async def run_scheduled_learning(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
+    try:
+        return await scheduled_learning.run_once()
+    except RETRYABLE_ERRORS as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"type": exc.__class__.__name__, "message": str(exc)},
+        ) from exc
+
+
+@app.post("/internal/scheduled-learning/run-managed")
+async def run_managed_scheduled_learning(http_request: Request) -> dict[str, Any]:
+    require_scheduler_identity(http_request)
     try:
         return await scheduled_learning.run_once()
     except RETRYABLE_ERRORS as exc:

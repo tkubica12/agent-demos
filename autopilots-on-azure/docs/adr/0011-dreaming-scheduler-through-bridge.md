@@ -47,6 +47,8 @@ The initial implementation uses a bridge-owned timer because it is simplest for 
 
 The production-friendly path is an Azure Container Apps scheduled Job. The job should call the bridge on a schedule; the bridge then wakes the sandbox and submits the dream run. This preserves scale-to-zero for worker sandboxes and avoids putting scheduling logic inside every sandbox.
 
+The scheduled Job uses the existing per-Worker bridge managed identity. A dedicated Entra resource application exposes `ScheduledLearning.Run.All`; the Job requests a short-lived application token and the bridge verifies signature, issuer, audience, role, client ID, and object ID. The Job receives no stored API key or application secret.
+
 Use event-driven ACA Jobs later when there is a real queue-driven need, such as processing large export batches or fan-out consolidation work. Do not use Service Connector as a scheduler; use it only when helpful for service-to-service wiring.
 
 ## Consequences

@@ -157,6 +157,7 @@ dependencies = [
     { name = "httpx" },
     { name = "microsoft-agents-authentication-msal" },
     { name = "microsoft-agents-hosting-fastapi" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "uvicorn", extra = ["standard"] },
     { name = "websockets" },
 ]
@@ -171,6 +172,7 @@ requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
     { name = "microsoft-agents-authentication-msal", specifier = ">=1.1.0" },
     { name = "microsoft-agents-hosting-fastapi", specifier = ">=1.1.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.13.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.3" },
     { name = "websockets", specifier = "==14.1" },
 ]

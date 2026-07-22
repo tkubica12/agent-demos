@@ -375,6 +375,63 @@ uv run python -m scripts.demo_ops scheduled-status --state-name hermes2
 
 Dreaming prepares a packet only when transferable records exist. Human digest approval, export, Collective Learning Review, Promotion, and Worker Refresh remain separate gates.
 
+### Production ACA scheduled Job
+
+The production scheduler uses the existing per-Worker bridge managed identity and a dedicated Entra application role. No Worker API key or application secret is passed to the Job.
+
+Configure the resource API and assign `ScheduledLearning.Run.All`:
+
+```powershell
+uv run python -m scripts.setup_scheduled_learning_identity `
+  --state-name hermes2
+```
+
+Switch Hermes 2 from the bridge-owned timer to the ACA scheduled Job:
+
+```powershell
+uv run python -m scripts.setup_app_tfvars `
+  --runtime hermes `
+  --state-name hermes2 `
+  --autopilot-name hermes2 `
+  --no-scheduled-learning-enabled `
+  --scheduled-learning-job-enabled `
+  --scheduled-learning-job-cron-expression "0 2 * * *" `
+  --scheduled-learning-job-timeout-seconds 1800 `
+  --scheduled-learning-job-retry-limit 3 `
+  --runtime-only
+
+uv run python -m scripts.deploy_apps_runtime `
+  --runtime hermes `
+  --state-name hermes2 `
+  --workspace autopilot-hermes2 `
+  --apply `
+  --auto-approve `
+  --capture
+```
+
+Start and inspect an execution:
+
+```powershell
+uv run python -m scripts.demo_ops scheduled-job-start --state-name hermes2
+uv run python -m scripts.demo_ops scheduled-job-status --state-name hermes2
+```
+
+### Disposable demo cohort reset
+
+Create demo Workers with `demo-*` state names, Worker IDs, Data Disks, and Terraform workspaces. Pin their tfvars to the immutable classroom baseline.
+
+Reset is dry-run by default:
+
+```powershell
+uv run python -m scripts.demo_cohort `
+  --state-name demo-hermes-a `
+  --workspace demo-hermes-a `
+  --baseline-release 3.1.0 `
+  --baseline-commit 60b8e7ef3fb594f386d5177032df434eb4e62917
+```
+
+After reviewing the exact Sandbox and Data Disk names, add `--execute`. The command refuses any resource whose state name, Worker ID, Data Disk, or workspace does not start with `demo-`.
+
 ## Runtime image updates
 
 Rebuild images, update the Worker's scoped tfvars, and apply its workspace. The runtime-image label forces controlled Sandbox replacement even when the Role Release is unchanged.

@@ -433,6 +433,54 @@ def run_scheduled_learning(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def run_scheduled_job(args: argparse.Namespace) -> int:
+    outputs = load_json(runtime_outputs_path("hermes", args.state_name))
+    job_name = str(outputs.get("scheduled_learning_job_name") or "")
+    if not job_name:
+        print_json(
+            {
+                "ok": False,
+                "error": "scheduledLearningJobNotConfigured",
+                "stateName": args.state_name,
+            }
+        )
+        return 1
+    resource_group = args.resource_group or lookup_resource_group(job_name)
+    action = "start" if args.command == "scheduled-job-start" else "execution"
+    command = [
+        resolve_executable("az"),
+        "containerapp",
+        "job",
+        action,
+    ]
+    if action == "execution":
+        command.append("list")
+    command.extend(
+        [
+            "--name",
+            job_name,
+            "--resource-group",
+            resource_group,
+            "-o",
+            "json",
+        ]
+    )
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print_json(
+            {
+                "ok": False,
+                "jobName": job_name,
+                "returnCode": result.returncode,
+                "stderr": result.stderr.strip(),
+            }
+        )
+        return result.returncode
+    payload = json.loads(result.stdout) if result.stdout.strip() else {}
+    print_json({"ok": True, "jobName": job_name, "result": payload})
+    return 0
+
+
 def run_activate(args: argparse.Namespace) -> int:
     activate_runtime_tfvars(args.runtime, args.state_name)
     print_json(
@@ -579,6 +627,22 @@ def main() -> None:
     scheduled_status.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     scheduled_status.add_argument("--timeout", type=int, default=120)
     scheduled_status.set_defaults(func=run_scheduled_learning)
+
+    scheduled_job_start = subparsers.add_parser(
+        "scheduled-job-start",
+        help="Start the managed-identity ACA scheduled learning Job now.",
+    )
+    scheduled_job_start.add_argument("--state-name", default="")
+    scheduled_job_start.add_argument("--resource-group", default="")
+    scheduled_job_start.set_defaults(func=run_scheduled_job)
+
+    scheduled_job_status = subparsers.add_parser(
+        "scheduled-job-status",
+        help="List ACA scheduled learning Job executions.",
+    )
+    scheduled_job_status.add_argument("--state-name", default="")
+    scheduled_job_status.add_argument("--resource-group", default="")
+    scheduled_job_status.set_defaults(func=run_scheduled_job)
 
     activate = subparsers.add_parser("activate", help="Make one runtime's tfvars active for Terraform operations.")
     activate.add_argument("--runtime", choices=RUNTIMES, required=True)

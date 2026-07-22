@@ -108,6 +108,46 @@ variable "scheduled_learning_prepare_packet" {
   default = true
 }
 
+variable "scheduled_learning_job_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "scheduled_learning_job_cron_expression" {
+  type    = string
+  default = "0 2 * * *"
+
+  validation {
+    condition     = length(split(" ", trimspace(var.scheduled_learning_job_cron_expression))) == 5
+    error_message = "scheduled_learning_job_cron_expression must contain five cron fields."
+  }
+}
+
+variable "scheduled_learning_job_timeout_seconds" {
+  type    = number
+  default = 1800
+}
+
+variable "scheduled_learning_job_retry_limit" {
+  type    = number
+  default = 3
+}
+
+variable "scheduled_learning_audience" {
+  type    = string
+  default = ""
+}
+
+variable "scheduled_learning_allowed_client_ids" {
+  type    = string
+  default = ""
+}
+
+variable "scheduled_learning_allowed_object_ids" {
+  type    = string
+  default = ""
+}
+
 variable "collective_learning_approval_private_key" {
   type      = string
   default   = ""

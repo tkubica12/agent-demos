@@ -89,6 +89,8 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertFalse(tfvars["scheduled_learning_enabled"])
         self.assertEqual(tfvars["scheduled_learning_interval_seconds"], 86_400)
         self.assertTrue(tfvars["scheduled_learning_prepare_packet"])
+        self.assertFalse(tfvars["scheduled_learning_job_enabled"])
+        self.assertEqual(tfvars["scheduled_learning_job_cron_expression"], "0 2 * * *")
         self.assertNotIn("openclaw_gateway_token", tfvars)
         self.assertNotIn("openclaw_bridge_device_private_key_pem", tfvars)
 
@@ -111,6 +113,10 @@ class SetupAppTfvarsTests(unittest.TestCase):
             scheduled_learning_retry_limit=4,
             scheduled_learning_retry_backoff_seconds=15,
             scheduled_learning_prepare_packet=False,
+            scheduled_learning_job_enabled=True,
+            scheduled_learning_job_cron_expression="15 3 * * *",
+            scheduled_learning_job_timeout_seconds=1_200,
+            scheduled_learning_job_retry_limit=2,
         )
         reused = build_tfvars(
             runtime="hermes",
@@ -132,6 +138,10 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(reused["scheduled_learning_retry_limit"], 4)
         self.assertEqual(reused["scheduled_learning_retry_backoff_seconds"], 15)
         self.assertFalse(reused["scheduled_learning_prepare_packet"])
+        self.assertTrue(reused["scheduled_learning_job_enabled"])
+        self.assertEqual(reused["scheduled_learning_job_cron_expression"], "15 3 * * *")
+        self.assertEqual(reused["scheduled_learning_job_timeout_seconds"], 1_200)
+        self.assertEqual(reused["scheduled_learning_job_retry_limit"], 2)
 
     def test_agent365_auth_values_are_reused_from_previous_tfvars(self):
         tfvars = build_tfvars(

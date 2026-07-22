@@ -277,6 +277,15 @@ uv run python -m scripts.demo_ops scheduled-status --state-name hermes2
 
 Point out that the automated cycle may Dream and prepare a digest, but cannot approve, export, promote, or merge it.
 
+For the production managed scheduler:
+
+```powershell
+uv run python -m scripts.demo_ops scheduled-job-start --state-name hermes2
+uv run python -m scripts.demo_ops scheduled-job-status --state-name hermes2
+```
+
+The Job authenticates with a short-lived managed-identity token and the `ScheduledLearning.Run.All` application role.
+
 ### Repeatable full-lifecycle demonstrations
 
 Use a separate disposable cohort rather than rolling back `hermes` or `hermes2`:
@@ -288,6 +297,16 @@ Use a separate disposable cohort rather than rolling back `hermes` or `hermes2`:
 5. Reset by deleting only demo Sandboxes and Data Disks, then invoke the Workers to recreate the baseline.
 
 Reset automation must refuse any Worker, volume, or workspace not explicitly named `demo-*`.
+
+Dry-run reset:
+
+```powershell
+uv run python -m scripts.demo_cohort `
+  --state-name demo-hermes-a `
+  --workspace demo-hermes-a `
+  --baseline-release 3.1.0 `
+  --baseline-commit 60b8e7ef3fb594f386d5177032df434eb4e62917
+```
 
 ## 11. Prepare Learning Packets
 

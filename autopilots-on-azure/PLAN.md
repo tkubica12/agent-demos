@@ -105,9 +105,10 @@ Tasks:
 - Complete: ensure automation never approves, exports, promotes, or merges learning.
 - Complete: live-validate an on-demand Hermes 2 cycle that produced one transferable record and prepared one approval-required packet.
 - Complete: deploy the scheduler bridge with a daily interval, one-hour startup delay, retry/backoff, and Terraform convergence.
-- Add managed-identity authentication for the production ACA scheduled Job bridge endpoint without stored keys.
-- Provision the ACA scheduled Job with Terraform/azapi and validate an on-demand execution.
-- Add disposable `demo-*` Worker/Data Disk reset automation pinned to an immutable baseline.
+- Complete: add managed-identity authentication and `ScheduledLearning.Run.All` for the production ACA scheduled Job bridge endpoint without stored keys.
+- Complete: model the ACA scheduled Job with Terraform/azapi and add on-demand execution/status commands.
+- Complete: add fail-closed disposable `demo-*` Worker/Data Disk reset automation pinned to an immutable baseline.
+- Provision the Entra resource API, deploy the ACA scheduled Job, and validate an on-demand execution.
 - Add a disposable Git Promotion lane so the full lifecycle can be replayed without rewriting `main`.
 - Add optional queue-driven fan-out for larger Worker populations.
 
