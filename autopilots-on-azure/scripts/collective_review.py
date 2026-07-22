@@ -299,6 +299,37 @@ def _run(command: list[str], *, cwd: Path) -> str:
     return result.stdout.strip()
 
 
+def update_distribution_owned(
+    distribution: dict[str, Any],
+    proposals: list[dict[str, Any]],
+) -> None:
+    owned = distribution.get("distribution_owned")
+    if not isinstance(owned, list) or not all(isinstance(path, str) for path in owned):
+        raise CollectiveReviewError("Role Blueprint distribution_owned must be an array of paths.")
+    proposed_skill_paths = sorted(
+        {
+            str(PurePosixPath(proposal["targetPath"]).parent)
+            for proposal in proposals
+        }
+    )
+    insert_at = next(
+        (
+            index
+            for index, path in enumerate(owned)
+            if path in {"schemas", "distribution.yaml"}
+        ),
+        len(owned),
+    )
+    for path in proposed_skill_paths:
+        if path not in owned:
+            owned.insert(insert_at, path)
+            insert_at += 1
+
+
+def remove_embedded_role_release(text: str) -> str:
+    return re.sub(r"(?m)^Role Release:\s*[^\r\n]+\.\r?\n(?:\r?\n)?", "", text, count=1)
+
+
 def create_role_release_pull_request(
     packets: list[dict[str, Any]],
     decision: dict[str, Any],
@@ -332,8 +363,14 @@ def create_role_release_pull_request(
         distribution_path = role_root / "distribution.yaml"
         distribution = yaml.safe_load(distribution_path.read_text(encoding="utf-8"))
         distribution["role_release"] = next_role_release
+        update_distribution_owned(distribution, decision["proposals"])
         distribution_path.write_text(
             yaml.safe_dump(distribution, sort_keys=False),
+            encoding="utf-8",
+        )
+        soul_path = role_root / "SOUL.md"
+        soul_path.write_text(
+            remove_embedded_role_release(soul_path.read_text(encoding="utf-8")),
             encoding="utf-8",
         )
         review_path = role_root / "collective-learning-review.json"

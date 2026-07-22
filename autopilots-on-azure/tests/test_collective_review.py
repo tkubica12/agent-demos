@@ -11,6 +11,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.collective_review import (
     CollectiveReviewError,
     load_packets,
+    remove_embedded_role_release,
+    update_distribution_owned,
     validate_decision,
     validate_next_role_release,
 )
@@ -216,6 +218,45 @@ class CollectiveReviewTests(unittest.TestCase):
         }
 
         self.assertEqual(validate_decision(decision, packets=packets), decision)
+
+    def test_promotion_adds_proposed_role_skills_to_distribution(self):
+        distribution = {
+            "distribution_owned": [
+                "SOUL.md",
+                "skills/role/junior-project-manager",
+                "schemas",
+                "distribution.yaml",
+            ]
+        }
+        proposals = [
+            {
+                "targetPath": "skills/role/delivery-commitment-control/SKILL.md",
+            },
+            {
+                "targetPath": "skills/role/junior-project-manager/SKILL.md",
+            },
+        ]
+
+        update_distribution_owned(distribution, proposals)
+
+        self.assertEqual(
+            distribution["distribution_owned"],
+            [
+                "SOUL.md",
+                "skills/role/junior-project-manager",
+                "skills/role/delivery-commitment-control",
+                "schemas",
+                "distribution.yaml",
+            ],
+        )
+
+    def test_promotion_removes_stale_role_release_from_soul(self):
+        soul = "# Junior Project Manager\n\nRole Release: 3.0.1.\n\nKeep plans concrete.\n"
+
+        self.assertEqual(
+            remove_embedded_role_release(soul),
+            "# Junior Project Manager\n\nKeep plans concrete.\n",
+        )
 
     def test_next_role_release_must_be_strictly_newer_semver(self):
         packets = [self._packet()]
