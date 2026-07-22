@@ -570,6 +570,26 @@ Work History                         |
 5. Terraform must converge after deployment.
 6. Runtime health must report Worker ID, Role Blueprint, Role Release, release commit, and gateway status.
 
+### Scheduled learning
+
+1. Recurring Dreaming must execute outside the Hermes Sandbox session loop and enter through the bridge so a suspended Sandbox can be woken safely.
+2. A scheduled cycle may run Dreaming and prepare a Learning Packet when transferable records exist.
+3. A scheduled cycle must never approve, attest, export, promote, or merge a Learning Packet.
+4. Per-Worker configuration must control enablement, initial delay, interval, focus, maximum records, retry limit, retry backoff, and packet preparation.
+5. Scheduled cycles must serialize through the same Worker learning transaction as foreground work and manual Dreaming.
+6. Status must expose timestamps, counts, current Role Release, last Dream summary, last prepared packet digest, and sanitized failures without private content.
+7. A bridge-owned timer is permitted for classroom demonstrations but requires a non-zero bridge replica.
+8. The production scheduler remains an Azure Container Apps scheduled Job calling a managed-identity-protected bridge endpoint; it must not receive stored Worker or bridge keys.
+
+### Repeatable demonstration cohorts
+
+1. A full lifecycle replay must use dedicated disposable Workers, identities, Terraform workspaces, Sandboxes, and Data Disks whose names begin with `demo-`.
+2. Demo Workers pin an immutable baseline Role Release and never share private state with long-lived Workers.
+3. Reset deletes only the disposable demo Sandboxes and Data Disks, then recreates them from the baseline on the next invocation.
+4. Reset must fail closed unless every selected Worker, volume, and workspace is explicitly marked as demo-owned.
+5. A demo Promotion uses a disposable Git branch or is closed without merge; main Role Release history must not be rewritten for repeatability.
+6. Long-lived Workers use normal forward-only Worker Refresh and are never reset to an older Role Release.
+
 ## Observability
 
 1. Bridge diagnostics record the selected authorization mode and privacy boundary, never tokens.

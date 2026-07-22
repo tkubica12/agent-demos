@@ -86,8 +86,52 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["worker_assignment_scope"], "team-alpha")
         self.assertEqual(tfvars["collective_learning_approval_private_key"], "approval-private")
         self.assertEqual(tfvars["collective_learning_approval_public_key"], "approval-public")
+        self.assertFalse(tfvars["scheduled_learning_enabled"])
+        self.assertEqual(tfvars["scheduled_learning_interval_seconds"], 86_400)
+        self.assertTrue(tfvars["scheduled_learning_prepare_packet"])
         self.assertNotIn("openclaw_gateway_token", tfvars)
         self.assertNotIn("openclaw_bridge_device_private_key_pem", tfvars)
+
+    def test_scheduled_learning_values_override_and_then_persist(self):
+        configured = build_tfvars(
+            runtime="hermes",
+            autopilot_name="hermes",
+            data_volume_name="hermes-data",
+            previous={},
+            api_server_key="api-key",
+            role_blueprint="junior-project-manager",
+            role_blueprint_source="https://example.com/roles.git",
+            role_release="3.2.0",
+            role_release_commit="a" * 40,
+            scheduled_learning_enabled=True,
+            scheduled_learning_initial_delay_seconds=10,
+            scheduled_learning_interval_seconds=3_600,
+            scheduled_learning_focus="review delivery handoffs",
+            scheduled_learning_max_records=2,
+            scheduled_learning_retry_limit=4,
+            scheduled_learning_retry_backoff_seconds=15,
+            scheduled_learning_prepare_packet=False,
+        )
+        reused = build_tfvars(
+            runtime="hermes",
+            autopilot_name="hermes",
+            data_volume_name="hermes-data",
+            previous=configured,
+            api_server_key="api-key",
+            role_blueprint="junior-project-manager",
+            role_blueprint_source="https://example.com/roles.git",
+            role_release="3.2.0",
+            role_release_commit="a" * 40,
+        )
+
+        self.assertTrue(reused["scheduled_learning_enabled"])
+        self.assertEqual(reused["scheduled_learning_initial_delay_seconds"], 10)
+        self.assertEqual(reused["scheduled_learning_interval_seconds"], 3_600)
+        self.assertEqual(reused["scheduled_learning_focus"], "review delivery handoffs")
+        self.assertEqual(reused["scheduled_learning_max_records"], 2)
+        self.assertEqual(reused["scheduled_learning_retry_limit"], 4)
+        self.assertEqual(reused["scheduled_learning_retry_backoff_seconds"], 15)
+        self.assertFalse(reused["scheduled_learning_prepare_packet"])
 
     def test_agent365_auth_values_are_reused_from_previous_tfvars(self):
         tfvars = build_tfvars(

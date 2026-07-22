@@ -43,7 +43,7 @@ The bridge is responsible for:
 - Calling a stateful Hermes endpoint with stable session identity.
 - Recording dream-run status and errors.
 
-Initial implementation may use a bridge-owned cron/timer because it is simplest for the demo and for deployments where the bridge remains running.
+The initial implementation uses a bridge-owned timer because it is simplest for the demo. Enabling it keeps one bridge replica active. The timer runs through the same Worker learning transaction as foreground work, prepares a Learning Packet only when transferable records exist, and never approves or exports the packet.
 
 The production-friendly path is an Azure Container Apps scheduled Job. The job should call the bridge on a schedule; the bridge then wakes the sandbox and submits the dream run. This preserves scale-to-zero for worker sandboxes and avoids putting scheduling logic inside every sandbox.
 
@@ -54,6 +54,6 @@ Use event-driven ACA Jobs later when there is a real queue-driven need, such as 
 - ACA Sandbox remains the stateful worker runtime, not the scheduler.
 - The bridge stays the control plane for worker wakeup and stateful Hermes invocation.
 - Bridge-owned cron is acceptable for v1 but requires the bridge to be alive.
-- ACA scheduled Jobs provide a clean path to cloud-native timer execution and should be modeled in Bicep when implemented.
+- ACA scheduled Jobs provide the production cloud-native timer path and are modeled with Terraform/azapi in this repository.
 - Event-driven Jobs remain available for future queue-based fleet workflows.
 - Dreaming runs can be audited and throttled centrally rather than hidden inside individual worker sandboxes.

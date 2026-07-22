@@ -169,6 +169,14 @@ def build_tfvars(
     role_release: str = "",
     role_release_commit: str = "",
     assignment_scope: str = "",
+    scheduled_learning_enabled: bool | None = None,
+    scheduled_learning_initial_delay_seconds: int | None = None,
+    scheduled_learning_interval_seconds: int | None = None,
+    scheduled_learning_focus: str = "",
+    scheduled_learning_max_records: int | None = None,
+    scheduled_learning_retry_limit: int | None = None,
+    scheduled_learning_retry_backoff_seconds: int | None = None,
+    scheduled_learning_prepare_packet: bool | None = None,
     collective_approval_private_key: str = "",
     collective_approval_public_key: str = "",
 ) -> dict[str, Any]:
@@ -178,6 +186,48 @@ def build_tfvars(
             "autopilot_name": autopilot_name,
             "agent_runtime": runtime,
             "runtime_data_volume_name": data_volume_name,
+            "scheduled_learning_enabled": (
+                scheduled_learning_enabled
+                if scheduled_learning_enabled is not None
+                else bool(previous.get("scheduled_learning_enabled", False))
+            ),
+            "scheduled_learning_initial_delay_seconds": (
+                scheduled_learning_initial_delay_seconds
+                if scheduled_learning_initial_delay_seconds is not None
+                else int(previous.get("scheduled_learning_initial_delay_seconds", 60))
+            ),
+            "scheduled_learning_interval_seconds": (
+                scheduled_learning_interval_seconds
+                if scheduled_learning_interval_seconds is not None
+                else int(previous.get("scheduled_learning_interval_seconds", 86_400))
+            ),
+            "scheduled_learning_focus": (
+                scheduled_learning_focus
+                or previous.get(
+                    "scheduled_learning_focus",
+                    "Review recent meaningful work for reusable, privacy-safe Role Skill improvements.",
+                )
+            ),
+            "scheduled_learning_max_records": (
+                scheduled_learning_max_records
+                if scheduled_learning_max_records is not None
+                else int(previous.get("scheduled_learning_max_records", 3))
+            ),
+            "scheduled_learning_retry_limit": (
+                scheduled_learning_retry_limit
+                if scheduled_learning_retry_limit is not None
+                else int(previous.get("scheduled_learning_retry_limit", 3))
+            ),
+            "scheduled_learning_retry_backoff_seconds": (
+                scheduled_learning_retry_backoff_seconds
+                if scheduled_learning_retry_backoff_seconds is not None
+                else int(previous.get("scheduled_learning_retry_backoff_seconds", 30))
+            ),
+            "scheduled_learning_prepare_packet": (
+                scheduled_learning_prepare_packet
+                if scheduled_learning_prepare_packet is not None
+                else bool(previous.get("scheduled_learning_prepare_packet", True))
+            ),
         }
     )
     if runtime == "openclaw":
@@ -305,6 +355,24 @@ def main() -> None:
     parser.add_argument("--role-release", default="", help="Expected distribution.yaml Role Release.")
     parser.add_argument("--role-release-commit", default="", help="Full immutable Git commit SHA for the Role Release.")
     parser.add_argument("--assignment-scope", default="", help="Person, team, or workstream assigned to this Worker.")
+    parser.add_argument(
+        "--scheduled-learning-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Keep the Hermes bridge active and run recurring Dreaming.",
+    )
+    parser.add_argument("--scheduled-learning-initial-delay-seconds", type=int, default=None)
+    parser.add_argument("--scheduled-learning-interval-seconds", type=int, default=None)
+    parser.add_argument("--scheduled-learning-focus", default="")
+    parser.add_argument("--scheduled-learning-max-records", type=int, default=None)
+    parser.add_argument("--scheduled-learning-retry-limit", type=int, default=None)
+    parser.add_argument("--scheduled-learning-retry-backoff-seconds", type=int, default=None)
+    parser.add_argument(
+        "--scheduled-learning-prepare-packet",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Prepare a human-approval packet when Dreaming produces transferable records.",
+    )
     parser.add_argument("--collective-approval-identity-file", default="", help="Local Ed25519 approval identity file.")
     parser.add_argument("--runtime-image", default="", help="Runtime image digest. Recommended for Hermes to avoid reusing an OpenClaw image tfvars value.")
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
@@ -376,6 +444,14 @@ def main() -> None:
         role_release=args.role_release,
         role_release_commit=args.role_release_commit,
         assignment_scope=args.assignment_scope,
+        scheduled_learning_enabled=args.scheduled_learning_enabled,
+        scheduled_learning_initial_delay_seconds=args.scheduled_learning_initial_delay_seconds,
+        scheduled_learning_interval_seconds=args.scheduled_learning_interval_seconds,
+        scheduled_learning_focus=args.scheduled_learning_focus,
+        scheduled_learning_max_records=args.scheduled_learning_max_records,
+        scheduled_learning_retry_limit=args.scheduled_learning_retry_limit,
+        scheduled_learning_retry_backoff_seconds=args.scheduled_learning_retry_backoff_seconds,
+        scheduled_learning_prepare_packet=args.scheduled_learning_prepare_packet,
         collective_approval_private_key=collective_identity.get("privateKey", ""),
         collective_approval_public_key=collective_identity.get("publicKey", ""),
     )

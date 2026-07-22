@@ -77,3 +77,11 @@ output "runtime_data_volume_name" {
 output "runtime_disk_image_name" {
   value = local.runtime_disk_image_name
 }
+
+output "scheduled_learning_enabled" {
+  value = var.agent_runtime == "hermes" && var.scheduled_learning_enabled
+}
+
+output "scheduled_learning_interval_seconds" {
+  value = var.scheduled_learning_interval_seconds
+}

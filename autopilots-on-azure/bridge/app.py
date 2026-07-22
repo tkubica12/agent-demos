@@ -23,6 +23,11 @@ from pydantic import BaseModel, Field
 
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.factory import create_runtime_adapter, runtime_kind_from_env
+from bridge.scheduled_learning import (
+    RETRYABLE_ERRORS,
+    ScheduledLearningCoordinator,
+    ScheduledLearningSettings,
+)
 
 
 app = FastAPI(title="Autopilot Azure Container Apps bridge")
@@ -48,6 +53,13 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
 
 
 agent365_app, agent365_adapter = create_agent365_app()
+
+
+scheduled_learning = ScheduledLearningCoordinator(
+    adapter_factory=lambda: runtime_adapter(),
+    settings=ScheduledLearningSettings.from_environment(),
+    worker_id=os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "worker")),
+)
 
 
 class InvokeRequest(BaseModel):
@@ -80,6 +92,16 @@ class DreamRunResponse(BaseModel):
 class CollectiveLearningApprovalRequest(BaseModel):
     packet_digest: str = Field(alias="packetDigest", min_length=64, max_length=64)
     approved_by: str = Field(alias="approvedBy", min_length=1, max_length=200)
+
+
+@app.on_event("startup")
+async def start_scheduled_learning() -> None:
+    await scheduled_learning.start()
+
+
+@app.on_event("shutdown")
+async def stop_scheduled_learning() -> None:
+    await scheduled_learning.stop()
 
 
 _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
@@ -807,6 +829,24 @@ async def export_collective_learning(http_request: Request) -> dict[str, Any]:
         return await adapter.export_collective_learning()
     except Exception as exc:
         raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+
+
+@app.post("/internal/scheduled-learning/run")
+async def run_scheduled_learning(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    try:
+        return await scheduled_learning.run_once()
+    except RETRYABLE_ERRORS as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"type": exc.__class__.__name__, "message": str(exc)},
+        ) from exc
+
+
+@app.get("/internal/scheduled-learning/status")
+async def scheduled_learning_status(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    return scheduled_learning.status()
 
 
 @agent365_app.activity("message")

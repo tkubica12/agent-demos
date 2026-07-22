@@ -43,6 +43,71 @@ variable "worker_assignment_scope" {
   default = ""
 }
 
+variable "scheduled_learning_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "scheduled_learning_initial_delay_seconds" {
+  type    = number
+  default = 60
+
+  validation {
+    condition     = var.scheduled_learning_initial_delay_seconds >= 0 && var.scheduled_learning_initial_delay_seconds <= 86400
+    error_message = "scheduled_learning_initial_delay_seconds must be between 0 and 86400."
+  }
+}
+
+variable "scheduled_learning_interval_seconds" {
+  type    = number
+  default = 86400
+
+  validation {
+    condition     = var.scheduled_learning_interval_seconds >= 300 && var.scheduled_learning_interval_seconds <= 2592000
+    error_message = "scheduled_learning_interval_seconds must be between 300 and 2592000."
+  }
+}
+
+variable "scheduled_learning_focus" {
+  type    = string
+  default = "Review recent meaningful work for reusable, privacy-safe Role Skill improvements."
+}
+
+variable "scheduled_learning_max_records" {
+  type    = number
+  default = 3
+
+  validation {
+    condition     = var.scheduled_learning_max_records >= 1 && var.scheduled_learning_max_records <= 10
+    error_message = "scheduled_learning_max_records must be between 1 and 10."
+  }
+}
+
+variable "scheduled_learning_retry_limit" {
+  type    = number
+  default = 3
+
+  validation {
+    condition     = var.scheduled_learning_retry_limit >= 0 && var.scheduled_learning_retry_limit <= 10
+    error_message = "scheduled_learning_retry_limit must be between 0 and 10."
+  }
+}
+
+variable "scheduled_learning_retry_backoff_seconds" {
+  type    = number
+  default = 30
+
+  validation {
+    condition     = var.scheduled_learning_retry_backoff_seconds >= 1 && var.scheduled_learning_retry_backoff_seconds <= 3600
+    error_message = "scheduled_learning_retry_backoff_seconds must be between 1 and 3600."
+  }
+}
+
+variable "scheduled_learning_prepare_packet" {
+  type    = bool
+  default = true
+}
+
 variable "collective_learning_approval_private_key" {
   type      = string
   default   = ""

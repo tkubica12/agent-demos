@@ -548,12 +548,44 @@ resource "azapi_resource" "bridge_app" {
               {
                 name  = "OPENCLAW_BRIDGE_DEBUG"
                 value = "true"
+              },
+              {
+                name  = "SCHEDULED_LEARNING_ENABLED"
+                value = var.agent_runtime == "hermes" && var.scheduled_learning_enabled ? "true" : "false"
+              },
+              {
+                name  = "SCHEDULED_LEARNING_INITIAL_DELAY_SECONDS"
+                value = tostring(var.scheduled_learning_initial_delay_seconds)
+              },
+              {
+                name  = "SCHEDULED_LEARNING_INTERVAL_SECONDS"
+                value = tostring(var.scheduled_learning_interval_seconds)
+              },
+              {
+                name  = "SCHEDULED_LEARNING_FOCUS"
+                value = var.scheduled_learning_focus
+              },
+              {
+                name  = "SCHEDULED_LEARNING_MAX_RECORDS"
+                value = tostring(var.scheduled_learning_max_records)
+              },
+              {
+                name  = "SCHEDULED_LEARNING_RETRY_LIMIT"
+                value = tostring(var.scheduled_learning_retry_limit)
+              },
+              {
+                name  = "SCHEDULED_LEARNING_RETRY_BACKOFF_SECONDS"
+                value = tostring(var.scheduled_learning_retry_backoff_seconds)
+              },
+              {
+                name  = "SCHEDULED_LEARNING_PREPARE_PACKET"
+                value = var.scheduled_learning_prepare_packet ? "true" : "false"
               }
             ]
           }
         ]
         scale = {
-          minReplicas = 0
+          minReplicas = var.agent_runtime == "hermes" && var.scheduled_learning_enabled ? 1 : 0
           maxReplicas = 1
           rules       = []
         }

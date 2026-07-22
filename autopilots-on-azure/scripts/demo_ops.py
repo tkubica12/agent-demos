@@ -279,6 +279,45 @@ def dream_check(*, focus: str = "", max_records: int = 5, timeout: int = 900, st
     return {"runtime": runtime, "check": "dream", "url": f"{url}/internal/dream", **result}
 
 
+def scheduled_learning_check(
+    *,
+    run: bool,
+    timeout: int = 900,
+    state_name: str = "",
+) -> dict[str, Any]:
+    runtime = "hermes"
+    try:
+        outputs = load_json(runtime_outputs_path(runtime, state_name))
+        tfvars = load_json(runtime_app_tfvars_path(runtime, state_name))
+        url = bridge_url(outputs)
+        api_key = str(tfvars.get("api_server_key") or "")
+        if not api_key:
+            raise KeyError("api_server_key")
+    except Exception as exc:
+        return {
+            "runtime": runtime,
+            "check": "scheduled-learning-run" if run else "scheduled-learning-status",
+            "ok": False,
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+        }
+
+    path = "/internal/scheduled-learning/run" if run else "/internal/scheduled-learning/status"
+    result = http_json(
+        f"{url}{path}",
+        method="POST" if run else "GET",
+        body={} if run else None,
+        headers={"X-Autopilot-Key": api_key},
+        timeout=timeout,
+    )
+    return {
+        "runtime": runtime,
+        "check": "scheduled-learning-run" if run else "scheduled-learning-status",
+        "url": f"{url}{path}",
+        **result,
+    }
+
+
 def diag_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> dict[str, Any]:
     try:
         outputs = load_json(runtime_outputs_path(runtime, state_name))
@@ -377,6 +416,16 @@ def run_dream(args: argparse.Namespace) -> int:
     result = dream_check(
         focus=args.focus,
         max_records=args.max_records,
+        timeout=args.timeout,
+        state_name=args.state_name,
+    )
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def run_scheduled_learning(args: argparse.Namespace) -> int:
+    result = scheduled_learning_check(
+        run=args.command == "scheduled-run",
         timeout=args.timeout,
         state_name=args.state_name,
     )
@@ -514,6 +563,22 @@ def main() -> None:
     dream.add_argument("--max-records", type=int, choices=range(1, 11), default=5)
     dream.add_argument("--timeout", type=int, default=900)
     dream.set_defaults(func=run_dream)
+
+    scheduled_run = subparsers.add_parser(
+        "scheduled-run",
+        help="Run the configured Hermes Dreaming and packet-preparation cycle now.",
+    )
+    scheduled_run.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    scheduled_run.add_argument("--timeout", type=int, default=900)
+    scheduled_run.set_defaults(func=run_scheduled_learning)
+
+    scheduled_status = subparsers.add_parser(
+        "scheduled-status",
+        help="Read sanitized Hermes scheduled-learning status.",
+    )
+    scheduled_status.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    scheduled_status.add_argument("--timeout", type=int, default=120)
+    scheduled_status.set_defaults(func=run_scheduled_learning)
 
     activate = subparsers.add_parser("activate", help="Make one runtime's tfvars active for Terraform operations.")
     activate.add_argument("--runtime", choices=RUNTIMES, required=True)

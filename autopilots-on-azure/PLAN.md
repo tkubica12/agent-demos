@@ -95,10 +95,15 @@ Goal: run recurring Dreaming and packet preparation without manual Sandbox acces
 Tasks:
 
 - Choose an Azure Container Apps scheduled Job as the production scheduler.
-- Retain bridge-owned scheduling only as a simple demo option.
-- Add per-Worker cadence, enablement, timeout, retry, and backoff settings.
-- Wake or reuse Workers through the bridge.
-- Track last Dream, last successful packet, last approval, and current Role Release.
+- Complete: retain bridge-owned scheduling as the first classroom/demo option.
+- Complete: add per-Worker enablement, initial delay, interval, focus, maximum records, retry/backoff, and packet-preparation settings.
+- Complete: wake or reuse Workers through the existing bridge and Worker learning transaction.
+- Complete: expose sanitized status for last Dream, packet preparation, failures, counters, and current Role Release.
+- Complete: ensure automation never approves, exports, promotes, or merges learning.
+- Add managed-identity authentication for the production ACA scheduled Job bridge endpoint without stored keys.
+- Provision the ACA scheduled Job with Terraform/azapi and validate an on-demand execution.
+- Add disposable `demo-*` Worker/Data Disk reset automation pinned to an immutable baseline.
+- Add a disposable Git Promotion lane so the full lifecycle can be replayed without rewriting `main`.
 - Add optional queue-driven fan-out for larger Worker populations.
 
 Exit criteria:
@@ -106,6 +111,7 @@ Exit criteria:
 - Dreaming runs on schedule for enabled Workers.
 - Failures are visible and retry safely.
 - Candidate Improvements can reach approval preparation without interactive Sandbox access.
+- A disposable demo cohort can be reset and replayed without touching long-lived Worker state.
 
 ### A12 - Agent 365 workload notifications
 

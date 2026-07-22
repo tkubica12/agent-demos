@@ -337,6 +337,44 @@ Before replacing a Role Release:
 
 Refresh preflight validates the approved packet before deleting the old Sandbox. Personal Memory, Private Playbooks, and Work History remain on the Data Disk. Role Skills are replaced and previous Candidate Improvements are archived.
 
+## Scheduled Dreaming
+
+Bridge-owned scheduling is the initial classroom path. It keeps one bridge replica active and runs Dreaming through the same Worker transaction used by manual operations.
+
+Enable it for one Hermes Worker:
+
+```powershell
+uv run python -m scripts.setup_app_tfvars `
+  --runtime hermes `
+  --state-name hermes2 `
+  --autopilot-name hermes2 `
+  --scheduled-learning-enabled `
+  --scheduled-learning-initial-delay-seconds 300 `
+  --scheduled-learning-interval-seconds 86400 `
+  --scheduled-learning-max-records 3 `
+  --scheduled-learning-retry-limit 3 `
+  --scheduled-learning-retry-backoff-seconds 30 `
+  --scheduled-learning-prepare-packet `
+  --runtime-only
+
+uv run python -m scripts.deploy_apps_runtime `
+  --runtime hermes `
+  --state-name hermes2 `
+  --workspace autopilot-hermes2 `
+  --apply `
+  --auto-approve `
+  --capture
+```
+
+Run and inspect a cycle without waiting for the interval:
+
+```powershell
+uv run python -m scripts.demo_ops scheduled-run --state-name hermes2 --timeout 900
+uv run python -m scripts.demo_ops scheduled-status --state-name hermes2
+```
+
+Dreaming prepares a packet only when transferable records exist. Human digest approval, export, Collective Learning Review, Promotion, and Worker Refresh remain separate gates.
+
 ## Runtime image updates
 
 Rebuild images, update the Worker's scoped tfvars, and apply its workspace. The runtime-image label forces controlled Sandbox replacement even when the Role Release is unchanged.

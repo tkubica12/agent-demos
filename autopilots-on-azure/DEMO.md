@@ -266,6 +266,29 @@ Expected outcomes:
 
 All three can be correct. Dreaming is retrospective reasoning over Work History, not a requirement to create a skill every time.
 
+### Scheduled Dreaming
+
+Run the configured scheduled-learning cycle immediately:
+
+```powershell
+uv run python -m scripts.demo_ops scheduled-run --state-name hermes2 --timeout 900
+uv run python -m scripts.demo_ops scheduled-status --state-name hermes2
+```
+
+Point out that the automated cycle may Dream and prepare a digest, but cannot approve, export, promote, or merge it.
+
+### Repeatable full-lifecycle demonstrations
+
+Use a separate disposable cohort rather than rolling back `hermes` or `hermes2`:
+
+1. Provision two `demo-*` Workers with dedicated Terraform workspaces and Data Disks.
+2. Pin both to an immutable baseline Role Release.
+3. Teach divergent Candidate Improvements and run the full review pipeline.
+4. Use a disposable Promotion branch when demonstrating merge and Worker Refresh.
+5. Reset by deleting only demo Sandboxes and Data Disks, then invoke the Workers to recreate the baseline.
+
+Reset automation must refuse any Worker, volume, or workspace not explicitly named `demo-*`.
+
 ## 11. Prepare Learning Packets
 
 Prepare each Worker independently:
