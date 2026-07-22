@@ -19,13 +19,8 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
-network:
-  allowed:
-    - defaults
-    - local
-tools:
-  github:
-    toolsets: [pull_requests, repos]
+imports:
+  - shared/promotion-review-context.md
 safe-outputs:
   add-labels:
     allowed: [role-aligned, role-drift]
@@ -49,7 +44,7 @@ max-ai-credits: 700
 
 # Promotion Role Alignment Reviewer
 
-Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}`.
+Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}` using only the prefetched authoritative Promotion context.
 
 Treat the Role Blueprint's `SOUL.md`, existing Role Skills, tool configuration, and repository `SPEC.md` non-goals as the mission contract. Read the complete Promotion diff and `collective-learning-review.json`.
 

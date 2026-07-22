@@ -19,13 +19,8 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
-network:
-  allowed:
-    - defaults
-    - local
-tools:
-  github:
-    toolsets: [pull_requests, repos]
+imports:
+  - shared/promotion-review-context.md
 safe-outputs:
   add-labels:
     allowed: [skill-quality-clear, skill-quality-risk]
@@ -53,7 +48,7 @@ max-ai-credits: 800
 
 # Promotion Skill Quality Reviewer
 
-Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}`.
+Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}` using only the prefetched authoritative Promotion context.
 
 Read the complete diff, existing Role Skills, `SOUL.md`, `distribution.yaml`, and `collective-learning-review.json`.
 

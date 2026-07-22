@@ -19,13 +19,8 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
-network:
-  allowed:
-    - defaults
-    - local
-tools:
-  github:
-    toolsets: [pull_requests, repos]
+imports:
+  - shared/promotion-review-context.md
 safe-outputs:
   add-labels:
     allowed: [evidence-sufficient, evidence-weak]
@@ -49,7 +44,7 @@ max-ai-credits: 700
 
 # Promotion Learning Evidence Auditor
 
-Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}`.
+Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}` using only the prefetched authoritative Promotion context.
 
 Read the complete diff and `collective-learning-review.json`. The review file is the retained, privacy-scanned explanation of the merger/judge decision; do not assume access to private Worker state.
 

@@ -549,6 +549,7 @@ Work History                         |
 6. Automated Promotion review must keep agent reasoning read-only and use permission-separated safe outputs for labels, comments, and reviews.
 7. Privacy, Role Blueprint alignment, learning evidence, and skill quality are independent semantic gates; they complement rather than replace deterministic signature, hash, schema, namespace, and version validation.
 8. Automated reviewers must not mark a Promotion ready, merge it, or perform Worker Refresh.
+9. Every semantic reviewer must consume the same deterministically prefetched PR-head metadata, diff, review history, and Role Blueprint snapshot; the base-branch checkout is not valid evidence of the proposed Role Release.
 
 ## Security and privacy requirements
 

@@ -19,13 +19,8 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
-network:
-  allowed:
-    - defaults
-    - local
-tools:
-  github:
-    toolsets: [pull_requests, repos]
+imports:
+  - shared/promotion-review-context.md
 safe-outputs:
   add-labels:
     allowed: [promotion, role-release, collective-learning]
@@ -43,7 +38,7 @@ max-ai-credits: 500
 
 # Promotion triage
 
-Triage pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}`.
+Triage pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}` using only the prefetched authoritative Promotion context.
 
 This workflow handles only Collective Learning Promotion pull requests. Read the PR title, body, changed files, complete diff, `distribution.yaml`, and `collective-learning-review.json`.
 

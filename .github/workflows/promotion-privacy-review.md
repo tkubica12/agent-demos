@@ -19,13 +19,8 @@ permissions:
   copilot-requests: write
 engine:
   id: copilot
-network:
-  allowed:
-    - defaults
-    - local
-tools:
-  github:
-    toolsets: [pull_requests, repos]
+imports:
+  - shared/promotion-review-context.md
 safe-outputs:
   add-labels:
     allowed: [privacy-clear, privacy-risk]
@@ -49,7 +44,7 @@ max-ai-credits: 700
 
 # Promotion Privacy Guardian
 
-Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}`.
+Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}` using only the prefetched authoritative Promotion context.
 
 Read the complete PR diff plus the Role Blueprint's `SOUL.md`, `distribution.yaml`, and `collective-learning-review.json`. Review only the proposed Promotion, but use the existing Role Blueprint to understand whether generic-looking text could reconstruct private source material.
 
