@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)] [string] $ProjectEndpoint,
-    [Parameter(Mandatory = $false)] [string] $AgentName = "step-11-agent365-teams"
+    [Parameter(Mandatory = $false)] [string] $AgentName = "step-11-contoso-support-agent"
 )
 
 $ErrorActionPreference = "Stop"

@@ -17,6 +17,10 @@ from urllib.parse import urlparse
 import httpx
 from jwt import PyJWTError
 from msal import ConfidentialClientApplication
+from agent365_identity_patch import apply_foundry_fmi_patch
+
+apply_foundry_fmi_patch()
+
 from agent_framework import (
     Agent,
     AgentSession,
@@ -609,17 +613,59 @@ def foundry_memory_options(user_id: str) -> dict[str, Any]:
     return {"extra_headers": {"x-memory-user-id": user_id}}
 
 
+@contextmanager
+def optional_agent365_invoke_scope(
+    *,
+    request: ObservabilityRequest,
+    scope_details: InvokeAgentScopeDetails,
+    agent_details: AgentDetails,
+    caller_details: CallerDetails,
+):
+    invoke_scope = None
+    entered = False
+    try:
+        invoke_scope = InvokeAgentScope.start(
+            request=request,
+            scope_details=scope_details,
+            agent_details=agent_details,
+            caller_details=caller_details,
+        )
+        invoke_scope.__enter__()
+        entered = True
+    except AttributeError as exc:
+        if "NonRecordingSpan" not in str(exc) and "context" not in str(exc):
+            raise
+        log_event("telemetry.agent365_scope_unavailable", error=str(exc))
+        invoke_scope = None
+    try:
+        yield invoke_scope
+    finally:
+        if entered and invoke_scope is not None:
+            invoke_scope.__exit__(None, None, None)
+
+
 def activity_message_text(activity: Activity) -> str:
     text = activity.text or ""
     recipient_id = activity.recipient.id if activity.recipient else None
     if recipient_id:
         for mention in activity.get_mentions():
-            if (
-                mention.mentioned
-                and mention.mentioned.id == recipient_id
-                and mention.text
-            ):
-                text = text.replace(mention.text, " ")
+            mentioned = (
+                mention.get("mentioned")
+                if isinstance(mention, dict)
+                else mention.mentioned
+            )
+            mentioned_id = (
+                mentioned.get("id")
+                if isinstance(mentioned, dict)
+                else getattr(mentioned, "id", None)
+            )
+            mention_text = (
+                mention.get("text")
+                if isinstance(mention, dict)
+                else mention.text
+            )
+            if mentioned_id == recipient_id and mention_text:
+                text = text.replace(mention_text, " ")
     return " ".join(text.split())
 
 
@@ -760,7 +806,7 @@ def create_activity_application(
             .build()
         )
         with baggage:
-            with InvokeAgentScope.start(
+            with optional_agent365_invoke_scope(
                 request=ObservabilityRequest(
                     content=[user_message],
                     session_id=conversation_id,
@@ -803,7 +849,8 @@ def create_activity_application(
                         response_text,
                         {"correlationId": correlation_id, "channelId": channel_id},
                     )
-                    invoke_scope.record_output_messages([response_text])
+                    if invoke_scope is not None:
+                        invoke_scope.record_output_messages([response_text])
                     await context.send_activity(response_text)
 
     return application, adapter, auth_configuration

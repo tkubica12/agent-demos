@@ -57,12 +57,15 @@ Activity path
 | Path | Purpose |
 | --- | --- |
 | `main.py` | Shared Responses/Invocations/Activity host and Activity-to-agent conversion. |
+| `agent365_identity_patch.py` | Temporary Foundry `fmi_path` fix for Python MSAL agent-instance tokens. |
 | `agent365.toml` | Tenant publication metadata and agentic-user template contract. |
 | `smoke_activity.py` | Mention, identity, conversation, and publication-manifest checks. |
 | `infra/agent365` | Terraform/azapi collection setting, Bot Service relay, and Teams channel. |
 | `scripts/Publish-Agent365.ps1` | Dual-protocol endpoint patch and native Foundry autopilot submission. |
 | `scripts/Grant-Agent365Observability.ps1` | Hosted Agent identity role assignment. |
 | `scripts/Grant-Agent365BlueprintAccess.ps1` | Blueprint ownership and least-privilege Messaging Bot API grant. |
+| `scripts/provision_agent365_instance.py` | Temporary direct Graph identity, user, license, and registration workaround. |
+| `scripts/Connect-Agent365Instance.ps1` | Grants downstream MCP/observability access to the direct instance. |
 | `scripts/Get-Agent365State.ps1` | Foundry, Entra blueprint, Bot, Teams, and registry evidence. |
 | `scripts/Configure-TeamsBlueprint.ps1` | Supported Teams Developer Portal backend configuration after approval. |
 | `scripts/Provision-Step11.ps1` | No-argument classroom provisioning, validation, publication, and evidence flow. |
@@ -128,8 +131,9 @@ With no existing azd environment, the script creates
    rollback;
 5. enables Foundry Agent 365 collection;
 6. provisions the native Bot Service relay and Teams channel;
-7. grants the operator blueprint ownership and `AgentData.ReadWrite` on the
-   Messaging Bot API;
+7. grants the operator blueprint ownership, `AgentData.ReadWrite` on the
+   Messaging Bot API, and enumerated inheritance of only that scope for future
+   agent instances;
 8. grants Agent 365 observability to the Hosted Agent identity;
 9. patches the endpoint to retain Responses plus Activity and submits the
    tenant-scoped autopilot request;
@@ -162,6 +166,26 @@ In Teams, create an agent instance from **Apps > Agents for your team**. Validat
 
 These are manual acceptance steps because no supported CLI/API creates the
 Teams agent instance or sends an interactive user chat before approval.
+
+### Temporary direct Graph workaround
+
+When the official Teams request-instance flow returns a generic publish or
+license error, the accepted temporary workaround is:
+
+```powershell
+uv run python scripts\provision_agent365_instance.py provision `
+  --blueprint-id <blueprint-client-id> `
+  --owner-upn <owner-upn> `
+  --display-name Step11Support `
+  --mail-nickname step11support `
+  --usage-location CZ
+
+.\scripts\Connect-Agent365Instance.ps1
+```
+
+The script assigns only Agent 365, Microsoft 365 E3 (no Teams), and Teams
+Enterprise. It does not assign Microsoft 365 Copilot. See
+`adr\0001-direct-graph-instance-workaround.md`.
 
 Instance onboarding has two distinct approval stages:
 

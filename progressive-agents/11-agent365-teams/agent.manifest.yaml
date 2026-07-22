@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
 
 kind: hosted
-name: step-11-agent365-teams
+name: step-11-contoso-support-agent
 description: Microsoft Agent Framework hosted agent published to Agent 365 and Teams.
 metadata:
     tags:

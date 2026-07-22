@@ -4,6 +4,7 @@ param(
     [string]$ToolboxName = "step-11-contoso-support",
     [string]$ConnectionName = "step-11-support-policy-mcp",
     [string]$SkillName = "step-11-escalation-policy",
+    [string]$AgentName = "step-11-contoso-support-agent",
     [string]$MemoryStoreName = "step-11-agent365-teams",
     [string]$MemoryChatModel = "gpt-5.4-mini",
     [string]$MemoryEmbeddingModel = "text-embedding-3-large"
@@ -161,7 +162,7 @@ try {
     Invoke-Checked { uv run python scripts\setup_foundry_memory.py --name $MemoryStoreName }
     Invoke-Checked { azd provision -C . --no-prompt }
 
-    $agentOutput = azd ai agent show step-11-agent365-teams --output json 2>$null
+    $agentOutput = azd ai agent show $AgentName --output json 2>$null
     $agent = if ($LASTEXITCODE -eq 0 -and $agentOutput) {
         $agentOutput | ConvertFrom-Json
     } else {
@@ -169,7 +170,7 @@ try {
     }
     if ($LASTEXITCODE -ne 0 -or -not $agent.instance_identity.principal_id) {
         Invoke-Checked { azd deploy -C . }
-        $agent = azd ai agent show step-11-agent365-teams --output json |
+        $agent = azd ai agent show $AgentName --output json |
             ConvertFrom-Json
     }
     if (-not $agent.instance_identity.principal_id -or -not $agent.blueprint.principal_id) {
@@ -365,7 +366,7 @@ try {
     }
     Invoke-Checked { azd env set TOOLBOX_EXPECTED_SKILL_CANARY "" }
     Invoke-Checked { azd deploy -C . }
-    $deployedAgent = azd ai agent show step-11-agent365-teams --output json |
+    $deployedAgent = azd ai agent show $AgentName --output json |
         ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or -not $deployedAgent.instance_identity.principal_id) {
         throw "Could not resolve the final hosted-agent identity."
@@ -386,7 +387,7 @@ try {
             terraform apply -auto-approve -input=false `
                 -var "foundry_account_id=$foundryAccountId" `
                 -var "foundry_project_endpoint=$projectEndpoint" `
-                -var "agent_name=step-11-agent365-teams" `
+                -var "agent_name=$AgentName" `
                 -var "blueprint_client_id=$($agent.blueprint.client_id)" `
                 -var "tenant_id=$($account.tenantId)" `
                 -var "suffix=$suffix"
@@ -419,6 +420,7 @@ try {
     $publication = $null
     try {
         $publication = & "$PSScriptRoot\Publish-Agent365.ps1" `
+            -AgentName $AgentName `
             -FoundryProjectEndpoint $projectEndpoint `
             -FoundryAccountResourceId $foundryAccountId |
             ConvertFrom-Json
@@ -427,7 +429,7 @@ try {
     }
     & "$PSScriptRoot\Setup-A2A.ps1" `
         -ProjectEndpoint $projectEndpoint `
-        -AgentName "step-11-agent365-teams"
+        -AgentName $AgentName
 
     $teamsBlueprint = $null
     if ($publication) {
@@ -528,7 +530,7 @@ try {
         containerApp = $app.mcp_endpoint.value
         mcpApiClientId = $entra.appClientId
         remoteToolConnection = $ConnectionName
-        hostedAgent = "step-11-agent365-teams"
+        hostedAgent = $AgentName
         hostedAgentVersion = $agent.version
         hostedAgentPrincipalId = $agent.instance_identity.principal_id
         hostedAgentClientId = $agent.instance_identity.client_id

@@ -1,5 +1,5 @@
 param(
-    [string]$AgentName = "step-11-agent365-teams",
+    [string]$AgentName = "step-11-contoso-support-agent",
     [Parameter(Mandatory = $true)]
     [string]$FoundryProjectEndpoint,
     [Parameter(Mandatory = $true)]

@@ -98,6 +98,56 @@ if ($grant.consentType -ne "AllPrincipals" -or $grant.principalId) {
     throw "Messaging Bot API grant is not tenant-wide."
 }
 
+$inheritanceBaseUri = "https://graph.microsoft.com/v1.0/applications/" +
+    "microsoft.graph.agentIdentityBlueprint/$($application.id)/inheritablePermissions"
+$inheritablePermissions = Invoke-RestMethod -Uri $inheritanceBaseUri -Headers $headers
+$inheritance = @($inheritablePermissions.value) |
+    Where-Object { $_.resourceAppId -eq $messagingBotApiAppId } |
+    Select-Object -First 1
+$inheritanceBody = @{
+    resourceAppId = $messagingBotApiAppId
+    inheritableScopes = @{
+        "@odata.type" = "#microsoft.graph.enumeratedScopes"
+        kind = "enumerated"
+        scopes = @($requiredScope)
+    }
+    inheritableRoles = @{
+        "@odata.type" = "#microsoft.graph.noRoles"
+        kind = "none"
+    }
+} | ConvertTo-Json -Depth 6 -Compress
+if (-not $inheritance) {
+    $inheritance = Invoke-RestMethod `
+        -Uri $inheritanceBaseUri `
+        -Method Post `
+        -Headers ($headers + @{ "OData-Version" = "4.0" }) `
+        -Body $inheritanceBody
+} elseif (
+    $inheritance.inheritableScopes.kind -ne "enumerated" -or
+    @($inheritance.inheritableScopes.scopes).Count -ne 1 -or
+    $inheritance.inheritableScopes.scopes[0] -ne $requiredScope -or
+    $inheritance.inheritableRoles.kind -ne "none"
+) {
+    $inheritance = Invoke-RestMethod `
+        -Uri "$inheritanceBaseUri/$messagingBotApiAppId" `
+        -Method Patch `
+        -Headers ($headers + @{ "OData-Version" = "4.0" }) `
+        -Body $inheritanceBody
+}
+$inheritablePermissions = Invoke-RestMethod -Uri $inheritanceBaseUri -Headers $headers
+$inheritance = @($inheritablePermissions.value) |
+    Where-Object { $_.resourceAppId -eq $messagingBotApiAppId } |
+    Select-Object -First 1
+if (
+    $inheritance.resourceAppId -ne $messagingBotApiAppId -or
+    $inheritance.inheritableScopes.kind -ne "enumerated" -or
+    @($inheritance.inheritableScopes.scopes).Count -ne 1 -or
+    $inheritance.inheritableScopes.scopes[0] -ne $requiredScope -or
+    $inheritance.inheritableRoles.kind -ne "none"
+) {
+    throw "Messaging Bot API inheritable permissions are not configured correctly."
+}
+
 [ordered]@{
     blueprintClientId = $BlueprintClientId
     blueprintApplicationObjectId = $application.id
@@ -107,4 +157,6 @@ if ($grant.consentType -ne "AllPrincipals" -or $grant.principalId) {
     messagingBotApiServicePrincipalObjectId = $messagingBotServicePrincipal.id
     oauth2PermissionGrantId = $grant.id
     scope = $grant.scope
+    inheritableScopes = @($inheritance.inheritableScopes.scopes)
+    inheritableRoles = $inheritance.inheritableRoles.kind
 } | ConvertTo-Json -Compress

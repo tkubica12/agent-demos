@@ -58,6 +58,8 @@ After blueprint approval:
 - The blueprint received the least-privilege Messaging Bot API delegated grant
   `AgentData.ReadWrite`:
   `BLJTnzgKqUy5HTeDEjZG2y2xswkqNrVAmA_tG0WigWo`.
+- Messaging Bot API inheritance enumerates only `AgentData.ReadWrite`; roles
+  are disabled.
 - Developer Portal was configured manually as Bot-based with blueprint client
   ID `24caa4d2-df05-404b-b0f4-a75ae7322d6a`.
 - The tenant has four consumed `AGENT_365` subscriptions. Tomas has

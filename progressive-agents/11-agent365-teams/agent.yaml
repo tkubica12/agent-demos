@@ -1,4 +1,4 @@
-name: step-11-agent365-teams
+name: step-11-contoso-support-agent
 kind: hosted
 description: Microsoft Agent Framework hosted agent published to Agent 365 and Teams.
 metadata:

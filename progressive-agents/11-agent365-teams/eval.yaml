@@ -1,6 +1,6 @@
 name: step11-toolbox-quality
 agent:
-    name: step-11-agent365-teams
+    name: step-11-contoso-support-agent
     kind: hosted
     version: "7"
     config: .agent_configs\baseline\metadata.yaml

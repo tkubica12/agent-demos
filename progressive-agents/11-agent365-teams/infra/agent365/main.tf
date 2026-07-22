@@ -6,7 +6,7 @@ data "terraform_remote_state" "platform" {
 }
 
 locals {
-  bot_name = "bot-step11-agent365-${var.suffix}"
+  bot_name = "bot-step11-${substr(replace(var.blueprint_client_id, "-", ""), 0, 8)}-${var.suffix}"
   tags = {
     demo = "progressive-agents"
     step = "11-agent365-teams"

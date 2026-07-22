@@ -7,7 +7,7 @@ import time
 import uuid
 
 
-AGENT_NAME = "step-11-agent365-teams"
+AGENT_NAME = "step-11-contoso-support-agent"
 SKILL_CANARIES = (
     "STYLE-CANARY-3318",
     "ESC-CANARY-7742",
