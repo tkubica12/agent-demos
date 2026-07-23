@@ -381,7 +381,7 @@ The canonical manifest path is:
 
 ### Design stance
 
-Hermes is the Worker's local learning engine. Autopilots uses its native memory, progressive skill disclosure, `/learn`, `skill_manage`, background review, and curator rather than replacing them with a parallel learning runtime.
+Hermes is the Worker's local learning engine. Autopilots uses its native memory, progressive skill disclosure, `skill_manage`, background review, and curator rather than replacing them with a parallel learning runtime. The bridge exposes `/learn <instruction>` as an explicit constrained mode over those native tools.
 
 Autopilots adds the boundaries Hermes does not provide across Workers:
 
@@ -439,7 +439,7 @@ All private stores remain private even when Dreaming uses them as evidence. Drea
 1. Inherited skills reside under `skills\role\<name>`.
 2. New reusable local skills reside under `skills\candidates\<name>`.
 3. Skill basenames must be globally unique across namespaces.
-4. Hermes may patch Role Skills and create Candidate Improvements through native `skill_manage`, `/learn`, foreground adaptation, or Dreaming.
+4. Hermes may patch Role Skills and create Candidate Improvements through native `skill_manage` during ordinary foreground adaptation, explicit bridge `/learn`, or Dreaming.
 5. Private details must never be written into Role Skills or Candidate Improvements.
 6. A fresh session is the guaranteed activation boundary for changed skill content.
 7. Candidate Improvements are scoped to one Role Release.
@@ -475,6 +475,15 @@ The journal explains *why* behavior changed. The skill tree is the actual Worker
 5. Asynchronous governed drift must be quarantined and restored to the last committed state.
 6. Personal Memory and Private Playbook writes remain local and do not require transferable provenance.
 7. Governed skills written directly through `hermes --cli` are not immediately provenance-bound; the next bridged turn or Dreaming run must quarantine, classify, safely recreate, and reconcile them before Collective Learning Review.
+
+### Explicit foreground learning
+
+1. Ordinary turns may use Hermes-native memory and skill tools during the same model invocation.
+2. Only an exact `/learn <instruction>` command or trusted `learningIntent: explicit` request metadata enters constrained learning mode.
+3. The bridge strips the command prefix, marks the request as explicit learning, and runs one Hermes invocation inside the normal learning transaction.
+4. The bridge must not infer learning intent from keywords in ordinary prose and must not launch a completed-turn second model pass.
+5. Explicit learning remains blocking until reconciliation succeeds or fails so the response accurately reports persistence.
+6. Failed governed learning is rolled back and reported; Dreaming remains the later multi-session opportunity to derive missed learning from Work History.
 
 ### Dreaming
 
@@ -599,7 +608,22 @@ Work History                         |
 5. Scheduled cycles must serialize through the same Worker learning transaction as foreground work and manual Dreaming.
 6. Status must expose timestamps, counts, current Role Release, last Dream summary, last prepared packet digest, and sanitized failures without private content.
 7. A bridge-owned timer is permitted for classroom demonstrations but requires a non-zero bridge replica.
-8. The production scheduler remains an Azure Container Apps scheduled Job calling a managed-identity-protected bridge endpoint; it must not receive stored Worker or bridge keys.
+8. The current production scheduler is an Azure Container Apps scheduled Job calling a managed-identity-protected bridge endpoint; it receives no stored Worker or bridge keys.
+9. A12 migrates Dreaming to a per-Worker Service Bus queue that directly scales the bridge under ADR 0015.
+10. The scheduled ACA Job must remain until Service Bus Dreaming passes parity validation, then be removed.
+
+### User-scheduled Worker tasks
+
+1. Hermes native cron jobs and execution ledger are the canonical schedule and history.
+2. User schedule prompts, skills, and delivery content remain on the Worker Data Disk and never enter Service Bus.
+3. An Azure Hermes `CronScheduler` provider schedules only the next occurrence as a minimal Service Bus message.
+4. A due message directly scales the isolated per-Worker bridge through a managed-identity KEDA rule.
+5. The bridge must use PeekLock, automatic lock renewal, bounded concurrency, and explicit settlement.
+6. Hermes job claims, execution ledger, and schedule revision checks must prevent duplicate execution under at-least-once delivery.
+7. Updates and cancellation must invalidate stale messages even when Service Bus cancellation races with activation.
+8. Scheduled results preserve their originating private/public delivery boundary.
+9. Initial hosted schedules support autonomous Agent Identity/Agent User work, prompt jobs, and reviewed Role Skills; arbitrary scripts and durable human OBO are excluded.
+10. Worker Refresh preserves schedule state, provider reconciliation metadata, and execution history.
 
 ### Repeatable demonstration cohorts
 
@@ -626,8 +650,8 @@ Work History                         |
 - Agent 365 BYO MCP requires supported-client connection and OAuth behavior; a raw generic MCP client is insufficient.
 - Human OBO is not implemented.
 - OpenClaw does not yet implement the complete Hermes Role Blueprint and Collective Learning Review lifecycle.
-- Multi-Worker Collective Learning Review is implemented but has only been live-validated with one Worker packet.
-- Scheduled Dreaming automation is not yet implemented.
+- Multi-Worker Collective Learning Review is live-validated with two independent Worker packets.
+- Scheduled Dreaming runs through a managed-identity ACA scheduled Job; migration to the unified Service Bus bridge trigger is not yet implemented.
 - Agent 365 Email and Office comment notifications are not yet implemented.
 - Teams and Agent 365 document attachment ingestion is not yet implemented.
 - Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.

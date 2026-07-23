@@ -113,7 +113,7 @@ Expected:
 Teach a harmless marker:
 
 ```text
-Remember as Personal Memory that my harmless marker is LOTUS-81 and I prefer delivery risks summarized as short bullets with an owner and due date. Keep this private to this Worker.
+/learn Store as Personal Memory that my harmless marker is LOTUS-81 and I prefer delivery risks summarized as short bullets with an owner and due date. Keep this private to this Worker.
 ```
 
 Start a fresh Sandbox CLI session and ask:
@@ -129,7 +129,7 @@ Expected: Hermes answers from the native fresh-session memory injection without 
 Create rich assignment-specific knowledge:
 
 ```text
-Create a private assignment playbook named cedar-delivery. Project Cedar's harmless marker is CEDAR-42. Its weekly status draft is due every Thursday at 15:00 local assignment time. The playbook should tell you to verify owners and due dates. Keep every Cedar-specific detail private and never make it a Candidate Improvement.
+/learn Create a private assignment playbook named cedar-delivery. Project Cedar's harmless marker is CEDAR-42. Its weekly status draft is due every Thursday at 15:00 local assignment time. The playbook should tell you to verify owners and due dates. Keep every Cedar-specific detail private and never make it a Candidate Improvement.
 ```
 
 Test deterministic progressive disclosure in a fresh CLI session:
@@ -147,7 +147,7 @@ Personal Memory is for small facts that should always be available. A Private Pl
 Teach Hermes 2 a reusable local capability:
 
 ```text
-Learn a reusable Candidate Improvement named dependency-handoff-contract: Every dependency handoff must record the provider, receiver, deliverable, acceptance criteria, and needed-by date. Keep it general and attach required provenance.
+/learn Create a reusable Candidate Improvement named dependency-handoff-contract: Every dependency handoff must record the provider, receiver, deliverable, acceptance criteria, and needed-by date. Keep it general and attach required provenance.
 ```
 
 Test it:
@@ -158,6 +158,7 @@ Test it:
 
 Expected:
 
+- the bridge runs one constrained Hermes invocation in one learning transaction;
 - Hermes calls native `skill_manage`;
 - `skills\candidates\dependency-handoff-contract\SKILL.md` exists;
 - `learning\records.jsonl` gains one schema-v2 record;
@@ -455,7 +456,7 @@ Refresh must fail before replacement when packet approval, Worker identity, Role
 - Agent User provides Microsoft 365 presence without becoming the runtime credential.
 - Private and public MCP paths use explicit Entra resource boundaries.
 - Multiple Workers can share one Role Blueprint without sharing private state.
-- Hermes native learning changes local behavior promptly.
+- Ordinary Hermes turns may learn natively, while explicit `/learn` uses one deterministic transactional learning turn without keyword-triggered retries.
 - Dreaming can discover reusable learning retrospectively.
 - Private information never enters the Learning Packet.
 - Shared behavior changes only through signed evidence, Collective Learning Review, and human Promotion.

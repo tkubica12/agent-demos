@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Trigger migration amended by [ADR 0015](0015-service-bus-backed-hermes-cron.md).
 
 ## Context
 
@@ -11,6 +11,8 @@ The digital-worker loop has three learning stages:
 - Hot-path learning during or after a user turn.
 - Dreaming, where one worker reflects over recent sessions and local evidence in batches.
 - Collective Learning Review, where Candidate Improvements from many Workers are proposed for the next Role Release.
+
+This decision covers platform-owned scheduled learning, not user-created reminders or recurring business tasks. Hermes native cron already models those jobs, including create/update/pause/resume/remove/run, delivery targets, attached skills, fresh-session execution, and durable execution history. User-scheduled work requires a separate delivery, authorization, privacy, and missed-run contract.
 
 For hosted Azure workers, dreaming must run even when the ACA Sandbox has suspended. We investigated whether ACA Sandboxes have their own native schedule/trigger mechanism. Current Microsoft documentation describes ACA Sandboxes as stateful compute with explicit lifecycle control, suspend/resume, snapshots, volumes, ports, and data-plane management. It does not describe a Sandbox-native timer trigger.
 
@@ -49,19 +51,17 @@ The production-friendly path is an Azure Container Apps scheduled Job. The job s
 
 The scheduled Job uses the existing per-Worker bridge managed identity. A dedicated Entra resource application exposes `ScheduledLearning.Run.All`; the Job requests a short-lived application token and the bridge verifies signature, issuer, audience, role, client ID, and object ID. The Job receives no stored API key or application secret.
 
-Use event-driven ACA Jobs later when there is a real queue-driven need, such as processing large export batches or fan-out consolidation work. Do not use Service Connector as a scheduler; use it only when helpful for service-to-service wiring.
-
-Service Bus does not directly wake an ACA Sandbox. If queue-driven Dreaming is introduced, the supported topology is:
+ADR 0015 selects a unified Service Bus trigger after the scheduled Job implementation proved the bridge/Sandbox Dreaming path. Service Bus does not directly wake an ACA Sandbox. Instead, a scheduled message becomes active and KEDA scales the existing per-Worker bridge:
 
 ```text
 Service Bus message
-  -> KEDA-triggered ACA Job execution
-  -> managed-identity bridge request
+  -> KEDA scales per-Worker bridge
+  -> bridge consumes and validates message
   -> bridge wakes or reuses ACA Sandbox
   -> Hermes Dreaming
 ```
 
-An alternative is a Service Bus scaler and queue consumer inside the bridge Container App, but the bridge must then own message settlement, retries, dead-letter handling, and idempotency. The event-driven Job keeps that queue concern outside the public message bridge and is preferred for future fleet fan-out.
+The A11 scheduled ACA Job remains deployed during migration. Remove it only after the Service Bus path proves parity. Do not use Service Connector as a scheduler; use it only when helpful for service-to-service wiring.
 
 ## Consequences
 
@@ -69,9 +69,9 @@ An alternative is a Service Bus scaler and queue consumer inside the bridge Cont
 - The bridge stays the control plane for worker wakeup and stateful Hermes invocation.
 - Bridge-owned cron is acceptable for v1 but requires the bridge to be alive.
 - ACA scheduled Jobs provide the production cloud-native timer path and are modeled with Terraform/azapi in this repository.
-- Event-driven Jobs remain available for future queue-based fleet workflows.
-- Neither scheduled nor event-driven ACA Jobs host Hermes; they run the finite control-plane client that invokes the bridge.
+- The bridge gains bounded queue-consumer responsibilities under ADR 0015.
 - Dreaming runs can be audited and throttled centrally rather than hidden inside individual worker sandboxes.
+- User-created schedules remain out of scope for this ADR; ADR 0015 defines their canonical Hermes cron and Service Bus integration.
 
 ## References
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <meta name="description" content="Visual guide to Autopilots on Azure with Hermes: architecture, identity, memory, learning, Promotion, and Worker Refresh.">
-  <title>Hermes on Azure — Visual Learning Guide</title>
+  <title>Hermes on Azure — Visual Overview</title>
   <style>
     :root {
       --bg: #f3f3f0;
@@ -607,6 +607,20 @@
       margin: 0;
       color: var(--muted);
       font-size: 0.86rem;
+    }
+
+    .callout-link {
+      display: inline-flex;
+      margin-top: 12px;
+      color: var(--accent-strong);
+      font-size: 0.82rem;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .callout-link:hover,
+    .callout-link:focus-visible {
+      text-decoration: underline;
     }
 
     .teams-window {
@@ -2098,19 +2112,20 @@
             <h2>Two ways a Worker learns locally</h2>
           </div>
           <p>
-            Hermes can learn immediately during work or reflect later across several sessions.
-            Both paths use the same privacy classification and provenance rules.
+            Hermes can learn during ordinary work, enter an explicit transactional mode through
+            <code>/learn</code>, or reflect later across several sessions. Every path uses the same
+            privacy classification and provenance rules.
           </p>
         </div>
 
         <div class="learning-methods">
           <article class="learning-method">
-            <span class="card-index">NATIVE HERMES · FOREGROUND</span>
-            <h3>Immediate learning</h3>
+            <span class="card-index">NATIVE HERMES · ONE TURN</span>
+            <h3>Foreground and explicit learning</h3>
             <p>
-              An explicit correction or <code>/learn</code> request can update Personal Memory,
-              create or patch a Private Playbook, patch a Role Skill, or create a Candidate Improvement
-              during the current task.
+              Ordinary turns may use native memory and skill tools. An exact <code>/learn</code>
+              command enters one constrained, blocking Hermes turn and reconciles its changes before
+              confirming persistence. Ordinary prose is not keyword-scanned into a hidden second pass.
             </p>
           </article>
           <article class="learning-method">
@@ -2128,6 +2143,7 @@
           <div>
             <strong>Custom governance enhancements around Hermes</strong>
             <p>Reserved private/role/candidate namespaces, serialized transactions, snapshots and rollback, provenance bound to file hashes, quarantine, privacy-scanned Learning Packets, owner approval, and forward-only Role Releases.</p>
+            <a class="callout-link" href="hermes-learning-deep-dive.html">Open the source-guided memory and learning deep dive →</a>
           </div>
         </div>
 
@@ -2212,7 +2228,7 @@
               <li>Defines required decision and handoff fields.</li>
               <li>Defines verification states: pending, accepted, rejected.</li>
               <li>Defines when and how to escalate.</li>
-              <li>Immediate learning or Dreaming can patch it; the baseline in Git remains immutable.</li>
+              <li>Foreground adaptation, explicit <code>/learn</code>, or Dreaming can patch it; the baseline in Git remains immutable.</li>
             </ul>
           </div>
         </div>
@@ -2444,7 +2460,7 @@
           "Defines required decision and handoff fields.",
           "Defines verification states: pending, accepted, rejected.",
           "Defines when and how to escalate.",
-          "Immediate learning or Dreaming can patch it while Git remains the immutable baseline."
+          "Foreground adaptation, explicit /learn, or Dreaming can patch it while Git remains the immutable baseline."
         ]
       },
       private: {
@@ -2454,7 +2470,7 @@
         points: [
           "Discovered progressively by name and description.",
           "May include references, templates, scripts, and named facts.",
-          "Immediate learning or Dreaming can create or patch it.",
+          "Foreground adaptation, explicit /learn, or Dreaming can create or patch it.",
           "It remains private even when Dreaming uses it as evidence."
         ]
       },
@@ -2464,7 +2480,7 @@
         intro: "New reusable behavior created by one Worker. It is active locally first and scoped to the current Role Release.",
         points: [
           "Created for a new generalized capability that does not fit an existing Role Skill.",
-          "Immediate learning and Dreaming both use the same candidates namespace.",
+          "Explicit /learn and Dreaming both use the same candidates namespace.",
           "Requires provenance bound to actual file hashes.",
           "May be rejected, narrowed, combined, or promoted.",
           "Does not become shared behavior until Promotion and is archived during Worker Refresh."

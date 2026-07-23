@@ -18,8 +18,12 @@ from bridge.gateway_client import OpenClawGatewayError
 from bridge.runtime.base import AgentRequest, DreamRequest
 from bridge.runtime.hermes import (
     HermesRuntimeAdapter,
+    bridge_instructions,
+    dream_prompt,
+    explicit_learning_instructions,
+    explicit_learning_prompt,
     parse_provenance_block,
-    requests_durable_learning,
+    quarantine_recovery_instructions,
 )
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import (
@@ -348,19 +352,19 @@ class RuntimeAdapterTests(unittest.TestCase):
             "skills/candidates/action-ownership",
         )
         self.assertEqual(result.raw["learningReconciliation"]["accepted"][0]["recordId"], "lr-test")
-        self.assertIn("Private Playbook", gateway_post["json"]["instructions"])
-        self.assertIn("Candidate Improvement", gateway_post["json"]["instructions"])
+        self.assertIn("active Role Blueprint SOUL.md", gateway_post["json"]["instructions"])
+        self.assertIn("<LEARNING_PROVENANCE_RECORDS>", gateway_post["json"]["instructions"])
 
 
 
-    def test_explicit_durable_learning_runs_isolated_native_application_turn(self):
+    def test_learn_command_runs_one_constrained_transactional_turn(self):
         calls: list[dict] = []
         post_responses = [
-            (200, {"output": "I will use that procedure."}),
             (
                 200,
                 {
                     "output": (
+                        "I saved the reusable procedure."
                         "<LEARNING_PROVENANCE_RECORDS>"
                         '[{"classification":"candidate_improvement",'
                         '"artifactPath":"skills/candidates/action-ownership","action":"create",'
@@ -374,13 +378,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             ),
         ]
         reconciliation_responses = [
-            {
-                "accepted": [],
-                "rejected": [],
-                "privatePlaybooksChanged": [],
-                "governedArtifactsChanged": [],
-                "rolledBack": False,
-            },
             {
                 "accepted": [{"recordId": "lr-learning"}],
                 "rejected": [],
@@ -423,7 +420,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             result = asyncio.run(
                 adapter.invoke(
                     AgentRequest(
-                        prompt="Remember this reusable procedure for future assignments.",
+                        prompt="/learn Require an accountable owner for every reusable action.",
                         conversation_id="session-1",
                         user_id="user-1",
                         source="teams_personal",
@@ -437,14 +434,63 @@ class RuntimeAdapterTests(unittest.TestCase):
         session_posts = [call for call in calls if "/api/sessions/" in call["url"]]
         turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
         reconcile_posts = [call for call in calls if call["url"].endswith("/internal/learning/reconcile")]
-        self.assertEqual(result.text, "I will use that procedure.")
-        self.assertEqual(len(turn_posts), 2)
-        self.assertEqual(len(session_posts), 2)
-        self.assertTrue(session_posts[1]["url"].startswith("https://hermes.example/api/sessions/learning%3Asession-1%3A"))
-        self.assertIn("<UNTRUSTED_COMPLETED_TURN>", session_posts[1]["json"]["input"])
-        self.assertIn("constrained native Hermes learning pass", session_posts[1]["json"]["instructions"])
-        self.assertEqual(reconcile_posts[1]["json"]["provenance"][0]["sourceStage"], "foreground")
+        self.assertEqual(result.text, "I saved the reusable procedure.")
+        self.assertEqual(len(turn_posts), 1)
+        self.assertEqual(len(session_posts), 1)
+        self.assertEqual(
+            session_posts[0]["json"]["input"],
+            "Require an accountable owner for every reusable action.",
+        )
+        self.assertIn("explicit /learn request", session_posts[0]["json"]["instructions"])
+        self.assertEqual(reconcile_posts[0]["json"]["provenance"][0]["sourceStage"], "foreground")
         self.assertEqual(result.raw["learningReconciliation"]["accepted"][0]["recordId"], "lr-learning")
+
+    def test_ordinary_remember_request_does_not_start_fallback_turn(self):
+        calls: list[dict] = []
+
+        def ensure_sandbox(config, *, credential):
+            return SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+                data_volume="hermes-data",
+            )
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "api-key-1"
+        try:
+            adapter = HermesRuntimeAdapter(
+                credential_factory=lambda: "credential-1",
+                sandbox_config_factory=sandbox_config,
+                ensure_sandbox=ensure_sandbox,
+                client_factory=lambda **kwargs: FakeHermesClient(
+                    calls,
+                    [(200, {"output": "I understand."})],
+                    **kwargs,
+                ),
+            )
+            result = asyncio.run(
+                adapter.invoke(
+                    AgentRequest(
+                        prompt="Remember this preference for later.",
+                        conversation_id="session-1",
+                        user_id="user-1",
+                        source="teams_personal",
+                        must_answer=True,
+                    )
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        session_posts = [call for call in calls if "/api/sessions/" in call["url"]]
+        turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
+        self.assertEqual(result.text, "I understand.")
+        self.assertEqual(len(session_posts), 1)
+        self.assertEqual(len(turn_posts), 1)
 
     def test_malformed_provenance_block_preserves_visible_answer_and_reports_failure(self):
         calls: list[dict] = []
@@ -573,10 +619,80 @@ class RuntimeAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one complete learning provenance block"):
             parse_provenance_block("answer</LEARNING_PROVENANCE_RECORDS>")
 
-    def test_requests_durable_learning_requires_explicit_durable_intent(self):
-        self.assertTrue(requests_durable_learning("Remember this reusable procedure for future assignments."))
-        self.assertTrue(requests_durable_learning("From now on, status reports need an owner."))
-        self.assertFalse(requests_durable_learning("Create a status report for today's project meeting."))
+    def test_explicit_learning_prompt_accepts_only_learn_command(self):
+        self.assertEqual(explicit_learning_prompt("/learn retain this rule"), "retain this rule")
+        self.assertEqual(explicit_learning_prompt("  /LEARN\tretain this rule  "), "retain this rule")
+        self.assertEqual(explicit_learning_prompt("/learn"), "")
+        self.assertIsNone(explicit_learning_prompt("Remember this rule"))
+        self.assertIsNone(explicit_learning_prompt("/learner retain this rule"))
+
+    def test_hermes_instructions_defer_classification_to_active_soul(self):
+        ordinary = bridge_instructions(
+            AgentRequest(
+                prompt="Remember this.",
+                conversation_id="session-1",
+                user_id="user-1",
+                source="teams_personal",
+                must_answer=True,
+            )
+        )
+        dream = bridge_instructions(
+            AgentRequest(
+                prompt="Dream.",
+                conversation_id="dream-1",
+                user_id="operator",
+                source="dream",
+                must_answer=True,
+            )
+        )
+        explicit = bridge_instructions(
+            AgentRequest(
+                prompt="Retain this rule.",
+                conversation_id="learn-1",
+                user_id="user-1",
+                source="teams_personal",
+                must_answer=True,
+                metadata={"learningIntent": "explicit"},
+            )
+        )
+
+        for instructions in (
+            ordinary,
+            dream,
+            explicit,
+            quarantine_recovery_instructions(),
+            dream_prompt(DreamRequest(session_id="dream-1", focus="recent work", max_records=2)),
+        ):
+            self.assertIn("active Role Blueprint SOUL.md", instructions)
+            self.assertIn("sole authority", instructions)
+
+        duplicated_taxonomy = (
+            "compact critical facts use Hermes USER.md or MEMORY.md",
+            "rich assignment-specific knowledge or procedure",
+            "generalized correction to existing role behavior",
+            "new generalized reusable procedure",
+        )
+        for phrase in duplicated_taxonomy:
+            self.assertNotIn(phrase, ordinary)
+            self.assertNotIn(phrase, explicit)
+            self.assertNotIn(phrase, quarantine_recovery_instructions())
+        self.assertEqual(explicit, explicit_learning_instructions())
+
+    def test_bridge_keeps_governed_learning_protocol_outside_soul(self):
+        instructions = bridge_instructions(
+            AgentRequest(
+                prompt="Do the work.",
+                conversation_id="session-1",
+                user_id="user-1",
+                source="teams_personal",
+                must_answer=True,
+            )
+        )
+
+        self.assertIn("<LEARNING_PROVENANCE_RECORDS>", instructions)
+        self.assertIn("at most 3 provenance objects", instructions)
+        self.assertIn("Private Playbook changes have no provenance object", instructions)
+        self.assertIn("Never edit learning/records.jsonl directly", instructions)
 
     def test_hermes_collective_learning_calls_secured_runtime_operations(self):
         calls: list[dict] = []
