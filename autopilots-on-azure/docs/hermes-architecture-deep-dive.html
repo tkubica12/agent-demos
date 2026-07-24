@@ -428,6 +428,7 @@
     </div>
     <div class="toolbar">
       <a class="guide-link overview-link" href="hermes-on-azure-overview.html">Overview</a>
+      <a class="guide-link overview-link" href="hermes-learning-deep-dive.html">Memory</a>
       <button class="icon-button" id="presentationToggle" type="button" aria-pressed="false" title="Presentation mode (P)">
         <span aria-hidden="true">▣</span><span class="button-label">Present</span>
       </button>
@@ -487,7 +488,7 @@
           </div>
           <div class="arrow">↓</div>
           <div class="lane">
-            <div class="lane-title">North Europe · per-Worker control plane</div>
+            <div class="lane-title">Per-Worker Container Apps control plane</div>
             <div class="nodes">
               <div class="node accent"><strong>Bridge Container App</strong><span>Agents SDK, auth boundary, lifecycle, queue consumer, proactive send</span></div>
               <div class="node azure"><strong>Service Bus queue</strong><span>One queue per Worker, scheduled messages, PeekLock, KEDA trigger</span></div>
@@ -495,7 +496,7 @@
           </div>
           <div class="arrow">↓ wake / reuse</div>
           <div class="lane">
-            <div class="lane-title">Sweden Central · Worker execution boundary</div>
+            <div class="lane-title">Worker execution boundary</div>
             <div class="boundary">
               <span class="boundary-label">Azure Container Apps Sandbox</span>
               <div class="nodes">
@@ -511,9 +512,9 @@
             <div class="lane-title">Azure and Microsoft services</div>
             <div class="nodes">
               <div class="node azure"><strong>Azure AI Foundry</strong><span><code>gpt-5-6-terra</code> through managed-identity proxy</span></div>
-              <div class="node private"><strong>Private incidents MCP</strong><span>Internal ACA endpoint across peered VNets</span></div>
-              <div class="node"><strong>Public shipments MCP</strong><span>Public HTTPS plus Entra app-role authorization</span></div>
-              <div class="node purple"><strong>Work IQ Mail</strong><span>Microsoft-managed MCP called as the Agent User</span></div>
+              <div class="node private"><strong>Private MCP in a VNet</strong><span>Internal endpoint + Entra authorization; incidents is the repository example</span></div>
+              <div class="node"><strong>Public MCP</strong><span>Public HTTPS + Entra authorization; shipments is the repository example</span></div>
+              <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Work IQ Mail is the current Agent User example</span></div>
             </div>
           </div>
         </div>
@@ -528,8 +529,8 @@
           <article class="card azure">
             <span class="card-index">SHARED PLATFORM STATE</span>
             <h3>Foundations used by every Worker</h3>
-            <p>Resource group, ACR, Foundry account/project/model, Sandbox Group, Service Bus namespace, regional VNets, peering, private DNS, and Container Apps environments.</p>
-            <div class="pill-row"><span class="pill">Sweden Central runtime</span><span class="pill">North Europe apps</span><span class="pill">Global VNet peering</span></div>
+            <p>Resource group, ACR, Foundry account/project/model, Sandbox Group, Service Bus namespace, VNets, peering, private DNS, and Container Apps environments.</p>
+            <div class="pill-row"><span class="pill">Shared model deployment</span><span class="pill">Shared Sandbox Group</span><span class="pill">Private network foundation</span></div>
           </article>
           <article class="card">
             <span class="card-index">PER-WORKER TERRAFORM WORKSPACE</span>
@@ -537,10 +538,6 @@
             <p>One bridge, bridge managed identity, Service Bus queue, Agent 365 blueprint, Agent Identity, Agent User, Sandbox Data Disk, MCP apps, runtime settings, and image digests.</p>
             <div class="pill-row"><span class="pill">autopilot-hermes</span><span class="pill">autopilot-hermes2</span><span class="pill">separate Data Disks</span></div>
           </article>
-        </div>
-        <div class="callout">
-          <strong>Why two regions?</strong>
-          <p>Foundry and ACA Sandboxes run in Sweden Central. Container Apps and ACR run in North Europe because the target managed-environment capacity was unavailable in Sweden Central. Peering and private DNS preserve the intended private MCP path.</p>
         </div>
       </section>
 
@@ -623,7 +620,7 @@
             <div class="lane-title">Author and arm</div>
             <div class="nodes">
               <div class="node accent"><strong>Hermes cron job</strong><span><code>cron/jobs.json</code> remains canonical</span></div>
-              <div class="node"><strong>Azure CronScheduler</strong><span>Revision + next run + sequence number</span></div>
+              <div class="node"><strong>Custom Azure CronScheduler plugin</strong><span>Our Hermes plugin maps native cron to revision + next run + Service Bus sequence number</span></div>
               <div class="node azure"><strong>Scheduled Service Bus message</strong><span>Worker ID, type, job ID, revision, due time—never the prompt</span></div>
             </div>
           </div>
@@ -650,10 +647,6 @@
             <p>A reserved daily Hermes schedule dispatches the existing Dreaming coordinator. Two-phase system receipts provide at-most-once execution and packet-preparation evidence. The former ACA scheduled Job is gone.</p>
           </article>
         </div>
-        <div class="callout">
-          <strong>Why not an always-running bridge?</strong>
-          <p>The bridge and Sandbox can both reach zero between occurrences. Service Bus scheduled delivery provides a durable future wake without polling, one ARM Job per task, or an in-process timer.</p>
-        </div>
       </section>
 
       <section id="identity">
@@ -663,7 +656,7 @@
         </div>
         <div class="grid-3">
           <article class="card azure"><span class="card-index">WORKLOAD CREDENTIAL</span><h3>Sandbox Group / bridge managed identity</h3><p>Bootstraps Azure access, Sandbox lifecycle, ACR, Service Bus receive, and the first federated exchange. It is not the business principal exposed to tools.</p></article>
-          <article class="card"><span class="card-index">AUTONOMOUS PRINCIPAL</span><h3>Agent Identity</h3><p>Obtains resource-specific application tokens for Foundry, private incidents, public shipments, and Service Bus scheduling. Servers validate audience, tenant, issuer, object/client identity, and app role.</p></article>
+          <article class="card"><span class="card-index">AUTONOMOUS PRINCIPAL</span><h3>Agent Identity</h3><p>Obtains resource-specific application tokens for Foundry, custom private/public MCP servers, and Service Bus scheduling. Servers validate audience, tenant, issuer, object/client identity, and app role.</p></article>
           <article class="card purple"><span class="card-index">DIGITAL TEAMMATE</span><h3>Agent User</h3><p>Uses <code>user_fic</code> to access licensed Worker-owned Microsoft 365 resources, currently demonstrated with Work IQ Mail. It is not the invoking human.</p></article>
         </div>
         <div class="diagram" style="margin-top:18px;">
@@ -688,7 +681,7 @@
             <div class="node azure"><strong>Foundry OpenAI v1</strong><span><code>gpt-5-6-terra</code>, managed authorization, no model API key on disk</span></div>
           </div>
         </div>
-        <div class="callout"><strong>Why a proxy?</strong><p>It is a compatibility adapter, not a behavior layer. Hermes still owns prompts, sessions, tools, and inference decisions. The proxy only changes authentication and endpoint transport.</p></div>
+        <div class="callout"><strong>Why a proxy?</strong><p>It is a compatibility adapter, not a behavior layer. Hermes still owns prompts, sessions, tools, and inference decisions. The proxy only changes authentication and endpoint transport. It can be removed when Hermes supports native Foundry endpoints with managed or Agent Identity authentication.</p></div>
       </section>
 
       <section id="mcp">
@@ -708,15 +701,27 @@
           <div class="lane">
             <div class="lane-title">Current upstream examples</div>
             <div class="nodes">
-              <div class="node private"><strong>Private incidents MCP</strong><span>Internal Container App, public access disabled, VNet + private DNS, <code>Incidents.Read.All</code></span></div>
-              <div class="node azure"><strong>Public shipments MCP</strong><span>Public HTTPS Container App, scale to zero, Entra audience + <code>Shipments.Read.All</code></span></div>
-              <div class="node purple"><strong>Work IQ Mail MCP</strong><span>Microsoft-managed upstream, Agent User token, licensed mailbox context</span></div>
+              <div class="node private"><strong>Private MCP in a VNet</strong><span>Internal Container App, public access disabled, private DNS, Entra application authorization</span></div>
+              <div class="node azure"><strong>Public MCP</strong><span>Public HTTPS endpoint, optional scale to zero, exact Entra audience and role validation</span></div>
+              <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Work IQ Mail example, Agent User token, licensed Worker-owned context</span></div>
             </div>
           </div>
         </div>
         <div class="grid-2" style="margin-top:18px;">
-          <article class="card private"><span class="card-index">PRIVATE DOES NOT MEAN UNAUTHENTICATED</span><h3>Two independent controls</h3><p>VNet routing and private DNS establish reachability. Entra application authorization still decides whether this Worker may call the incidents tool.</p></article>
-          <article class="card"><span class="card-index">PUBLIC DOES NOT MEAN ANONYMOUS</span><h3>HTTPS plus exact audience</h3><p>The shipments endpoint is internet-routable, but it accepts only valid tenant/issuer/audience claims and the required application or delegated role.</p></article>
+          <article class="card private"><span class="card-index">PRIVATE DOES NOT MEAN UNAUTHENTICATED</span><h3>Two independent controls</h3><p>VNet routing and private DNS establish reachability. Entra application authorization still decides whether the Worker may call the MCP server. Incidents is the repository example.</p></article>
+          <article class="card"><span class="card-index">PUBLIC DOES NOT MEAN ANONYMOUS</span><h3>HTTPS plus exact audience</h3><p>A public MCP endpoint is internet-routable, but it accepts only valid tenant/issuer/audience claims and the required application or delegated role. Shipments is the repository example.</p></article>
+        </div>
+        <div class="callout">
+          <strong>Generic Entra pattern; repository-specific scope names</strong>
+          <p>
+            A custom MCP server has a Microsoft Entra resource application with an identifier URI that becomes
+            the token audience. That resource application exposes application roles for autonomous Agent Identity
+            access and, when needed, delegated scopes for human OBO. The Worker’s Agent Identity service principal
+            is assigned the required application role. The loopback proxy requests the resource
+            <code>&lt;application-id-uri&gt;/.default</code> scope, and the MCP server validates issuer, tenant,
+            audience, calling identity, and role. <code>Incidents.Read.All</code> and
+            <code>Shipments.Read.All</code> are only the example role names used by this repository.
+          </p>
         </div>
       </section>
 
@@ -727,12 +732,12 @@
         </div>
         <div class="grid-2">
           <article class="card">
-            <span class="card-index">NORTH EUROPE APPLICATION VNET</span>
+            <span class="card-index">APPLICATION VNET</span>
             <h3>Bridge and MCP hosting</h3>
-            <p>Public bridge Container Apps environment and an internal private-MCP environment. ACR also resides in North Europe.</p>
+            <p>Public bridge Container Apps environment and an internal private-MCP environment, with an ACR available to the deployment.</p>
           </article>
           <article class="card private">
-            <span class="card-index">SWEDEN CENTRAL SANDBOX VNET</span>
+            <span class="card-index">SANDBOX VNET</span>
             <h3>Worker network interfaces</h3>
             <p>Delegated Sandbox subnet connects through the Sandbox Group VNet connection. Global peering reaches the private MCP environment; linked private DNS resolves its internal FQDN.</p>
           </article>
