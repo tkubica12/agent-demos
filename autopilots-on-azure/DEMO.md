@@ -278,14 +278,16 @@ uv run python -m scripts.demo_ops scheduled-status --state-name hermes2
 
 Point out that the automated cycle may Dream and prepare a digest, but cannot approve, export, promote, or merge it.
 
-For the production managed scheduler:
+For the production queue-backed scheduler:
 
 ```powershell
-uv run python -m scripts.demo_ops scheduled-job-start --state-name hermes2
-uv run python -m scripts.demo_ops scheduled-job-status --state-name hermes2
+uv run python -m scripts.servicebus_dream_smoke `
+  --state-name hermes2 `
+  --due-seconds 180 `
+  --timeout 1800
 ```
 
-The Job authenticates with a short-lived managed-identity token and the `ScheduledLearning.Run.All` application role.
+The system Dreaming message uses the same managed-identity Service Bus queue and KEDA bridge wake as user schedules. The dedicated ACA scheduled Job no longer exists.
 
 ### Repeatable full-lifecycle demonstrations
 

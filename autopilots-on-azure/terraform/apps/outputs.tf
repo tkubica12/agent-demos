@@ -86,18 +86,18 @@ output "scheduler_servicebus_queue_name" {
   value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? azurerm_servicebus_queue.worker_schedule[0].name : ""
 }
 
+output "servicebus_dream_enabled" {
+  value = var.agent_runtime == "hermes" && var.servicebus_dream_enabled
+}
+
+output "servicebus_dream_cron_expression" {
+  value = var.servicebus_dream_cron_expression
+}
+
 output "scheduled_learning_enabled" {
   value = var.agent_runtime == "hermes" && var.scheduled_learning_enabled
 }
 
 output "scheduled_learning_interval_seconds" {
   value = var.scheduled_learning_interval_seconds
-}
-
-output "scheduled_learning_job_enabled" {
-  value = var.agent_runtime == "hermes" && var.scheduled_learning_job_enabled
-}
-
-output "scheduled_learning_job_name" {
-  value = var.agent_runtime == "hermes" && var.scheduled_learning_job_enabled ? azapi_resource.scheduled_learning_job[0].name : ""
 }

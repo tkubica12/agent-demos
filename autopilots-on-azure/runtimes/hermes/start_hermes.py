@@ -45,9 +45,13 @@ from cron_runtime import (
     acknowledge_cron_delivery,
     bind_cron_delivery,
     bind_cron_local,
+    claim_system_schedule,
+    complete_system_schedule,
     cron_diagnostics,
     cron_delivery_receipt_status,
     fire_cron_job,
+    ensure_system_dream_schedule,
+    enqueue_system_dream_now,
     list_cron_jobs,
     reconcile_cron_provider,
     upsert_delivery_reference,
@@ -496,6 +500,60 @@ def create_health_app(
                 },
             ) from exc
 
+    @app.post("/internal/cron/system/claim")
+    async def cron_system_claim(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        try:
+            return await asyncio.to_thread(
+                claim_system_schedule,
+                profile_home,
+                job_id=str(payload.get("jobId") or ""),
+                revision=str(payload.get("revision") or ""),
+                occurrence_id=str(
+                    payload.get("occurrenceId")
+                    or payload.get("revision")
+                    or ""
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/cron/system/run-now")
+    async def cron_system_run_now(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return await asyncio.to_thread(
+                enqueue_system_dream_now,
+                profile_home,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/cron/system/complete")
+    async def cron_system_complete(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        try:
+            return await asyncio.to_thread(
+                complete_system_schedule,
+                profile_home,
+                job_id=str(payload.get("jobId") or ""),
+                revision=str(payload.get("revision") or ""),
+                occurrence_id=str(
+                    payload.get("occurrenceId")
+                    or payload.get("revision")
+                    or ""
+                ),
+                success=bool(payload.get("success")),
+                error=str(payload.get("error") or ""),
+                summary=payload.get("summary")
+                if isinstance(payload.get("summary"), dict)
+                else {},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/internal/cron/ack-delivery")
     async def cron_ack_delivery(request: Request) -> dict[str, Any]:
         require_internal_key(request)
@@ -572,10 +630,19 @@ def main() -> None:
         validate_skill_namespaces(profile_home)
     env_path = write_env_file(profile_home)
     config_path = write_config(profile_home)
+    system_dream_schedule = ensure_system_dream_schedule(
+        profile_home,
+        enabled=bool_env("SERVICEBUS_DREAM_ENABLED", False),
+        schedule=os.getenv(
+            "SERVICEBUS_DREAM_CRON_EXPRESSION",
+            "0 2 * * *",
+        ),
+    )
     print(f"Hermes home: {home}", flush=True)
     print(f"Hermes profile home: {profile_home}", flush=True)
     print(f"Hermes env: {env_path}", flush=True)
     print(f"Hermes config: {config_path}", flush=True)
+    print(f"System Dreaming schedule: {system_dream_schedule}", flush=True)
 
     foundry_proxy = start_foundry_proxy()
     mcp_proxy = start_agent_mcp_proxy()

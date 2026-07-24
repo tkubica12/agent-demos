@@ -26,12 +26,11 @@ locals {
     layer         = "apps"
   }
 
-  private_mcp_app_name        = "apmcp-${var.autopilot_name}-${local.suffix}"
-  public_mcp_app_name         = "apshipmcp-${var.autopilot_name}-${local.suffix}"
-  bridge_app_name             = "autopilot-bridge-${var.autopilot_name}-${local.suffix}"
-  scheduled_learning_job_name = "aplearn-${var.autopilot_name}-${local.suffix}"
-  scheduler_queue_name        = "worker-${var.autopilot_name}"
-  runtime_image               = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
+  private_mcp_app_name = "apmcp-${var.autopilot_name}-${local.suffix}"
+  public_mcp_app_name  = "apshipmcp-${var.autopilot_name}-${local.suffix}"
+  bridge_app_name      = "autopilot-bridge-${var.autopilot_name}-${local.suffix}"
+  scheduler_queue_name = "worker-${var.autopilot_name}"
+  runtime_image        = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
   runtime_disk_image_name = (
     var.runtime_disk_image_name != "openclaw-gateway-image-with-private-mcp" || var.openclaw_disk_image_name == ""
     ? var.runtime_disk_image_name
@@ -477,6 +476,8 @@ resource "azapi_resource" "bridge_app" {
                     namespace          = data.terraform_remote_state.platform.outputs.scheduler_servicebus_fully_qualified_namespace
                     queue              = azurerm_servicebus_queue.worker_schedule[0].name
                     lockRenewalSeconds = var.user_scheduling_lock_renewal_seconds
+                    dreamEnabled       = var.servicebus_dream_enabled
+                    dreamCron          = var.servicebus_dream_cron_expression
                   } : null
                 })), 0, 16)
               },
@@ -649,26 +650,6 @@ resource "azapi_resource" "bridge_app" {
                 value = var.scheduled_learning_prepare_packet ? "true" : "false"
               },
               {
-                name  = "SCHEDULED_LEARNING_AUDIENCE"
-                value = var.scheduled_learning_audience
-              },
-              {
-                name  = "SCHEDULED_LEARNING_JWKS_URL"
-                value = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/discovery/v2.0/keys"
-              },
-              {
-                name  = "SCHEDULED_LEARNING_ISSUERS"
-                value = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0,https://sts.windows.net/${data.azurerm_client_config.current.tenant_id}/"
-              },
-              {
-                name  = "SCHEDULED_LEARNING_ALLOWED_CLIENT_IDS"
-                value = var.scheduled_learning_allowed_client_ids
-              },
-              {
-                name  = "SCHEDULED_LEARNING_ALLOWED_OBJECT_IDS"
-                value = var.scheduled_learning_allowed_object_ids
-              },
-              {
                 name  = "USER_SCHEDULING_ENABLED"
                 value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? "true" : "false"
               },
@@ -687,6 +668,14 @@ resource "azapi_resource" "bridge_app" {
               {
                 name  = "SCHEDULER_MAX_DELIVERY_COUNT"
                 value = tostring(var.user_scheduling_max_delivery_count)
+              },
+              {
+                name  = "SERVICEBUS_DREAM_ENABLED"
+                value = var.agent_runtime == "hermes" && var.servicebus_dream_enabled ? "true" : "false"
+              },
+              {
+                name  = "SERVICEBUS_DREAM_CRON_EXPRESSION"
+                value = var.servicebus_dream_cron_expression
               }
             ]
           }
@@ -728,100 +717,15 @@ resource "azapi_resource" "bridge_app" {
     azurerm_role_assignment.bridge_schedule_receiver,
     azapi_resource.private_mcp_app
   ]
-}
-
-resource "azapi_resource" "scheduled_learning_job" {
-  count = var.agent_runtime == "hermes" && var.scheduled_learning_job_enabled ? 1 : 0
-
-  type      = "Microsoft.App/jobs@2025-01-01"
-  name      = local.scheduled_learning_job_name
-  parent_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
-  location  = local.location
-  tags      = local.tags
-
-  identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.bridge.id]
-  }
-
-  body = {
-    properties = {
-      environmentId = data.terraform_remote_state.platform.outputs.bridge_env_id
-      configuration = {
-        triggerType       = "Schedule"
-        replicaTimeout    = var.scheduled_learning_job_timeout_seconds
-        replicaRetryLimit = var.scheduled_learning_job_retry_limit
-        scheduleTriggerConfig = {
-          cronExpression         = var.scheduled_learning_job_cron_expression
-          parallelism            = 1
-          replicaCompletionCount = 1
-        }
-        registries = [
-          {
-            server   = local.acr_login_server
-            identity = azurerm_user_assigned_identity.bridge.id
-          }
-        ]
-        secrets = []
-      }
-      template = {
-        containers = [
-          {
-            name    = "scheduled-learning"
-            image   = var.bridge_image
-            command = ["python"]
-            args    = ["-m", "scripts.scheduled_learning_job"]
-            env = [
-              {
-                name  = "AZURE_CLIENT_ID"
-                value = azurerm_user_assigned_identity.bridge.client_id
-              },
-              {
-                name  = "SCHEDULED_LEARNING_BRIDGE_URL"
-                value = "https://${azapi_resource.bridge_app.output.properties.configuration.ingress.fqdn}"
-              },
-              {
-                name  = "SCHEDULED_LEARNING_AUDIENCE"
-                value = var.scheduled_learning_audience
-              },
-              {
-                name  = "SCHEDULED_LEARNING_JOB_TIMEOUT_SECONDS"
-                value = tostring(var.scheduled_learning_job_timeout_seconds)
-              },
-              {
-                name  = "SCHEDULED_LEARNING_JOB_RETRY_LIMIT"
-                value = tostring(var.scheduled_learning_job_retry_limit)
-              },
-              {
-                name  = "SCHEDULED_LEARNING_JOB_RETRY_BACKOFF_SECONDS"
-                value = tostring(var.scheduled_learning_retry_backoff_seconds)
-              },
-              {
-                name  = "WORKER_ID"
-                value = var.autopilot_name
-              }
-            ]
-            resources = {
-              cpu    = 0.25
-              memory = "0.5Gi"
-            }
-          }
-        ]
-      }
-    }
-  }
 
   lifecycle {
     precondition {
-      condition     = var.scheduled_learning_audience != "" && var.scheduled_learning_allowed_client_ids != "" && var.scheduled_learning_allowed_object_ids != ""
-      error_message = "Managed scheduled learning requires audience and allowed bridge identity IDs."
+      condition     = !var.servicebus_dream_enabled || (var.agent_runtime == "hermes" && var.user_scheduling_enabled)
+      error_message = "Queue-driven Dreaming requires Hermes user scheduling and its Service Bus queue."
+    }
+    precondition {
+      condition     = !(var.servicebus_dream_enabled && var.scheduled_learning_enabled)
+      error_message = "Queue-driven Dreaming and the legacy bridge timer cannot both be enabled."
     }
   }
-
-  schema_validation_enabled = false
-
-  depends_on = [
-    azurerm_role_assignment.bridge_acr_pull,
-    azapi_resource.bridge_app
-  ]
 }

@@ -534,6 +534,203 @@ class UserSchedulingTests(unittest.TestCase):
         )
         self.assertIn("job-2:executing", receipts)
 
+    def test_system_dream_schedule_claims_completes_and_rearms(self):
+        job = {
+            "id": "dream-job",
+            "name": "Renamed by user",
+            "prompt": "Changed by user",
+            "schedule": {"kind": "cron", "expr": "0 2 * * *"},
+            "schedule_display": "0 2 * * *",
+            "next_run_at": "2026-07-25T02:00:00+00:00",
+            "enabled": True,
+            "state": "scheduled",
+            "last_run_at": None,
+        }
+        jobs = [job]
+        marked = []
+        reconciled = []
+        cron_modules = {
+            "cron": types.ModuleType("cron"),
+            "cron.jobs": types.ModuleType("cron.jobs"),
+            "cron.scheduler_provider": types.ModuleType("cron.scheduler_provider"),
+            "azure_cron_provider": types.ModuleType("azure_cron_provider"),
+        }
+        cron_modules["cron.jobs"].list_jobs = lambda include_disabled=True: list(jobs)
+        cron_modules["cron.jobs"].create_job = lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("existing system job should be reused")
+        )
+        cron_modules["cron.jobs"].remove_job = lambda job_id: True
+        def update_job(job_id, updates):
+            job.update(updates)
+            return job
+
+        cron_modules["cron.jobs"].update_job = update_job
+        cron_modules["cron.jobs"].get_job = lambda job_id: job
+        cron_modules["cron.jobs"].claim_job_for_fire = lambda job_id: True
+        cron_modules["cron.jobs"].mark_job_run = (
+            lambda job_id, success, error=None: marked.append(
+                (job_id, success, error)
+            )
+        )
+        cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = (
+            lambda: SimpleNamespace(
+                reconcile=lambda: reconciled.append(True)
+            )
+        )
+        cron_modules["azure_cron_provider"].schedule_revision = (
+            lambda value: "dream-revision"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir)
+            cron_runtime.atomic_write_json(
+                cron_runtime.cron_delivery_path(profile),
+                {"dream-job": {"systemType": "dream"}},
+            )
+            with patch.dict(sys.modules, cron_modules):
+                ensured = cron_runtime.ensure_system_dream_schedule(
+                    profile,
+                    enabled=True,
+                    schedule="0 2 * * *",
+                )
+                user_jobs = cron_runtime.list_cron_jobs(profile)
+                all_jobs = cron_runtime.list_cron_jobs(
+                    profile,
+                    include_system=True,
+                )
+                claimed = cron_runtime.claim_system_schedule(
+                    profile,
+                    job_id="dream-job",
+                    revision="dream-revision",
+                    occurrence_id="manual-1",
+                )
+                completed = cron_runtime.complete_system_schedule(
+                    profile,
+                    job_id="dream-job",
+                    revision="dream-revision",
+                    occurrence_id="manual-1",
+                    success=True,
+                    summary={"dream": {"recordCount": 1}},
+                )
+                production_claim = cron_runtime.claim_system_schedule(
+                    profile,
+                    job_id="dream-job",
+                    revision="dream-revision",
+                    occurrence_id="dream-revision",
+                )
+            binding = cron_runtime.read_json_object(
+                cron_runtime.cron_delivery_path(profile)
+            )["dream-job"]
+
+        self.assertTrue(ensured["enabled"])
+        self.assertEqual(job["name"], cron_runtime.SYSTEM_DREAM_JOB_NAME)
+        self.assertEqual(job["prompt"], cron_runtime.SYSTEM_DREAM_PROMPT)
+        self.assertEqual(user_jobs, [])
+        self.assertEqual(all_jobs[0]["systemType"], "dream")
+        self.assertEqual(binding, {"systemType": "dream"})
+        self.assertEqual(claimed["status"], "claimed")
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(production_claim["status"], "claimed")
+        self.assertEqual(marked, [("dream-job", True, None)])
+        self.assertEqual(reconciled, [True])
+
+    def test_system_completion_recovery_does_not_advance_twice(self):
+        job = {
+            "id": "dream-job",
+            "last_run_at": "2026-07-24T07:00:00+00:00",
+        }
+        marked = []
+        reconciled = []
+        cron_modules = {
+            "cron": types.ModuleType("cron"),
+            "cron.jobs": types.ModuleType("cron.jobs"),
+            "cron.scheduler_provider": types.ModuleType("cron.scheduler_provider"),
+            "azure_cron_provider": types.ModuleType("azure_cron_provider"),
+        }
+        cron_modules["cron.jobs"].get_job = lambda job_id: job
+        cron_modules["cron.jobs"].claim_job_for_fire = lambda job_id: True
+        cron_modules["cron.jobs"].mark_job_run = (
+            lambda *args, **kwargs: marked.append((args, kwargs))
+        )
+        cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = (
+            lambda: SimpleNamespace(
+                reconcile=lambda: reconciled.append(True)
+            )
+        )
+        cron_modules["azure_cron_provider"].schedule_revision = (
+            lambda value: "new-revision"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir)
+            cron_runtime.atomic_write_json(
+                cron_runtime.system_schedule_receipts_path(profile),
+                {
+                    "dream-job:old-revision": {
+                        "state": "completing",
+                        "success": True,
+                        "lastRunAtBefore": None,
+                        "summary": {},
+                    }
+                },
+            )
+            with patch.dict(sys.modules, cron_modules):
+                result = cron_runtime.claim_system_schedule(
+                    profile,
+                    job_id="dream-job",
+                    revision="old-revision",
+                    occurrence_id="old-revision",
+                )
+            receipt = cron_runtime.read_json_object(
+                cron_runtime.system_schedule_receipts_path(profile)
+            )["dream-job:old-revision"]
+
+        self.assertEqual(result["status"], "duplicate")
+        self.assertEqual(marked, [])
+        self.assertEqual(reconciled, [True])
+        self.assertEqual(receipt["state"], "completed")
+
+    def test_expired_running_dream_is_not_executed_twice(self):
+        cron_modules = {
+            "cron": types.ModuleType("cron"),
+            "cron.jobs": types.ModuleType("cron.jobs"),
+            "azure_cron_provider": types.ModuleType("azure_cron_provider"),
+        }
+        cron_modules["cron.jobs"].get_job = lambda job_id: (_ for _ in ()).throw(
+            AssertionError("must not reclaim an executing occurrence")
+        )
+        cron_modules["cron.jobs"].claim_job_for_fire = lambda job_id: (
+            (_ for _ in ()).throw(
+                AssertionError("must not reclaim an executing occurrence")
+            )
+        )
+        cron_modules["azure_cron_provider"].schedule_revision = (
+            lambda value: "dream-revision"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile = Path(temp_dir)
+            cron_runtime.atomic_write_json(
+                cron_runtime.system_schedule_receipts_path(profile),
+                {
+                    "dream-job:manual-1": {
+                        "state": "running",
+                        "startedAtEpoch": 1,
+                        "revision": "dream-revision",
+                        "occurrenceId": "manual-1",
+                    }
+                },
+            )
+            with patch.dict(sys.modules, cron_modules):
+                result = cron_runtime.claim_system_schedule(
+                    profile,
+                    job_id="dream-job",
+                    revision="dream-revision",
+                    occurrence_id="manual-1",
+                )
+
+        self.assertEqual(result["status"], "interrupted")
+
 
 if __name__ == "__main__":
     unittest.main()

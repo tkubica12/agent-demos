@@ -1,7 +1,9 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
+import bridge.app as bridge_app
 from bridge.runtime.base import AgentResponse, DreamResponse
 from bridge.scheduled_learning import (
     ScheduledLearningCoordinator,
@@ -10,6 +12,106 @@ from bridge.scheduled_learning import (
 
 
 class ScheduledLearningTests(unittest.TestCase):
+    def test_system_dream_message_claims_runs_and_completes_schedule(self):
+        calls = []
+
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def claim_system_schedule(self, **kwargs):
+                calls.append(("claim", kwargs))
+                return {"status": "claimed"}
+
+            async def complete_system_schedule(self, **kwargs):
+                calls.append(("complete", kwargs))
+                return {"status": "completed", "nextRunAt": "tomorrow"}
+
+        class Coordinator:
+            async def run_once(self):
+                return {
+                    "dream": {"recordCount": 1},
+                    "packet": {"approvalRequired": True},
+                }
+
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=Adapter()),
+            patch.object(bridge_app, "scheduled_learning", Coordinator()),
+        ):
+            result = asyncio.run(bridge_app.process_scheduled_message({
+                "type": "system.dream",
+                "jobId": "dream-job",
+                "revision": "dream-revision",
+                "occurrenceId": "dream-occurrence",
+            }))
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(calls[0][0], "claim")
+        self.assertEqual(calls[1][0], "complete")
+        self.assertTrue(calls[1][1]["success"])
+
+    def test_system_dream_records_nonretryable_failure_and_rearms(self):
+        calls = []
+
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def claim_system_schedule(self, **kwargs):
+                return {"status": "claimed"}
+
+            async def complete_system_schedule(self, **kwargs):
+                calls.append(kwargs)
+                return {"status": "completed", "nextRunAt": "tomorrow"}
+
+        class Coordinator:
+            async def run_once(self):
+                raise ValueError("invalid Dreaming result")
+
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=Adapter()),
+            patch.object(bridge_app, "scheduled_learning", Coordinator()),
+        ):
+            result = asyncio.run(bridge_app.process_scheduled_message({
+                "type": "system.dream",
+                "jobId": "dream-job",
+                "revision": "dream-revision",
+                "occurrenceId": "dream-occurrence",
+            }))
+
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(calls[0]["success"])
+        self.assertIn("ValueError", calls[0]["error"])
+
+    def test_interrupted_system_dream_is_not_rerun(self):
+        calls = []
+
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def claim_system_schedule(self, **kwargs):
+                return {"status": "interrupted"}
+
+            async def complete_system_schedule(self, **kwargs):
+                calls.append(kwargs)
+                return {"status": "completed", "nextRunAt": "tomorrow"}
+
+        class Coordinator:
+            async def run_once(self):
+                raise AssertionError("interrupted Dreaming must not rerun")
+
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=Adapter()),
+            patch.object(bridge_app, "scheduled_learning", Coordinator()),
+        ):
+            result = asyncio.run(bridge_app.process_scheduled_message({
+                "type": "system.dream",
+                "jobId": "dream-job",
+                "revision": "dream-revision",
+                "occurrenceId": "manual-1",
+            }))
+
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(calls[0]["success"])
+        self.assertIn("interrupted", calls[0]["error"].lower())
     def test_dream_prepares_packet_when_records_exist(self):
         class Adapter:
             runtime_kind = "hermes"

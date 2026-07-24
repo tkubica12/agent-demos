@@ -27,7 +27,6 @@ from bridge.proactive_delivery import (
     delivery_reference_metadata,
     send_proactive_activity,
 )
-from bridge.scheduler_auth import require_scheduler_identity
 from bridge.servicebus_scheduler import ServiceBusScheduleConsumer
 from bridge.scheduled_learning import (
     RETRYABLE_ERRORS,
@@ -855,18 +854,6 @@ async def run_scheduled_learning(http_request: Request) -> dict[str, Any]:
         ) from exc
 
 
-@app.post("/internal/scheduled-learning/run-managed")
-async def run_managed_scheduled_learning(http_request: Request) -> dict[str, Any]:
-    require_scheduler_identity(http_request)
-    try:
-        return await scheduled_learning.run_once()
-    except RETRYABLE_ERRORS as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={"type": exc.__class__.__name__, "message": str(exc)},
-        ) from exc
-
-
 @app.get("/internal/scheduled-learning/status")
 async def scheduled_learning_status(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
@@ -891,8 +878,87 @@ async def ensure_runtime_status(http_request: Request) -> dict[str, Any]:
 async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
     message_type = str(payload.get("type") or "")
     if message_type == "system.dream":
-        result = await scheduled_learning.run_once()
-        return {"status": "completed", "type": message_type, "result": result}
+        adapter = runtime_adapter()
+        if adapter.runtime_kind != "hermes":
+            raise RuntimeError("Scheduled Dreaming is supported only by Hermes.")
+        job_id = str(payload.get("jobId") or "")
+        revision = str(payload.get("revision") or "")
+        occurrence_id = str(
+            payload.get("occurrenceId") or revision
+        )
+        claim = await adapter.claim_system_schedule(
+            job_id=job_id,
+            revision=revision,
+            occurrence_id=occurrence_id,
+        )
+        deadline = (
+            asyncio.get_running_loop().time()
+            + int(os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800"))
+            - 30
+        )
+        while claim.get("status") == "in_progress":
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("Scheduled Dreaming is still in progress.")
+            await asyncio.sleep(15)
+            claim = await adapter.claim_system_schedule(
+                job_id=job_id,
+                revision=revision,
+                occurrence_id=occurrence_id,
+            )
+        if claim.get("status") in {"duplicate", "stale"}:
+            return {
+                "status": str(claim["status"]),
+                "type": message_type,
+                "jobId": job_id,
+            }
+        if claim.get("status") == "interrupted":
+            completion = await adapter.complete_system_schedule(
+                job_id=job_id,
+                revision=revision,
+                occurrence_id=occurrence_id,
+                success=False,
+                error="Scheduled Dreaming was interrupted after execution began.",
+            )
+            return {
+                "status": "failed",
+                "type": message_type,
+                "jobId": job_id,
+                "completion": completion,
+            }
+        try:
+            result = await scheduled_learning.run_once()
+        except Exception as exc:
+            completion = await adapter.complete_system_schedule(
+                job_id=job_id,
+                revision=revision,
+                occurrence_id=occurrence_id,
+                success=False,
+                error=f"{exc.__class__.__name__}: {str(exc)[:1000]}",
+            )
+            return {
+                "status": "failed",
+                "type": message_type,
+                "jobId": job_id,
+                "completion": completion,
+            }
+        summary = {
+            "dream": result.get("dream"),
+            "packet": result.get("packet"),
+        }
+        completion = await adapter.complete_system_schedule(
+            job_id=job_id,
+            revision=revision,
+            occurrence_id=occurrence_id,
+            success=True,
+            summary=summary,
+        )
+        return {
+            "status": "completed",
+            "type": message_type,
+            "jobId": job_id,
+            "result": result,
+            "completion": completion,
+        }
     if message_type != "hermes.cron.fire":
         raise ValueError(f"Unsupported scheduled message type: {message_type!r}.")
     adapter = runtime_adapter()

@@ -53,6 +53,14 @@ class HermesRuntimeTests(unittest.TestCase):
             calls["ack"] = kwargs
             return {"status": "delivered"}
 
+        def claim_system(profile_home, **kwargs):
+            calls["claim"] = kwargs
+            return {"status": "claimed"}
+
+        def complete_system(profile_home, **kwargs):
+            calls["complete"] = kwargs
+            return {"status": "completed"}
+
         previous = os.environ.get("API_SERVER_KEY")
         os.environ["API_SERVER_KEY"] = "operator-key"
         try:
@@ -64,6 +72,16 @@ class HermesRuntimeTests(unittest.TestCase):
                         start_hermes,
                         "acknowledge_cron_delivery",
                         acknowledge,
+                    ),
+                    patch.object(
+                        start_hermes,
+                        "claim_system_schedule",
+                        claim_system,
+                    ),
+                    patch.object(
+                        start_hermes,
+                        "complete_system_schedule",
+                        complete_system,
                     ),
                 ):
                     client = TestClient(
@@ -93,6 +111,26 @@ class HermesRuntimeTests(unittest.TestCase):
                             "deliveryActivityId": "activity-1",
                         },
                     )
+                    claim_response = client.post(
+                        "/internal/cron/system/claim",
+                        headers=headers,
+                        json={
+                            "jobId": "dream-job",
+                            "revision": "dream-revision",
+                            "occurrenceId": "manual-1",
+                        },
+                    )
+                    complete_response = client.post(
+                        "/internal/cron/system/complete",
+                        headers=headers,
+                        json={
+                            "jobId": "dream-job",
+                            "revision": "dream-revision",
+                            "occurrenceId": "manual-1",
+                            "success": True,
+                            "summary": {"dream": {"recordCount": 1}},
+                        },
+                    )
         finally:
             if previous is None:
                 os.environ.pop("API_SERVER_KEY", None)
@@ -101,6 +139,8 @@ class HermesRuntimeTests(unittest.TestCase):
 
         self.assertEqual(fire_response.status_code, 200)
         self.assertEqual(ack_response.status_code, 200)
+        self.assertEqual(claim_response.status_code, 200)
+        self.assertEqual(complete_response.status_code, 200)
         self.assertEqual(
             calls["fire"],
             {"job_id": "job-1", "revision": "revision-1"},
@@ -111,6 +151,25 @@ class HermesRuntimeTests(unittest.TestCase):
                 "job_id": "job-1",
                 "revision": "revision-1",
                 "delivery_activity_id": "activity-1",
+            },
+        )
+        self.assertEqual(
+            calls["claim"],
+            {
+                "job_id": "dream-job",
+                "revision": "dream-revision",
+                "occurrence_id": "manual-1",
+            },
+        )
+        self.assertEqual(
+            calls["complete"],
+            {
+                "job_id": "dream-job",
+                "revision": "dream-revision",
+                "occurrence_id": "manual-1",
+                "success": True,
+                "error": "",
+                "summary": {"dream": {"recordCount": 1}},
             },
         )
 

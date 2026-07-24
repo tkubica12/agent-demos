@@ -20,7 +20,7 @@ As of 2026-07-24:
 - `hermes2` retains its isolated Agent 365 platform blueprint, Agent Identity, Agent User, bridge, Terraform workspace, Sandbox volume, and approval identity.
 - Both Hermes bridges use the runtime-specific wake/readiness and transient Worker Refresh preflight fixes; Terraform workspaces converge.
 - The Teams Enterprise license temporarily transferred for the multi-Worker test is restored to `openclaw1`.
-- Hermes 2 runs the managed-identity ACA scheduled Job daily; an on-demand execution succeeded and reached approval-required packet preparation without approving or exporting it.
+- Hermes 2 runs daily Dreaming through the same Service Bus/KEDA bridge wake path as user schedules; the dedicated ACA scheduled Job has been removed.
 - Hermes 2 user schedules are live through Hermes cron, Service Bus, KEDA scale-from-zero, and proactive Teams continuation; recurring personal-chat delivery is validated with a visible unsolicited message.
 - Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
@@ -37,7 +37,7 @@ As of 2026-07-24:
 | A10 - Native skill evolution and Collective Learning Review | Complete | Multi-Worker Private Playbooks, Role Skill patches, Candidate Improvements, schema-v2 provenance, attested packets, merger/judge, Agentic Promotion gates, merged Promotion, and Worker Refresh. |
 | A11 - Scheduled Dreaming | Complete | Managed-identity ACA scheduled Job, bridge-owned classroom timer, packet preparation, observability, and disposable lifecycle reset. |
 | A12 - User-scheduled Worker tasks | Complete | Hermes-native schedules, Service Bus/KEDA wake, crash-safe execution, schedule management, and visible proactive personal Teams delivery. |
-| A12.1 - Unified scheduling hardening | Next | Move Dreaming onto the Worker queue, remove the A11 Job after parity, live-validate channel/group delivery, and add explicit schedule quotas and DLQ operations. |
+| A12.1 - Unified Dreaming scheduler | Complete | Queue-driven `system.dream`, scale-to-zero wake, packet-preparation parity, durable system receipts, and removal of the A11 ACA Job. |
 | A13 - Document-aware work and attachments | Planned | Secure Teams/Microsoft 365 attachment ingestion and Work IQ Word operations. |
 | A14 - Microsoft 365 knowledge and actions | Planned | SharePoint, OneDrive, Mail, Teams, Calendar, Word, and notification workload actions through Agent User identity. |
 | A15 - Teams targeted private messaging | Planned | Private `/WorkerName` invocation inside supported group conversations. |
@@ -100,7 +100,7 @@ Exit criteria:
 
 Goal: run recurring Dreaming and packet preparation without manual Sandbox access.
 
-Status: Complete; Hermes 2 uses the managed-identity ACA scheduled Job, and guarded disposable Worker/Data Disk/Git reset automation is available for classroom replays.
+Status: Complete; A11 proved the managed-identity ACA scheduled Job and guarded disposable lifecycle. A12.1 later retired the Job after queue-driven Dreaming reached parity.
 
 Tasks:
 
@@ -164,27 +164,27 @@ Exit criteria:
 - Worker Refresh preserves active schedules and their execution history.
 - A recurring scheduled result can be proactively delivered into the originating personal Teams conversation.
 
-### A12.1 - Unified scheduling hardening
+### A12.1 - Unified Dreaming scheduler
 
-Goal: finish platform-wide schedule consolidation after the user-scheduling milestone.
+Goal: move platform Dreaming onto the same queue-driven wake path as user schedules and remove the dedicated A11 scheduler.
 
-Status: Next.
+Status: Complete. Hermes 2 has a reserved daily Platform Dreaming job whose `system.dream` message wakes the bridge through KEDA. Live operator-triggered occurrences produced one Dreaming record, prepared an approval-required packet, persisted successful system receipts without changing the daily schedule, and left the queue and DLQ clean. The A11 ACA scheduled Job is deleted.
 
 Tasks:
 
-- Schedule `system.dream` messages through the same per-Worker queue and bridge dispatcher.
-- Validate Dreaming schedule, retry, scale-to-zero, packet preparation, and no-duplicate parity with A11.
-- Remove the dedicated A11 ACA scheduled Job only after queue-driven Dreaming passes parity.
-- Live-validate proactive continuation in an existing Teams channel and group chat, including thread placement and privacy boundaries.
-- Add explicit per-Worker and per-user schedule quotas plus operator DLQ inspect/replay/remove commands.
-- Add deterministic management commands for schedule listing when model inference is transiently unavailable.
+- Complete: provision a reserved Hermes Platform Dreaming schedule on the Worker Data Disk.
+- Complete: emit one next `system.dream` Service Bus message without a prompt or private learning content.
+- Complete: claim under a durable system receipt, run the existing Dreaming coordinator, record success/failure, and re-arm the next occurrence.
+- Complete: validate scale-from-zero, retry ownership, one Dreaming record, approval-required packet preparation, next-occurrence restoration, and empty DLQ.
+- Complete: disable and delete the dedicated A11 ACA scheduled Job and its obsolete auth/client tooling.
+- Complete: add a repeatable operator-triggered Service Bus Dreaming smoke that leaves the configured production schedule unchanged.
 
 Exit criteria:
 
-- Dreaming and user schedules share one queue-driven wake path.
-- No dedicated A11 scheduled Job remains.
-- Existing personal, group, and channel conversations receive scheduled output through their original boundary.
-- Operators can inspect and safely replay or remove dead-lettered schedule messages.
+- Met: Dreaming and user schedules share one queue-driven wake path.
+- Met: no dedicated A11 scheduled Job remains.
+- Met: Dreaming preserves its learning transaction and human approval boundary.
+- Met: the production daily schedule is restored after repeatable live validation.
 
 ### A13 - Document-aware work and attachments
 
@@ -243,6 +243,7 @@ Tasks:
 - Confirm whether Agent 365 AI teammate packaging can emit the Teams manifest `bots[].supportsTargetedMessages: true` capability or requires an additional supported package surface.
 - Add discoverable agent slash commands only after targeted-message opt-in is confirmed.
 - Live-validate `/Hermes` and `/Hermes 2` in a channel, group chat, and meeting chat.
+- Live-validate scheduled proactive continuation in an existing Teams channel and group chat, including thread placement.
 - Verify inbound activities set `recipient.is_targeted` and map to a private-user bridge boundary.
 - Ensure a targeted request always receives a targeted response unless the user explicitly approves public sharing.
 - Keep targeted turns out of public bridge context, public Work History keys, and public channel replies.
@@ -261,6 +262,7 @@ Exit criteria:
 ## Deferred
 
 - Human OBO with explicit per-turn consent.
+- Per-user schedule quotas, deterministic management fallback, and operator DLQ replay/remove commands.
 - Complete OpenClaw Role Blueprint and Collective Learning Review parity.
 - Full Teams thread-follow or unmentioned-channel delivery unless Agent 365 adds support.
 - Hermes dashboard exposure.

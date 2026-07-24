@@ -608,9 +608,9 @@ Work History                         |
 5. Scheduled cycles must serialize through the same Worker learning transaction as foreground work and manual Dreaming.
 6. Status must expose timestamps, counts, current Role Release, last Dream summary, last prepared packet digest, and sanitized failures without private content.
 7. A bridge-owned timer is permitted for classroom demonstrations but requires a non-zero bridge replica.
-8. The current production scheduler is an Azure Container Apps scheduled Job calling a managed-identity-protected bridge endpoint; it receives no stored Worker or bridge keys.
-9. A12.1 migrates Dreaming to a per-Worker Service Bus queue that directly scales the bridge under ADR 0015.
-10. The scheduled ACA Job must remain until Service Bus Dreaming passes parity validation, then be removed.
+8. The production scheduler is the per-Worker Service Bus queue under ADR 0015; a reserved Hermes Platform Dreaming schedule emits `system.dream` messages that directly scale the bridge.
+9. Queue-driven Dreaming uses the same Worker learning transaction and packet-preparation coordinator as manual Dreaming.
+10. The former ACA scheduled Job and its dedicated authentication surface are removed.
 
 ### User-scheduled Worker tasks
 
@@ -652,7 +652,7 @@ Work History                         |
 - Human OBO is not implemented.
 - OpenClaw does not yet implement the complete Hermes Role Blueprint and Collective Learning Review lifecycle.
 - Multi-Worker Collective Learning Review is live-validated with two independent Worker packets.
-- Scheduled Dreaming runs through a managed-identity ACA scheduled Job; migration to the unified Service Bus bridge trigger is not yet implemented.
+- Scheduled Dreaming and user schedules share the unified Service Bus/KEDA bridge trigger; the former ACA scheduled Job is removed.
 - Agent 365 Email and Office comment notifications are not yet implemented.
 - Teams and Agent 365 document attachment ingestion is not yet implemented.
 - Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Trigger migration amended by [ADR 0015](0015-service-bus-backed-hermes-cron.md).
+Superseded for trigger selection by [ADR 0015](0015-service-bus-backed-hermes-cron.md). The bridge/Sandbox Dreaming boundary remains valid.
 
 ## Context
 
@@ -47,9 +47,9 @@ The bridge is responsible for:
 
 The initial implementation uses a bridge-owned timer because it is simplest for the demo. Enabling it keeps one bridge replica active. The timer runs through the same Worker learning transaction as foreground work, prepares a Learning Packet only when transferable records exist, and never approves or exports the packet.
 
-The production-friendly path is an Azure Container Apps scheduled Job. The job should call the bridge on a schedule; the bridge then wakes the sandbox and submits the dream run. This preserves scale-to-zero for worker sandboxes and avoids putting scheduling logic inside every sandbox.
+The first production path was an Azure Container Apps scheduled Job. It called the bridge on a schedule; the bridge then woke the Sandbox and submitted the Dream run.
 
-The scheduled Job uses the existing per-Worker bridge managed identity. A dedicated Entra resource application exposes `ScheduledLearning.Run.All`; the Job requests a short-lived application token and the bridge verifies signature, issuer, audience, role, client ID, and object ID. The Job receives no stored API key or application secret.
+The scheduled Job used the existing per-Worker bridge managed identity and a dedicated Entra resource application exposing `ScheduledLearning.Run.All`. This surface was removed after queue-driven Dreaming reached parity.
 
 ADR 0015 selects a unified Service Bus trigger after the scheduled Job implementation proved the bridge/Sandbox Dreaming path. Service Bus does not directly wake an ACA Sandbox. Instead, a scheduled message becomes active and KEDA scales the existing per-Worker bridge:
 
@@ -61,14 +61,14 @@ Service Bus message
   -> Hermes Dreaming
 ```
 
-The A11 scheduled ACA Job remains deployed during migration. Remove it only after the Service Bus path proves parity. Do not use Service Connector as a scheduler; use it only when helpful for service-to-service wiring.
+Queue-driven Dreaming proved scale-to-zero, retry ownership, Dreaming, packet preparation, and next-occurrence parity. The A11 Job and its dedicated authentication/client code are removed.
 
 ## Consequences
 
 - ACA Sandbox remains the stateful worker runtime, not the scheduler.
 - The bridge stays the control plane for worker wakeup and stateful Hermes invocation.
 - Bridge-owned cron is acceptable for v1 but requires the bridge to be alive.
-- ACA scheduled Jobs provide the production cloud-native timer path and are modeled with Terraform/azapi in this repository.
+- The former ACA scheduled Job is retained only as historical context for A11.
 - The bridge gains bounded queue-consumer responsibilities under ADR 0015.
 - Dreaming runs can be audited and throttled centrally rather than hidden inside individual worker sandboxes.
 - User-created schedules remain out of scope for this ADR; ADR 0015 defines their canonical Hermes cron and Service Bus integration.

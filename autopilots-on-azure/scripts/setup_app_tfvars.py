@@ -175,6 +175,8 @@ def build_tfvars(
     user_scheduling_lock_renewal_seconds: int | None = None,
     user_scheduling_keda_polling_seconds: int | None = None,
     user_scheduling_scale_down_seconds: int | None = None,
+    servicebus_dream_enabled: bool | None = None,
+    servicebus_dream_cron_expression: str = "",
     scheduled_learning_enabled: bool | None = None,
     scheduled_learning_initial_delay_seconds: int | None = None,
     scheduled_learning_interval_seconds: int | None = None,
@@ -183,10 +185,6 @@ def build_tfvars(
     scheduled_learning_retry_limit: int | None = None,
     scheduled_learning_retry_backoff_seconds: int | None = None,
     scheduled_learning_prepare_packet: bool | None = None,
-    scheduled_learning_job_enabled: bool | None = None,
-    scheduled_learning_job_cron_expression: str = "",
-    scheduled_learning_job_timeout_seconds: int | None = None,
-    scheduled_learning_job_retry_limit: int | None = None,
     collective_approval_private_key: str = "",
     collective_approval_public_key: str = "",
 ) -> dict[str, Any]:
@@ -225,6 +223,18 @@ def build_tfvars(
                 user_scheduling_scale_down_seconds
                 if user_scheduling_scale_down_seconds is not None
                 else int(previous.get("user_scheduling_scale_down_seconds", 60))
+            ),
+            "servicebus_dream_enabled": (
+                servicebus_dream_enabled
+                if servicebus_dream_enabled is not None
+                else bool(previous.get("servicebus_dream_enabled", False))
+            ),
+            "servicebus_dream_cron_expression": (
+                servicebus_dream_cron_expression
+                or previous.get(
+                    "servicebus_dream_cron_expression",
+                    "0 2 * * *",
+                )
             ),
             "scheduled_learning_enabled": (
                 scheduled_learning_enabled
@@ -268,27 +278,18 @@ def build_tfvars(
                 if scheduled_learning_prepare_packet is not None
                 else bool(previous.get("scheduled_learning_prepare_packet", True))
             ),
-            "scheduled_learning_job_enabled": (
-                scheduled_learning_job_enabled
-                if scheduled_learning_job_enabled is not None
-                else bool(previous.get("scheduled_learning_job_enabled", False))
-            ),
-            "scheduled_learning_job_cron_expression": (
-                scheduled_learning_job_cron_expression
-                or previous.get("scheduled_learning_job_cron_expression", "0 2 * * *")
-            ),
-            "scheduled_learning_job_timeout_seconds": (
-                scheduled_learning_job_timeout_seconds
-                if scheduled_learning_job_timeout_seconds is not None
-                else int(previous.get("scheduled_learning_job_timeout_seconds", 1_800))
-            ),
-            "scheduled_learning_job_retry_limit": (
-                scheduled_learning_job_retry_limit
-                if scheduled_learning_job_retry_limit is not None
-                else int(previous.get("scheduled_learning_job_retry_limit", 3))
-            ),
         }
     )
+    for obsolete in (
+        "scheduled_learning_job_enabled",
+        "scheduled_learning_job_cron_expression",
+        "scheduled_learning_job_timeout_seconds",
+        "scheduled_learning_job_retry_limit",
+        "scheduled_learning_audience",
+        "scheduled_learning_allowed_client_ids",
+        "scheduled_learning_allowed_object_ids",
+    ):
+        tfvars.pop(obsolete, None)
     if runtime == "openclaw":
         if not device:
             raise ValueError("OpenClaw app tfvars require a bridge device identity.")
@@ -426,6 +427,16 @@ def main() -> None:
     parser.add_argument("--user-scheduling-keda-polling-seconds", type=int, default=None)
     parser.add_argument("--user-scheduling-scale-down-seconds", type=int, default=None)
     parser.add_argument(
+        "--servicebus-dream-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Schedule platform Dreaming through the Worker Service Bus queue.",
+    )
+    parser.add_argument(
+        "--servicebus-dream-cron-expression",
+        default="",
+    )
+    parser.add_argument(
         "--scheduled-learning-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -443,15 +454,6 @@ def main() -> None:
         default=None,
         help="Prepare a human-approval packet when Dreaming produces transferable records.",
     )
-    parser.add_argument(
-        "--scheduled-learning-job-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Deploy the managed-identity ACA scheduled Job.",
-    )
-    parser.add_argument("--scheduled-learning-job-cron-expression", default="")
-    parser.add_argument("--scheduled-learning-job-timeout-seconds", type=int, default=None)
-    parser.add_argument("--scheduled-learning-job-retry-limit", type=int, default=None)
     parser.add_argument("--collective-approval-identity-file", default="", help="Local Ed25519 approval identity file.")
     parser.add_argument("--runtime-image", default="", help="Runtime image digest. Recommended for Hermes to avoid reusing an OpenClaw image tfvars value.")
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
@@ -529,6 +531,8 @@ def main() -> None:
         user_scheduling_lock_renewal_seconds=args.user_scheduling_lock_renewal_seconds,
         user_scheduling_keda_polling_seconds=args.user_scheduling_keda_polling_seconds,
         user_scheduling_scale_down_seconds=args.user_scheduling_scale_down_seconds,
+        servicebus_dream_enabled=args.servicebus_dream_enabled,
+        servicebus_dream_cron_expression=args.servicebus_dream_cron_expression,
         scheduled_learning_enabled=args.scheduled_learning_enabled,
         scheduled_learning_initial_delay_seconds=args.scheduled_learning_initial_delay_seconds,
         scheduled_learning_interval_seconds=args.scheduled_learning_interval_seconds,
@@ -537,10 +541,6 @@ def main() -> None:
         scheduled_learning_retry_limit=args.scheduled_learning_retry_limit,
         scheduled_learning_retry_backoff_seconds=args.scheduled_learning_retry_backoff_seconds,
         scheduled_learning_prepare_packet=args.scheduled_learning_prepare_packet,
-        scheduled_learning_job_enabled=args.scheduled_learning_job_enabled,
-        scheduled_learning_job_cron_expression=args.scheduled_learning_job_cron_expression,
-        scheduled_learning_job_timeout_seconds=args.scheduled_learning_job_timeout_seconds,
-        scheduled_learning_job_retry_limit=args.scheduled_learning_job_retry_limit,
         collective_approval_private_key=collective_identity.get("privateKey", ""),
         collective_approval_public_key=collective_identity.get("publicKey", ""),
     )

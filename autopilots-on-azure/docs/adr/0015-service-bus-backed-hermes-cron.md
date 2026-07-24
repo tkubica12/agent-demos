@@ -125,9 +125,9 @@ A private origin defaults to private delivery. Scheduled output is never promote
 
 ### A12.1 Dreaming migration
 
-The same queue carries `system.dream` messages. The bridge dispatches those to the existing scheduled-learning coordinator rather than Hermes cron.
+The same queue carries `system.dream` messages. The bridge dispatches those to the existing scheduled-learning coordinator rather than an agent prompt.
 
-Keep A11's scheduled ACA Job during migration. Remove it only after the Service Bus path proves:
+The A11 scheduled ACA Job was removed after the Service Bus path proved:
 
 - scheduled wake from zero;
 - retry and DLQ behavior;
@@ -138,7 +138,7 @@ Keep A11's scheduled ACA Job during migration. Remove it only after the Service 
 ## Consequences
 
 - Bridge code gains queue receive, lock-renewal, settlement, and DLQ responsibilities.
-- The separate A11 scheduled Job can eventually be removed.
+- The separate A11 scheduled Job and dedicated auth/client surface are removed.
 - No fixed polling wakes idle Workers.
 - Cost follows actual due occurrences; trigger latency is approximately the KEDA polling interval.
 - Service Bus and bridge failure modes require explicit observability and operator replay.

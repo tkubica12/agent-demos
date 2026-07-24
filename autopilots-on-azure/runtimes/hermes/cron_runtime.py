@@ -11,6 +11,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 
+SYSTEM_DREAM_JOB_NAME = "Platform Dreaming"
+SYSTEM_DREAM_PROMPT = "__AUTOPILOT_SYSTEM_DREAM__"
+
+
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_path = tempfile.mkstemp(
@@ -51,6 +55,10 @@ def cron_delivery_receipts_path(profile_home: Path) -> Path:
     return profile_home / "local" / "cron-delivery-receipts.json"
 
 
+def system_schedule_receipts_path(profile_home: Path) -> Path:
+    return profile_home / "local" / "system-schedule-receipts.json"
+
+
 def _receipt_key(job_id: str, revision: str) -> str:
     return f"{job_id}:{revision}"
 
@@ -84,13 +92,26 @@ def get_delivery_reference(
     return value if isinstance(value, dict) else None
 
 
-def list_cron_jobs(profile_home: Path) -> list[dict[str, Any]]:
+def list_cron_jobs(
+    profile_home: Path,
+    *,
+    include_system: bool = False,
+) -> list[dict[str, Any]]:
     from cron.jobs import list_jobs
     from azure_cron_provider import schedule_revision
 
     scheduled = read_json_object(profile_home / "cron" / "azure-schedules.json")
+    bindings = read_json_object(cron_delivery_path(profile_home))
     result = []
     for job in list_jobs(include_disabled=True):
+        binding = bindings.get(str(job.get("id") or ""))
+        system_type = (
+            str(binding.get("systemType") or "")
+            if isinstance(binding, dict)
+            else ""
+        )
+        if system_type and not include_system:
+            continue
         revision = schedule_revision(job)
         external = scheduled.get(str(job.get("id") or "")) or {}
         result.append({
@@ -102,6 +123,7 @@ def list_cron_jobs(profile_home: Path) -> list[dict[str, Any]]:
             "revision": revision,
             "script": bool(job.get("script")),
             "noAgent": bool(job.get("no_agent")),
+            "systemType": system_type,
             "externallyScheduled": (
                 external.get("revision") == revision
                 and external.get("fireAt") == job.get("next_run_at")
@@ -155,6 +177,301 @@ def bind_cron_local(
         bound.append(job_id)
     atomic_write_json(path, bindings)
     return {"bound": bound, "deliveryMode": "local"}
+
+
+def ensure_system_dream_schedule(
+    profile_home: Path,
+    *,
+    enabled: bool,
+    schedule: str,
+) -> dict[str, Any]:
+    from cron.jobs import create_job, list_jobs, remove_job, update_job
+
+    all_jobs = list_jobs(include_disabled=True)
+    bindings_path = cron_delivery_path(profile_home)
+    bindings = read_json_object(bindings_path)
+    bound_ids = {
+        job_id
+        for job_id, binding in bindings.items()
+        if isinstance(binding, dict)
+        and binding.get("systemType") == "dream"
+    }
+    jobs = [
+        job
+        for job in all_jobs
+        if str(job.get("id") or "") in bound_ids
+        or (
+            job.get("name") == SYSTEM_DREAM_JOB_NAME
+            and job.get("prompt") == SYSTEM_DREAM_PROMPT
+        )
+    ]
+    if not enabled:
+        for job in jobs:
+            remove_job(str(job["id"]))
+            bindings.pop(str(job["id"]), None)
+        atomic_write_json(bindings_path, bindings)
+        return {"enabled": False, "removed": len(jobs)}
+    if not schedule.strip():
+        raise ValueError("SERVICEBUS_DREAM_CRON_EXPRESSION is required.")
+
+    job = jobs[0] if jobs else create_job(
+        prompt=SYSTEM_DREAM_PROMPT,
+        schedule=schedule,
+        name=SYSTEM_DREAM_JOB_NAME,
+        deliver="local",
+    )
+    for duplicate in jobs[1:]:
+        remove_job(str(duplicate["id"]))
+        bindings.pop(str(duplicate["id"]), None)
+    updates: dict[str, Any] = {
+        "name": SYSTEM_DREAM_JOB_NAME,
+        "prompt": SYSTEM_DREAM_PROMPT,
+        "deliver": "local",
+    }
+    if str(job.get("schedule_display") or "") != schedule:
+        updates["schedule"] = schedule
+    if not job.get("enabled") or job.get("state") != "scheduled":
+        updates.update({"enabled": True, "state": "scheduled"})
+    if updates:
+        updated = update_job(str(job["id"]), updates)
+        if updated:
+            job = updated
+    job_id = str(job["id"])
+    bindings[job_id] = {"systemType": "dream"}
+    atomic_write_json(bindings_path, bindings)
+    return {
+        "enabled": True,
+        "jobId": job_id,
+        "schedule": str(job.get("schedule_display") or schedule),
+        "nextRunAt": job.get("next_run_at"),
+    }
+
+
+def claim_system_schedule(
+    profile_home: Path,
+    *,
+    job_id: str,
+    revision: str,
+    occurrence_id: str,
+) -> dict[str, Any]:
+    from cron.jobs import claim_job_for_fire, get_job
+    from azure_cron_provider import schedule_revision
+
+    path = system_schedule_receipts_path(profile_home)
+    receipts = read_json_object(path)
+    key = _receipt_key(job_id, occurrence_id)
+    receipt = receipts.get(key)
+    if isinstance(receipt, dict):
+        if receipt.get("state") == "completed":
+            return {"status": "duplicate", "jobId": job_id}
+        if receipt.get("state") == "completing":
+            _finish_system_schedule_completion(
+                profile_home,
+                job_id=job_id,
+                receipts=receipts,
+                receipt_key=key,
+            )
+            return {"status": "duplicate", "jobId": job_id}
+        if receipt.get("state") == "claiming":
+            current_job = get_job(job_id)
+            if current_job is not None and not current_job.get("fire_claim"):
+                if claim_job_for_fire(job_id):
+                    claimed_job = get_job(job_id)
+                    receipt.update({
+                        "state": "running",
+                        "claimedNextRunAt": (
+                            claimed_job or {}
+                        ).get("next_run_at"),
+                    })
+                    receipts[key] = receipt
+                    atomic_write_json(path, receipts)
+                    return {
+                        "status": "claimed",
+                        "jobId": job_id,
+                        "recovered": True,
+                    }
+        started_at = float(receipt.get("startedAtEpoch") or 0)
+        lease_seconds = int(
+            os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800")
+        )
+        if started_at and time.time() - started_at < lease_seconds:
+            return {"status": "in_progress", "jobId": job_id}
+        if receipt.get("state") == "running":
+            return {
+                "status": "interrupted",
+                "jobId": job_id,
+                "reason": "execution_lease_expired",
+            }
+        receipt["state"] = "running"
+        receipt["startedAtEpoch"] = time.time()
+        receipt["recovered"] = True
+        receipts[key] = receipt
+        atomic_write_json(path, receipts)
+        return {"status": "claimed", "jobId": job_id, "recovered": True}
+
+    job = get_job(job_id)
+    if not job:
+        return {"status": "stale", "reason": "job_not_found", "jobId": job_id}
+    if schedule_revision(job) != revision:
+        return {
+            "status": "stale",
+            "reason": "revision_mismatch",
+            "jobId": job_id,
+        }
+    binding = read_json_object(cron_delivery_path(profile_home)).get(job_id)
+    if not isinstance(binding, dict) or binding.get("systemType") != "dream":
+        raise ValueError("Cron job is not the managed Dreaming schedule.")
+    last_run_at_before = job.get("last_run_at")
+    receipts[key] = {
+        "state": "claiming",
+        "revision": revision,
+        "occurrenceId": occurrence_id,
+        "startedAtEpoch": time.time(),
+        "completedAt": None,
+        "success": None,
+        "lastRunAtBefore": last_run_at_before,
+        "claimedNextRunAt": None,
+    }
+    atomic_write_json(path, receipts)
+    if not claim_job_for_fire(job_id):
+        return {"status": "in_progress", "jobId": job_id}
+    claimed_job = get_job(job_id)
+    receipts[key].update({
+        "state": "running",
+        "claimedNextRunAt": (claimed_job or {}).get("next_run_at"),
+    })
+    atomic_write_json(path, receipts)
+    return {"status": "claimed", "jobId": job_id, "recovered": False}
+
+
+def complete_system_schedule(
+    profile_home: Path,
+    *,
+    job_id: str,
+    revision: str,
+    occurrence_id: str,
+    success: bool,
+    error: str = "",
+    summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    path = system_schedule_receipts_path(profile_home)
+    receipts = read_json_object(path)
+    key = _receipt_key(job_id, occurrence_id)
+    receipt = receipts.get(key)
+    if not isinstance(receipt, dict):
+        raise ValueError("System schedule receipt does not exist.")
+    if receipt.get("state") == "completed":
+        return {"status": "duplicate", "jobId": job_id}
+    receipt.update({
+        "state": "completing",
+        "success": success,
+        "errorType": "scheduled_dream_failed" if not success else None,
+        "error": error[:1000],
+        "summary": summary or {},
+    })
+    receipts[key] = receipt
+    atomic_write_json(path, receipts)
+    return _finish_system_schedule_completion(
+        profile_home,
+        job_id=job_id,
+        receipts=receipts,
+        receipt_key=key,
+    )
+
+
+def _finish_system_schedule_completion(
+    profile_home: Path,
+    *,
+    job_id: str,
+    receipts: dict[str, Any],
+    receipt_key: str,
+) -> dict[str, Any]:
+    from cron.jobs import get_job, mark_job_run
+    from cron.scheduler_provider import resolve_cron_scheduler
+
+    receipt = receipts[receipt_key]
+    job = get_job(job_id)
+    if (
+        job is not None
+        and job.get("last_run_at") == receipt.get("lastRunAtBefore")
+    ):
+        mark_job_run(
+            job_id,
+            bool(receipt.get("success")),
+            str(receipt.get("error") or "") or None,
+        )
+    resolve_cron_scheduler().reconcile()
+    receipt["state"] = "completed"
+    receipt["completedAt"] = datetime.now(UTC).isoformat()
+    receipts[receipt_key] = receipt
+    _prune_system_schedule_receipts(receipts)
+    atomic_write_json(system_schedule_receipts_path(profile_home), receipts)
+    refreshed = get_job(job_id)
+    return {
+        "status": "completed",
+        "jobId": job_id,
+        "success": bool(receipt.get("success")),
+        "nextRunAt": (refreshed or {}).get("next_run_at"),
+    }
+
+
+def enqueue_system_dream_now(profile_home: Path) -> dict[str, Any]:
+    from cron.jobs import get_job, list_jobs
+    from cron.scheduler_provider import resolve_cron_scheduler
+    from azure_cron_provider import schedule_revision
+
+    job = next(
+        (
+            candidate
+            for candidate in list_jobs(include_disabled=True)
+            if candidate.get("name") == SYSTEM_DREAM_JOB_NAME
+            and candidate.get("prompt") == SYSTEM_DREAM_PROMPT
+        ),
+        None,
+    )
+    if not job:
+        raise ValueError("Platform Dreaming schedule does not exist.")
+    binding = read_json_object(cron_delivery_path(profile_home)).get(
+        str(job["id"])
+    )
+    if not isinstance(binding, dict) or binding.get("systemType") != "dream":
+        raise ValueError("Platform Dreaming binding is missing.")
+    provider = resolve_cron_scheduler()
+    enqueue = getattr(provider, "enqueue_now", None)
+    if not callable(enqueue):
+        raise RuntimeError(
+            "Active cron provider cannot enqueue Platform Dreaming."
+        )
+    revision = schedule_revision(job)
+    enqueued = enqueue(job, revision, binding)
+    return {
+        "status": "enqueued",
+        "jobId": str(job["id"]),
+        "revision": revision,
+        "occurrenceId": enqueued["occurrenceId"],
+        "messageId": enqueued["messageId"],
+        "scheduledNextRunAt": job.get("next_run_at"),
+    }
+
+
+def _prune_system_schedule_receipts(
+    receipts: dict[str, Any],
+    *,
+    keep_completed_per_job: int = 20,
+) -> None:
+    completed_by_job: dict[str, list[tuple[str, str]]] = {}
+    for key, receipt in receipts.items():
+        if not isinstance(receipt, dict) or receipt.get("state") != "completed":
+            continue
+        job_id, separator, _ = key.rpartition(":")
+        if separator:
+            completed_by_job.setdefault(job_id, []).append(
+                (str(receipt.get("completedAt") or ""), key)
+            )
+    for values in completed_by_job.values():
+        values.sort(reverse=True)
+        for _, key in values[keep_completed_per_job:]:
+            receipts.pop(key, None)
 
 
 def _latest_output_path(profile_home: Path, job_id: str) -> Path | None:
@@ -462,6 +779,20 @@ def cron_delivery_receipt_status(
 def reconcile_cron_provider(profile_home: Path) -> dict[str, Any]:
     from cron.scheduler_provider import resolve_cron_scheduler
 
+    if os.getenv("SERVICEBUS_DREAM_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        ensure_system_dream_schedule(
+            profile_home,
+            enabled=True,
+            schedule=os.getenv(
+                "SERVICEBUS_DREAM_CRON_EXPRESSION",
+                "0 2 * * *",
+            ),
+        )
     provider = resolve_cron_scheduler()
     try:
         provider.reconcile()
@@ -520,15 +851,23 @@ def cron_diagnostics(profile_home: Path) -> dict[str, Any]:
     bindings = read_json_object(cron_delivery_path(profile_home))
     receipts = read_json_object(cron_delivery_receipts_path(profile_home))
     schedules = read_json_object(profile_home / "cron" / "azure-schedules.json")
+    system_receipts = read_json_object(system_schedule_receipts_path(profile_home))
     return {
-        "jobs": list_cron_jobs(profile_home),
+        "jobs": list_cron_jobs(profile_home, include_system=True),
         "bindings": [
             {
                 "jobId": job_id,
-                "deliveryMode": "local" if binding.get("local") is True else "teams",
+                "deliveryMode": (
+                    "system"
+                    if binding.get("systemType") == "dream"
+                    else "local"
+                    if binding.get("local") is True
+                    else "teams"
+                ),
                 "referenceKey": str(binding.get("referenceKey") or ""),
                 "referenceExists": bool(
                     binding.get("local") is True
+                    or binding.get("systemType") == "dream"
                     or binding.get("referenceKey") in references
                 ),
                 "boundary": str(
@@ -574,5 +913,23 @@ def cron_diagnostics(profile_home: Path) -> dict[str, Any]:
             }
             for job_id, schedule in schedules.items()
             if isinstance(schedule, dict)
+        ],
+        "systemReceipts": [
+            {
+                "jobId": key.rpartition(":")[0],
+                "revision": receipt.get("revision"),
+                "occurrenceId": (
+                    receipt.get("occurrenceId")
+                    or key.rpartition(":")[2]
+                ),
+                "state": str(receipt.get("state") or ""),
+                "success": receipt.get("success"),
+                "startedAtEpoch": receipt.get("startedAtEpoch"),
+                "completedAt": receipt.get("completedAt"),
+                "errorType": receipt.get("errorType"),
+                "summary": receipt.get("summary") or {},
+            }
+            for key, receipt in system_receipts.items()
+            if isinstance(receipt, dict)
         ],
     }

@@ -375,18 +375,9 @@ uv run python -m scripts.demo_ops scheduled-status --state-name hermes2
 
 Dreaming prepares a packet only when transferable records exist. Human digest approval, export, Collective Learning Review, Promotion, and Worker Refresh remain separate gates.
 
-### Production ACA scheduled Job
+### Production Service Bus Dreaming
 
-The production scheduler uses the existing per-Worker bridge managed identity and a dedicated Entra application role. No Worker API key or application secret is passed to the Job.
-
-Configure the resource API and assign `ScheduledLearning.Run.All`:
-
-```powershell
-uv run python -m scripts.setup_scheduled_learning_identity `
-  --state-name hermes2
-```
-
-Switch Hermes 2 from the bridge-owned timer to the ACA scheduled Job:
+Production Dreaming uses a reserved Hermes system schedule. Its one next occurrence is a `system.dream` Service Bus message that scales the existing Worker bridge from zero. The bridge runs the same Dreaming and packet-preparation coordinator used by the operator endpoint.
 
 ```powershell
 uv run python -m scripts.setup_app_tfvars `
@@ -394,10 +385,9 @@ uv run python -m scripts.setup_app_tfvars `
   --state-name hermes2 `
   --autopilot-name hermes2 `
   --no-scheduled-learning-enabled `
-  --scheduled-learning-job-enabled `
-  --scheduled-learning-job-cron-expression "0 2 * * *" `
-  --scheduled-learning-job-timeout-seconds 1800 `
-  --scheduled-learning-job-retry-limit 3 `
+  --user-scheduling-enabled `
+  --servicebus-dream-enabled `
+  --servicebus-dream-cron-expression "0 2 * * *" `
   --runtime-only
 
 uv run python -m scripts.deploy_apps_runtime `
@@ -409,12 +399,16 @@ uv run python -m scripts.deploy_apps_runtime `
   --capture
 ```
 
-Start and inspect an execution:
+Enqueue one operator-triggered real occurrence without changing the configured schedule:
 
 ```powershell
-uv run python -m scripts.demo_ops scheduled-job-start --state-name hermes2
-uv run python -m scripts.demo_ops scheduled-job-status --state-name hermes2
+uv run python -m scripts.servicebus_dream_smoke `
+  --state-name hermes2 `
+  --due-seconds 180 `
+  --timeout 1800
 ```
+
+The smoke requires the bridge to reach zero before enqueue, verifies KEDA wake, waits for the durable system receipt, confirms Dreaming success and optional packet preparation, checks the DLQ, and verifies the production cron expression remains unchanged.
 
 ### Disposable demo cohort reset
 

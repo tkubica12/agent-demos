@@ -382,6 +382,8 @@ def hermes_runtime_environment(
     scheduler_servicebus_namespace: str = "",
     scheduler_servicebus_queue: str = "",
     scheduler_max_lock_renewal_seconds: int = 1800,
+    servicebus_dream_enabled: bool = False,
+    servicebus_dream_cron_expression: str = "0 2 * * *",
 ) -> dict[str, str]:
     environment = {
         "API_SERVER_ENABLED": "true",
@@ -404,6 +406,10 @@ def hermes_runtime_environment(
         "SCHEDULER_MAX_LOCK_RENEWAL_SECONDS": str(
             scheduler_max_lock_renewal_seconds
         ),
+        "SERVICEBUS_DREAM_ENABLED": (
+            "true" if servicebus_dream_enabled else "false"
+        ),
+        "SERVICEBUS_DREAM_CRON_EXPRESSION": servicebus_dream_cron_expression,
     }
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
@@ -489,6 +495,13 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         scheduler_servicebus_queue=overrides.get("scheduler_servicebus_queue") or "",
         scheduler_max_lock_renewal_seconds=int(
             overrides.get("scheduler_max_lock_renewal_seconds") or 1800
+        ),
+        servicebus_dream_enabled=bool(
+            overrides.get("servicebus_dream_enabled")
+        ),
+        servicebus_dream_cron_expression=(
+            overrides.get("servicebus_dream_cron_expression")
+            or "0 2 * * *"
         ),
     )
     config = AgentSandboxConfig(
@@ -772,6 +785,19 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "scheduler_max_lock_renewal_seconds": int(
             overrides.get("scheduler_max_lock_renewal_seconds")
             or get_config("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800")
+        ),
+        "servicebus_dream_enabled": (
+            overrides.get("servicebus_dream_enabled")
+            if "servicebus_dream_enabled" in overrides
+            else get_config("SERVICEBUS_DREAM_ENABLED").lower()
+            in {"1", "true", "yes"}
+        ),
+        "servicebus_dream_cron_expression": (
+            overrides.get("servicebus_dream_cron_expression")
+            or get_config(
+                "SERVICEBUS_DREAM_CRON_EXPRESSION",
+                "0 2 * * *",
+            )
         ),
         "registry_username": overrides.get("registry_username") or get_config("AGENT_RUNTIME_REGISTRY_USERNAME", get_config("OPENCLAW_REGISTRY_USERNAME")),
         "registry_password": overrides.get("registry_password") or get_config("AGENT_RUNTIME_REGISTRY_PASSWORD", get_config("OPENCLAW_REGISTRY_PASSWORD")),

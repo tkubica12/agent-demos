@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -160,6 +161,22 @@ class AzureCronScheduler(CronScheduler):
             self._client = None
 
     def on_jobs_changed(self) -> None:
+        if os.getenv("SERVICEBUS_DREAM_ENABLED", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            from cron.jobs import CRON_DIR
+            from cron_runtime import ensure_system_dream_schedule
+
+            ensure_system_dream_schedule(
+                CRON_DIR.parent,
+                enabled=True,
+                schedule=required_env(
+                    "SERVICEBUS_DREAM_CRON_EXPRESSION"
+                ),
+            )
         self.reconcile()
 
     def current_revision(self, job_id: str) -> str:
@@ -201,6 +218,7 @@ class AzureCronScheduler(CronScheduler):
                 and (
                     bool(bindings[job["id"]].get("referenceKey"))
                     or bindings[job["id"]].get("local") is True
+                    or bindings[job["id"]].get("systemType") == "dream"
                 )
             }
             observed = self._load_state()
@@ -212,7 +230,11 @@ class AzureCronScheduler(CronScheduler):
                 if current.get("revision") == revision and current.get("fireAt") == fire_at:
                     continue
                 self._cancel(current.get("sequenceNumber"))
-                sequence_number = self._schedule(job, revision)
+                sequence_number = self._schedule(
+                    job,
+                    revision,
+                    bindings[job_id],
+                )
                 updated[job_id] = {
                     "fireAt": fire_at,
                     "revision": revision,
@@ -231,28 +253,76 @@ class AzureCronScheduler(CronScheduler):
             )
         return self._client
 
-    def _schedule(self, job: dict[str, Any], revision: str) -> int:
+    def _schedule(
+        self,
+        job: dict[str, Any],
+        revision: str,
+        binding: dict[str, Any],
+    ) -> int:
         worker_id = required_env("WORKER_ID")
         fire_at = datetime.fromisoformat(str(job["next_run_at"]).replace("Z", "+00:00"))
+        message_type = (
+            "system.dream"
+            if binding.get("systemType") == "dream"
+            else "hermes.cron.fire"
+        )
         body = {
             "version": "1.0",
-            "type": "hermes.cron.fire",
+            "type": message_type,
             "workerId": worker_id,
             "jobId": job["id"],
             "revision": revision,
+            "occurrenceId": revision,
             "dueAt": str(job["next_run_at"]),
         }
         message = ServiceBusMessage(
             canonical_json(body),
             message_id=f"{worker_id}:{job['id']}:{revision}",
             content_type="application/json",
-            subject="hermes.cron.fire",
+            subject=message_type,
         )
         with self._servicebus_client().get_queue_sender(
             required_env("SCHEDULER_SERVICEBUS_QUEUE")
         ) as sender:
             sequence_numbers = sender.schedule_messages(message, fire_at)
         return int(sequence_numbers[0])
+
+    def enqueue_now(
+        self,
+        job: dict[str, Any],
+        revision: str,
+        binding: dict[str, Any],
+    ) -> dict[str, str]:
+        worker_id = required_env("WORKER_ID")
+        message_type = (
+            "system.dream"
+            if binding.get("systemType") == "dream"
+            else "hermes.cron.fire"
+        )
+        occurrence_id = f"manual-{uuid.uuid4().hex}"
+        message_id = f"{worker_id}:{job['id']}:{occurrence_id}"
+        message = ServiceBusMessage(
+            canonical_json({
+                "version": "1.0",
+                "type": message_type,
+                "workerId": worker_id,
+                "jobId": job["id"],
+                "revision": revision,
+                "occurrenceId": occurrence_id,
+                "dueAt": datetime.now().astimezone().isoformat(),
+            }),
+            message_id=message_id,
+            content_type="application/json",
+            subject=message_type,
+        )
+        with self._servicebus_client().get_queue_sender(
+            required_env("SCHEDULER_SERVICEBUS_QUEUE")
+        ) as sender:
+            sender.send_messages(message)
+        return {
+            "messageId": message_id,
+            "occurrenceId": occurrence_id,
+        }
 
     def _cancel(self, sequence_number: Any) -> None:
         if sequence_number in (None, ""):

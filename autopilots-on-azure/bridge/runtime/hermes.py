@@ -128,7 +128,8 @@ def bridge_instructions(request: AgentRequest) -> str:
             "one-shot task, or recurring task, use the cronjob tool. Use a self-contained prompt, reviewed Role Skills where "
             "helpful, and deliver='local' because the bridge performs proactive delivery to the originating Teams conversation. "
             "Never create script or no_agent cron jobs in hosted mode. Ask for missing date, time, timezone, recurrence, or "
-            "destination instead of guessing. Do not schedule access to human-owned resources that would require retained OBO."
+            "destination instead of guessing. Do not schedule access to human-owned resources that would require retained OBO. "
+            "Platform Dreaming is a reserved system schedule: never list, modify, pause, resume, run, or remove it as a user task."
         )
     return (
         f"{BRIDGE_INSTRUCTIONS}\n\n"
@@ -351,14 +352,14 @@ class HermesRuntimeAdapter:
                         "referenceKey": delivery_reference.get("referenceKey"),
                     },
                 )
+            await self._cron_request(
+                base_url,
+                api_key,
+                "POST",
+                "/internal/cron/reconcile",
+                body={},
+            )
             if cron_jobs_after_by_id != cron_jobs_before:
-                await self._cron_request(
-                    base_url,
-                    api_key,
-                    "POST",
-                    "/internal/cron/reconcile",
-                    body={},
-                )
                 cron_jobs_after = await self._cron_jobs(base_url, api_key)
             unscheduled_jobs = [
                 str(job.get("id") or "")
@@ -560,6 +561,72 @@ class HermesRuntimeAdapter:
                 "revision": revision,
                 "deliveryActivityId": delivery_activity_id,
             },
+        )
+
+    async def claim_system_schedule(
+        self,
+        *,
+        job_id: str,
+        revision: str,
+        occurrence_id: str,
+    ) -> dict[str, Any]:
+        return await self._system_schedule_request(
+            "/internal/cron/system/claim",
+            {
+                "jobId": job_id,
+                "revision": revision,
+                "occurrenceId": occurrence_id,
+            },
+        )
+
+    async def complete_system_schedule(
+        self,
+        *,
+        job_id: str,
+        revision: str,
+        occurrence_id: str,
+        success: bool,
+        error: str = "",
+        summary: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self._system_schedule_request(
+            "/internal/cron/system/complete",
+            {
+                "jobId": job_id,
+                "revision": revision,
+                "occurrenceId": occurrence_id,
+                "success": success,
+                "error": error,
+                "summary": summary or {},
+            },
+        )
+
+    async def _system_schedule_request(
+        self,
+        path: str,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        config = self._sandbox_config_factory()
+        credential = self._credential_factory()
+        async with self._sandbox_lock:
+            sandbox = await asyncio.to_thread(
+                self._ensure_sandbox,
+                config,
+                credential=credential,
+            )
+        if not sandbox.endpoint_url:
+            raise RuntimeError(
+                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
+            )
+        base_url = sandbox.endpoint_url.rstrip("/")
+        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        await self._wait_for_health(base_url, api_key)
+        return await self._cron_request(
+            base_url,
+            api_key,
+            "POST",
+            path,
+            body=body,
         )
 
     async def _cron_jobs(self, base_url: str, api_key: str) -> list[dict[str, Any]]:
