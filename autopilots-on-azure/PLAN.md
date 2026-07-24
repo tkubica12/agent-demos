@@ -22,6 +22,7 @@ As of 2026-07-24:
 - The Teams Enterprise license temporarily transferred for the multi-Worker test is restored to `openclaw1`.
 - Hermes 2 runs daily Dreaming through the same Service Bus/KEDA bridge wake path as user schedules; the dedicated ACA scheduled Job has been removed.
 - Hermes 2 user schedules are live through Hermes cron, Service Bus, KEDA scale-from-zero, and proactive Teams continuation; recurring personal-chat delivery is validated with a visible unsolicited message.
+- Visual documentation now includes the main Hermes overview, a current architecture deep dive, and the source-guided memory/learning deep dive.
 - Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
 ## Milestone status

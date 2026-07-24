@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Detailed visual architecture of Hermes digital Workers on Azure: bridge, Sandbox, Data Disk, Service Bus scheduling, Teams, identity, Foundry, and MCP connectivity.">
+  <title>Hermes on Azure — Architecture Deep Dive</title>
+  <style>
+    :root {
+      --bg: #f3f3f0;
+      --surface: #ffffff;
+      --surface-2: #e9e9e5;
+      --surface-3: #dcdcd6;
+      --ink: #11110f;
+      --muted: #65645f;
+      --soft: #8b8a84;
+      --line: #cecec7;
+      --line-strong: #a9a9a1;
+      --accent: #df6300;
+      --accent-strong: #b84c00;
+      --accent-soft: #fff0e4;
+      --accent-faint: #fff8f2;
+      --azure: #1267a5;
+      --azure-soft: #e7f2fa;
+      --private: #1d6b52;
+      --private-soft: #e9f5f0;
+      --purple: #7550a8;
+      --purple-soft: #f0eafa;
+      --shadow: 0 18px 50px rgba(17, 17, 15, 0.09);
+      --radius: 18px;
+      --radius-sm: 10px;
+      --max: 1440px;
+      --nav: 250px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    html[data-theme="dark"] {
+      --bg: #0d0d0c;
+      --surface: #171716;
+      --surface-2: #222220;
+      --surface-3: #30302d;
+      --ink: #f5f4ef;
+      --muted: #aaa9a2;
+      --soft: #7e7d77;
+      --line: #343431;
+      --line-strong: #53534e;
+      --accent: #ff8426;
+      --accent-strong: #ff9b50;
+      --accent-soft: #382113;
+      --accent-faint: #21160f;
+      --azure: #73b8e8;
+      --azure-soft: #142b3a;
+      --private: #6bc7a5;
+      --private-soft: #132b23;
+      --purple: #c49aef;
+      --purple-soft: #281d34;
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.34);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 86px; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 88% 8%, var(--accent-soft), transparent 25rem), var(--bg);
+      font-family: var(--font);
+      line-height: 1.58;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: inherit; }
+    button { color: inherit; font: inherit; }
+    code, pre { font-family: var(--mono); }
+    code {
+      padding: 0.12em 0.34em;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface-2);
+      font-size: 0.9em;
+    }
+    .skip-link {
+      position: fixed;
+      z-index: 1000;
+      top: 8px;
+      left: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: var(--surface);
+      background: var(--ink);
+      transform: translateY(-150%);
+    }
+    .skip-link:focus { transform: translateY(0); }
+    .topbar {
+      position: sticky;
+      z-index: 100;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 66px;
+      padding: 10px clamp(16px, 3vw, 42px);
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 86%, transparent);
+      backdrop-filter: blur(16px);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+      font-weight: 900;
+      letter-spacing: -0.06em;
+    }
+    .brand-copy strong, .brand-copy span { display: block; white-space: nowrap; }
+    .brand-copy strong { font-size: 0.94rem; }
+    .brand-copy span { color: var(--muted); font-size: 0.72rem; }
+    .toolbar { display: flex; gap: 8px; }
+    .icon-button, .guide-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 38px;
+      padding: 7px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink);
+      background: var(--surface);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .icon-button:hover, .icon-button:focus-visible, .guide-link:hover, .guide-link:focus-visible {
+      border-color: var(--accent);
+      outline: none;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: var(--nav) minmax(0, 1fr);
+      width: min(100%, var(--max));
+      margin: 0 auto;
+    }
+    .side-nav {
+      position: sticky;
+      top: 66px;
+      align-self: start;
+      height: calc(100vh - 66px);
+      padding: 28px 22px 40px;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+    }
+    .side-nav p {
+      margin: 16px 0 8px;
+      color: var(--soft);
+      font-size: 0.7rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .side-nav p:first-child { margin-top: 0; }
+    .side-nav a {
+      display: block;
+      margin: 2px 0;
+      padding: 7px 10px;
+      border-left: 2px solid transparent;
+      border-radius: 0 8px 8px 0;
+      color: var(--muted);
+      font-size: 0.84rem;
+      text-decoration: none;
+    }
+    .side-nav a:hover, .side-nav a:focus-visible, .side-nav a.active {
+      border-left-color: var(--accent);
+      color: var(--ink);
+      background: var(--accent-faint);
+      outline: none;
+    }
+    main { min-width: 0; padding: 28px clamp(18px, 4vw, 64px) 110px; }
+    .hero {
+      position: relative;
+      display: grid;
+      min-height: min(760px, calc(100vh - 110px));
+      align-content: center;
+      padding: clamp(30px, 7vw, 92px) 0;
+    }
+    .hero::before {
+      position: absolute;
+      z-index: -1;
+      top: 8%;
+      right: 0;
+      width: min(42vw, 520px);
+      height: min(42vw, 520px);
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, transparent 44%, var(--accent-soft) 45%, transparent 46%),
+        radial-gradient(circle, transparent 63%, var(--line) 64%, transparent 65%);
+      content: "";
+      opacity: 0.72;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      width: fit-content;
+      margin-bottom: 18px;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { width: 28px; height: 2px; background: currentColor; content: ""; }
+    h1, h2, h3, h4 { margin: 0; line-height: 1.08; letter-spacing: -0.035em; }
+    h1 { max-width: 1050px; font-size: clamp(3rem, 7vw, 7rem); letter-spacing: -0.075em; }
+    h1 em { color: var(--accent); font-style: normal; }
+    h2 { font-size: clamp(2rem, 4.2vw, 4.2rem); }
+    h3 { font-size: 1.18rem; }
+    .hero-lead {
+      max-width: 850px;
+      margin: 28px 0 0;
+      color: var(--muted);
+      font-size: clamp(1.04rem, 1.7vw, 1.32rem);
+    }
+    .hero-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+    section { padding: 82px 0 18px; border-top: 1px solid var(--line); }
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+      gap: 34px;
+      align-items: end;
+      margin-bottom: 30px;
+    }
+    .section-head p { margin: 0; color: var(--muted); }
+    .section-number {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+    }
+    .grid-2, .grid-3, .grid-4 {
+      display: grid;
+      gap: 16px;
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card, .diagram, .table-wrap, .callout {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .card { padding: 22px; }
+    .card p { margin: 12px 0 0; color: var(--muted); }
+    .card-index {
+      display: block;
+      margin-bottom: 13px;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.69rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+    }
+    .card.azure { background: var(--azure-soft); }
+    .card.private { background: var(--private-soft); }
+    .card.purple { background: var(--purple-soft); }
+    .diagram { padding: clamp(18px, 3vw, 32px); }
+    .lane {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-2);
+    }
+    .lane + .lane { margin-top: 14px; }
+    .lane-title {
+      margin-bottom: 10px;
+      color: var(--soft);
+      font-size: 0.7rem;
+      font-weight: 900;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .nodes {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+    }
+    .node {
+      position: relative;
+      min-height: 94px;
+      padding: 15px;
+      border: 1px solid var(--line-strong);
+      border-radius: 11px;
+      background: var(--surface);
+    }
+    .node strong, .node span { display: block; }
+    .node span { margin-top: 5px; color: var(--muted); font-size: 0.8rem; }
+    .node.accent { border-color: var(--accent); background: var(--accent-faint); }
+    .node.azure { border-color: var(--azure); background: var(--azure-soft); }
+    .node.private { border-color: var(--private); background: var(--private-soft); }
+    .arrow {
+      display: grid;
+      height: 38px;
+      place-items: center;
+      color: var(--accent);
+      font-size: 1.35rem;
+      font-weight: 900;
+    }
+    .sequence { counter-reset: sequence; }
+    .sequence-step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 14px;
+      padding: 15px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .sequence-step:last-child { border-bottom: 0; }
+    .sequence-step::before {
+      counter-increment: sequence;
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--accent);
+      content: counter(sequence, decimal-leading-zero);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      font-weight: 900;
+    }
+    .sequence-step p { margin: 5px 0 0; color: var(--muted); }
+    .callout { margin-top: 18px; padding: 18px 20px; border-left: 4px solid var(--accent); }
+    .callout p { margin: 5px 0 0; color: var(--muted); }
+    .callout-link {
+      display: inline-flex;
+      margin-top: 12px;
+      color: var(--accent-strong);
+      font-weight: 800;
+      text-decoration: none;
+    }
+    .table-wrap { overflow: hidden; box-shadow: none; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th {
+      color: var(--soft);
+      background: var(--surface-2);
+      font-size: 0.7rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+    td { color: var(--muted); font-size: 0.9rem; }
+    td strong { color: var(--ink); }
+    tr:last-child td { border-bottom: 0; }
+    .boundary {
+      position: relative;
+      padding: 20px;
+      border: 2px dashed var(--line-strong);
+      border-radius: 18px;
+    }
+    .boundary-label {
+      position: absolute;
+      top: -11px;
+      left: 18px;
+      padding: 2px 8px;
+      color: var(--muted);
+      background: var(--bg);
+      font-size: 0.69rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .pill {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--surface-2);
+      font-size: 0.74rem;
+    }
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      margin-top: 90px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+      color: var(--soft);
+      font-size: 0.78rem;
+    }
+    body.presentation .side-nav { display: none; }
+    body.presentation .layout { display: block; max-width: 1280px; }
+    body.presentation section { min-height: calc(100vh - 66px); display: grid; align-content: center; }
+    @media (max-width: 980px) {
+      .layout { display: block; }
+      .side-nav { display: none; }
+      .section-head, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      main { padding-top: 12px; }
+    }
+    @media (max-width: 700px) {
+      .grid-2 { grid-template-columns: 1fr; }
+      .button-label, .overview-link { display: none; }
+      h1 { font-size: clamp(2.8rem, 15vw, 5.4rem); }
+      th, td { padding: 11px 10px; }
+      .footer { display: block; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: 0.001ms !important; animation-duration: 0.001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">H</div>
+      <div class="brand-copy">
+        <strong>Hermes on Azure</strong>
+        <span>Current architecture deep dive</span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <a class="guide-link overview-link" href="hermes-on-azure-overview.html">Overview</a>
+      <button class="icon-button" id="presentationToggle" type="button" aria-pressed="false" title="Presentation mode (P)">
+        <span aria-hidden="true">▣</span><span class="button-label">Present</span>
+      </button>
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Switch color theme" title="Light / dark mode">
+        <span aria-hidden="true">◐</span><span class="button-label">Theme</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="side-nav" aria-label="Architecture sections">
+      <p>System</p>
+      <a href="#map">System map</a>
+      <a href="#deployment">Deployment units</a>
+      <a href="#runtime">Sandbox &amp; disk</a>
+      <p>Control flow</p>
+      <a href="#teams">Teams &amp; bridge</a>
+      <a href="#scheduling">Scheduling &amp; wake</a>
+      <a href="#identity">Identity chain</a>
+      <p>Data plane</p>
+      <a href="#model">Foundry model path</a>
+      <a href="#mcp">MCP connectivity</a>
+      <a href="#network">Network boundaries</a>
+      <p>Operate it</p>
+      <a href="#ownership">State ownership</a>
+      <a href="#failure">Failure model</a>
+    </nav>
+
+    <main id="main">
+      <div class="hero" id="top">
+        <span class="eyebrow">Autopilots on Azure · implementation architecture</span>
+        <h1>A thin control plane. <em>A durable Worker.</em></h1>
+        <p class="hero-lead">
+          This is the current, deployed architecture: Microsoft Teams and Agent 365 at the edge,
+          one scale-to-zero bridge per Worker, Hermes inside an Azure Container Apps Sandbox,
+          durable private state on an attached Data Disk, Service Bus as the wake-up clock,
+          and identity-aware loopback proxies for Foundry and MCP.
+        </p>
+        <div class="hero-links">
+          <a class="guide-link" href="hermes-on-azure-overview.html">← Main visual overview</a>
+          <a class="guide-link" href="hermes-learning-deep-dive.html">Memory &amp; learning deep dive</a>
+        </div>
+      </div>
+
+      <section id="map">
+        <div class="section-head">
+          <div><span class="section-number">01 / SYSTEM MAP</span><h2>Follow one Worker end to end.</h2></div>
+          <p>Shared Azure foundations support isolated Worker application stacks. The bridge owns ingress and lifecycle; the Sandbox owns behavior and private runtime state.</p>
+        </div>
+        <div class="diagram" role="img" aria-label="End-to-end Hermes Worker architecture">
+          <div class="lane">
+            <div class="lane-title">Microsoft 365 edge</div>
+            <div class="nodes">
+              <div class="node accent"><strong>Microsoft Teams</strong><span>Personal chat, group chat, channel mentions, proactive continuation</span></div>
+              <div class="node"><strong>Agent 365</strong><span>Platform blueprint, Agent User, package, Activity Protocol</span></div>
+            </div>
+          </div>
+          <div class="arrow">↓</div>
+          <div class="lane">
+            <div class="lane-title">North Europe · per-Worker control plane</div>
+            <div class="nodes">
+              <div class="node accent"><strong>Bridge Container App</strong><span>Agents SDK, auth boundary, lifecycle, queue consumer, proactive send</span></div>
+              <div class="node azure"><strong>Service Bus queue</strong><span>One queue per Worker, scheduled messages, PeekLock, KEDA trigger</span></div>
+            </div>
+          </div>
+          <div class="arrow">↓ wake / reuse</div>
+          <div class="lane">
+            <div class="lane-title">Sweden Central · Worker execution boundary</div>
+            <div class="boundary">
+              <span class="boundary-label">Azure Container Apps Sandbox</span>
+              <div class="nodes">
+                <div class="node accent"><strong>Hermes Gateway</strong><span>Sessions, agent loop, native cron, memory, skills, Dreaming</span></div>
+                <div class="node"><strong>Health wrapper</strong><span>Stable runtime API, Role Release, governed learning, cron receipts</span></div>
+                <div class="node private"><strong>Attached Data Disk</strong><span>Worker profile and private state survive Sandbox replacement</span></div>
+                <div class="node purple"><strong>Loopback identity proxies</strong><span>Managed tokens for Foundry and upstream MCP servers</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="arrow">↓ direct data plane</div>
+          <div class="lane">
+            <div class="lane-title">Azure and Microsoft services</div>
+            <div class="nodes">
+              <div class="node azure"><strong>Azure AI Foundry</strong><span><code>gpt-5-6-terra</code> through managed-identity proxy</span></div>
+              <div class="node private"><strong>Private incidents MCP</strong><span>Internal ACA endpoint across peered VNets</span></div>
+              <div class="node"><strong>Public shipments MCP</strong><span>Public HTTPS plus Entra app-role authorization</span></div>
+              <div class="node purple"><strong>Work IQ Mail</strong><span>Microsoft-managed MCP called as the Agent User</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="deployment">
+        <div class="section-head">
+          <div><span class="section-number">02 / DEPLOYMENT</span><h2>Shared platform. Isolated Workers.</h2></div>
+          <p>Terraform is split into one shared platform state and one workspace per deployed Worker. Hermes and Hermes 2 can share a Role Release without sharing identity or private state.</p>
+        </div>
+        <div class="grid-2">
+          <article class="card azure">
+            <span class="card-index">SHARED PLATFORM STATE</span>
+            <h3>Foundations used by every Worker</h3>
+            <p>Resource group, ACR, Foundry account/project/model, Sandbox Group, Service Bus namespace, regional VNets, peering, private DNS, and Container Apps environments.</p>
+            <div class="pill-row"><span class="pill">Sweden Central runtime</span><span class="pill">North Europe apps</span><span class="pill">Global VNet peering</span></div>
+          </article>
+          <article class="card">
+            <span class="card-index">PER-WORKER TERRAFORM WORKSPACE</span>
+            <h3>Nothing private is shared</h3>
+            <p>One bridge, bridge managed identity, Service Bus queue, Agent 365 blueprint, Agent Identity, Agent User, Sandbox Data Disk, MCP apps, runtime settings, and image digests.</p>
+            <div class="pill-row"><span class="pill">autopilot-hermes</span><span class="pill">autopilot-hermes2</span><span class="pill">separate Data Disks</span></div>
+          </article>
+        </div>
+        <div class="callout">
+          <strong>Why two regions?</strong>
+          <p>Foundry and ACA Sandboxes run in Sweden Central. Container Apps and ACR run in North Europe because the target managed-environment capacity was unavailable in Sweden Central. Peering and private DNS preserve the intended private MCP path.</p>
+        </div>
+      </section>
+
+      <section id="runtime">
+        <div class="section-head">
+          <div><span class="section-number">03 / RUNTIME</span><h2>The Sandbox is replaceable. The Worker is not.</h2></div>
+          <p>The runtime image is immutable and disposable. The profile on the named Data Disk is the durable Worker identity and state boundary.</p>
+        </div>
+        <div class="grid-3">
+          <article class="card">
+            <span class="card-index">01 · PROVISION</span>
+            <h3>Create the Data Disk once</h3>
+            <p>The bridge asks the Sandbox Group data plane for the Worker’s named volume. If it does not exist, Azure creates it before the Sandbox.</p>
+          </article>
+          <article class="card accent-card">
+            <span class="card-index">02 · ATTACH</span>
+            <h3>Mount at <code>/data</code></h3>
+            <p>The Sandbox mounts the persistent volume. Hermes activates <code>/data/hermes/profiles/&lt;role&gt;</code> and uses its workspace, SQLite state, memories, skills, cron files, and receipts.</p>
+          </article>
+          <article class="card">
+            <span class="card-index">03 · REPLACE SAFELY</span>
+            <h3>Labels decide reuse</h3>
+            <p>Worker ID, Role Release, runtime image, and config revision label the Sandbox. A mismatch replaces compute while reattaching the same disk.</p>
+          </article>
+        </div>
+        <div class="table-wrap" style="margin-top:18px;">
+          <table>
+            <thead><tr><th>Path on the profile</th><th>What it owns</th><th>Replacement behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>memories/</code></td><td><strong>Personal Memory</strong> and persistent private facts</td><td>Preserved</td></tr>
+              <tr><td><code>skills/private/</code></td><td><strong>Private Playbooks</strong> for the assignment</td><td>Preserved</td></tr>
+              <tr><td><code>state.db</code> + session data</td><td><strong>Work History</strong>, messages, tools, search</td><td>Preserved</td></tr>
+              <tr><td><code>skills/role/</code></td><td>Role Skills installed from the pinned Role Release</td><td>Transactionally refreshed</td></tr>
+              <tr><td><code>skills/candidates/</code></td><td>Local Candidate Improvements</td><td>Preserved or archived by Worker Refresh</td></tr>
+              <tr><td><code>cron/</code> + <code>local/*receipts.json</code></td><td>User schedules, Platform Dreaming, queue reconciliation, delivery receipts</td><td>Preserved</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="teams">
+        <div class="section-head">
+          <div><span class="section-number">04 / TEAMS</span><h2>Agent 365 outside. Hermes inside.</h2></div>
+          <p>Teams never connects directly to the Sandbox. The per-Worker bridge terminates Activity Protocol, establishes the privacy boundary, and translates to a runtime-neutral request.</p>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <span class="card-index">INTERACTIVE TURN</span>
+            <div class="sequence">
+              <div class="sequence-step"><div><strong>Teams sends an activity</strong><p>Personal chat, explicit mention, reaction, or supported targeted activity reaches Agent 365.</p></div></div>
+              <div class="sequence-step"><div><strong>Agents SDK authenticates ingress</strong><p>The bridge identifies the Worker, user, conversation type, and selected authorization mode.</p></div></div>
+              <div class="sequence-step"><div><strong>Bridge wakes the Sandbox</strong><p>It creates, resumes, or reuses the labeled Sandbox and waits for health.</p></div></div>
+              <div class="sequence-step"><div><strong>Hermes runs the turn</strong><p>The Gateway owns the session, model calls, tools, memory, skills, and learning transaction.</p></div></div>
+              <div class="sequence-step"><div><strong>Bridge returns the activity</strong><p>Text, reactions, and supported Teams behavior are sent through the same Agent 365 connection.</p></div></div>
+            </div>
+          </div>
+          <div class="card purple">
+            <span class="card-index">PROACTIVE SCHEDULED RESULT</span>
+            <div class="sequence">
+              <div class="sequence-step"><div><strong>Capture the conversation reference</strong><p>A user-created schedule is durably bound to its existing personal, group, or channel conversation.</p></div></div>
+              <div class="sequence-step"><div><strong>Execute after wake</strong><p>Service Bus starts the bridge; Hermes records the result on the Data Disk.</p></div></div>
+              <div class="sequence-step"><div><strong>Continue the conversation</strong><p>The bridge uses app-ID continuation when persisted inbound claims are empty.</p></div></div>
+              <div class="sequence-step"><div><strong>Require an activity ID</strong><p>The queue message is acknowledged only after Teams returns a concrete activity ID.</p></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Current boundary</strong>
+          <p>Proactive continuation can post into an existing installed conversation. Creating a brand-new chat or contacting a new person belongs to Work IQ Teams/Graph actions, not Activity Protocol continuation.</p>
+        </div>
+      </section>
+
+      <section id="scheduling">
+        <div class="section-head">
+          <div><span class="section-number">05 / SCALE TO ZERO</span><h2>Service Bus is the alarm clock.</h2></div>
+          <p>Hermes owns schedule meaning. Service Bus holds one minimal next-occurrence message. KEDA turns that message into compute only when work is due.</p>
+        </div>
+        <div class="diagram">
+          <div class="lane">
+            <div class="lane-title">Author and arm</div>
+            <div class="nodes">
+              <div class="node accent"><strong>Hermes cron job</strong><span><code>cron/jobs.json</code> remains canonical</span></div>
+              <div class="node"><strong>Azure CronScheduler</strong><span>Revision + next run + sequence number</span></div>
+              <div class="node azure"><strong>Scheduled Service Bus message</strong><span>Worker ID, type, job ID, revision, due time—never the prompt</span></div>
+            </div>
+          </div>
+          <div class="arrow">↓ due time arrives</div>
+          <div class="lane">
+            <div class="lane-title">Wake, execute, settle</div>
+            <div class="nodes">
+              <div class="node azure"><strong>KEDA scaler</strong><span>Bridge 0 → 1 from queue depth</span></div>
+              <div class="node accent"><strong>PeekLock consumer</strong><span>Lock renewal, single concurrency, retry, DLQ</span></div>
+              <div class="node"><strong>Sandbox + Hermes</strong><span>Claim, execute, durable receipt, re-arm</span></div>
+              <div class="node"><strong>Complete message</strong><span>Only after durable outcome and required delivery</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:18px;">
+          <article class="card">
+            <span class="card-index">USER TASK · <code>hermes.cron.fire</code></span>
+            <h3>Prompt execution with proactive delivery</h3>
+            <p>Revision checks reject stale updates. Pre-fire receipts, Hermes claims, execution leases, bounded delivery receipts, and a required Teams activity ID make redelivery safe.</p>
+          </article>
+          <article class="card purple">
+            <span class="card-index">PLATFORM TASK · <code>system.dream</code></span>
+            <h3>Same wake path, no agent prompt</h3>
+            <p>A reserved daily Hermes schedule dispatches the existing Dreaming coordinator. Two-phase system receipts provide at-most-once execution and packet-preparation evidence. The former ACA scheduled Job is gone.</p>
+          </article>
+        </div>
+        <div class="callout">
+          <strong>Why not an always-running bridge?</strong>
+          <p>The bridge and Sandbox can both reach zero between occurrences. Service Bus scheduled delivery provides a durable future wake without polling, one ARM Job per task, or an in-process timer.</p>
+        </div>
+      </section>
+
+      <section id="identity">
+        <div class="section-head">
+          <div><span class="section-number">06 / IDENTITY</span><h2>Execution identity is not business identity.</h2></div>
+          <p>Managed identity proves where code runs. Agent Identity authorizes autonomous application work. Agent User represents the digital teammate for Worker-owned Microsoft 365 resources.</p>
+        </div>
+        <div class="grid-3">
+          <article class="card azure"><span class="card-index">WORKLOAD CREDENTIAL</span><h3>Sandbox Group / bridge managed identity</h3><p>Bootstraps Azure access, Sandbox lifecycle, ACR, Service Bus receive, and the first federated exchange. It is not the business principal exposed to tools.</p></article>
+          <article class="card"><span class="card-index">AUTONOMOUS PRINCIPAL</span><h3>Agent Identity</h3><p>Obtains resource-specific application tokens for Foundry, private incidents, public shipments, and Service Bus scheduling. Servers validate audience, tenant, issuer, object/client identity, and app role.</p></article>
+          <article class="card purple"><span class="card-index">DIGITAL TEAMMATE</span><h3>Agent User</h3><p>Uses <code>user_fic</code> to access licensed Worker-owned Microsoft 365 resources, currently demonstrated with Work IQ Mail. It is not the invoking human.</p></article>
+        </div>
+        <div class="diagram" style="margin-top:18px;">
+          <div class="sequence">
+            <div class="sequence-step"><div><strong>Managed identity requests <code>api://AzureADTokenExchange/.default</code></strong><p>Azure proves the executing workload without a stored secret.</p></div></div>
+            <div class="sequence-step"><div><strong>Platform blueprint federated credential exchanges the assertion</strong><p><code>fmi_path</code> selects the Worker’s Agent Identity.</p></div></div>
+            <div class="sequence-step"><div><strong>Agent Identity requests the target scope</strong><p>Each upstream service gets a short-lived token with its own audience and roles.</p></div></div>
+            <div class="sequence-step"><div><strong>Optional Agent User exchange</strong><p>For Worker-owned Microsoft 365 data, a fixed Agent User is selected through <code>user_fic</code>.</p></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="model">
+        <div class="section-head">
+          <div><span class="section-number">07 / MODEL</span><h2>Hermes sees OpenAI. Azure sees identity.</h2></div>
+          <p>Hermes expects an OpenAI-compatible endpoint and key. A small loopback proxy preserves that interface while acquiring Foundry tokens with managed identity.</p>
+        </div>
+        <div class="diagram">
+          <div class="nodes">
+            <div class="node accent"><strong>Hermes agent</strong><span><code>OPENAI_BASE_URL=http://127.0.0.1:18080/v1</code></span></div>
+            <div class="node purple"><strong><code>foundry_token_proxy.py</code></strong><span>Acquire and cache Azure token; forward OpenAI-compatible request</span></div>
+            <div class="node azure"><strong>Foundry OpenAI v1</strong><span><code>gpt-5-6-terra</code>, managed authorization, no model API key on disk</span></div>
+          </div>
+        </div>
+        <div class="callout"><strong>Why a proxy?</strong><p>It is a compatibility adapter, not a behavior layer. Hermes still owns prompts, sessions, tools, and inference decisions. The proxy only changes authentication and endpoint transport.</p></div>
+      </section>
+
+      <section id="mcp">
+        <div class="section-head">
+          <div><span class="section-number">08 / MCP</span><h2>One loopback contract, different network paths.</h2></div>
+          <p>Hermes connects to loopback MCP endpoints. The local identity adapter chooses Agent Identity or Agent User, obtains the upstream token, and forwards to the real MCP server.</p>
+        </div>
+        <div class="diagram">
+          <div class="lane">
+            <div class="lane-title">Inside the Sandbox</div>
+            <div class="nodes">
+              <div class="node accent"><strong>Hermes MCP client</strong><span>Stable local MCP configuration</span></div>
+              <div class="node purple"><strong><code>autopilots_identity.mcp_proxy</code></strong><span>Loopback HTTP, token exchange, refresh, upstream routing</span></div>
+            </div>
+          </div>
+          <div class="arrow">↓ target-specific token + route</div>
+          <div class="lane">
+            <div class="lane-title">Current upstream examples</div>
+            <div class="nodes">
+              <div class="node private"><strong>Private incidents MCP</strong><span>Internal Container App, public access disabled, VNet + private DNS, <code>Incidents.Read.All</code></span></div>
+              <div class="node azure"><strong>Public shipments MCP</strong><span>Public HTTPS Container App, scale to zero, Entra audience + <code>Shipments.Read.All</code></span></div>
+              <div class="node purple"><strong>Work IQ Mail MCP</strong><span>Microsoft-managed upstream, Agent User token, licensed mailbox context</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:18px;">
+          <article class="card private"><span class="card-index">PRIVATE DOES NOT MEAN UNAUTHENTICATED</span><h3>Two independent controls</h3><p>VNet routing and private DNS establish reachability. Entra application authorization still decides whether this Worker may call the incidents tool.</p></article>
+          <article class="card"><span class="card-index">PUBLIC DOES NOT MEAN ANONYMOUS</span><h3>HTTPS plus exact audience</h3><p>The shipments endpoint is internet-routable, but it accepts only valid tenant/issuer/audience claims and the required application or delegated role.</p></article>
+        </div>
+      </section>
+
+      <section id="network">
+        <div class="section-head">
+          <div><span class="section-number">09 / NETWORK</span><h2>Control plane public. Private data plane private.</h2></div>
+          <p>The architecture deliberately separates user-facing ingress from private tool reachability. The bridge is not a relay for MCP traffic.</p>
+        </div>
+        <div class="grid-2">
+          <article class="card">
+            <span class="card-index">NORTH EUROPE APPLICATION VNET</span>
+            <h3>Bridge and MCP hosting</h3>
+            <p>Public bridge Container Apps environment and an internal private-MCP environment. ACR also resides in North Europe.</p>
+          </article>
+          <article class="card private">
+            <span class="card-index">SWEDEN CENTRAL SANDBOX VNET</span>
+            <h3>Worker network interfaces</h3>
+            <p>Delegated Sandbox subnet connects through the Sandbox Group VNet connection. Global peering reaches the private MCP environment; linked private DNS resolves its internal FQDN.</p>
+          </article>
+        </div>
+        <div class="callout"><strong>Egress inspection remains active</strong><p>Python HTTP clients use the system trust bundle through <code>SSL_CERT_FILE</code> and <code>REQUESTS_CA_BUNDLE</code>. The Sandbox egress proxy may terminate and re-establish inspected TLS.</p></div>
+      </section>
+
+      <section id="ownership">
+        <div class="section-head">
+          <div><span class="section-number">10 / OWNERSHIP</span><h2>Know which layer is authoritative.</h2></div>
+          <p>Most architecture mistakes come from putting behavior, state, or authorization in the wrong layer.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Concern</th><th>Authoritative owner</th><th>Not the owner</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Teams packaging and presence</strong></td><td>Agent 365 blueprint, package, Agent User</td><td>Hermes Gateway</td></tr>
+              <tr><td><strong>Ingress and lifecycle</strong></td><td>Per-Worker bridge</td><td>MCP proxies</td></tr>
+              <tr><td><strong>Agent behavior and sessions</strong></td><td>Hermes + Role Release</td><td>Bridge</td></tr>
+              <tr><td><strong>Private Worker state</strong></td><td>Attached Data Disk profile</td><td>Container image</td></tr>
+              <tr><td><strong>User schedule meaning</strong></td><td>Hermes cron store</td><td>Service Bus</td></tr>
+              <tr><td><strong>Future wake</strong></td><td>Service Bus scheduled message + KEDA</td><td>Sandbox ticker</td></tr>
+              <tr><td><strong>Business authorization</strong></td><td>Agent Identity / Agent User token</td><td>Workload managed identity alone</td></tr>
+              <tr><td><strong>Network reachability</strong></td><td>VNet, peering, DNS, ingress policy</td><td>Entra token</td></tr>
+              <tr><td><strong>Shared role evolution</strong></td><td>Git Role Release + reviewed Promotion</td><td>Private Worker memory</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="failure">
+        <div class="section-head">
+          <div><span class="section-number">11 / FAILURE MODEL</span><h2>Durability is explicit, not hopeful.</h2></div>
+          <p>Scale-to-zero and distributed delivery introduce retries and races. The implementation records enough state to distinguish stale work, duplicate work, interrupted work, and delivered work.</p>
+        </div>
+        <div class="grid-3">
+          <article class="card"><span class="card-index">QUEUE</span><h3>PeekLock + renewal</h3><p>Complete only after durable execution and required delivery. Retry transient failures; dead-letter bounded terminal failures for operator inspection.</p></article>
+          <article class="card"><span class="card-index">HERMES</span><h3>Claims + revisions</h3><p>Schedule revision rejects stale cancellation/update races. Claims and receipts prevent redelivery from rerunning an occurrence.</p></article>
+          <article class="card"><span class="card-index">DREAMING</span><h3>At-most-once occurrence</h3><p><code>claiming → running → completing → completed</code>. An expired running lease records interruption and re-arms; it does not duplicate Dreaming side effects.</p></article>
+          <article class="card"><span class="card-index">TEAMS</span><h3>Activity ID required</h3><p>No success-shaped acknowledgement. A proactive send must return a concrete activity ID before its queue message completes.</p></article>
+          <article class="card"><span class="card-index">SANDBOX</span><h3>Replace compute, retain disk</h3><p>Config/image/identity label drift replaces the Sandbox. Worker state remains on the named Data Disk.</p></article>
+          <article class="card"><span class="card-index">OBSERVABILITY</span><h3>Sanitized persistent diagnostics</h3><p>Queue counters, provider schedule, bindings, execution receipts, system receipts, and packet summaries exclude prompts and token material.</p></article>
+        </div>
+        <div class="callout">
+          <strong>Repeatable proof</strong>
+          <p><code>scripts.user_schedule_smoke</code> proves user-task scale-to-zero and exact output. <code>scripts.servicebus_dream_smoke</code> enqueues a unique operator occurrence, proves Dreaming and packet preparation, and leaves the production daily schedule unchanged.</p>
+          <a class="callout-link" href="../DEMO.md">Open the demonstration guide →</a>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span>Autopilots on Azure · Hermes architecture</span>
+        <span>Current implementation · Updated 2026-07-24</span>
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    const root = document.documentElement;
+    const themeToggle = document.getElementById("themeToggle");
+    const presentationToggle = document.getElementById("presentationToggle");
+    const storedTheme = localStorage.getItem("hermes-guide-theme");
+    const preferredDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = storedTheme || (preferredDark ? "dark" : "light");
+
+    themeToggle.addEventListener("click", () => {
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      localStorage.setItem("hermes-guide-theme", root.dataset.theme);
+    });
+    presentationToggle.addEventListener("click", () => {
+      const enabled = document.body.classList.toggle("presentation");
+      presentationToggle.setAttribute("aria-pressed", String(enabled));
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key.toLowerCase() === "p" && !/input|textarea|select/i.test(event.target.tagName)) {
+        presentationToggle.click();
+      }
+    });
+
+    const navLinks = [...document.querySelectorAll(".side-nav a")];
+    const sections = navLinks
+      .map((link) => document.querySelector(link.getAttribute("href")))
+      .filter(Boolean);
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (!visible) return;
+      navLinks.forEach((link) => {
+        link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`);
+      });
+    }, { rootMargin: "-18% 0px -62% 0px", threshold: [0.05, 0.25, 0.5] });
+    sections.forEach((section) => observer.observe(section));
+  </script>
+</body>
+</html>

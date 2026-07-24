@@ -1686,6 +1686,10 @@
       </div>
     </div>
     <div class="toolbar">
+      <a class="icon-button" href="hermes-architecture-deep-dive.html" style="text-decoration:none;">
+        <span aria-hidden="true">⌘</span>
+        <span class="button-label">Architecture</span>
+      </a>
       <button class="icon-button" id="presentationToggle" type="button" aria-pressed="false" title="Presentation mode (P)">
         <span aria-hidden="true">▣</span>
         <span class="button-label">Present</span>
@@ -1701,7 +1705,7 @@
     <nav class="side-nav" aria-label="Guide sections">
       <p>Start simple</p>
       <a href="#story">Continuous improvement</a>
-      <a href="#architecture">Architecture</a>
+      <a href="#architecture">Architecture map</a>
       <a href="#teams">Working in Teams</a>
       <a href="#identity">Identity</a>
       <p>How learning works</p>
@@ -1791,8 +1795,9 @@
             <h2>Architecture at a glance</h2>
           </div>
           <p>
-            The public bridge is a thin control plane. The Worker runs inside a strongly isolated,
-            scale-to-zero Sandbox. An attached Data Disk makes private Worker state durable.
+            Start with four layers: Microsoft 365 at the edge, a per-Worker bridge and Service Bus
+            control plane, Hermes in a scale-to-zero Sandbox, and direct identity-aware data-plane connections.
+            The full implementation detail lives in the dedicated architecture guide.
           </p>
         </div>
 
@@ -1808,15 +1813,15 @@
               <span>Agent User, package, Activity Protocol</span>
             </div>
             <div class="flow-node">
-              <strong>Operator / scheduler</strong>
-              <span>Direct invoke, Dreaming, packet preparation</span>
+              <strong>Service Bus</strong>
+              <span>User schedules + Platform Dreaming wake the bridge through KEDA</span>
             </div>
           </div>
           <div class="flow-arrow" aria-hidden="true">↓</div>
           <div class="flow-label">Per-Worker public control plane</div>
           <div class="flow-node accent">
             <strong><span class="term" tabindex="0" data-tip="The per-Worker public control plane that handles messaging, authorization context, Sandbox lifecycle, and serialized learning.">Bridge Container App</span></strong>
-            <span>Messaging adapter · authorization boundary · Sandbox wake/reuse · serialized learning · approval signature</span>
+            <span>Messaging adapter · queue consumer · authorization boundary · Sandbox wake/reuse · proactive Teams continuation</span>
           </div>
           <div class="flow-arrow" aria-hidden="true">↓</div>
           <div class="flow-label">Stateful, serverless-style Worker runtime</div>
@@ -1828,7 +1833,7 @@
             <div class="sandbox-grid">
               <div class="sandbox-attachment">
                 <h3><span class="term" tabindex="0" data-tip="A persistent, single-Sandbox volume that carries private Worker state across Sandbox replacement and Worker Refresh.">Attached Data Disk</span></h3>
-                <p>Personal Memory, Private Playbooks, Work History, Candidate Improvements, workspace, and Worker manifest.</p>
+                <p>Personal Memory, Private Playbooks, Work History, schedules, receipts, Candidate Improvements, workspace, and Worker manifest.</p>
               </div>
               <div class="sandbox-core">
                 <h3><span class="term" tabindex="0" data-tip="The in-Sandbox agent runtime containing Hermes Gateway, sessions, tools, native memory, skills, and Dreaming.">Hermes runtime inside the Sandbox</span></h3>
@@ -1886,6 +1891,7 @@
             </div>
           </div>
         </div>
+        <a class="callout-link" href="hermes-architecture-deep-dive.html">Open the detailed runtime, identity, scheduling, and MCP architecture →</a>
       </section>
 
       <section id="teams">
@@ -2396,7 +2402,7 @@
 
       <footer class="footer">
         <span>Autopilots on Azure · Hermes learning path</span>
-        <span>Role Release 3.2.0 example · Updated 2026-07-22</span>
+        <span>Role Release 3.2.0 example · Updated 2026-07-24</span>
       </footer>
     </main>
   </div>
