@@ -450,6 +450,48 @@ After the Promotion PR is reviewed and merged:
 
 Refresh must fail before replacement when packet approval, Worker identity, Role Release, signature, or governed-state validation fails.
 
+## 15. User-scheduled tasks
+
+First run the automated live smoke against Hermes 2:
+
+```powershell
+uv run python -m scripts.user_schedule_smoke `
+  --state-name hermes2 `
+  --due-seconds 180 `
+  --timeout 1200
+```
+
+The smoke creates a real one-shot Hermes cron job, confirms its next occurrence is armed as a scheduled Service Bus message, observes the bridge at zero replicas before the due time, verifies Service Bus wakes the bridge, checks the durable execution/delivery receipt and exact output hash, confirms the queue is empty with no dead letters, and removes any remaining test job.
+
+For the Teams demonstration, use an existing 1:1 chat or a channel where Hermes 2 is already installed. In a channel, explicitly mention the Worker:
+
+```text
+@Hermes 2 Every 3 minutes, reply in this conversation with exactly "Scheduled hello from Hermes 2". Name the task scheduled-hello-demo.
+```
+
+Hermes should confirm the schedule. After three minutes, the bridge proactively continues the same Teams conversation and posts the result without another user message.
+
+Manage the canonical Hermes schedule conversationally:
+
+```text
+@Hermes 2 List my scheduled tasks.
+@Hermes 2 Pause scheduled-hello-demo.
+@Hermes 2 Resume scheduled-hello-demo.
+@Hermes 2 Run scheduled-hello-demo now.
+@Hermes 2 Remove scheduled-hello-demo.
+```
+
+Expected:
+
+- only Worker ID, job ID, revision, due time, and message type enter Service Bus; the private prompt remains on the Worker Data Disk;
+- one next occurrence is scheduled at a time, including for recurring tasks;
+- a locked message remains unsettled until Hermes records execution and proactive delivery succeeds;
+- the queue is acknowledged only after Teams returns a concrete activity ID;
+- a stale revision or redelivery cannot rerun the Hermes task;
+- Teams delivery is at-least-once across the final send/receipt boundary because Teams and Service Bus do not share a transaction;
+- channel delivery continues the originating conversation or thread; the bot does not create an arbitrary new channel or conversation;
+- a new first-contact personal chat still requires the app to be installed for that user.
+
 ## What the demo proves
 
 - Worker identity is autonomous and independently authorized.

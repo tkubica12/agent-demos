@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
 import subprocess
+import shutil
 import sys
 import threading
 import time
@@ -38,6 +40,17 @@ from learning import (
     initialize_governed_state,
     reconcile_learning_turn,
     validate_skill_namespaces,
+)
+from cron_runtime import (
+    acknowledge_cron_delivery,
+    bind_cron_delivery,
+    bind_cron_local,
+    cron_diagnostics,
+    cron_delivery_receipt_status,
+    fire_cron_job,
+    list_cron_jobs,
+    reconcile_cron_provider,
+    upsert_delivery_reference,
 )
 
 
@@ -154,6 +167,11 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         mcp_servers["workiq-mail"] = {"url": workiq_mail_mcp_url}
     if mcp_servers:
         runtime_config["mcp_servers"] = mcp_servers
+    if bool_env("USER_SCHEDULING_ENABLED", False):
+        runtime_config["cron"] = {
+            "provider": "azure",
+            "mirror_delivery": False,
+        }
     config = _deep_merge(base or {}, runtime_config)
     configured_servers = config.get("mcp_servers")
     if isinstance(configured_servers, dict):
@@ -163,6 +181,21 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         if not configured_servers:
             config.pop("mcp_servers", None)
     return config
+
+
+def install_runtime_plugins(profile_home: Path) -> None:
+    source_root = Path("/app/runtime_plugins")
+    if not source_root.is_dir():
+        return
+    destination_root = profile_home / "plugins"
+    destination_root.mkdir(parents=True, exist_ok=True)
+    for source in source_root.iterdir():
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                destination_root / source.name,
+                dirs_exist_ok=True,
+            )
 
 
 def foundry_proxy_port() -> int:
@@ -384,6 +417,116 @@ def create_health_app(
         except CollectiveLearningError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.get("/internal/cron/jobs")
+    def cron_jobs(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        return {"jobs": list_cron_jobs(profile_home)}
+
+    @app.post("/internal/cron/reconcile")
+    async def cron_reconcile(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        return await asyncio.to_thread(reconcile_cron_provider, profile_home)
+
+    @app.get("/internal/cron/diagnostics")
+    async def cron_diagnostic_status(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        return await asyncio.to_thread(cron_diagnostics, profile_home)
+
+    @app.post("/internal/cron/delivery-reference")
+    async def cron_delivery_reference(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        try:
+            return upsert_delivery_reference(
+                profile_home,
+                reference_key=str(payload.get("referenceKey") or ""),
+                conversation=payload.get("conversation") or {},
+                boundary=str(payload.get("boundary") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/cron/bind-delivery")
+    async def cron_bind_delivery(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        job_ids = payload.get("jobIds")
+        if not isinstance(job_ids, list) or not all(isinstance(value, str) for value in job_ids):
+            raise HTTPException(status_code=400, detail="jobIds must be an array of strings.")
+        try:
+            return bind_cron_delivery(
+                profile_home,
+                job_ids=job_ids,
+                reference_key=str(payload.get("referenceKey") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/cron/bind-local")
+    async def cron_bind_local(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        job_ids = payload.get("jobIds")
+        if not isinstance(job_ids, list) or not all(isinstance(value, str) for value in job_ids):
+            raise HTTPException(status_code=400, detail="jobIds must be an array of strings.")
+        try:
+            return bind_cron_local(profile_home, job_ids=job_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/cron/fire")
+    async def cron_fire(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        try:
+            return await asyncio.to_thread(
+                fire_cron_job,
+                profile_home,
+                job_id=str(payload.get("jobId") or ""),
+                revision=str(payload.get("revision") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "type": exc.__class__.__name__,
+                    "message": str(exc)[:2000],
+                },
+            ) from exc
+
+    @app.post("/internal/cron/ack-delivery")
+    async def cron_ack_delivery(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        try:
+            return await asyncio.to_thread(
+                acknowledge_cron_delivery,
+                profile_home,
+                job_id=str(payload.get("jobId") or ""),
+                revision=str(payload.get("revision") or ""),
+                delivery_activity_id=str(
+                    payload.get("deliveryActivityId") or ""
+                ),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/internal/cron/delivery-receipt/{job_id}/{revision}")
+    async def cron_delivery_receipt(
+        job_id: str,
+        revision: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        require_internal_key(request)
+        return await asyncio.to_thread(
+            cron_delivery_receipt_status,
+            profile_home,
+            job_id=job_id,
+            revision=revision,
+        )
+
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
@@ -419,6 +562,8 @@ def main() -> None:
             flush=True,
         )
     profile_home.mkdir(parents=True, exist_ok=True)
+    install_runtime_plugins(profile_home)
+    os.environ["HERMES_HOME"] = str(profile_home)
     (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
     if role_release:
         assert_legacy_state_migrated(profile_home)

@@ -43,6 +43,46 @@ variable "worker_assignment_scope" {
   default = ""
 }
 
+variable "user_scheduling_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "user_scheduling_max_concurrent_calls" {
+  type    = number
+  default = 1
+
+  validation {
+    condition     = var.user_scheduling_max_concurrent_calls == 1
+    error_message = "A12 currently requires one scheduled call at a time per Worker."
+  }
+}
+
+variable "user_scheduling_max_delivery_count" {
+  type    = number
+  default = 5
+
+  validation {
+    condition     = var.user_scheduling_max_delivery_count >= 1 && var.user_scheduling_max_delivery_count <= 20
+    error_message = "user_scheduling_max_delivery_count must be between 1 and 20."
+  }
+}
+
+variable "user_scheduling_lock_renewal_seconds" {
+  type    = number
+  default = 1800
+}
+
+variable "user_scheduling_keda_polling_seconds" {
+  type    = number
+  default = 15
+}
+
+variable "user_scheduling_scale_down_seconds" {
+  type    = number
+  default = 60
+}
+
 variable "scheduled_learning_enabled" {
   type    = bool
   default = false

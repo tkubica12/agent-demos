@@ -6,7 +6,7 @@ This file tracks delivery status and future work. Product requirements and archi
 
 ## Current snapshot
 
-As of 2026-07-22:
+As of 2026-07-24:
 
 - OpenClaw and Hermes run side by side through separate bridge Container Apps and Terraform workspaces.
 - Both runtimes use Sweden Central ACA Sandboxes and Foundry `gpt-5-6-terra`.
@@ -21,9 +21,10 @@ As of 2026-07-22:
 - Both Hermes bridges use the runtime-specific wake/readiness and transient Worker Refresh preflight fixes; Terraform workspaces converge.
 - The Teams Enterprise license temporarily transferred for the multi-Worker test is restored to `openclaw1`.
 - Hermes 2 runs the managed-identity ACA scheduled Job daily; an on-demand execution succeeded and reached approval-required packet preparation without approving or exporting it.
+- Hermes 2 user schedules are live through Hermes cron, Service Bus, KEDA scale-from-zero, and proactive Teams continuation; recurring personal-chat delivery is validated with a visible unsolicited message.
 - Durable requirements and architecture are consolidated in `SPEC.md`; deployment and demonstration procedures are separated into focused guides.
 
-## Completed milestones
+## Milestone status
 
 | Milestone | Status | Outcome |
 | --- | --- | --- |
@@ -34,6 +35,12 @@ As of 2026-07-22:
 | A8 - Role Blueprint distribution | Complete | Commit-pinned Hermes distribution, Worker manifest, persistent profile, and transactional Worker Refresh. |
 | A9 - Local learning bridge | Superseded | Proved private classification, Dreaming, validated journal records, and generated hot learning before A10 native skills. |
 | A10 - Native skill evolution and Collective Learning Review | Complete | Multi-Worker Private Playbooks, Role Skill patches, Candidate Improvements, schema-v2 provenance, attested packets, merger/judge, Agentic Promotion gates, merged Promotion, and Worker Refresh. |
+| A11 - Scheduled Dreaming | Complete | Managed-identity ACA scheduled Job, bridge-owned classroom timer, packet preparation, observability, and disposable lifecycle reset. |
+| A12 - User-scheduled Worker tasks | Complete | Hermes-native schedules, Service Bus/KEDA wake, crash-safe execution, schedule management, and visible proactive personal Teams delivery. |
+| A12.1 - Unified scheduling hardening | Next | Move Dreaming onto the Worker queue, remove the A11 Job after parity, live-validate channel/group delivery, and add explicit schedule quotas and DLQ operations. |
+| A13 - Document-aware work and attachments | Planned | Secure Teams/Microsoft 365 attachment ingestion and Work IQ Word operations. |
+| A14 - Microsoft 365 knowledge and actions | Planned | SharePoint, OneDrive, Mail, Teams, Calendar, Word, and notification workload actions through Agent User identity. |
+| A15 - Teams targeted private messaging | Planned | Private `/WorkerName` invocation inside supported group conversations. |
 
 ## Immediate work
 
@@ -128,28 +135,24 @@ Goal: let users create, inspect, pause, resume, cancel, and run scheduled Worker
 
 Decision: [ADR 0015](docs/adr/0015-service-bus-backed-hermes-cron.md) selects one Service Bus queue per Worker, direct KEDA scaling of the per-Worker bridge, and a Hermes Azure `CronScheduler` provider. A11's scheduled ACA Job remains until the unified queue path passes parity validation.
 
+Status: Complete. Hermes 2 has the live Service Bus queue, KEDA-scaled bridge consumer, Azure cron provider, durable execution/delivery receipts, conversational management, and proactive Teams continuation. Automated one-shot scale-to-zero and recurring personal-chat delivery are live-validated, including a concrete Teams activity ID and visible unsolicited message.
+
 Tasks:
 
-- Keep Hermes native cron jobs and execution ledger as the canonical user-facing schedule state on the Worker's Data Disk.
-- Do not rely on the built-in in-process cron ticker because the Hermes Sandbox can be suspended.
-- Provision one shared Service Bus namespace and one queue per Worker with duplicate detection, dead-lettering, and managed-identity-only access.
-- Add an `azure` Hermes `CronScheduler` plugin under the runtime-owned plugin path; do not fork Hermes or create a second task database.
-- Persist only provider reconciliation metadata such as scheduled-message sequence number and schedule revision beside Hermes cron state.
-- On create/update/resume, schedule only the next Service Bus occurrence containing Worker ID, message type, cron job ID, schedule revision, and due time—not the private prompt.
-- Configure the queue's KEDA scaler to start the existing per-Worker bridge directly from zero; do not add a separate event-driven ACA Job.
-- Add a single background bridge consumer using PeekLock, automatic lock renewal, bounded concurrency, explicit completion/abandon/dead-letter behavior, and no public queue payload logging.
-- Have the bridge wake or reuse the Worker Sandbox and call a protected runtime endpoint that resolves the active profile and invokes the selected provider's `fire_due(job_id)`.
-- Complete the Service Bus message only after Hermes records the execution and the provider reconciles the next occurrence.
-- Use deterministic message IDs, Hermes `fire_claim`, the execution ledger, and schedule revision checks so redelivery or a stale cancelled message cannot duplicate the user-visible outcome.
-- Define missed-run policy, retry/backoff, dead-letter handling, cancellation races, clock/timezone behavior, concurrency limits, and maximum schedule horizon.
-- Preserve originating delivery context explicitly: 1:1, targeted private message, channel, email, or Office comment. Never default a private scheduled result to a public destination.
-- Initially permit autonomous Agent Identity/Agent User operations only. User-delegated OBO work requires valid per-run authorization and remains blocked until the OBO milestone.
-- Disable hosted user creation of arbitrary shell/script cron jobs by default; initially allow prompt jobs and reviewed Role Skills only.
-- Expose conversational list/create/pause/resume/remove/run-now flows and validate Hermes `/cron` or `cronjob` tool behavior through the bridge.
-- Add quotas, audit history, sanitized observability, and explicit user-visible failures for expired permissions or unavailable delivery destinations.
-- Validate one-shot reminders, recurring status preparation, private targeted delivery, Worker Refresh preservation, and schedule deletion.
-- Add `system.dream` messages to the same queue and validate functional parity with A11.
-- Remove A11's dedicated scheduled ACA Job only after Service Bus Dreaming passes schedule, retry, scale-to-zero, and packet-preparation tests.
+- Complete: keep Hermes native cron jobs and execution history as canonical state on the Worker Data Disk.
+- Complete: replace the unusable suspended-Sandbox ticker with the runtime-owned Azure `CronScheduler` plugin.
+- Complete: provision a shared managed-identity-only Service Bus namespace and one duplicate-detecting, dead-letter-enabled queue per Worker.
+- Complete: schedule only one next occurrence containing Worker ID, message type, job ID, revision, and due time; private prompts never enter Service Bus.
+- Complete: scale the existing isolated bridge directly from zero through KEDA, with no separate event-driven execution app.
+- Complete: consume under PeekLock with lock renewal, bounded concurrency, explicit settlement, retries, and DLQ behavior.
+- Complete: wake or reuse the Sandbox and invoke protected profile-aware fire/reconcile endpoints.
+- Complete: prevent duplicate execution with deterministic message IDs, Hermes claims, revision checks, pre-fire receipts, execution leases, and crash recovery.
+- Complete: bind schedules durably before arming and preserve personal/group/channel delivery boundaries without private-to-public fallback.
+- Complete: require a real Teams activity ID before acknowledging proactive delivery.
+- Complete: block hosted `script`, `no_agent`, and durable human-OBO schedules; allow autonomous prompt jobs and reviewed Role Skills.
+- Complete: support conversational create/list/pause/resume/remove/run-now operations and reconcile every schedule revision change.
+- Complete: provide bounded audit receipts, sanitized persistent diagnostics, queue counters, and explicit failed-delivery behavior.
+- Complete: validate one-shot scale-from-zero, recurring re-arm, Worker Data Disk persistence, DLQ handling, Terraform convergence, and visible personal-chat delivery.
 
 Exit criteria:
 
@@ -157,9 +160,31 @@ Exit criteria:
 - The Worker and bridge can scale to zero between occurrences.
 - A due Service Bus message directly scales the per-Worker bridge, which executes the canonical Hermes cron job.
 - Scheduled prompts and outputs retain the correct private/public delivery boundary.
-- Duplicate Service Bus delivery cannot duplicate the user-visible task outcome.
+- Duplicate Service Bus delivery cannot rerun the Hermes task; Teams continuation is explicitly at-least-once across a send/receipt crash boundary.
 - Worker Refresh preserves active schedules and their execution history.
-- Dreaming uses the same Service Bus/bridge trigger path and the old scheduled ACA Job is removed.
+- A recurring scheduled result can be proactively delivered into the originating personal Teams conversation.
+
+### A12.1 - Unified scheduling hardening
+
+Goal: finish platform-wide schedule consolidation after the user-scheduling milestone.
+
+Status: Next.
+
+Tasks:
+
+- Schedule `system.dream` messages through the same per-Worker queue and bridge dispatcher.
+- Validate Dreaming schedule, retry, scale-to-zero, packet preparation, and no-duplicate parity with A11.
+- Remove the dedicated A11 ACA scheduled Job only after queue-driven Dreaming passes parity.
+- Live-validate proactive continuation in an existing Teams channel and group chat, including thread placement and privacy boundaries.
+- Add explicit per-Worker and per-user schedule quotas plus operator DLQ inspect/replay/remove commands.
+- Add deterministic management commands for schedule listing when model inference is transiently unavailable.
+
+Exit criteria:
+
+- Dreaming and user schedules share one queue-driven wake path.
+- No dedicated A11 scheduled Job remains.
+- Existing personal, group, and channel conversations receive scheduled output through their original boundary.
+- Operators can inspect and safely replay or remove dead-lettered schedule messages.
 
 ### A13 - Document-aware work and attachments
 
@@ -185,26 +210,29 @@ Exit criteria:
 - Unsupported or unauthorized attachments fail explicitly without leaking content.
 - Document content remains private and excluded from Collective Learning Review.
 
-### A14 - Agent 365 workload notifications
+### A14 - Microsoft 365 knowledge and actions
 
-Goal: add non-Teams Microsoft 365 event inputs while retaining Teams Activity Protocol for chat.
+Goal: prove the Agent User can find organizational knowledge and perform governed Microsoft 365 actions through Microsoft-managed Work IQ MCP servers while retaining Teams Activity Protocol for existing chat conversations.
 
 Tasks:
 
-- Validate Agent 365 Email and Word comment notifications first.
-- Add bridge sources such as `a365_email` and `a365_word_comment`.
-- Use stable Work History keys based on message, document, thread, or comment identifiers.
-- Use attachment/document handling from A13 for WPX comment payloads, which include document URLs and IDs.
-- Reply through the originating workload rather than Teams.
-- Add Excel and PowerPoint comments after Email and Word.
-- Preserve runtime selection, identity, privacy, and learning boundaries.
+- Expand the Agent 365 tooling manifest from Mail-only to the currently supported Microsoft-managed Work IQ servers for Mail, Calendar, SharePoint, OneDrive, Teams, User, Word, and Copilot.
+- Validate SharePoint and OneDrive search, result grounding, metadata retrieval, and authorized file operations with explicit preview-size limits.
+- Validate Mail search, draft, reply, and send through the Agent User; distinguish a proposed draft from an externally visible send.
+- Validate Teams `createChat` and `postMessage` for proactive one-to-one and group outreach. Keep this separate from Activity Protocol continuation into an existing bot conversation.
+- Validate Calendar free/busy, meeting-time suggestions, event creation, update, cancellation, and proposal flows with explicit confirmation before consequential writes.
+- Reuse A13 for Word content, comments, document IDs, and sharing URLs.
+- Validate Agent 365 Email and Word comment notifications as event inputs, using stable Work History keys based on message, document, thread, or comment identifiers.
+- Reply through the originating workload rather than silently redirecting output to Teams.
+- Preserve runtime selection, Agent Identity/Agent User distinction, privacy boundaries, and learning exclusions.
+- Record the current product gap: no dedicated Microsoft-managed Work IQ Excel or PowerPoint MCP server is available; do not simulate or claim those capabilities.
 
 Exit criteria:
 
-- Email and Word notifications reach the selected Worker.
-- The Worker resolves the referenced document through the A13 document contract.
-- The Worker responds or acts through the correct Microsoft 365 workload.
-- Required permissions remain least privilege.
+- The Worker can search SharePoint/OneDrive, send a reviewed email, create a Teams chat/message, and propose or create a calendar event through Microsoft-managed tools.
+- Email and Word notifications reach the selected Worker and resolve referenced documents through A13.
+- Reads and writes use the correct workload, identity, and least-privilege scopes.
+- Consequential actions are explicit and auditable; preview limitations and unsupported Excel/PowerPoint operations fail clearly.
 
 ### A15 - Teams targeted private messaging
 

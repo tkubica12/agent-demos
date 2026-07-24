@@ -14,12 +14,16 @@ COPY runtimes/hermes/blueprint.py .
 COPY runtimes/hermes/learning.py .
 COPY runtimes/hermes/collective_learning.py .
 COPY runtimes/hermes/foundry_token_proxy.py .
+COPY runtimes/hermes/azure_cron_provider.py .
+COPY runtimes/hermes/cron_runtime.py .
+COPY runtimes/hermes/plugins ./runtime_plugins
 COPY autopilots_identity ./autopilots_identity
 
 ENV API_SERVER_ENABLED=true
 ENV API_SERVER_HOST=0.0.0.0
 ENV API_SERVER_PORT=8642
 ENV HERMES_HOME=/data/hermes
+ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8642
 

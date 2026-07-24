@@ -72,7 +72,9 @@ scheduled message becomes active
   -> bridge wakes or reuses Sandbox
   -> protected runtime endpoint resolves active profile
   -> CronScheduler.fire_due(job_id)
-  -> Hermes claim + execution ledger + fresh session + delivery
+  -> Hermes claim + execution ledger + fresh session + durable output receipt
+  -> bridge proactively continues the bound Teams conversation
+  -> runtime marks the delivery receipt
   -> provider reconciles the next occurrence
   -> bridge completes Service Bus message
   -> bridge scales to zero
@@ -86,10 +88,13 @@ Service Bus does not provide recurring scheduled messages. The provider schedule
 - Set `maxReplicas = 1` per Worker.
 - Use deterministic Service Bus message IDs plus Service Bus duplicate detection where available.
 - Treat Service Bus as at-least-once transport. Hermes `fire_claim`, execution ledger, and schedule revision are the correctness boundary.
+- Hermes execution is at-most-once for one schedule revision. Teams proactive delivery is at-least-once: a process failure after Teams accepts the activity but before the durable receipt is marked can repeat the visible message because Teams and Service Bus do not share a transaction.
 - A stale message caused by update/cancellation is acknowledged without execution after revision mismatch.
 - Store scheduled-message sequence number and revision as provider reconciliation metadata beside Hermes cron state so cancellation can be attempted.
+- Persist an execution/delivery receipt before calling `fire_due`; after a process crash, recover a newly written Hermes output without rerunning or emit an explicit interrupted-run result when Hermes had already claimed the occurrence.
 - Do not depend on cancellation being atomic near activation; revision checks remain mandatory.
 - Complete the queue message only after execution and next-occurrence reconciliation are durable.
+- For bound Teams schedules, complete the queue message only after proactive send and durable delivery acknowledgement. A delivery failure abandons the message without rerunning the Hermes job.
 - Monitor and expose dead-letter queue depth; never auto-discard DLQ messages.
 
 ### Identity
@@ -118,7 +123,7 @@ Persist the originating delivery boundary with the Hermes job:
 
 A private origin defaults to private delivery. Scheduled output is never promoted to a public destination without explicit user approval.
 
-### Dreaming migration
+### A12.1 Dreaming migration
 
 The same queue carries `system.dream` messages. The bridge dispatches those to the existing scheduled-learning coordinator rather than Hermes cron.
 

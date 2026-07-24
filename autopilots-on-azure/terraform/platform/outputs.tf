@@ -26,6 +26,18 @@ output "acr_id" {
   value = azurerm_container_registry.main.id
 }
 
+output "scheduler_servicebus_namespace_id" {
+  value = azurerm_servicebus_namespace.scheduler.id
+}
+
+output "scheduler_servicebus_namespace_name" {
+  value = azurerm_servicebus_namespace.scheduler.name
+}
+
+output "scheduler_servicebus_fully_qualified_namespace" {
+  value = "${azurerm_servicebus_namespace.scheduler.name}.servicebus.windows.net"
+}
+
 output "private_mcp_env_name" {
   value = azapi_resource.private_mcp_env.name
 }

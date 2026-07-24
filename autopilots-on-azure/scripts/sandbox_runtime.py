@@ -378,6 +378,10 @@ def hermes_runtime_environment(
     worker_id: str = "",
     assignment_scope: str = "",
     collective_learning_approval_public_key: str = "",
+    user_scheduling_enabled: bool = False,
+    scheduler_servicebus_namespace: str = "",
+    scheduler_servicebus_queue: str = "",
+    scheduler_max_lock_renewal_seconds: int = 1800,
 ) -> dict[str, str]:
     environment = {
         "API_SERVER_ENABLED": "true",
@@ -394,6 +398,12 @@ def hermes_runtime_environment(
         "WORKER_ID": worker_id,
         "WORKER_ASSIGNMENT_SCOPE": assignment_scope,
         "COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY": collective_learning_approval_public_key,
+        "USER_SCHEDULING_ENABLED": "true" if user_scheduling_enabled else "false",
+        "SCHEDULER_SERVICEBUS_NAMESPACE": scheduler_servicebus_namespace,
+        "SCHEDULER_SERVICEBUS_QUEUE": scheduler_servicebus_queue,
+        "SCHEDULER_MAX_LOCK_RENEWAL_SECONDS": str(
+            scheduler_max_lock_renewal_seconds
+        ),
     }
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
@@ -474,6 +484,12 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         worker_id=overrides.get("worker_id") or "",
         assignment_scope=overrides.get("assignment_scope") or "",
         collective_learning_approval_public_key=overrides.get("collective_learning_approval_public_key") or "",
+        user_scheduling_enabled=bool(overrides.get("user_scheduling_enabled")),
+        scheduler_servicebus_namespace=overrides.get("scheduler_servicebus_namespace") or "",
+        scheduler_servicebus_queue=overrides.get("scheduler_servicebus_queue") or "",
+        scheduler_max_lock_renewal_seconds=int(
+            overrides.get("scheduler_max_lock_renewal_seconds") or 1800
+        ),
     )
     config = AgentSandboxConfig(
         subscription_id=overrides.get("subscription_id") or "",
@@ -750,6 +766,13 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "agent365_blueprint_client_id": overrides.get("agent365_blueprint_client_id") or get_config("AGENT365_BLUEPRINT_CLIENT_ID", get_config("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID")),
         "agent365_agent_identity_client_id": overrides.get("agent365_agent_identity_client_id") or get_config("AGENT365_AGENT_IDENTITY_CLIENT_ID"),
         "agent365_agent_user_id": overrides.get("agent365_agent_user_id") or get_config("AGENT365_AGENT_USER_ID"),
+        "user_scheduling_enabled": overrides.get("user_scheduling_enabled") if "user_scheduling_enabled" in overrides else get_config("USER_SCHEDULING_ENABLED").lower() in {"1", "true", "yes"},
+        "scheduler_servicebus_namespace": overrides.get("scheduler_servicebus_namespace") or get_config("SCHEDULER_SERVICEBUS_NAMESPACE"),
+        "scheduler_servicebus_queue": overrides.get("scheduler_servicebus_queue") or get_config("SCHEDULER_SERVICEBUS_QUEUE"),
+        "scheduler_max_lock_renewal_seconds": int(
+            overrides.get("scheduler_max_lock_renewal_seconds")
+            or get_config("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800")
+        ),
         "registry_username": overrides.get("registry_username") or get_config("AGENT_RUNTIME_REGISTRY_USERNAME", get_config("OPENCLAW_REGISTRY_USERNAME")),
         "registry_password": overrides.get("registry_password") or get_config("AGENT_RUNTIME_REGISTRY_PASSWORD", get_config("OPENCLAW_REGISTRY_PASSWORD")),
         "acr_name": overrides.get("acr_name") or get_config("ACR_NAME"),

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi.testclient import TestClient
 
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
@@ -41,6 +42,78 @@ from learning import (  # noqa: E402
 
 
 class HermesRuntimeTests(unittest.TestCase):
+    def test_cron_fire_and_delivery_ack_use_distinct_arguments(self):
+        calls = {}
+
+        def fire(profile_home, **kwargs):
+            calls["fire"] = kwargs
+            return {"status": "completed"}
+
+        def acknowledge(profile_home, **kwargs):
+            calls["ack"] = kwargs
+            return {"status": "delivered"}
+
+        previous = os.environ.get("API_SERVER_KEY")
+        os.environ["API_SERVER_KEY"] = "operator-key"
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                home = Path(temp_dir)
+                with (
+                    patch.object(start_hermes, "fire_cron_job", fire),
+                    patch.object(
+                        start_hermes,
+                        "acknowledge_cron_delivery",
+                        acknowledge,
+                    ),
+                ):
+                    client = TestClient(
+                        start_hermes.create_health_app(
+                            home,
+                            home,
+                            None,
+                            None,
+                        )
+                    )
+                    headers = {"X-Autopilot-Key": "operator-key"}
+                    fire_response = client.post(
+                        "/internal/cron/fire",
+                        headers=headers,
+                        json={
+                            "jobId": "job-1",
+                            "revision": "revision-1",
+                            "deliveryActivityId": "must-not-reach-fire",
+                        },
+                    )
+                    ack_response = client.post(
+                        "/internal/cron/ack-delivery",
+                        headers=headers,
+                        json={
+                            "jobId": "job-1",
+                            "revision": "revision-1",
+                            "deliveryActivityId": "activity-1",
+                        },
+                    )
+        finally:
+            if previous is None:
+                os.environ.pop("API_SERVER_KEY", None)
+            else:
+                os.environ["API_SERVER_KEY"] = previous
+
+        self.assertEqual(fire_response.status_code, 200)
+        self.assertEqual(ack_response.status_code, 200)
+        self.assertEqual(
+            calls["fire"],
+            {"job_id": "job-1", "revision": "revision-1"},
+        )
+        self.assertEqual(
+            calls["ack"],
+            {
+                "job_id": "job-1",
+                "revision": "revision-1",
+                "delivery_activity_id": "activity-1",
+            },
+        )
+
     def _git(self, repo: Path, *args: str) -> str:
         result = subprocess.run(
             ["git", *args],

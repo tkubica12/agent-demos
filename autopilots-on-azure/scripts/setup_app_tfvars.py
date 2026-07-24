@@ -169,6 +169,12 @@ def build_tfvars(
     role_release: str = "",
     role_release_commit: str = "",
     assignment_scope: str = "",
+    user_scheduling_enabled: bool | None = None,
+    user_scheduling_max_concurrent_calls: int | None = None,
+    user_scheduling_max_delivery_count: int | None = None,
+    user_scheduling_lock_renewal_seconds: int | None = None,
+    user_scheduling_keda_polling_seconds: int | None = None,
+    user_scheduling_scale_down_seconds: int | None = None,
     scheduled_learning_enabled: bool | None = None,
     scheduled_learning_initial_delay_seconds: int | None = None,
     scheduled_learning_interval_seconds: int | None = None,
@@ -190,6 +196,36 @@ def build_tfvars(
             "autopilot_name": autopilot_name,
             "agent_runtime": runtime,
             "runtime_data_volume_name": data_volume_name,
+            "user_scheduling_enabled": (
+                user_scheduling_enabled
+                if user_scheduling_enabled is not None
+                else bool(previous.get("user_scheduling_enabled", False))
+            ),
+            "user_scheduling_max_concurrent_calls": (
+                user_scheduling_max_concurrent_calls
+                if user_scheduling_max_concurrent_calls is not None
+                else int(previous.get("user_scheduling_max_concurrent_calls", 1))
+            ),
+            "user_scheduling_max_delivery_count": (
+                user_scheduling_max_delivery_count
+                if user_scheduling_max_delivery_count is not None
+                else int(previous.get("user_scheduling_max_delivery_count", 5))
+            ),
+            "user_scheduling_lock_renewal_seconds": (
+                user_scheduling_lock_renewal_seconds
+                if user_scheduling_lock_renewal_seconds is not None
+                else int(previous.get("user_scheduling_lock_renewal_seconds", 1_800))
+            ),
+            "user_scheduling_keda_polling_seconds": (
+                user_scheduling_keda_polling_seconds
+                if user_scheduling_keda_polling_seconds is not None
+                else int(previous.get("user_scheduling_keda_polling_seconds", 15))
+            ),
+            "user_scheduling_scale_down_seconds": (
+                user_scheduling_scale_down_seconds
+                if user_scheduling_scale_down_seconds is not None
+                else int(previous.get("user_scheduling_scale_down_seconds", 60))
+            ),
             "scheduled_learning_enabled": (
                 scheduled_learning_enabled
                 if scheduled_learning_enabled is not None
@@ -379,6 +415,17 @@ def main() -> None:
     parser.add_argument("--role-release-commit", default="", help="Full immutable Git commit SHA for the Role Release.")
     parser.add_argument("--assignment-scope", default="", help="Person, team, or workstream assigned to this Worker.")
     parser.add_argument(
+        "--user-scheduling-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable Hermes cron schedules through the per-Worker Service Bus queue.",
+    )
+    parser.add_argument("--user-scheduling-max-concurrent-calls", type=int, default=None)
+    parser.add_argument("--user-scheduling-max-delivery-count", type=int, default=None)
+    parser.add_argument("--user-scheduling-lock-renewal-seconds", type=int, default=None)
+    parser.add_argument("--user-scheduling-keda-polling-seconds", type=int, default=None)
+    parser.add_argument("--user-scheduling-scale-down-seconds", type=int, default=None)
+    parser.add_argument(
         "--scheduled-learning-enabled",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -476,6 +523,12 @@ def main() -> None:
         role_release=args.role_release,
         role_release_commit=args.role_release_commit,
         assignment_scope=args.assignment_scope,
+        user_scheduling_enabled=args.user_scheduling_enabled,
+        user_scheduling_max_concurrent_calls=args.user_scheduling_max_concurrent_calls,
+        user_scheduling_max_delivery_count=args.user_scheduling_max_delivery_count,
+        user_scheduling_lock_renewal_seconds=args.user_scheduling_lock_renewal_seconds,
+        user_scheduling_keda_polling_seconds=args.user_scheduling_keda_polling_seconds,
+        user_scheduling_scale_down_seconds=args.user_scheduling_scale_down_seconds,
         scheduled_learning_enabled=args.scheduled_learning_enabled,
         scheduled_learning_initial_delay_seconds=args.scheduled_learning_initial_delay_seconds,
         scheduled_learning_interval_seconds=args.scheduled_learning_interval_seconds,

@@ -95,6 +95,17 @@ resource "azurerm_container_registry" "main" {
   tags                = local.tags
 }
 
+resource "azurerm_servicebus_namespace" "scheduler" {
+  name                          = "apschedule-${local.suffix}"
+  location                      = var.apps_location
+  resource_group_name           = azurerm_resource_group.main.name
+  sku                           = "Standard"
+  local_auth_enabled            = false
+  minimum_tls_version           = "1.2"
+  public_network_access_enabled = true
+  tags                          = local.tags
+}
+
 resource "azapi_resource" "private_mcp_env" {
   type      = "Microsoft.App/managedEnvironments@2025-07-01"
   name      = "apmcp-${local.suffix}"

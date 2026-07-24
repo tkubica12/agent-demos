@@ -121,6 +121,15 @@ def bridge_instructions(request: AgentRequest) -> str:
         return quarantine_recovery_instructions()
     if request.source == "dream":
         return f"{BRIDGE_INSTRUCTIONS}\n\n{ROLE_POLICY_REFERENCE}"
+    scheduling = ""
+    if _configured_env("USER_SCHEDULING_ENABLED") == "true":
+        scheduling = (
+            "\n\nUser scheduling is enabled through Hermes native cron. When the user explicitly asks for a reminder, "
+            "one-shot task, or recurring task, use the cronjob tool. Use a self-contained prompt, reviewed Role Skills where "
+            "helpful, and deliver='local' because the bridge performs proactive delivery to the originating Teams conversation. "
+            "Never create script or no_agent cron jobs in hosted mode. Ask for missing date, time, timezone, recurrence, or "
+            "destination instead of guessing. Do not schedule access to human-owned resources that would require retained OBO."
+        )
     return (
         f"{BRIDGE_INSTRUCTIONS}\n\n"
         f"{ROLE_POLICY_REFERENCE} {GOVERNED_LEARNING_BOUNDARY} "
@@ -130,6 +139,7 @@ def bridge_instructions(request: AgentRequest) -> str:
         "Include one object for each Role Skill or Candidate Improvement changed. Use an empty array when no governed skill "
         "changed. Private Playbook changes have no provenance object. Use exactly this shape: "
         f"{PROVENANCE_SHAPE_EXAMPLE}."
+        f"{scheduling}"
     )
 
 
@@ -241,6 +251,21 @@ class HermesRuntimeAdapter:
         base_url = sandbox.endpoint_url.rstrip("/")
         api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
+        cron_jobs_before: dict[str, str] = {}
+        delivery_reference = request.metadata.get("deliveryReference")
+        if _configured_env("USER_SCHEDULING_ENABLED") == "true":
+            cron_jobs_before = {
+                str(job.get("id") or ""): str(job.get("revision") or "")
+                for job in await self._cron_jobs(base_url, api_key)
+            }
+            if isinstance(delivery_reference, dict):
+                await self._cron_request(
+                    base_url,
+                    api_key,
+                    "POST",
+                    "/internal/cron/delivery-reference",
+                    body=delivery_reference,
+                )
         snapshot_token, recovered_unprovenanced = await self._begin_learning_turn(base_url, api_key)
         quarantine_recovery = None
         quarantine_recovery_error = None
@@ -299,6 +324,53 @@ class HermesRuntimeAdapter:
                 f"{visible_text}\n\n"
                 "A direct CLI skill change remains quarantined. Run Dreaming to reconcile it."
             ).strip()
+        scheduled_jobs: list[str] = []
+        if _configured_env("USER_SCHEDULING_ENABLED") == "true":
+            cron_jobs_after = await self._cron_jobs(base_url, api_key)
+            cron_jobs_after_by_id = {
+                str(job.get("id") or ""): str(job.get("revision") or "")
+                for job in cron_jobs_after
+            }
+            scheduled_jobs = [
+                str(job.get("id") or "")
+                for job in cron_jobs_after
+                if str(job.get("id") or "") not in cron_jobs_before
+            ]
+            if scheduled_jobs and not isinstance(delivery_reference, dict):
+                raise RuntimeError(
+                    "Hermes created a cron job without a supported proactive delivery destination."
+                )
+            if scheduled_jobs and isinstance(delivery_reference, dict):
+                await self._cron_request(
+                    base_url,
+                    api_key,
+                    "POST",
+                    "/internal/cron/bind-delivery",
+                    body={
+                        "jobIds": scheduled_jobs,
+                        "referenceKey": delivery_reference.get("referenceKey"),
+                    },
+                )
+            if cron_jobs_after_by_id != cron_jobs_before:
+                await self._cron_request(
+                    base_url,
+                    api_key,
+                    "POST",
+                    "/internal/cron/reconcile",
+                    body={},
+                )
+                cron_jobs_after = await self._cron_jobs(base_url, api_key)
+            unscheduled_jobs = [
+                str(job.get("id") or "")
+                for job in cron_jobs_after
+                if str(job.get("id") or "") in scheduled_jobs
+                and not job.get("externallyScheduled")
+            ]
+            if unscheduled_jobs:
+                raise RuntimeError(
+                    "Hermes created cron jobs that were not armed in Service Bus: "
+                    + ", ".join(unscheduled_jobs)
+                )
         return AgentResponse(
             text=visible_text,
             raw={
@@ -312,6 +384,7 @@ class HermesRuntimeAdapter:
                 "learningCaptureError": learning_error,
                 "quarantineRecovery": quarantine_recovery,
                 "quarantineRecoveryError": quarantine_recovery_error,
+                "scheduledJobs": scheduled_jobs,
             },
         )
 
@@ -395,6 +468,134 @@ class HermesRuntimeAdapter:
     async def export_collective_learning(self) -> dict[str, Any]:
         async with self._learning_lock:
             return await self._collective_learning_request("GET", "/internal/collective-learning/export")
+
+    async def fire_cron_job(
+        self,
+        *,
+        job_id: str,
+        revision: str,
+    ) -> dict[str, Any]:
+        async with self._learning_lock:
+            config = self._sandbox_config_factory()
+            credential = self._credential_factory()
+            async with self._sandbox_lock:
+                sandbox = await asyncio.to_thread(
+                    self._ensure_sandbox,
+                    config,
+                    credential=credential,
+                )
+            if not sandbox.endpoint_url:
+                raise RuntimeError(
+                    f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
+                )
+            base_url = sandbox.endpoint_url.rstrip("/")
+            api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+            await self._wait_for_health(base_url, api_key)
+            result = await self._cron_request(
+                base_url,
+                api_key,
+                "POST",
+                "/internal/cron/fire",
+                body={"jobId": job_id, "revision": revision},
+                timeout=1800,
+            )
+            return {
+                **result,
+                "sandboxId": sandbox.sandbox_id,
+                "reusedExistingSandbox": sandbox.reused_existing_sandbox,
+            }
+
+    async def ensure_runtime(self) -> dict[str, Any]:
+        config = self._sandbox_config_factory()
+        credential = self._credential_factory()
+        async with self._sandbox_lock:
+            sandbox = await asyncio.to_thread(
+                self._ensure_sandbox,
+                config,
+                credential=credential,
+            )
+        if not sandbox.endpoint_url:
+            raise RuntimeError(
+                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
+            )
+        base_url = sandbox.endpoint_url.rstrip("/")
+        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        await self._wait_for_health(base_url, api_key)
+        return {
+            "sandboxId": sandbox.sandbox_id,
+            "gatewayUrl": sandbox.endpoint_url,
+            "reusedExistingSandbox": sandbox.reused_existing_sandbox,
+            "dataVolume": sandbox.data_volume,
+        }
+
+    async def acknowledge_cron_delivery(
+        self,
+        *,
+        job_id: str,
+        revision: str,
+        delivery_activity_id: str = "",
+    ) -> dict[str, Any]:
+        config = self._sandbox_config_factory()
+        credential = self._credential_factory()
+        async with self._sandbox_lock:
+            sandbox = await asyncio.to_thread(
+                self._ensure_sandbox,
+                config,
+                credential=credential,
+            )
+        if not sandbox.endpoint_url:
+            raise RuntimeError(
+                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
+            )
+        base_url = sandbox.endpoint_url.rstrip("/")
+        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        await self._wait_for_health(base_url, api_key)
+        return await self._cron_request(
+            base_url,
+            api_key,
+            "POST",
+            "/internal/cron/ack-delivery",
+            body={
+                "jobId": job_id,
+                "revision": revision,
+                "deliveryActivityId": delivery_activity_id,
+            },
+        )
+
+    async def _cron_jobs(self, base_url: str, api_key: str) -> list[dict[str, Any]]:
+        payload = await self._cron_request(
+            base_url,
+            api_key,
+            "GET",
+            "/internal/cron/jobs",
+        )
+        jobs = payload.get("jobs")
+        if not isinstance(jobs, list):
+            raise RuntimeError("Hermes cron jobs endpoint returned no jobs array.")
+        return [job for job in jobs if isinstance(job, dict)]
+
+    async def _cron_request(
+        self,
+        base_url: str,
+        api_key: str,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        timeout: int = 60,
+    ) -> dict[str, Any]:
+        async with self._client_factory(timeout=timeout) as client:
+            response = await client.request(
+                method,
+                f"{base_url}{path}",
+                headers={"X-Autopilot-Key": api_key},
+                json=body,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Hermes {path} returned a non-object response.")
+        return payload
 
     async def _collective_learning_request(
         self,

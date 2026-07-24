@@ -78,6 +78,14 @@ output "runtime_disk_image_name" {
   value = local.runtime_disk_image_name
 }
 
+output "user_scheduling_enabled" {
+  value = var.agent_runtime == "hermes" && var.user_scheduling_enabled
+}
+
+output "scheduler_servicebus_queue_name" {
+  value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? azurerm_servicebus_queue.worker_schedule[0].name : ""
+}
+
 output "scheduled_learning_enabled" {
   value = var.agent_runtime == "hermes" && var.scheduled_learning_enabled
 }

@@ -30,6 +30,7 @@ locals {
   public_mcp_app_name         = "apshipmcp-${var.autopilot_name}-${local.suffix}"
   bridge_app_name             = "autopilot-bridge-${var.autopilot_name}-${local.suffix}"
   scheduled_learning_job_name = "aplearn-${var.autopilot_name}-${local.suffix}"
+  scheduler_queue_name        = "worker-${var.autopilot_name}"
   runtime_image               = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
   runtime_disk_image_name = (
     var.runtime_disk_image_name != "openclaw-gateway-image-with-private-mcp" || var.openclaw_disk_image_name == ""
@@ -88,6 +89,58 @@ resource "azurerm_role_assignment" "bridge_sandbox_data_owner" {
   role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
   principal_id       = azurerm_user_assigned_identity.bridge.principal_id
   principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_servicebus_queue" "worker_schedule" {
+  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? 1 : 0
+
+  name                                    = local.scheduler_queue_name
+  namespace_id                            = data.terraform_remote_state.platform.outputs.scheduler_servicebus_namespace_id
+  lock_duration                           = "PT5M"
+  max_delivery_count                      = var.user_scheduling_max_delivery_count
+  default_message_ttl                     = "P14D"
+  dead_lettering_on_message_expiration    = true
+  duplicate_detection_history_time_window = "PT1H"
+  requires_duplicate_detection            = true
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.agent365_tenant_id != ""
+        && var.agent365_client_id != ""
+        && var.agent365_agent_identity_client_id != ""
+        && var.agent365_agent_identity_object_id != ""
+      )
+      error_message = "User scheduling requires Agent 365 tenant, blueprint client, Agent Identity client, and Agent Identity object IDs."
+    }
+  }
+}
+
+resource "azurerm_role_assignment" "bridge_schedule_sender" {
+  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? 1 : 0
+
+  scope                = azurerm_servicebus_queue.worker_schedule[0].id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = azurerm_user_assigned_identity.bridge.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "bridge_schedule_receiver" {
+  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? 1 : 0
+
+  scope                = azurerm_servicebus_queue.worker_schedule[0].id
+  role_definition_name = "Azure Service Bus Data Receiver"
+  principal_id         = azurerm_user_assigned_identity.bridge.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "agent_identity_schedule_sender" {
+  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled && var.agent365_agent_identity_object_id != "" ? 1 : 0
+
+  scope                = azurerm_servicebus_queue.worker_schedule[0].id
+  role_definition_name = "Azure Service Bus Data Sender"
+  principal_id         = var.agent365_agent_identity_object_id
+  principal_type       = "ServicePrincipal"
 }
 
 resource "azapi_resource" "private_mcp_app" {
@@ -411,8 +464,21 @@ resource "azapi_resource" "bridge_app" {
                 secretRef = "previous-api-server-key"
               },
               {
-                name  = "RUNTIME_CONFIG_REVISION"
-                value = substr(sha256(var.api_server_key), 0, 16)
+                name = "RUNTIME_CONFIG_REVISION"
+                value = substr(sha256(jsonencode({
+                  apiServerKey = var.api_server_key
+                  agentIdentity = {
+                    tenantId              = var.agent365_tenant_id
+                    blueprintClientId     = var.agent365_client_id
+                    agentIdentityClientId = var.agent365_agent_identity_client_id
+                    agentUserId           = var.agent365_agent_user_id
+                  }
+                  scheduler = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? {
+                    namespace          = data.terraform_remote_state.platform.outputs.scheduler_servicebus_fully_qualified_namespace
+                    queue              = azurerm_servicebus_queue.worker_schedule[0].name
+                    lockRenewalSeconds = var.user_scheduling_lock_renewal_seconds
+                  } : null
+                })), 0, 16)
               },
               {
                 name      = "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"
@@ -601,15 +667,52 @@ resource "azapi_resource" "bridge_app" {
               {
                 name  = "SCHEDULED_LEARNING_ALLOWED_OBJECT_IDS"
                 value = var.scheduled_learning_allowed_object_ids
+              },
+              {
+                name  = "USER_SCHEDULING_ENABLED"
+                value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? "true" : "false"
+              },
+              {
+                name  = "SCHEDULER_SERVICEBUS_NAMESPACE"
+                value = data.terraform_remote_state.platform.outputs.scheduler_servicebus_fully_qualified_namespace
+              },
+              {
+                name  = "SCHEDULER_SERVICEBUS_QUEUE"
+                value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? azurerm_servicebus_queue.worker_schedule[0].name : ""
+              },
+              {
+                name  = "SCHEDULER_MAX_LOCK_RENEWAL_SECONDS"
+                value = tostring(var.user_scheduling_lock_renewal_seconds)
+              },
+              {
+                name  = "SCHEDULER_MAX_DELIVERY_COUNT"
+                value = tostring(var.user_scheduling_max_delivery_count)
               }
             ]
           }
 
         ]
         scale = {
-          minReplicas = var.agent_runtime == "hermes" && var.scheduled_learning_enabled ? 1 : 0
-          maxReplicas = 1
-          rules       = []
+          minReplicas     = var.agent_runtime == "hermes" && var.scheduled_learning_enabled ? 1 : 0
+          maxReplicas     = 1
+          pollingInterval = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? var.user_scheduling_keda_polling_seconds : null
+          cooldownPeriod  = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? var.user_scheduling_scale_down_seconds : null
+          rules = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? [
+            {
+              name = "scheduled-work"
+              custom = {
+                type = "azure-servicebus"
+                metadata = {
+                  queueName              = azurerm_servicebus_queue.worker_schedule[0].name
+                  namespace              = data.terraform_remote_state.platform.outputs.scheduler_servicebus_namespace_name
+                  messageCount           = "1"
+                  activationMessageCount = "0"
+                }
+                auth     = []
+                identity = azurerm_user_assigned_identity.bridge.id
+              }
+            }
+          ] : []
         }
       }
     }
@@ -621,6 +724,8 @@ resource "azapi_resource" "bridge_app" {
   depends_on = [
     azurerm_role_assignment.bridge_acr_pull,
     azurerm_role_assignment.bridge_sandbox_data_owner,
+    azurerm_role_assignment.bridge_schedule_sender,
+    azurerm_role_assignment.bridge_schedule_receiver,
     azapi_resource.private_mcp_app
   ]
 }

@@ -609,7 +609,7 @@ Work History                         |
 6. Status must expose timestamps, counts, current Role Release, last Dream summary, last prepared packet digest, and sanitized failures without private content.
 7. A bridge-owned timer is permitted for classroom demonstrations but requires a non-zero bridge replica.
 8. The current production scheduler is an Azure Container Apps scheduled Job calling a managed-identity-protected bridge endpoint; it receives no stored Worker or bridge keys.
-9. A12 migrates Dreaming to a per-Worker Service Bus queue that directly scales the bridge under ADR 0015.
+9. A12.1 migrates Dreaming to a per-Worker Service Bus queue that directly scales the bridge under ADR 0015.
 10. The scheduled ACA Job must remain until Service Bus Dreaming passes parity validation, then be removed.
 
 ### User-scheduled Worker tasks
@@ -624,6 +624,7 @@ Work History                         |
 8. Scheduled results preserve their originating private/public delivery boundary.
 9. Initial hosted schedules support autonomous Agent Identity/Agent User work, prompt jobs, and reviewed Role Skills; arbitrary scripts and durable human OBO are excluded.
 10. Worker Refresh preserves schedule state, provider reconciliation metadata, and execution history.
+11. Proactive Teams output requires a persisted filtered conversation reference from an existing installed conversation. Hermes execution is at-most-once per revision, while the final Teams send is at-least-once because Teams and Service Bus cannot share one transaction.
 
 ### Repeatable demonstration cohorts
 

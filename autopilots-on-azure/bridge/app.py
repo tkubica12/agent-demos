@@ -23,7 +23,12 @@ from pydantic import BaseModel, Field
 
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.factory import create_runtime_adapter, runtime_kind_from_env
+from bridge.proactive_delivery import (
+    delivery_reference_metadata,
+    send_proactive_activity,
+)
 from bridge.scheduler_auth import require_scheduler_identity
+from bridge.servicebus_scheduler import ServiceBusScheduleConsumer
 from bridge.scheduled_learning import (
     RETRYABLE_ERRORS,
     ScheduledLearningCoordinator,
@@ -62,6 +67,10 @@ scheduled_learning = ScheduledLearningCoordinator(
     worker_id=os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "worker")),
 )
 
+schedule_consumer = ServiceBusScheduleConsumer(
+    handler=lambda payload: process_scheduled_message(payload)
+)
+
 
 class InvokeRequest(BaseModel):
     conversation_id: str = Field(alias="conversationId", min_length=1)
@@ -98,10 +107,12 @@ class CollectiveLearningApprovalRequest(BaseModel):
 @app.on_event("startup")
 async def start_scheduled_learning() -> None:
     await scheduled_learning.start()
+    schedule_consumer.start(asyncio.get_running_loop())
 
 
 @app.on_event("shutdown")
 async def stop_scheduled_learning() -> None:
+    await asyncio.to_thread(schedule_consumer.stop)
     await scheduled_learning.stop()
 
 
@@ -862,6 +873,79 @@ async def scheduled_learning_status(http_request: Request) -> dict[str, Any]:
     return scheduled_learning.status()
 
 
+@app.get("/internal/user-scheduling/status")
+async def user_scheduling_status(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    return schedule_consumer.status()
+
+
+@app.post("/internal/runtime/ensure")
+async def ensure_runtime_status(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Runtime ensure is supported only by Hermes.")
+    return await adapter.ensure_runtime()
+
+
+async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
+    message_type = str(payload.get("type") or "")
+    if message_type == "system.dream":
+        result = await scheduled_learning.run_once()
+        return {"status": "completed", "type": message_type, "result": result}
+    if message_type != "hermes.cron.fire":
+        raise ValueError(f"Unsupported scheduled message type: {message_type!r}.")
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise RuntimeError("User scheduling is supported only by Hermes.")
+    result = await adapter.fire_cron_job(
+        job_id=str(payload.get("jobId") or ""),
+        revision=str(payload.get("revision") or ""),
+    )
+    deadline = (
+        asyncio.get_running_loop().time()
+        + int(os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800"))
+        - 30
+    )
+    while result.get("status") == "in_progress":
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError("Scheduled Hermes execution is still in progress.")
+        await asyncio.sleep(15)
+        result = await adapter.fire_cron_job(
+            job_id=str(payload.get("jobId") or ""),
+            revision=str(payload.get("revision") or ""),
+        )
+    delivery = result.get("deliveryReference")
+    output = str(result.get("output") or "").strip()
+    if result.get("status") in {"completed", "pending_delivery"}:
+        if not output:
+            raise RuntimeError("Scheduled Hermes execution returned no output.")
+        if isinstance(delivery, dict):
+            delivery_result = await send_proactive_activity(
+                agent365_adapter,
+                delivery,
+                output,
+            )
+            result["delivered"] = True
+        elif result.get("deliveryMode") == "local":
+            result["delivered"] = False
+        else:
+            raise RuntimeError("Scheduled Hermes execution has no Teams delivery binding.")
+        await adapter.acknowledge_cron_delivery(
+            job_id=str(payload.get("jobId") or ""),
+            revision=str(payload.get("revision") or ""),
+            delivery_activity_id=str(
+                (delivery_result if isinstance(delivery, dict) else {}).get(
+                    "activityId"
+                )
+                or ""
+            ),
+        )
+    else:
+        result["delivered"] = False
+    return result
+
+
 @agent365_app.activity("message")
 async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
     conversation_type = teams_conversation_type(ctx.activity)
@@ -1178,6 +1262,16 @@ async def run_agent_runtime_for_teams(
             source=teams_runtime_source(ctx.activity),
             user_id=user_id(ctx.activity),
             must_answer=not suppress_no_response,
+            metadata={
+                "deliveryReference": delivery_reference_metadata(
+                    ctx,
+                    worker_id=os.getenv(
+                        "WORKER_ID",
+                        os.getenv("AUTOPILOT_NAME", "worker"),
+                    ),
+                    boundary=auth_context.conversation_boundary,
+                )
+            },
             auth_context=auth_context,
             on_delta=emit_delta if show_public_progress else None,
         )
