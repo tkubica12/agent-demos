@@ -874,9 +874,9 @@
           <article class="card"><span class="card-index">SERVERLESS REVIEW</span><h3>Express is a gated future option</h3><p>ACA Express advertises subsecond scale-from-zero, but currently lacks required identity, networking, probes, regions, and SLA. ADR 0001 requires capability gates and measured Agent 365 p95 acknowledgement before returning the bridge to zero replicas.</p></article>
           <article class="card"><span class="card-index">SANDBOX</span><h3>Replace compute, retain disk</h3><p>Config/image/identity label drift replaces the Sandbox. Worker state remains on the named Data Disk.</p></article>
           <article class="card"><span class="card-index">DOCUMENT VERSION</span><h3>Baseline, validate, then publish</h3><p>Microsoft 365-targeted Open XML validation records source defects before editing. Unchanged legacy errors may remain; any error introduced by Hermes blocks upload. ETag conflicts never overwrite human work.</p></article>
-          <article class="card"><span class="card-index">OFFICE LOCK</span><h3>Original first, explicit escape hatch</h3><p>A validated <code>423 Locked</code> edit remains in bounded private storage while short upload-only retries run. Persistent locks offer retry-original, send-copy, or cancel; checkout is never used to block coauthors.</p></article>
+          <article class="card"><span class="card-index">OFFICE LOCK</span><h3>Original first, useful fallback</h3><p>A validated <code>423 Locked</code> edit remains in bounded private storage. Teams offers retry-original or a shared copy; a Word comment returns the exact proposed content, rationale, and explicit not-applied status in the same thread.</p></article>
           <article class="card"><span class="card-index">PRIVATE FILE</span><h3>Cleanup is part of the transaction</h3><p>Downloads remain under one private workspace. Success, cancellation, validation failure, terminal failure, or bounded pending-operation expiry deletes the staged bytes and edit intent.</p></article>
-          <article class="card"><span class="card-index">NOTIFICATION</span><h3>Unknown delivery guarantees</h3><p>Microsoft does not document retry semantics for Agent 365 notifications. Stable email/document/comment IDs make handlers defensively idempotent.</p></article>
+          <article class="card"><span class="card-index">NOTIFICATION</span><h3>Workload-local and idempotent</h3><p>Email and Office notifications reuse <code>/api/messages</code>, stable workload IDs, and persistence-disabled turns. Responses stay in the originating workload; Word retries require a fresh explicit mention.</p></article>
           <article class="card"><span class="card-index">OBSERVABILITY</span><h3>Sanitized persistent diagnostics</h3><p>Queue counters, provider schedule, bindings, execution receipts, system receipts, and packet summaries exclude prompts and token material.</p></article>
         </div>
         <div class="callout">
@@ -888,7 +888,7 @@
 
       <footer class="footer">
         <span>Autopilots on Azure · Hermes architecture</span>
-        <span>Current implementation · Updated 2026-07-25</span>
+        <span>Current implementation · Updated 2026-07-28</span>
       </footer>
     </main>
   </div>

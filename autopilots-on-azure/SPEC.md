@@ -314,7 +314,7 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 11. Existing Office body edits must prefer ETag-protected same-item publishing so sharing, comments, mentions, tracked changes, and version history remain attached to one document.
 12. A validated edit blocked by a transient Microsoft 365 lock may remain in Worker-private storage under an opaque operation ID for at most 24 hours and one hour by default. The identifier and private path must never be exposed to the user or persisted in memory or learning artifacts.
 13. Lock recovery must retry only the retained publish in short bounded attempts. A reconstructible guarded edit may be reapplied to a newer source ETag; an opaque local transformation must fail closed when the source changed.
-14. After bounded retries, the Worker must ask whether to retry the original, return an edited copy, or cancel. It must not silently create a copy or use checkout to block coauthors.
+14. After bounded retries, the Worker must ask whether to retry the original, return an edited copy, or cancel. It must not silently create a copy or use checkout to block coauthors. For Word comment-originated work, the comment thread remains the primary review surface: a failed publish must return the exact proposed content, concise rationale, explicit not-applied status, and a fresh-mention retry instruction in that thread.
 15. A fallback copy must be created under Agent User identity and returned through the originating Teams context with an explicit warning that it has independent sharing, comments, and version history.
 16. Pending publishes must be bound to a hashed stable conversation scope. A new native transcript may recover matching internal operation IDs through that scope, but operation IDs and scope values must never appear in user-visible output, memory, Work History, learning records, or diagnostics.
 17. Activity Protocol may acknowledge a Teams attachment before its agent callback finishes, so HTTP concurrency alone is not a processing lease. The bridge scale-down cooldown must exceed the maximum runtime turn timeout; the default is 900 seconds for a 600-second Hermes timeout. The bridge still scales to zero after the bounded cooldown.
@@ -673,7 +673,7 @@ Work History                         |
 - OpenClaw does not yet implement the complete Hermes Role Blueprint and Collective Learning Review lifecycle.
 - Multi-Worker Collective Learning Review is live-validated with two independent Worker packets.
 - Scheduled Dreaming and user schedules share the unified Service Bus/KEDA bridge trigger; the former ACA scheduled Job is removed.
-- Agent 365 Email and Word/Excel/PowerPoint comment notification routing is implemented on the existing Activity Protocol endpoint; live workload mention validation remains.
+- Agent 365 Email and Word/Excel/PowerPoint comment notification routing is live-validated on the existing Activity Protocol endpoint.
 - Hermes supports bounded Teams DOCX and UTF-8 text attachment ingestion; OpenClaw rejects attachments until it has an equivalent private learning transaction.
 - PDF and image attachment ingestion remain unsupported. A14 supports shared Excel workbook range collaboration and bounded shared PowerPoint text extraction, not direct Teams attachment ingestion for those formats.
 - Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.

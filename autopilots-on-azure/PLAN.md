@@ -6,7 +6,7 @@ This file tracks delivery status and future work. Product requirements and archi
 
 ## Current snapshot
 
-As of 2026-07-24:
+As of 2026-07-28:
 
 - OpenClaw and Hermes run side by side through separate bridge Container Apps and Terraform workspaces.
 - Both runtimes use Sweden Central ACA Sandboxes and Foundry `gpt-5-6-terra`.
@@ -41,7 +41,7 @@ As of 2026-07-24:
 | A12 - User-scheduled Worker tasks | Complete | Hermes-native schedules, Service Bus/KEDA wake, crash-safe execution, schedule management, and visible proactive personal Teams delivery. |
 | A12.1 - Unified Dreaming scheduler | Complete | Queue-driven `system.dream`, scale-to-zero wake, packet-preparation parity, durable system receipts, and removal of the A11 ACA Job. |
 | A13 - Document-aware work and attachments | Complete | Secure DOCX/text attachment ingestion and live Work IQ Word create/read/comment/reply operations are validated in Teams and through the repeatable smoke. |
-| A14 - Microsoft 365 knowledge and actions | Planned | SharePoint, OneDrive, Mail, Teams, Calendar, Word, and notification workload actions through Agent User identity. |
+| A14 - Microsoft 365 knowledge and actions | Complete | Agent User knowledge and actions across SharePoint, OneDrive, Mail, Teams, Calendar, Word, Excel, and workload notifications. |
 | A15 - Teams targeted private messaging | Planned | Private `/WorkerName` invocation inside supported group conversations. |
 
 ## Immediate work
@@ -222,16 +222,16 @@ Exit criteria:
 
 Goal: prove the Agent User can find organizational knowledge and perform governed Microsoft 365 actions through Microsoft-managed Work IQ MCP servers while retaining Teams Activity Protocol for existing chat conversations.
 
-Status: In progress. Hermes 2 now has live Agent User Mail, Teams, Calendar, OneDrive, SharePoint, Word, tenant-preview Excel, and M365 Copilot servers. Proactive one-to-one chat, Teams file delivery, directory resolution, same-item tracked Word updates, Agent User version attribution, and Excel range writes are live-validated. Email and Office notification handlers reuse `/api/messages`; live mention delivery remains to validate.
+Status: Complete. Hermes 2 has live-validated Agent User Mail, Teams, Calendar, OneDrive, SharePoint, Word, tenant-preview Excel, M365 Copilot, and Email/Word/Excel/PowerPoint notification handling. Word comments remain useful when body publication is locked by returning the proposed content in the originating thread.
 
 Tasks:
 
 - Complete: expand the Agent 365 tooling manifest and Agent User proxy to Mail, Calendar, SharePoint, OneDrive, Teams, Word, tenant-preview Excel, and M365 Copilot.
-- In progress: validate SharePoint and OneDrive search, result grounding, metadata retrieval, and authorized file operations with explicit preview-size limits.
+- Complete: validate SharePoint and OneDrive search, result grounding, metadata retrieval, and authorized file operations with explicit preview-size limits.
 - Complete: validate a real Mail send through the Agent User; retain explicit confirmation before externally visible send operations.
 - Complete: validate Teams `CreateChat` and `SendMessageToChat` for proactive one-to-one outreach, including independent message read-back. Keep this separate from Activity Protocol continuation into an existing bot conversation.
 - Complete: select ADR 0017's Hermes-native messaging lifecycle: bounded transcript IDs created through `/api/sessions`, stable per-conversation memory keys, and native compression/Work History instead of one lifetime Teams transcript or a parallel continuity store. The initial daily bucket was tightened to hourly after document-heavy validation.
-- Validate Calendar free/busy, meeting-time suggestions, event creation, update, cancellation, and proposal flows with explicit confirmation before consequential writes.
+- Complete: validate Calendar free/busy, meeting-time suggestions, event creation, update, cancellation, and proposal flows with explicit confirmation before consequential writes.
 - Reuse A13 for Word content, comments, document IDs, and sharing URLs.
 - Complete: select ADR 0016's thin Agent User Graph file bridge plus the MIT MiniMax document skills pinned to a reviewed commit. Word uses MiniMax's Microsoft Open XML CLI and hard validation gates; a small original `office-collaboration` policy skill orchestrates identity-safe download, fixed tool wrappers, upload, and cleanup without copying Anthropic's restricted document skills.
 - Complete: validate tenant-preview Excel workbook creation and Agent User range writes/read-back through the native Graph workbook API.
@@ -249,9 +249,11 @@ Tasks:
 - Complete: document the observed WOPI behavior: lock refresh resets a 30-minute expiry, Graph `423 notAllowed` does not reveal the holder, and Teams/Word/service activity may refresh the lock without a desktop file being open.
 - Complete: select ADR 0019's predefined document-lock Teams suggested actions and deterministic 24-hour Service Bus retry workflow with ETag rebase, receipts, proactive completion, and explicitly shared copy fallback. A live probe showed proactive Agent 365 delivery strips Adaptive Card attachments, so Adaptive Cards remain an A16 investigation.
 - Complete: resolve the invoking human's mail/UPN from the Teams Entra object ID so delivery offers can name the known destination instead of asking for an address already available in Microsoft 365.
-- Implemented, pending live validation: route Agent 365 Email and Word/Excel/PowerPoint comment notifications through the existing `/api/messages` endpoint with stable workload/item IDs and persistence-disabled turns.
-- Reply through the originating workload rather than silently redirecting output to Teams.
-- Preserve runtime selection, Agent Identity/Agent User distinction, privacy boundaries, and learning exclusions.
+- Complete: live-validate a Word @mention notification through `/api/messages`; Hermes read `Research on AI.docx` and added reply comment `3EB21EB5` under Agent User identity.
+- Complete: live-validate Agent 365 Email and Excel/PowerPoint comment notifications through the existing `/api/messages` endpoint with stable workload/item IDs and persistence-disabled turns.
+- Complete: keep Word comments as the primary review surface. If an existing-body publish is locked, reply with the exact proposed content, rationale, explicit not-applied status, and a fresh-mention retry instruction.
+- Complete: reply through the originating workload rather than silently redirecting output to Teams.
+- Complete: preserve runtime selection, Agent Identity/Agent User distinction, privacy boundaries, and learning exclusions.
 - Complete: record and enforce the current product gap: this tenant catalogs a preview Excel MCP with create/read/comment tools, but no dedicated PowerPoint MCP. The original runtime skill can read and narrowly edit local PPTX files through Microsoft Open XML after Agent User download; PowerPoint has no tracked-changes model.
 
 Exit criteria:

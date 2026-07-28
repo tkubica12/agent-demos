@@ -585,6 +585,8 @@ To validate notifications:
 
 Notifications reuse `/api/messages`, Agent 365 Activity Protocol authentication, and ACA HTTP scaling. They do not require Graph webhooks, Event Grid, a second endpoint, or Service Bus ingress. Delivery retry guarantees are currently undocumented, so handlers use stable workload IDs and must remain idempotent.
 
+For a Word comment that requests a body edit, the comment thread is the primary review surface. An unlocked document is updated and acknowledged there. If Microsoft 365 blocks publication, Hermes replies with the exact proposed content, concise rationale, explicit not-applied status, and a fresh-mention retry instruction instead of returning only a lock notice.
+
 ## What the demo proves
 
 - Worker identity is autonomous and independently authorized.

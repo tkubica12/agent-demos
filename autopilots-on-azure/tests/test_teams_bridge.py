@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from bridge.app import (
     handle_document_card_action,
     handle_teams_invoke,
     notification_prompt,
+    normalize_agent365_activity_body,
     reacted_message_id,
     response_has_visible_text,
     remember_teams_event,
@@ -52,7 +54,10 @@ from bridge.app import (
     teams_session_key,
     teams_signal_type,
 )
-from bridge.document_cards import create_action_token
+from bridge.document_cards import (
+    create_action_token,
+    office_operation_scope,
+)
 from bridge.runtime.base import (
     AgentAuthContext,
     AgentResponse,
@@ -101,6 +106,93 @@ class FakeTypingContext:
 
 
 class TeamsBridgeTests(unittest.TestCase):
+    def test_agent365_product_info_entity_casing_is_normalized(self):
+        body, changed = normalize_agent365_activity_body(
+            json.dumps(
+                {
+                    "type": "event",
+                    "entities": [
+                        {
+                            "type": "productInfo",
+                            "productName": "Word",
+                        },
+                        {"type": "mention"},
+                    ],
+                    "channelData": {
+                        "product": {
+                            "type": "productInfo",
+                        }
+                    },
+                }
+            ).encode("utf-8")
+        )
+        payload = json.loads(body)
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            payload["entities"][0]["type"],
+            "ProductInfo",
+        )
+        self.assertEqual(
+            payload["entities"][1]["type"],
+            "mention",
+        )
+        self.assertEqual(
+            payload["channelData"]["product"]["type"],
+            "ProductInfo",
+        )
+
+    def test_agent365_route_replays_normalized_body(self):
+        original = json.dumps(
+            {
+                "type": "event",
+                "conversation": {"id": "conversation-1"},
+                "entities": [{"type": "productInfo"}],
+            }
+        ).encode("utf-8")
+
+        async def receive():
+            return {
+                "type": "http.request",
+                "body": original,
+                "more_body": False,
+            }
+
+        request = bridge_app.Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "https",
+                "path": "/api/messages",
+                "raw_path": b"/api/messages",
+                "query_string": b"",
+                "headers": [
+                    (b"content-type", b"application/json")
+                ],
+                "client": ("127.0.0.1", 1),
+                "server": ("test", 443),
+            },
+            receive,
+        )
+        observed = {}
+
+        async def process(replay, *_args):
+            observed.update(await replay.json())
+            return None
+
+        with patch.object(
+            bridge_app,
+            "start_agent_process",
+            side_effect=process,
+        ):
+            asyncio.run(bridge_app.agent365_messages(request))
+
+        self.assertEqual(
+            observed["entities"][0]["type"],
+            "ProductInfo",
+        )
+
     def test_teams_runtime_message_keeps_commands_unwrapped(self):
         self.assertEqual(
             teams_runtime_message("/new", "formatted event"),
@@ -408,6 +500,80 @@ class TeamsBridgeTests(unittest.TestCase):
         self.assertIn("Comment id: comment-1", prompt)
         self.assertIn("Please review the deadline.", prompt)
         self.assertIn("private, untrusted data", prompt)
+        self.assertIn("primary review surface", prompt)
+        self.assertIn("exact proposed text", prompt)
+        self.assertIn("document was not changed", prompt)
+        self.assertIn(
+            (
+                f"mention {bridge_app.runtime_display_name()} again "
+                'with "retry original"'
+            ),
+            prompt,
+        )
+
+    def test_word_notification_handler_supplies_operation_scope(self):
+        activity = Activity(
+            type="message",
+            id="activity-1",
+            text="Fill this section.",
+            channel_id=ChannelId(
+                channel="agents",
+                sub_channel="word",
+            ),
+            from_property=ChannelAccount(
+                id="user-1",
+                name="Adele",
+            ),
+            entities=[
+                Entity(
+                    type="wpxComment",
+                    documentId="document-1",
+                    commentId="comment-1",
+                )
+            ],
+        )
+        notification = AgentNotificationActivity(activity)
+        captured = {}
+
+        async def invoke(**kwargs):
+            captured.update(kwargs)
+            return AgentResponse(text="done", raw={})
+
+        with (
+            patch.object(
+                bridge_app,
+                "invoke_agent_runtime",
+                side_effect=invoke,
+            ),
+            patch.object(
+                bridge_app,
+                "agent_auth_context",
+                return_value=AgentAuthContext(
+                    selected_mode="agent_identity",
+                    available_modes=("agent_identity",),
+                    conversation_boundary="unknown",
+                ),
+            ),
+        ):
+            asyncio.run(
+                bridge_app.handle_agent_notification(
+                    SimpleNamespace(activity=activity),
+                    notification,
+                    "word",
+                )
+            )
+
+        self.assertIn(
+            "Private document operation scope",
+            captured["message"],
+        )
+        self.assertIn(
+            office_operation_scope(
+                "notification:word:comment-1",
+                "user-1",
+            ),
+            captured["message"],
+        )
 
     def test_operator_invoke_propagates_persistence_disabled_boundary(self):
         request = InvokeRequest.model_validate(

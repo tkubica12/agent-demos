@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import os
 import secrets
 import re
@@ -75,11 +76,21 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
         connection_manager = MsalConnectionManager(**configuration)
         adapter = CloudAdapter(connection_manager=connection_manager)
         authorization = Authorization(storage, connection_manager, **configuration)
-        agent = AgentApplication[TurnState](storage=storage, adapter=adapter, authorization=authorization, **configuration)
+        agent = AgentApplication[TurnState](
+            storage=storage,
+            adapter=adapter,
+            authorization=authorization,
+            start_typing_timer=False,
+            **configuration,
+        )
         return agent, adapter
 
     adapter = CloudAdapter()
-    agent = AgentApplication[TurnState](storage=storage, adapter=adapter)
+    agent = AgentApplication[TurnState](
+        storage=storage,
+        adapter=adapter,
+        start_typing_timer=False,
+    )
     return agent, adapter
 
 
@@ -736,7 +747,66 @@ def health() -> dict[str, str]:
 
 @app.post("/api/messages")
 async def agent365_messages(request: Request):
-    return await start_agent_process(request, agent365_app, agent365_adapter)
+    body = await request.body()
+    body, normalized_product_info = (
+        normalize_agent365_activity_body(body)
+    )
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+
+    if normalized_product_info:
+        record_teams_diag(
+            {"event": "normalizedProductInfoAtRoute"}
+        )
+    replay_request = Request(request.scope, receive)
+    return await start_agent_process(
+        replay_request,
+        agent365_app,
+        agent365_adapter,
+    )
+
+
+def normalize_agent365_activity_body(body: bytes) -> tuple[bytes, bool]:
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return body, False
+    if not isinstance(payload, dict):
+        return body, False
+    changed = False
+
+    def normalize(value: object) -> None:
+        nonlocal changed
+        if isinstance(value, dict):
+            if (
+                str(value.get("type") or "").casefold()
+                == "productinfo"
+                and value.get("type") != "ProductInfo"
+            ):
+                value["type"] = "ProductInfo"
+                changed = True
+            for nested in value.values():
+                normalize(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                normalize(nested)
+
+    normalize(payload)
+    if not changed:
+        return body, False
+    return (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        True,
+    )
 
 
 @app.middleware("http")
@@ -745,11 +815,15 @@ async def teams_diagnostics(request: Request, call_next):
         return await call_next(request)
 
     body = await request.body()
+    body, normalized_product_info = (
+        normalize_agent365_activity_body(body)
+    )
     record_teams_diag(
         {
             "event": "request",
             "contentLength": len(body),
             "hasAuthorization": bool(request.headers.get("authorization")),
+            "normalizedProductInfo": normalized_product_info,
         }
     )
 
@@ -1330,6 +1404,16 @@ def notification_prompt(
         "the request is explicit and authorized. Reply through the originating workload. Never redirect the result to "
         "Teams unless the sender explicitly asks."
     )
+    if workload == "word":
+        prompt += (
+            "\nTreat the Word comment thread as the primary review surface. "
+            "If a requested body edit cannot be published, reply in that thread "
+            "with the exact proposed text, a brief rationale, and an explicit "
+            "statement that the document was not changed. Ask the sender to "
+            f"mention {runtime_display_name()} again with \"retry original\" "
+            "after closing the document. Never claim that an unpublished edit "
+            "was applied."
+        )
     return identifier, prompt
 
 
@@ -1340,8 +1424,21 @@ async def handle_agent_notification(
 ) -> AgentResponse:
     identifier, prompt = notification_prompt(notification, workload)
     auth_context = agent_auth_context(ctx.activity)
+    notification_conversation_id = (
+        f"notification:{workload}:{identifier}"
+    )
+    if workload in {"word", "excel", "powerpoint"}:
+        prompt += (
+            "\nPrivate document operation scope for every "
+            "m365-collaboration write in this notification: "
+            + office_operation_scope(
+                notification_conversation_id,
+                user_id(ctx.activity),
+            )
+            + "\nNever reveal or persist this scope."
+        )
     return await invoke_agent_runtime(
-        conversation_id=f"notification:{workload}:{identifier}",
+        conversation_id=notification_conversation_id,
         session_key=f"notification:{workload}:{identifier}",
         message=prompt,
         source=f"notification_{workload}",

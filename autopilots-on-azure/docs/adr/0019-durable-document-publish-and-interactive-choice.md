@@ -16,6 +16,8 @@ The user needs a low-friction choice:
 
 If background publication still cannot update the original after 24 hours, the prepared work must not disappear. The accepted fallback is an explicitly shared copy and a proactive explanation.
 
+Word comment notifications have a different interaction surface. The comment thread is already the review workspace, so a failed body publish must still return the exact proposed content and rationale there rather than reducing the result to a lock notice.
+
 ## Options considered
 
 ### Keep the agent turn running
@@ -73,6 +75,7 @@ Selected. The agent prepares and validates the edit once; the bridge owns the in
 13. Keep terminal receipts for seven days so Service Bus redelivery and duplicate card clicks do not repeat document mutations.
 14. Use a durable delivery lease before sending a terminal result. Duplicate handlers do not send while a lease is active; failed sends release the lease; successful sends retry receipt acknowledgement before leaving an uncertain lease for bounded reconciliation.
 15. A terminal operation is complete only after Teams returns a concrete delivery activity ID and that ID is persisted.
+16. For Word comment-originated work, keep the response in the originating thread. If body publication fails, include the exact proposed content, concise rationale, explicit not-applied status, and instructions to mention the Agent User again to retry after closing the document.
 
 ## Work IQ Word review trigger
 
@@ -88,7 +91,7 @@ Review this ADR and ADR 0016 whenever Work IQ Word exposes a supported server-si
 - Private document bytes remain on the Worker Data Disk and never enter queue messages, learning, or diagnostics.
 - The bridge and runtime gain a small deterministic document state machine.
 - External Teams delivery cannot be made transactionally atomic with local storage. The delivery lease closes normal retry races and makes the rare send/ack crash window explicit instead of silently duplicating.
-- Teams receives native suggested-action buttons; other workloads need a text fallback.
+- Teams receives native suggested-action buttons. Word comments use a review-first text fallback that preserves the proposed work even when body publication fails.
 - A live Agent 365 proactive-delivery probe preserved text but stripped an Adaptive Card attachment. Suggested actions are therefore the proven narrow A14 surface; Adaptive Cards and MCP Apps remain A16 research.
 - The card is intentionally predefined. Broader agent-authored or MCP-rendered UI remains an A16 decision.
 
