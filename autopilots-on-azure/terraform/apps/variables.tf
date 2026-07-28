@@ -48,6 +48,11 @@ variable "user_scheduling_enabled" {
   default = false
 }
 
+variable "document_retry_enabled" {
+  type    = bool
+  default = true
+}
+
 variable "user_scheduling_max_concurrent_calls" {
   type    = number
   default = 1
@@ -80,7 +85,12 @@ variable "user_scheduling_keda_polling_seconds" {
 
 variable "user_scheduling_scale_down_seconds" {
   type    = number
-  default = 60
+  default = 900
+
+  validation {
+    condition     = var.user_scheduling_scale_down_seconds >= 660 && var.user_scheduling_scale_down_seconds <= 3600
+    error_message = "user_scheduling_scale_down_seconds must be between 660 and 3600 seconds so detached Activity Protocol turns outlive the 600-second runtime timeout."
+  }
 }
 
 variable "servicebus_dream_enabled" {
@@ -291,6 +301,76 @@ variable "workiq_mail_mcp_url" {
 variable "workiq_mail_mcp_scope" {
   type    = string
   default = "16b1878d-62c7-4009-aa25-68989d63bbad/Tools.ListInvoke.All"
+}
+
+variable "workiq_word_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_WordServer"
+}
+
+variable "workiq_word_mcp_scope" {
+  type    = string
+  default = "c2d0c2b6-8013-4346-9f8b-b81d3b754a29/Tools.ListInvoke.All"
+}
+
+variable "workiq_teams_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_TeamsServer"
+}
+
+variable "workiq_teams_mcp_scope" {
+  type    = string
+  default = "ce5029ee-c1d3-45c0-bdcc-efb5a4245687/Tools.ListInvoke.All"
+}
+
+variable "workiq_calendar_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_CalendarTools"
+}
+
+variable "workiq_calendar_mcp_scope" {
+  type    = string
+  default = "910333d2-47e9-43ca-981f-6df2f4531ef4/Tools.ListInvoke.All"
+}
+
+variable "workiq_onedrive_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_OneDriveRemoteServer"
+}
+
+variable "workiq_onedrive_mcp_scope" {
+  type    = string
+  default = "b0b2a2bb-6361-4549-a00c-a018417eb8e2/Tools.ListInvoke.All"
+}
+
+variable "workiq_sharepoint_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_SharePointRemoteServer"
+}
+
+variable "workiq_sharepoint_mcp_scope" {
+  type    = string
+  default = "292cff14-c0e8-4116-9e3b-99934ae05766/Tools.ListInvoke.All"
+}
+
+variable "workiq_excel_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_ExcelServer"
+}
+
+variable "workiq_excel_mcp_scope" {
+  type    = string
+  default = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1/McpServers.Excel.All"
+}
+
+variable "workiq_copilot_mcp_url" {
+  type    = string
+  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_M365Copilot"
+}
+
+variable "workiq_copilot_mcp_scope" {
+  type    = string
+  default = "ab7c82de-7946-4454-ac28-70249d17c95e/Tools.ListInvoke.All"
 }
 
 variable "runtime_data_volume_name" {

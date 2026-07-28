@@ -5,6 +5,7 @@ import json
 import os
 import threading
 from concurrent.futures import Future
+from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
 from azure.core.exceptions import AzureError
@@ -12,6 +13,7 @@ from azure.identity import DefaultAzureCredential
 from azure.servicebus import (
     AutoLockRenewer,
     ServiceBusClient,
+    ServiceBusMessage,
     ServiceBusReceivedMessage,
 )
 from azure.servicebus.exceptions import ServiceBusError
@@ -32,6 +34,83 @@ def message_body(message: ServiceBusReceivedMessage) -> dict[str, Any]:
     return payload
 
 
+class ServiceBusScheduleSender:
+    def __init__(
+        self,
+        *,
+        client_factory: Callable[..., ServiceBusClient] = (
+            ServiceBusClient
+        ),
+        credential_factory: Callable[[], Any] = (
+            DefaultAzureCredential
+        ),
+    ) -> None:
+        self._client_factory = client_factory
+        self._credential_factory = credential_factory
+
+    def schedule_document_retry(
+        self,
+        *,
+        operation_id: str,
+        attempt: int,
+        due_at_unix: float,
+    ) -> dict[str, Any]:
+        worker_id = os.environ["WORKER_ID"]
+        body = {
+            "version": "1.0",
+            "type": "document.publish.retry",
+            "workerId": worker_id,
+            "operationId": operation_id,
+            "attempt": attempt,
+            "dueAt": datetime.fromtimestamp(
+                due_at_unix,
+                UTC,
+            ).isoformat(),
+        }
+        message_id = (
+            f"{worker_id}:document:{operation_id}:{attempt}"
+        )
+        message = ServiceBusMessage(
+            json.dumps(
+                body,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            message_id=message_id,
+            content_type="application/json",
+            subject="document.publish.retry",
+        )
+        due_at = datetime.fromtimestamp(due_at_unix, UTC)
+        with self._client_factory(
+            os.environ["SCHEDULER_SERVICEBUS_NAMESPACE"],
+            credential=self._credential_factory(),
+        ) as client:
+            with client.get_queue_sender(
+                os.environ["SCHEDULER_SERVICEBUS_QUEUE"]
+            ) as sender:
+                sequence_numbers = sender.schedule_messages(
+                    message,
+                    due_at,
+                )
+        return {
+            "messageId": message_id,
+            "sequenceNumber": int(sequence_numbers[0]),
+            "dueAt": due_at.isoformat(),
+        }
+
+    def cancel_scheduled(self, sequence_number: int) -> None:
+        with self._client_factory(
+            os.environ["SCHEDULER_SERVICEBUS_NAMESPACE"],
+            credential=self._credential_factory(),
+        ) as client:
+            with client.get_queue_sender(
+                os.environ["SCHEDULER_SERVICEBUS_QUEUE"]
+            ) as sender:
+                sender.cancel_scheduled_messages(
+                    [sequence_number]
+                )
+
+
 class ServiceBusScheduleConsumer:
     def __init__(
         self,
@@ -47,7 +126,10 @@ class ServiceBusScheduleConsumer:
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._status: dict[str, Any] = {
-            "enabled": bool_env("USER_SCHEDULING_ENABLED"),
+            "enabled": (
+                bool_env("USER_SCHEDULING_ENABLED")
+                or bool_env("DOCUMENT_RETRY_ENABLED")
+            ),
             "running": False,
             "completed": 0,
             "abandoned": 0,
@@ -182,7 +264,18 @@ class ServiceBusScheduleConsumer:
     def _validate(payload: dict[str, Any]) -> None:
         if payload.get("version") != "1.0":
             raise ValueError("Unsupported scheduled message version.")
-        if payload.get("type") not in {"hermes.cron.fire", "system.dream"}:
+        if payload.get("type") not in {
+            "hermes.cron.fire",
+            "system.dream",
+            "document.publish.retry",
+        }:
             raise ValueError("Unsupported scheduled message type.")
         if payload.get("workerId") != os.getenv("WORKER_ID"):
             raise ValueError("Scheduled message targets another Worker.")
+        if (
+            payload.get("type") == "document.publish.retry"
+            and not payload.get("operationId")
+        ):
+            raise ValueError(
+                "Document retry message requires operationId."
+            )

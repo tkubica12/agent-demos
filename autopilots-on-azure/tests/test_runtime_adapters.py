@@ -1,21 +1,24 @@
 import asyncio
 import base64
+import hashlib
 import io
 import inspect
 import os
 import unittest
 import urllib.error
+from urllib.parse import quote
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 import bridge.app as bridge_app
 import bridge.runtime.factory as runtime_factory
+import bridge.runtime.hermes as hermes_runtime
 import bridge.runtime.openclaw as openclaw_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.gateway_client import OpenClawGatewayError
-from bridge.runtime.base import AgentRequest, DreamRequest
+from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.hermes import (
     HermesRuntimeAdapter,
     bridge_instructions,
@@ -24,6 +27,7 @@ from bridge.runtime.hermes import (
     explicit_learning_prompt,
     parse_provenance_block,
     quarantine_recovery_instructions,
+    session_reset_command,
 )
 from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import (
@@ -51,6 +55,100 @@ def sandbox_config() -> AgentSandboxConfig:
 
 
 class RuntimeAdapterTests(unittest.TestCase):
+    def test_session_reset_command_accepts_only_exact_aliases(self):
+        self.assertTrue(session_reset_command("/new"))
+        self.assertTrue(session_reset_command("  /RESET  "))
+        self.assertFalse(session_reset_command("/new continue"))
+        self.assertFalse(session_reset_command("new"))
+
+    def test_personal_new_command_resets_without_model_turn(self):
+        adapter = HermesRuntimeAdapter()
+        reset = AsyncMock(
+            return_value=AgentResponse(
+                text="Started a new topic.",
+                raw={"sessionReset": "completed"},
+            )
+        )
+        request = AgentRequest(
+            prompt="/new",
+            conversation_id="teams:personal:conversation-1",
+            user_id="user-1",
+            source="teams_personal",
+            must_answer=True,
+        )
+
+        async def run():
+            with patch.object(
+                adapter,
+                "_reset_transcript",
+                reset,
+            ):
+                return await adapter.invoke(request)
+
+        response = asyncio.run(run())
+
+        self.assertEqual(response.raw["sessionReset"], "completed")
+        reset.assert_awaited_once_with(request)
+
+    def test_group_new_command_does_not_reset_shared_context(self):
+        adapter = HermesRuntimeAdapter()
+        reset = AsyncMock()
+        request = AgentRequest(
+            prompt="/new",
+            conversation_id="teams:group:conversation-1",
+            user_id="user-1",
+            source="teams_group",
+            must_answer=True,
+        )
+
+        async def run():
+            with patch.object(
+                adapter,
+                "_reset_transcript",
+                reset,
+            ):
+                return await adapter.invoke(request)
+
+        response = asyncio.run(run())
+
+        self.assertEqual(
+            response.raw["sessionReset"],
+            "unsupported_scope",
+        )
+        reset.assert_not_awaited()
+
+    def test_hermes_cancellation_aborts_learning_transaction(self):
+        adapter = HermesRuntimeAdapter()
+        request = AgentRequest(
+            prompt="Update the document",
+            conversation_id="conversation-1",
+            user_id="user-1",
+            source="teams_personal",
+            must_answer=True,
+        )
+        invoke = AsyncMock(side_effect=asyncio.CancelledError())
+        abort = AsyncMock()
+
+        async def run() -> None:
+            with (
+                patch.object(adapter, "_invoke_hermes", invoke),
+                patch.object(adapter, "_abort_learning_turn", abort),
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    await adapter._invoke_hermes_with_abort(
+                        "https://sandbox.example",
+                        "key",
+                        request,
+                        "snapshot-1",
+                    )
+
+        asyncio.run(run())
+        abort.assert_awaited_once_with(
+            "https://sandbox.example",
+            "key",
+            "snapshot-1",
+        )
+
     def test_bridge_app_does_not_import_openclaw_protocol_or_sandbox_lifecycle(self):
         source = inspect.getsource(bridge_app)
 
@@ -224,16 +322,40 @@ class RuntimeAdapterTests(unittest.TestCase):
         finally:
             restore_env(previous_env)
 
-        post = next(call for call in calls if "/api/sessions/" in call["url"])
+        post = next(
+            call
+            for call in calls
+            if call["method"] == "POST"
+            and call["url"].endswith("/chat")
+        )
         readiness = next(call for call in calls if call["url"].endswith("/v1/models"))
         self.assertEqual(response.text, "stateful OK")
         self.assertEqual(response.raw["hermesEndpoint"], "sessions")
         self.assertEqual(readiness["headers"]["Authorization"], "Bearer api-key-1")
         self.assertLess(calls.index(readiness), calls.index(post))
-        self.assertEqual(post["url"], "https://hermes.example/api/sessions/teams%3Athread%3A1/chat")
+        transcript_id = post["headers"]["X-Hermes-Session-Id"]
+        self.assertRegex(
+            transcript_id,
+            r"^teams_personal:[0-9a-f]{24}:\d{8}T\d{2}$",
+        )
+        self.assertEqual(
+            post["url"],
+            (
+                "https://hermes.example/api/sessions/"
+                f"{quote(transcript_id, safe='')}/chat"
+            ),
+        )
         self.assertEqual(post["headers"]["Authorization"], "Bearer api-key-1")
-        self.assertEqual(post["headers"]["X-Hermes-Session-Id"], "teams:thread:1")
-        self.assertEqual(post["headers"]["X-Hermes-Session-Key"], "hermes-worker:teams_personal:user-1")
+        session_key = post["headers"]["X-Hermes-Session-Key"]
+        self.assertEqual(
+            session_key,
+            (
+                "hermes-worker:teams_personal:user-1:"
+                + hashlib.sha256(
+                    b"teams:thread:1"
+                ).hexdigest()[:16]
+            ),
+        )
         self.assertEqual(post["json"]["input"], "hello")
 
     def test_hermes_adapter_falls_back_to_responses_api_when_session_chat_is_unavailable(self):
@@ -276,11 +398,234 @@ class RuntimeAdapterTests(unittest.TestCase):
         post_urls = [
             call["url"]
             for call in calls
-            if "/api/sessions/" in call["url"] or call["url"].endswith("/v1/responses")
+            if call["method"] == "POST"
+            and (
+                call["url"].endswith("/chat")
+                or call["url"].endswith("/v1/responses")
+            )
         ]
         self.assertEqual(response.text, "responses OK")
         self.assertEqual(response.raw["hermesEndpoint"], "responses")
-        self.assertEqual(post_urls, ["https://hermes.example/api/sessions/teams%3Athread%3A1/chat", "https://hermes.example/v1/responses"])
+        self.assertEqual(len(post_urls), 2)
+        self.assertTrue(post_urls[0].endswith("/chat"))
+        self.assertEqual(
+            post_urls[1],
+            "https://hermes.example/v1/responses",
+        )
+
+    def test_hermes_adapter_creates_missing_native_session(self):
+        calls = []
+
+        class MissingSessionClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, *, headers):
+                calls.append(
+                    {
+                        "method": "GET",
+                        "url": url,
+                        "headers": headers,
+                    }
+                )
+                return httpx.Response(
+                    404,
+                    json={"error": "missing"},
+                    request=httpx.Request("GET", url),
+                )
+
+            async def post(self, url, *, headers, json):
+                calls.append(
+                    {
+                        "method": "POST",
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                    }
+                )
+                return httpx.Response(
+                    201,
+                    json={"object": "hermes.session"},
+                    request=httpx.Request("POST", url),
+                )
+
+        request = AgentRequest(
+            prompt="hello",
+            conversation_id="teams:personal:conversation-1",
+            user_id="user-1",
+            source="teams_personal",
+            must_answer=True,
+        )
+        adapter = HermesRuntimeAdapter(
+            client_factory=MissingSessionClient,
+        )
+        transcript_id = hermes_runtime._hermes_transcript_id(
+            request
+        )
+
+        asyncio.run(
+            adapter._ensure_session(
+                "https://hermes.example",
+                "api-key",
+                request,
+                transcript_id,
+            )
+        )
+
+        self.assertEqual(calls[0]["method"], "GET")
+        self.assertEqual(calls[1]["method"], "POST")
+        self.assertEqual(calls[1]["url"], "https://hermes.example/api/sessions")
+        self.assertEqual(calls[1]["json"]["id"], transcript_id)
+
+    def test_hermes_selects_latest_reset_generation(self):
+        base_id = "teams_personal:abc:20260727T12"
+
+        class SessionListClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, *, headers):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": base_id,
+                                "started_at": 1,
+                            },
+                            {
+                                "id": f"{base_id}:new:latest",
+                                "started_at": 3,
+                            },
+                            {
+                                "id": f"{base_id}:new:older",
+                                "started_at": 2,
+                            },
+                        ]
+                    },
+                    request=httpx.Request("GET", url),
+                )
+
+        request = AgentRequest(
+            prompt="continue",
+            conversation_id="conversation-1",
+            user_id="user-1",
+            source="teams_personal",
+            must_answer=True,
+        )
+        adapter = HermesRuntimeAdapter(
+            client_factory=SessionListClient,
+        )
+        with patch.object(
+            hermes_runtime,
+            "_hermes_transcript_id",
+            return_value=base_id,
+        ):
+            result = asyncio.run(
+                adapter._resolve_transcript_id(
+                    "https://hermes.example",
+                    "api-key",
+                    request,
+                )
+            )
+
+        self.assertEqual(result, f"{base_id}:new:latest")
+
+    def test_hermes_adapter_recovers_completed_turn_after_session_500(self):
+        class RecoveringSessionClient:
+            def __init__(self, **_kwargs):
+                self.message_reads = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, *, headers):
+                if url.endswith("/messages"):
+                    self.message_reads += 1
+                    payload = {
+                        "data": [
+                            {"role": "user", "content": "old"},
+                            {"role": "assistant", "content": "old answer"},
+                            *(
+                                [
+                                    {
+                                        "role": "tool",
+                                        "content": "tool result",
+                                    },
+                                    {
+                                        "role": "assistant",
+                                        "content": (
+                                            "completed despite HTTP 500"
+                                        ),
+                                    },
+                                ]
+                                if self.message_reads >= 20
+                                else []
+                            ),
+                        ]
+                    }
+                else:
+                    payload = {
+                        "session": {
+                            "id": "session-1",
+                            "message_count": 2,
+                        }
+                    }
+                return httpx.Response(
+                    200,
+                    json=payload,
+                    request=httpx.Request("GET", url),
+                )
+
+            async def post(self, url, *, headers, json):
+                return httpx.Response(
+                    500,
+                    json={"error": "serialization failed"},
+                    request=httpx.Request("POST", url),
+                )
+
+        request = AgentRequest(
+            prompt="edit the document",
+            conversation_id="teams:personal:conversation-1",
+            user_id="user-1",
+            source="teams_personal",
+            must_answer=True,
+        )
+        adapter = HermesRuntimeAdapter(
+            client_factory=RecoveringSessionClient,
+        )
+
+        sleep = AsyncMock()
+        with patch.object(hermes_runtime.asyncio, "sleep", sleep):
+            payload = asyncio.run(
+                adapter._session_chat(
+                    "https://hermes.example",
+                    "api-key",
+                    request,
+                )
+            )
+
+        self.assertEqual(
+            payload["message"]["content"],
+            "completed despite HTTP 500",
+        )
+        self.assertEqual(payload["recovered_after_status"], 500)
+        self.assertEqual(sleep.await_count, 19)
 
     def test_hermes_normal_turn_reconciles_native_skill_provenance(self):
         calls: list[dict] = []
@@ -344,7 +689,12 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         begin_post = next(call for call in calls if call["url"].endswith("/internal/learning/turns"))
         reconcile_post = next(call for call in calls if call["url"].endswith("/internal/learning/reconcile"))
-        gateway_post = next(call for call in calls if "/api/sessions/" in call["url"])
+        gateway_post = next(
+            call
+            for call in calls
+            if call["method"] == "POST"
+            and call["url"].endswith("/chat")
+        )
         self.assertEqual(begin_post["json"], {})
         self.assertEqual(result.text, "I created the reusable procedure.")
         self.assertEqual(
@@ -431,7 +781,12 @@ class RuntimeAdapterTests(unittest.TestCase):
         finally:
             restore_env(previous)
 
-        session_posts = [call for call in calls if "/api/sessions/" in call["url"]]
+        session_posts = [
+            call
+            for call in calls
+            if call["method"] == "POST"
+            and call["url"].endswith("/chat")
+        ]
         turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
         reconcile_posts = [call for call in calls if call["url"].endswith("/internal/learning/reconcile")]
         self.assertEqual(result.text, "I saved the reusable procedure.")
@@ -486,7 +841,12 @@ class RuntimeAdapterTests(unittest.TestCase):
             else:
                 os.environ["API_SERVER_KEY"] = previous
 
-        session_posts = [call for call in calls if "/api/sessions/" in call["url"]]
+        session_posts = [
+            call
+            for call in calls
+            if call["method"] == "POST"
+            and call["url"].endswith("/chat")
+        ]
         turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
         self.assertEqual(result.text, "I understand.")
         self.assertEqual(len(session_posts), 1)
@@ -548,7 +908,14 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("The user-visible answer.", result.text)
         self.assertIn("Local learning was not saved.", result.text)
         self.assertIn("JSON array", result.raw["learningCaptureError"])
-        self.assertFalse(any("/learning%3A" in call["url"] for call in calls if "/api/sessions/" in call["url"]))
+        self.assertFalse(
+            any(
+                "/learning%3A" in call["url"]
+                for call in calls
+                if call["method"] == "POST"
+                and call["url"].endswith("/chat")
+            )
+        )
 
     def test_hermes_dream_uses_isolated_session_reconciles_dream_provenance_and_returns_status(self):
         calls: list[dict] = []
@@ -601,10 +968,21 @@ class RuntimeAdapterTests(unittest.TestCase):
         finally:
             restore_env(previous_env)
 
-        dream_post = next(call for call in calls if "/api/sessions/" in call["url"])
+        dream_post = next(
+            call
+            for call in calls
+            if call["method"] == "POST"
+            and call["url"].endswith("/chat")
+        )
         reconcile_post = next(call for call in calls if call["url"].endswith("/internal/learning/reconcile"))
         status_get = next(call for call in calls if call["url"].endswith("/internal/learning/status"))
-        self.assertEqual(dream_post["url"], "https://hermes.example/api/sessions/dream%3Ahermes-worker/chat")
+        self.assertRegex(
+            dream_post["url"],
+            (
+                r"^https://hermes\.example/api/sessions/"
+                r"dream%3A[0-9a-f]{24}%3A\d{8}T\d{2}/chat$"
+            ),
+        )
         self.assertIn("delivery follow-up", dream_post["json"]["input"])
         self.assertEqual(reconcile_post["json"]["provenance"][0]["sourceStage"], "dream")
         self.assertEqual(status_get["headers"]["X-Autopilot-Key"], "api-key-1")
@@ -693,6 +1071,43 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("at most 3 provenance objects", instructions)
         self.assertIn("Private Playbook changes have no provenance object", instructions)
         self.assertIn("Never edit learning/records.jsonl directly", instructions)
+
+    def test_office_lock_guidance_does_not_require_teams_mcp(self):
+        request = AgentRequest(
+            prompt="Edit this file.",
+            conversation_id="conversation-1",
+            user_id="user-1",
+            source="invoke",
+            must_answer=True,
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "M365_COLLABORATION_MCP_URL": (
+                    "http://127.0.0.1:18082/mcp"
+                ),
+                "WORKIQ_TEAMS_MCP_URL": "",
+            },
+        ):
+            instructions = bridge_instructions(request)
+
+        self.assertIn(
+            "retry_pending_office_publish",
+            instructions,
+        )
+        self.assertIn(
+            "find_pending_office_publishes",
+            instructions,
+        )
+        self.assertIn(
+            "share_office_file_with_user",
+            instructions,
+        )
+        self.assertNotIn(
+            "Agent User Teams collaboration is enabled",
+            instructions,
+        )
 
     def test_hermes_collective_learning_calls_secured_runtime_operations(self):
         calls: list[dict] = []
@@ -908,7 +1323,12 @@ class RuntimeAdapterTests(unittest.TestCase):
                 os.environ["API_SERVER_KEY"] = previous
 
         turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
-        session_posts = [call for call in calls if "/api/sessions/" in call["url"]]
+        session_posts = [
+            call
+            for call in calls
+            if call["method"] == "POST"
+            and call["url"].endswith("/chat")
+        ]
         self.assertEqual(len(turn_posts), 2)
         self.assertEqual(len(session_posts), 2)
         self.assertIn("learning/quarantine", session_posts[0]["json"]["instructions"])
@@ -1220,6 +1640,19 @@ class RuntimeAdapterTests(unittest.TestCase):
         text = HermesRuntimeAdapter._response_text({"choices": [{"message": {"content": " hello from Hermes "}}]})
 
         self.assertEqual(text, "hello from Hermes")
+
+    def test_hermes_response_text_parses_native_session_chat(self):
+        text = HermesRuntimeAdapter._response_text(
+            {
+                "object": "hermes.session.chat.completion",
+                "message": {
+                    "role": "assistant",
+                    "content": " native session reply ",
+                },
+            }
+        )
+
+        self.assertEqual(text, "native session reply")
 
 
 class FakeHermesClient:

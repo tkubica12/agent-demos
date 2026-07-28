@@ -1,19 +1,34 @@
 import asyncio
 import os
+import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
+
+from microsoft_agents.activity import (
+    Activity,
+    ChannelAccount,
+    ChannelId,
+    Entity,
+)
+from microsoft_agents_a365.notifications import AgentNotificationActivity
 
 import bridge.app as bridge_app
 from bridge.app import (
     DreamRunRequest,
+    InvokeRequest,
     _teams_memory,
     _teams_diag,
     bot_is_mentioned,
     delete_message_reaction,
+    document_result_activity,
     format_teams_context,
     format_teams_event_prompt,
     agent_memory_record,
     memory_has_agent_message_id,
+    handle_document_card_action,
+    handle_teams_invoke,
+    notification_prompt,
     reacted_message_id,
     response_has_visible_text,
     remember_teams_event,
@@ -31,11 +46,18 @@ from bridge.app import (
     teams_event_memory_record,
     teams_is_targeted,
     teams_prompt_text,
+    teams_runtime_message,
+    pending_document_card_activity,
     teams_response_contract,
     teams_session_key,
     teams_signal_type,
 )
-from bridge.runtime.base import AgentResponse, DreamResponse
+from bridge.document_cards import create_action_token
+from bridge.runtime.base import (
+    AgentAuthContext,
+    AgentResponse,
+    DreamResponse,
+)
 from scripts.sandbox_runtime import existing_gateway_sandbox
 from scripts.sandbox_runtime import private_incidents_mcp_server_config
 
@@ -79,6 +101,339 @@ class FakeTypingContext:
 
 
 class TeamsBridgeTests(unittest.TestCase):
+    def test_teams_runtime_message_keeps_commands_unwrapped(self):
+        self.assertEqual(
+            teams_runtime_message("/new", "formatted event"),
+            "/new",
+        )
+        self.assertEqual(
+            teams_runtime_message(
+                "/learn retain this",
+                "formatted event",
+            ),
+            "/learn retain this",
+        )
+        self.assertEqual(
+            teams_runtime_message("ordinary work", "formatted event"),
+            "formatted event",
+        )
+
+    def test_pending_document_choice_renders_predefined_card(self):
+        class Adapter:
+            async def pending_document_choices(self, scope):
+                self.scope = scope
+                return {
+                    "operations": [
+                        {
+                            "operationId": "a" * 24,
+                            "fileName": "document.docx",
+                            "expiresAt": "2026-07-28T12:00:00Z",
+                            "expiresAtUnix": time.time() + 300,
+                        }
+                    ]
+                }
+
+        adapter = Adapter()
+        with patch.dict(
+            os.environ,
+            {
+                "API_SERVER_KEY": "secret",
+                "WORKER_ID": "hermes2",
+            },
+        ):
+            activity = asyncio.run(
+                pending_document_card_activity(
+                    adapter=adapter,
+                    conversation_id="conversation-1",
+                    invoking_user_id="user-1",
+                )
+            )
+
+        actions = activity.suggested_actions.actions
+        self.assertIn("usually releases the lock within an hour", activity.text)
+        self.assertEqual(
+            [
+                action.value["documentActionChoice"]
+                for action in actions
+            ],
+            ["background", "copy"],
+        )
+        self.assertTrue(
+            all(action.type == "Action.Submit" for action in actions)
+        )
+
+    def test_document_result_uses_accessible_link_message(self):
+        activity = document_result_activity(
+            {
+                "status": "completed_copy",
+                "contentType": (
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                "driveItem": {
+                    "name": "workbook.xlsx",
+                    "webUrl": "https://contoso/workbook",
+                },
+            }
+        )
+
+        self.assertEqual(activity.attachments, None)
+        self.assertIn("https://contoso/workbook", activity.text)
+
+    def test_background_card_action_schedules_document_retry(self):
+        sent = []
+
+        class Context:
+            activity = ns(
+                value=None,
+                conversation=ns(
+                    id="conversation-1",
+                    conversation_type="personal",
+                ),
+                from_property=ns(id="user-1"),
+            )
+
+            async def send_activity(self, activity):
+                sent.append(activity)
+                return {"id": "activity-1"}
+
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def start_document_background(self, **kwargs):
+                self.started = kwargs
+                return {
+                    "status": "scheduled",
+                    "attempt": 0,
+                    "nextAttemptUnix": time.time() + 60,
+                }
+
+        adapter = Adapter()
+        context = Context()
+        with patch.dict(
+            os.environ,
+            {
+                "API_SERVER_KEY": "secret",
+                "WORKER_ID": "hermes2",
+            },
+        ):
+            token = create_action_token(
+                operation_id="a" * 24,
+                operation_scope="scope-1",
+                user_id="user-1",
+                conversation_id="conversation-1",
+                expires_at_unix=time.time() + 300,
+            )
+            context.activity.value = {
+                "documentActionToken": token,
+                "documentActionChoice": "background",
+            }
+            with (
+                patch.object(
+                    bridge_app,
+                    "runtime_adapter",
+                    return_value=adapter,
+                ),
+                patch.object(
+                    bridge_app,
+                    "agent_auth_context",
+                    return_value=AgentAuthContext(
+                        selected_mode="agent_identity",
+                        available_modes=("agent_identity",),
+                        conversation_boundary="one_to_one",
+                    ),
+                ),
+                patch.object(
+                    bridge_app,
+                    "delivery_reference_metadata",
+                    return_value={
+                        "boundary": "one_to_one",
+                        "conversation": {},
+                    },
+                ),
+                patch.object(
+                    bridge_app.schedule_sender,
+                    "schedule_document_retry",
+                    return_value={"sequenceNumber": 42},
+                ) as schedule,
+            ):
+                handled = asyncio.run(
+                    handle_document_card_action(context)
+                )
+
+        self.assertTrue(handled)
+        self.assertEqual(
+            adapter.started["recipient_identifier"],
+            "user-1",
+        )
+        schedule.assert_called_once()
+        self.assertIn("24 hours", sent[-1])
+
+    def test_suggested_action_invoke_returns_explicit_success(self):
+        class Context:
+            activity = ns(
+                value={},
+                name="suggestedAction/submit",
+            )
+            turn_state = {}
+
+        context = Context()
+        asyncio.run(
+            handle_teams_invoke(
+                context,
+                SimpleNamespace(),
+            )
+        )
+
+        response = context.turn_state[
+            bridge_app.TurnContext._INVOKE_RESPONSE_KEY
+        ]
+        self.assertEqual(response.value["status"], 200)
+        self.assertEqual(
+            response.value["body"]["status"],
+            "ignored",
+        )
+
+    def test_attachment_final_response_uses_proactive_continuation(self):
+        ctx = SimpleNamespace(activity=object())
+        proactive = AsyncMock(
+            return_value={"activityId": "activity-final"}
+        )
+        direct = AsyncMock()
+        invoke_runtime = AsyncMock(
+            return_value=AgentResponse(text="Completed", raw={})
+        )
+        attachment = SimpleNamespace(
+            metadata=lambda: {"name": "form.docx"}
+        )
+        auth = AgentAuthContext(
+            selected_mode="agent_identity",
+            available_modes=("agent_identity", "agent_user"),
+            conversation_boundary="one_to_one",
+        )
+
+        with (
+            patch.object(
+                bridge_app,
+                "agent_auth_context",
+                return_value=auth,
+            ),
+            patch.object(
+                bridge_app,
+                "delivery_reference_metadata",
+                return_value={"conversationId": "conversation-1"},
+            ),
+            patch.object(
+                bridge_app,
+                "invoke_agent_runtime",
+                invoke_runtime,
+            ),
+            patch.object(
+                bridge_app,
+                "send_proactive_activity",
+                proactive,
+            ),
+            patch.object(
+                bridge_app,
+                "send_teams_response",
+                direct,
+            ),
+            patch.object(
+                bridge_app,
+                "teams_runtime_source",
+                return_value="teams_personal",
+            ),
+            patch.object(
+                bridge_app,
+                "user_id",
+                return_value="user-1",
+            ),
+            patch.object(
+                bridge_app,
+                "teams_conversation_type",
+                return_value="personal",
+            ),
+            patch.object(
+                bridge_app,
+                "supports_typing_indicators",
+                return_value=False,
+            ),
+        ):
+            asyncio.run(
+                bridge_app.run_agent_runtime_for_teams(
+                    ctx,
+                    conversation_id="conversation-1",
+                    session_key="teams:personal:conversation-1",
+                    message="Fill the form",
+                    attachments=[attachment],
+                )
+            )
+
+        proactive.assert_awaited_once_with(
+            bridge_app.agent365_adapter,
+            {"conversationId": "conversation-1"},
+            "Completed",
+        )
+        direct.assert_not_awaited()
+
+    def test_word_notification_prompt_preserves_stable_document_context(self):
+        activity = Activity(
+            type="message",
+            id="activity-1",
+            text="Please review the deadline.",
+            channel_id=ChannelId(
+                channel="agents",
+                sub_channel="word",
+            ),
+            from_property=ChannelAccount(
+                id="user-1",
+                name="Adele",
+            ),
+            entities=[
+                Entity(
+                    type="wpxComment",
+                    documentId="document-1",
+                    commentId="comment-1",
+                )
+            ],
+        )
+
+        identifier, prompt = notification_prompt(
+            AgentNotificationActivity(activity),
+            "word",
+        )
+
+        self.assertEqual(identifier, "comment-1")
+        self.assertIn("Document id: document-1", prompt)
+        self.assertIn("Comment id: comment-1", prompt)
+        self.assertIn("Please review the deadline.", prompt)
+        self.assertIn("private, untrusted data", prompt)
+
+    def test_operator_invoke_propagates_persistence_disabled_boundary(self):
+        request = InvokeRequest.model_validate(
+            {
+                "conversationId": "private-smoke",
+                "message": "validate",
+                "persistenceDisabled": True,
+            }
+        )
+        invoke_runtime = AsyncMock(
+            return_value=AgentResponse(text="ok", raw={})
+        )
+
+        with patch.object(
+            bridge_app,
+            "invoke_agent_runtime",
+            invoke_runtime,
+        ):
+            response = asyncio.run(bridge_app.invoke(request))
+
+        self.assertEqual(response.response, "ok")
+        self.assertEqual(
+            invoke_runtime.await_args.kwargs["metadata"],
+            {"persistenceDisabled": True},
+        )
+
     def tearDown(self):
         _teams_memory.clear()
         _teams_diag.clear()

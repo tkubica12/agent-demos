@@ -49,9 +49,12 @@ def delivery_reference_metadata(
 async def send_proactive_activity(
     adapter: Any,
     stored: dict[str, Any],
-    text: str,
+    text: str = "",
+    *,
+    activity: Activity | None = None,
+    require_activity_id: bool = True,
 ) -> dict[str, str]:
-    if not text.strip():
+    if activity is None and not text.strip():
         return
     boundary = str(stored.get("boundary") or "")
     if boundary not in SUPPORTED_BOUNDARIES:
@@ -62,12 +65,16 @@ async def send_proactive_activity(
     conversation = Conversation.from_json_to_store_item(conversation_payload)
     conversation.validate()
     continuation = conversation.conversation_reference.get_continuation_activity()
+    if hasattr(continuation, "delivery_mode"):
+        continuation.delivery_mode = None
 
     activity_id = ""
 
     async def callback(turn_context: TurnContext) -> None:
         nonlocal activity_id
-        response = await turn_context.send_activity(Activity(type="message", text=text))
+        response = await turn_context.send_activity(
+            activity or Activity(type="message", text=text)
+        )
         raw_activity_id = (
             response.get("id")
             if isinstance(response, dict)
@@ -102,6 +109,9 @@ async def send_proactive_activity(
             continuation,
             callback,
         )
-    if not activity_id:
+    if require_activity_id and not activity_id:
         raise RuntimeError("Teams proactive send returned no activity ID.")
-    return {"activityId": activity_id}
+    return {
+        "activityId": activity_id,
+        "accepted": "true",
+    }

@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
 sys.path.insert(0, str(RUNTIME_DIR))
 
+import learning  # noqa: E402
 import start_hermes  # noqa: E402
 from blueprint import (  # noqa: E402
     RoleReleaseSettings,
@@ -42,6 +43,25 @@ from learning import (  # noqa: E402
 
 
 class HermesRuntimeTests(unittest.TestCase):
+    def test_gateway_replaces_stale_persisted_runtime_state(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(start_hermes.subprocess, "Popen") as popen,
+        ):
+            start_hermes.start_gateway(Path(temp_dir))
+
+        popen.assert_called_once()
+        self.assertEqual(
+            popen.call_args.args[0],
+            [
+                "hermes",
+                "gateway",
+                "run",
+                "--replace",
+                "--accept-hooks",
+            ],
+        )
+
     def test_cron_fire_and_delivery_ack_use_distinct_arguments(self):
         calls = {}
 
@@ -539,6 +559,125 @@ class HermesRuntimeTests(unittest.TestCase):
         self.assertEqual(records, [])
         self.assertTrue(playbook_exists)
 
+    def test_attachment_turn_restores_memory_and_all_skill_namespaces(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, profile, _ = self._installed_profile(root)
+            memory = profile / "memories" / "USER.md"
+            memory.parent.mkdir(parents=True, exist_ok=True)
+            memory.write_text("Original preference.\n", encoding="utf-8")
+            token = begin_learning_turn(
+                profile,
+                attachment_private=True,
+            )["token"]
+            memory.write_text(
+                "Persisted from document.\n",
+                encoding="utf-8",
+            )
+            playbook = (
+                profile
+                / "skills"
+                / "private"
+                / "document-secret"
+                / "SKILL.md"
+            )
+            playbook.parent.mkdir(parents=True)
+            playbook.write_text(
+                "---\nname: document-secret\n"
+                "description: From attachment.\n---\n",
+                encoding="utf-8",
+            )
+            role_skill = (
+                profile
+                / "skills"
+                / "role"
+                / "junior-project-manager"
+                / "SKILL.md"
+            )
+            role_before = role_skill.read_text(encoding="utf-8")
+            role_skill.write_text(
+                role_before + "\nDocument instruction.\n",
+                encoding="utf-8",
+            )
+
+            result = reconcile_learning_turn(
+                profile,
+                token=token,
+                provenance=[],
+            )
+            memory_after = memory.read_text(encoding="utf-8")
+            playbook_exists = playbook.exists()
+            role_after = role_skill.read_text(encoding="utf-8")
+
+        self.assertTrue(result["attachmentPersistenceBlocked"])
+        self.assertTrue(result["rolledBack"])
+        self.assertEqual(memory_after, "Original preference.\n")
+        self.assertFalse(playbook_exists)
+        self.assertEqual(role_after, role_before)
+
+    def test_aborted_attachment_turn_restores_private_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, profile, _ = self._installed_profile(root)
+            memory = profile / "memories" / "USER.md"
+            memory.parent.mkdir(parents=True, exist_ok=True)
+            memory.write_text("Before.\n", encoding="utf-8")
+            token = begin_learning_turn(
+                profile,
+                attachment_private=True,
+            )["token"]
+            memory.write_text("From attachment.\n", encoding="utf-8")
+            playbook = (
+                profile
+                / "skills"
+                / "private"
+                / "attachment"
+                / "SKILL.md"
+            )
+            playbook.parent.mkdir(parents=True)
+            playbook.write_text("private document data", encoding="utf-8")
+
+            abort_learning_turn(profile, token=token)
+            memory_after = memory.read_text(encoding="utf-8")
+            playbook_exists = playbook.exists()
+
+        self.assertEqual(memory_after, "Before.\n")
+        self.assertFalse(playbook_exists)
+
+    def test_attachment_snapshot_failure_restores_memory_before_release(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, profile, _ = self._installed_profile(root)
+            memory = profile / "memories" / "USER.md"
+            memory.parent.mkdir(parents=True, exist_ok=True)
+            memory.write_text("Before.\n", encoding="utf-8")
+            token = begin_learning_turn(
+                profile,
+                attachment_private=True,
+            )["token"]
+            memory.write_text("From attachment.\n", encoding="utf-8")
+            oversized = (
+                profile
+                / "skills"
+                / "private"
+                / "oversized"
+                / "SKILL.md"
+            )
+            oversized.parent.mkdir(parents=True)
+            oversized.write_bytes(b"x" * (2 * 1024 * 1024))
+
+            with self.assertRaises(LearningRecordError):
+                reconcile_learning_turn(
+                    profile,
+                    token=token,
+                    provenance=[],
+                )
+            memory_after = memory.read_text(encoding="utf-8")
+            oversized_exists = oversized.exists()
+
+        self.assertEqual(memory_after, "Before.\n")
+        self.assertFalse(oversized_exists)
+
     def test_private_content_in_candidate_improvement_is_rejected_and_rolled_back(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -671,6 +810,25 @@ class HermesRuntimeTests(unittest.TestCase):
             reconcile_learning_turn(profile, token=first["token"], provenance=[])
             second = begin_learning_turn(profile)
             reconcile_learning_turn(profile, token=second["token"], provenance=[])
+
+        self.assertNotEqual(first["token"], second["token"])
+
+    def test_replacement_process_recovers_interrupted_learning_lease(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _, profile, _ = self._installed_profile(root)
+            first = begin_learning_turn(profile)
+            with patch.object(
+                learning,
+                "LEARNING_PROCESS_INSTANCE_ID",
+                "replacement-process",
+            ):
+                second = begin_learning_turn(profile)
+                reconcile_learning_turn(
+                    profile,
+                    token=second["token"],
+                    provenance=[],
+                )
 
         self.assertNotEqual(first["token"], second["token"])
 

@@ -30,7 +30,19 @@ locals {
   public_mcp_app_name  = "apshipmcp-${var.autopilot_name}-${local.suffix}"
   bridge_app_name      = "autopilot-bridge-${var.autopilot_name}-${local.suffix}"
   scheduler_queue_name = "worker-${var.autopilot_name}"
-  runtime_image        = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
+  document_retry_active = (
+    var.agent_runtime == "hermes"
+    && var.document_retry_enabled
+    && var.agent365_client_id != ""
+  )
+  scheduler_transport_enabled = (
+    var.agent_runtime == "hermes"
+    && (
+      var.user_scheduling_enabled
+      || local.document_retry_active
+    )
+  )
+  runtime_image = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
   runtime_disk_image_name = (
     var.runtime_disk_image_name != "openclaw-gateway-image-with-private-mcp" || var.openclaw_disk_image_name == ""
     ? var.runtime_disk_image_name
@@ -91,7 +103,7 @@ resource "azurerm_role_assignment" "bridge_sandbox_data_owner" {
 }
 
 resource "azurerm_servicebus_queue" "worker_schedule" {
-  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? 1 : 0
+  count = local.scheduler_transport_enabled ? 1 : 0
 
   name                                    = local.scheduler_queue_name
   namespace_id                            = data.terraform_remote_state.platform.outputs.scheduler_servicebus_namespace_id
@@ -116,7 +128,7 @@ resource "azurerm_servicebus_queue" "worker_schedule" {
 }
 
 resource "azurerm_role_assignment" "bridge_schedule_sender" {
-  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? 1 : 0
+  count = local.scheduler_transport_enabled ? 1 : 0
 
   scope                = azurerm_servicebus_queue.worker_schedule[0].id
   role_definition_name = "Azure Service Bus Data Sender"
@@ -125,7 +137,7 @@ resource "azurerm_role_assignment" "bridge_schedule_sender" {
 }
 
 resource "azurerm_role_assignment" "bridge_schedule_receiver" {
-  count = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? 1 : 0
+  count = local.scheduler_transport_enabled ? 1 : 0
 
   scope                = azurerm_servicebus_queue.worker_schedule[0].id
   role_definition_name = "Azure Service Bus Data Receiver"
@@ -578,6 +590,62 @@ resource "azapi_resource" "bridge_app" {
                 value = var.workiq_mail_mcp_scope
               },
               {
+                name  = "WORKIQ_WORD_MCP_UPSTREAM_URL"
+                value = var.workiq_word_mcp_url
+              },
+              {
+                name  = "WORKIQ_WORD_MCP_SCOPE"
+                value = var.workiq_word_mcp_scope
+              },
+              {
+                name  = "WORKIQ_TEAMS_MCP_UPSTREAM_URL"
+                value = var.workiq_teams_mcp_url
+              },
+              {
+                name  = "WORKIQ_TEAMS_MCP_SCOPE"
+                value = var.workiq_teams_mcp_scope
+              },
+              {
+                name  = "WORKIQ_CALENDAR_MCP_UPSTREAM_URL"
+                value = var.workiq_calendar_mcp_url
+              },
+              {
+                name  = "WORKIQ_CALENDAR_MCP_SCOPE"
+                value = var.workiq_calendar_mcp_scope
+              },
+              {
+                name  = "WORKIQ_ONEDRIVE_MCP_UPSTREAM_URL"
+                value = var.workiq_onedrive_mcp_url
+              },
+              {
+                name  = "WORKIQ_ONEDRIVE_MCP_SCOPE"
+                value = var.workiq_onedrive_mcp_scope
+              },
+              {
+                name  = "WORKIQ_SHAREPOINT_MCP_UPSTREAM_URL"
+                value = var.workiq_sharepoint_mcp_url
+              },
+              {
+                name  = "WORKIQ_SHAREPOINT_MCP_SCOPE"
+                value = var.workiq_sharepoint_mcp_scope
+              },
+              {
+                name  = "WORKIQ_EXCEL_MCP_UPSTREAM_URL"
+                value = var.workiq_excel_mcp_url
+              },
+              {
+                name  = "WORKIQ_EXCEL_MCP_SCOPE"
+                value = var.workiq_excel_mcp_scope
+              },
+              {
+                name  = "WORKIQ_COPILOT_MCP_UPSTREAM_URL"
+                value = var.workiq_copilot_mcp_url
+              },
+              {
+                name  = "WORKIQ_COPILOT_MCP_SCOPE"
+                value = var.workiq_copilot_mcp_scope
+              },
+              {
                 name  = "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL"
                 value = "https://${azapi_resource.public_shipments_mcp_app.output.properties.configuration.ingress.fqdn}/mcp"
               },
@@ -654,12 +722,16 @@ resource "azapi_resource" "bridge_app" {
                 value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? "true" : "false"
               },
               {
+                name  = "DOCUMENT_RETRY_ENABLED"
+                value = local.document_retry_active ? "true" : "false"
+              },
+              {
                 name  = "SCHEDULER_SERVICEBUS_NAMESPACE"
                 value = data.terraform_remote_state.platform.outputs.scheduler_servicebus_fully_qualified_namespace
               },
               {
                 name  = "SCHEDULER_SERVICEBUS_QUEUE"
-                value = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? azurerm_servicebus_queue.worker_schedule[0].name : ""
+                value = local.scheduler_transport_enabled ? azurerm_servicebus_queue.worker_schedule[0].name : ""
               },
               {
                 name  = "SCHEDULER_MAX_LOCK_RENEWAL_SECONDS"
@@ -682,26 +754,38 @@ resource "azapi_resource" "bridge_app" {
 
         ]
         scale = {
-          minReplicas     = var.agent_runtime == "hermes" && var.scheduled_learning_enabled ? 1 : 0
+          minReplicas     = var.agent365_client_id != "" || (var.agent_runtime == "hermes" && var.scheduled_learning_enabled) ? 1 : 0
           maxReplicas     = 1
-          pollingInterval = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? var.user_scheduling_keda_polling_seconds : null
-          cooldownPeriod  = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? var.user_scheduling_scale_down_seconds : null
-          rules = var.agent_runtime == "hermes" && var.user_scheduling_enabled ? [
-            {
-              name = "scheduled-work"
-              custom = {
-                type = "azure-servicebus"
-                metadata = {
-                  queueName              = azurerm_servicebus_queue.worker_schedule[0].name
-                  namespace              = data.terraform_remote_state.platform.outputs.scheduler_servicebus_namespace_name
-                  messageCount           = "1"
-                  activationMessageCount = "0"
+          pollingInterval = local.scheduler_transport_enabled ? var.user_scheduling_keda_polling_seconds : null
+          cooldownPeriod  = local.scheduler_transport_enabled ? var.user_scheduling_scale_down_seconds : null
+          rules = concat(
+            [
+              {
+                name = "active-http"
+                http = {
+                  metadata = {
+                    concurrentRequests = "1"
+                  }
                 }
-                auth     = []
-                identity = azurerm_user_assigned_identity.bridge.id
               }
-            }
-          ] : []
+            ],
+            local.scheduler_transport_enabled ? [
+              {
+                name = "scheduled-work"
+                custom = {
+                  type = "azure-servicebus"
+                  metadata = {
+                    queueName              = azurerm_servicebus_queue.worker_schedule[0].name
+                    namespace              = data.terraform_remote_state.platform.outputs.scheduler_servicebus_namespace_name
+                    messageCount           = "1"
+                    activationMessageCount = "0"
+                  }
+                  auth     = []
+                  identity = azurerm_user_assigned_identity.bridge.id
+                }
+              }
+            ] : []
+          )
         }
       }
     }

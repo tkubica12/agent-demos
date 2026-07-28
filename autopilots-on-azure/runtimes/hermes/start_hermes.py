@@ -18,6 +18,18 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from autopilots_identity.document_operations import (
+    acknowledge_delivery as acknowledge_document_delivery,
+    claim_delivery as claim_document_delivery,
+    configure_background_retry,
+    copy_now as copy_document_now,
+    fail_delivery as fail_document_delivery,
+    pending_choices as pending_document_choices,
+    process_background_retry,
+)
+from autopilots_identity.collaboration_mcp import (
+    bind_pending_publish_scope,
+)
 from blueprint import (
     RoleReleaseInstall,
     install_or_refresh_role_release,
@@ -50,6 +62,7 @@ from cron_runtime import (
     cron_diagnostics,
     cron_delivery_receipt_status,
     fire_cron_job,
+    get_delivery_reference,
     ensure_system_dream_schedule,
     enqueue_system_dream_now,
     list_cron_jobs,
@@ -57,11 +70,23 @@ from cron_runtime import (
     upsert_delivery_reference,
 )
 
+WORKIQ_MCP_ENVIRONMENTS = {
+    "workiq-mail": "WORKIQ_MAIL_MCP_URL",
+    "workiq-word": "WORKIQ_WORD_MCP_URL",
+    "workiq-teams": "WORKIQ_TEAMS_MCP_URL",
+    "workiq-calendar": "WORKIQ_CALENDAR_MCP_URL",
+    "workiq-onedrive": "WORKIQ_ONEDRIVE_MCP_URL",
+    "workiq-sharepoint": "WORKIQ_SHAREPOINT_MCP_URL",
+    "workiq-excel": "WORKIQ_EXCEL_MCP_URL",
+    "workiq-copilot": "WORKIQ_COPILOT_MCP_URL",
+}
+
 
 DEFAULT_HERMES_HOME = "/data/hermes"
 DEFAULT_GATEWAY_PORT = 9119
 DEFAULT_FOUNDRY_PROXY_PORT = 18080
 DEFAULT_AGENT_MCP_PROXY_PORT = 18081
+DEFAULT_M365_COLLABORATION_MCP_PORT = 18082
 
 
 def bool_env(name: str, default: bool = False) -> bool:
@@ -106,6 +131,15 @@ def write_env_file(home: Path) -> Path:
         "PRIVATE_INCIDENTS_MCP_URL": os.getenv("PRIVATE_INCIDENTS_MCP_URL", ""),
         "PUBLIC_SHIPMENTS_MCP_URL": os.getenv("PUBLIC_SHIPMENTS_MCP_URL", ""),
         "WORKIQ_MAIL_MCP_URL": os.getenv("WORKIQ_MAIL_MCP_URL", ""),
+        "WORKIQ_WORD_MCP_URL": os.getenv("WORKIQ_WORD_MCP_URL", ""),
+        **{
+            environment_name: os.getenv(environment_name, "")
+            for environment_name in WORKIQ_MCP_ENVIRONMENTS.values()
+        },
+        "M365_COLLABORATION_MCP_URL": os.getenv(
+            "M365_COLLABORATION_MCP_URL",
+            "",
+        ),
     }
     managed = {key: value for key, value in values.items() if value}
     existing_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
@@ -162,13 +196,22 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     mcp_servers: dict[str, Any] = {}
     private_mcp_url = os.getenv("PRIVATE_INCIDENTS_MCP_URL", "").strip()
     public_shipments_mcp_url = os.getenv("PUBLIC_SHIPMENTS_MCP_URL", "").strip()
-    workiq_mail_mcp_url = os.getenv("WORKIQ_MAIL_MCP_URL", "").strip()
     if private_mcp_url:
         mcp_servers["private-incidents"] = {"url": private_mcp_url}
     if public_shipments_mcp_url:
         mcp_servers["public-shipments"] = {"url": public_shipments_mcp_url}
-    if workiq_mail_mcp_url:
-        mcp_servers["workiq-mail"] = {"url": workiq_mail_mcp_url}
+    for name, environment_name in WORKIQ_MCP_ENVIRONMENTS.items():
+        url = os.getenv(environment_name, "").strip()
+        if url:
+            mcp_servers[name] = {"url": url}
+    collaboration_url = os.getenv(
+        "M365_COLLABORATION_MCP_URL",
+        "",
+    ).strip()
+    if collaboration_url:
+        mcp_servers["m365-collaboration"] = {
+            "url": collaboration_url,
+        }
     if mcp_servers:
         runtime_config["mcp_servers"] = mcp_servers
     if bool_env("USER_SCHEDULING_ENABLED", False):
@@ -179,7 +222,12 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     config = _deep_merge(base or {}, runtime_config)
     configured_servers = config.get("mcp_servers")
     if isinstance(configured_servers, dict):
-        for name in ("private-incidents", "public-shipments", "workiq-mail"):
+        for name in (
+            "private-incidents",
+            "public-shipments",
+            *WORKIQ_MCP_ENVIRONMENTS,
+            "m365-collaboration",
+        ):
             if name not in mcp_servers:
                 configured_servers.pop(name, None)
         if not configured_servers:
@@ -261,6 +309,30 @@ def start_agent_mcp_proxy() -> subprocess.Popen | None:
     )
 
 
+def start_m365_collaboration_mcp() -> subprocess.Popen | None:
+    if not os.getenv("M365_COLLABORATION_MCP_URL", "").strip():
+        return None
+    port = os.getenv(
+        "M365_COLLABORATION_MCP_PORT",
+        str(DEFAULT_M365_COLLABORATION_MCP_PORT),
+    )
+    print(
+        "Starting Agent User collaboration MCP on "
+        f"127.0.0.1:{port}",
+        flush=True,
+    )
+    env = os.environ.copy()
+    env["M365_COLLABORATION_MCP_PORT"] = port
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "autopilots_identity.collaboration_mcp",
+        ],
+        env=env,
+    )
+
+
 def write_config(home: Path) -> Path:
     config_path = home / "config.yaml"
     base: dict[str, Any] = {}
@@ -289,6 +361,7 @@ def start_gateway(profile_home: Path) -> subprocess.Popen:
         "hermes",
         "gateway",
         "run",
+        "--replace",
         "--accept-hooks",
     ]
     return subprocess.Popen(command, env=env)
@@ -342,9 +415,17 @@ def create_health_app(
         return build_learning_status(profile_home)
 
     @app.post("/internal/learning/turns")
-    def begin_turn(request: Request) -> dict[str, Any]:
+    async def begin_turn(request: Request) -> dict[str, Any]:
         require_internal_key(request)
-        return begin_learning_turn(profile_home)
+        payload = await request.json()
+        return begin_learning_turn(
+            profile_home,
+            attachment_private=bool(
+                payload.get("attachmentPrivate")
+                if isinstance(payload, dict)
+                else False
+            ),
+        )
 
     @app.post("/internal/learning/reconcile")
     async def reconcile_turn(request: Request) -> dict[str, Any]:
@@ -376,6 +457,181 @@ def create_health_app(
             return abort_learning_turn(profile_home, token=token)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/documents/pending")
+    async def document_pending(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        operation_scope = (
+            payload.get("operationScope")
+            if isinstance(payload, dict)
+            else None
+        )
+        if not isinstance(operation_scope, str) or not operation_scope:
+            raise HTTPException(
+                status_code=400,
+                detail="operationScope must be a non-empty string.",
+            )
+        return await pending_document_choices(operation_scope)
+
+    @app.post("/internal/documents/bind-scope")
+    async def document_bind_scope(
+        request: Request,
+    ) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Document operation body must be an object.",
+            )
+        try:
+            return bind_pending_publish_scope(
+                str(payload.get("operationId") or ""),
+                str(payload.get("operationScope") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post("/internal/documents/background")
+    async def document_background(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Document operation body must be an object.",
+            )
+        try:
+            return configure_background_retry(
+                str(payload.get("operationId") or ""),
+                str(payload.get("operationScope") or ""),
+                str(payload.get("recipientIdentifier") or ""),
+                payload.get("deliveryReference")
+                if isinstance(
+                    payload.get("deliveryReference"),
+                    dict,
+                )
+                else {},
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post("/internal/documents/process")
+    async def document_process(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        operation_id = (
+            payload.get("operationId")
+            if isinstance(payload, dict)
+            else None
+        )
+        if not isinstance(operation_id, str) or not operation_id:
+            raise HTTPException(
+                status_code=400,
+                detail="operationId must be a non-empty string.",
+            )
+        return await process_background_retry(operation_id)
+
+    @app.post("/internal/documents/copy")
+    async def document_copy(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Document operation body must be an object.",
+            )
+        try:
+            return await copy_document_now(
+                str(payload.get("operationId") or ""),
+                str(payload.get("operationScope") or ""),
+                str(payload.get("recipientIdentifier") or ""),
+                payload.get("deliveryReference")
+                if isinstance(
+                    payload.get("deliveryReference"),
+                    dict,
+                )
+                else {},
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post("/internal/documents/ack-delivery")
+    async def document_ack_delivery(
+        request: Request,
+    ) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Document delivery body must be an object.",
+            )
+        try:
+            return acknowledge_document_delivery(
+                str(payload.get("operationId") or ""),
+                str(payload.get("deliveryActivityId") or ""),
+                str(payload.get("deliveryAttemptId") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post("/internal/documents/claim-delivery")
+    async def document_claim_delivery(
+        request: Request,
+    ) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        operation_id = (
+            payload.get("operationId")
+            if isinstance(payload, dict)
+            else None
+        )
+        try:
+            return claim_document_delivery(
+                str(operation_id or "")
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post("/internal/documents/fail-delivery")
+    async def document_fail_delivery(
+        request: Request,
+    ) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Document delivery body must be an object.",
+            )
+        try:
+            return fail_document_delivery(
+                str(payload.get("operationId") or ""),
+                str(payload.get("deliveryAttemptId") or ""),
+                str(payload.get("error") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
 
     @app.post("/internal/collective-learning/prepare")
     def prepare_collective_learning(request: Request) -> dict[str, Any]:
@@ -448,7 +704,30 @@ def create_health_app(
                 boundary=str(payload.get("boundary") or ""),
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.get("/internal/cron/delivery-reference")
+    async def cron_get_delivery_reference(
+        request: Request,
+        referenceKey: str,
+    ) -> dict[str, Any]:
+        require_internal_key(request)
+        reference = get_delivery_reference(
+            profile_home,
+            referenceKey,
+        )
+        if not isinstance(reference, dict):
+            raise HTTPException(
+                status_code=404,
+                detail="Delivery reference was not found.",
+            )
+        return {
+            "referenceKey": referenceKey,
+            "deliveryReference": reference,
+        }
 
     @app.post("/internal/cron/bind-delivery")
     async def cron_bind_delivery(request: Request) -> dict[str, Any]:
@@ -646,7 +925,8 @@ def main() -> None:
 
     foundry_proxy = start_foundry_proxy()
     mcp_proxy = start_agent_mcp_proxy()
-    if foundry_proxy or mcp_proxy:
+    collaboration_mcp = start_m365_collaboration_mcp()
+    if foundry_proxy or mcp_proxy or collaboration_mcp:
         time.sleep(2)
     gateway = None
     if bool_env("HERMES_START_GATEWAY", True):
@@ -670,7 +950,11 @@ def main() -> None:
 
         raise SystemExit(gateway.wait())
     finally:
-        for process in (mcp_proxy, foundry_proxy):
+        for process in (
+            collaboration_mcp,
+            mcp_proxy,
+            foundry_proxy,
+        ):
             if process and process.poll() is None:
                 process.terminate()
 

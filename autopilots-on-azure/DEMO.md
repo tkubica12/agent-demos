@@ -494,11 +494,104 @@ Expected:
 - channel delivery continues the originating conversation or thread; the bot does not create an arbitrary new channel or conversation;
 - a new first-contact personal chat still requires the app to be installed for that user.
 
+## 16. Document-aware work
+
+First run the live Work IQ Word smoke:
+
+```powershell
+uv run python -m scripts.document_smoke `
+  --state-name hermes2 `
+  --timeout 1200
+```
+
+The smoke uses the real Hermes 2 Agent User to create a DOCX, read back a unique marker, add a comment, and reply to it. It fails unless every managed Word tool reports success and the result contains the exact marker and a Microsoft 365 SharePoint URL. The temporary document remains in the Hermes 2 Agent User's OneDrive because Work IQ Word does not expose deletion.
+
+Then validate the Teams attachment path in the existing personal chat with Hermes 2:
+
+1. Attach one small `.docx` with recognizable text and at least one Word comment.
+2. Send: `Summarize this document and list its comments. Treat the attachment as private turn context and do not learn from it.`
+3. Confirm the answer reflects the actual body and comment without asking for another download link.
+4. Attach the document with `/learn remember the contents of this attachment` and confirm Hermes explicitly blocks attachment-derived learning.
+5. Attach a PDF or another unsupported format and confirm Hermes fails explicitly rather than pretending to read it.
+
+Current limits are 20 `.docx` or UTF-8 `.txt` files, 50 MiB per file, 300 MiB per turn, and 1,000,000 extracted characters. Connector authorization is sent only to the original connector origin; Microsoft sharing URLs use Work IQ Word when direct download is unavailable. Attachment turns restore Personal Memory, Private Playbooks, Role Skills, and Candidate Improvements transactionally.
+
+## 17. Agent User collaboration
+
+Run the proactive Teams smoke:
+
+```powershell
+uv run python -m scripts.m365_actions_smoke `
+  --state-name hermes2 `
+  --recipient admin@tomasonline.net `
+  --execute `
+  --timeout 1200
+```
+
+Hermes 2 creates or reuses a one-to-one chat, identifies itself as the digital Worker, sends a unique project follow-up, and independently reads the message back. The same Work IQ Teams server can return a OneDrive/SharePoint file directly to a user, chat, or channel.
+
+In the Hermes 2 personal chat, paste a shared Word URL and ask:
+
+```text
+Append a tracked paragraph saying "The dependency is confirmed." to this shared document. Keep the existing file and formatting, and show me who Microsoft 365 records as the modifier.
+```
+
+The thin loopback collaboration MCP downloads, publishes, and cleans up under the Agent User identity. The `office-collaboration` policy skill reuses the pinned MIT `minimax-docx` skill and its Microsoft Open XML CLI for ordinary Word operations and hard validation gates; narrow Open XML adapters cover explicitly tracked changes. It uploads to the same drive item with an ETag guard, then deletes the local copy. Microsoft 365 creates a version attributed to Hermes 2. Ambiguous edits must fail instead of guessing across complex formatting.
+
+To demonstrate lock recovery, keep the shared document open in Word or Teams while asking Hermes to edit it. When Microsoft 365 returns `423 Locked`, Hermes should report that the validated edit is ready and post predefined suggested-action buttons for **Keep trying original** and **Send shared copy now**.
+
+- **Send shared copy now** creates the Agent User copy, grants the invoking user write access, returns the file in Teams, and records a delivery receipt.
+- **Keep trying original** schedules deterministic Service Bus retries without another model turn. Close the document and confirm a later proactive message links the updated original. For a forced-expiry test, set the operation deadline in the isolated test fixture and confirm the 24-hour path creates, shares, and delivers a copy exactly once.
+
+A changed original ETag must safely rebase a guarded Word patch or fall back to a copy; it must never overwrite a human edit.
+
+The initial "Document received" message is an Activity Protocol acknowledgement, not completion. The bridge remains available for the bounded Hermes turn through the KEDA cooldown and posts the final result proactively. If system logs show `KEDAScaleTargetDeactivated` before the final response, verify that `user_scheduling_scale_down_seconds` is at least 660 seconds; the supported default is 900.
+
+Agent 365 configuration keeps one lightweight bridge replica ready. Do not expect the messaging endpoint itself to scale to zero: cold start can exceed the workload response window before acknowledgement. The Hermes Sandbox remains the expensive scale-to-zero boundary.
+
+The Microsoft Open XML gate targets `FileFormatVersions.Microsoft365`; do not use the parameterless `OpenXmlValidator`, which defaults to Office 2007 and rejects valid modern Word attributes. A native session HTTP 5xx does not rerun document tools: the bridge polls the existing transcript for up to 120 seconds and delivers a newly persisted final answer when available.
+
+Existing files are validated twice: once immediately after download and again after editing. Unchanged source defects are reported but allowed; errors introduced by Hermes block publishing. This keeps legacy Word documents usable without silently repairing unrelated content.
+
+The deterministic local proof for encrypted card actions, retry timing, ETag rebase, Service Bus scheduling, persistent-lock retention, copy sharing, 24-hour fallback, receipts, and expiry cleanup is:
+
+```powershell
+uv run python -m unittest `
+  tests.test_document_cards `
+  tests.test_document_operations `
+  tests.test_collaboration_mcp `
+  tests.test_user_scheduling `
+  tests.test_teams_bridge -v
+```
+
+Before a manual lock test, validate the deployed transport and card rendering against the existing Hermes 2 personal chat. The command schedules and immediately cancels a future synthetic retry message, then sends one non-actionable card preview:
+
+```powershell
+uv run python -m scripts.document_action_smoke `
+  --state-name hermes2 `
+  --conversation-id "<Teams conversation ID>" `
+  --execute
+```
+
+The smoke must return a Service Bus sequence number with `cancelled: true` and suggested-action delivery with `accepted: true`. Independently confirm the validation text through a read-only Work IQ Teams message read. The smoke does not create, edit, or retain a document operation.
+
+For Excel, ask Hermes to create a workbook, then write and read a specific range. The tenant-preview Excel MCP provides create/read/comment operations; Agent User Graph workbook operations provide range writes without regenerating the file. Shared PowerPoint slide, note, and comment text can be read, but PowerPoint creation and body editing are not supported.
+
+To validate notifications:
+
+1. Send an email to the Hermes 2 Agent User or mention it in an email.
+2. Mention Hermes 2 in a Word, Excel, or PowerPoint comment on a file it can access.
+3. Confirm the existing bridge scales from zero, wakes the same Worker, resolves the stable email/comment/document identifiers, and responds through the originating workload.
+
+Notifications reuse `/api/messages`, Agent 365 Activity Protocol authentication, and ACA HTTP scaling. They do not require Graph webhooks, Event Grid, a second endpoint, or Service Bus ingress. Delivery retry guarantees are currently undocumented, so handlers use stable workload IDs and must remain idempotent.
+
 ## What the demo proves
 
 - Worker identity is autonomous and independently authorized.
 - Agent User provides Microsoft 365 presence without becoming the runtime credential.
 - Private and public MCP paths use explicit Entra resource boundaries.
+- Document content can enter private turn context and managed Word operations without entering durable learning.
+- Agent User actions are attributable in Teams, Mail, OneDrive/SharePoint version history, Word comments, and Excel workbooks.
 - Multiple Workers can share one Role Blueprint without sharing private state.
 - Ordinary Hermes turns may learn natively, while explicit `/learn` uses one deterministic transactional learning turn without keyword-triggered retries.
 - Dreaming can discover reusable learning retrospectively.

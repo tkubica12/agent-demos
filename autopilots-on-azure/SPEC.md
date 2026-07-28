@@ -108,7 +108,7 @@ The bridge:
 - forwards turns to the runtime port;
 - returns messages and Teams reactions through Microsoft 365 Agents SDK.
 
-Bridge Container Apps scale to zero. The full `/invoke`, Agent 365 message, reaction, Dreaming, or approval operation remains awaited inside the incoming HTTP request so the scaler observes active work.
+Agent 365 Workers keep one lightweight bridge replica ready so Activity Protocol acknowledgement never depends on standard ACA cold start. Agent 365 callbacks may continue after the workload has accepted the HTTP request, so the bounded cooldown protects detached processing. Non-Agent-365 bridges may scale to zero. Worker Sandbox compute remains independently scale-to-zero.
 
 The bridge does not:
 
@@ -260,7 +260,7 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 1. Public ingress must terminate at a runtime-specific Azure Container Apps bridge.
 2. OpenClaw and Hermes must run inside Azure Container Apps Sandboxes, not ACA Dynamic Sessions.
 3. Sandbox runtime state must reside on a persistent Data Disk.
-4. Bridge Container Apps may scale to zero.
+4. Bridge Container Apps without Agent 365 ingress may scale to zero. An Agent 365 messaging endpoint must keep one ready bridge replica until a faster hosting tier passes ADR 0001's identity, networking, region, TLS, reliability, and measured acknowledgement gates.
 5. An incoming bridge request must wake or reuse the selected Sandbox and await the runtime operation.
 6. Runtime-specific Terraform workspaces must prevent OpenClaw and Hermes app state from colliding.
 7. The current implementation isolates each Worker behind its own Agent 365 platform blueprint, bridge, Terraform workspace, and Data Disk; this does not duplicate the shared Git Role Blueprint.
@@ -311,6 +311,26 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 8. Raw documents and extracted excerpts are private Worker context and are excluded from Role Skills, Candidate Improvements, provenance, and Learning Packets.
 9. Temporary attachment files must use Worker-private storage with bounded retention and must not be committed to the Role Blueprint.
 10. Office comment notifications must reuse the same document access contract rather than creating a second attachment path.
+11. Existing Office body edits must prefer ETag-protected same-item publishing so sharing, comments, mentions, tracked changes, and version history remain attached to one document.
+12. A validated edit blocked by a transient Microsoft 365 lock may remain in Worker-private storage under an opaque operation ID for at most 24 hours and one hour by default. The identifier and private path must never be exposed to the user or persisted in memory or learning artifacts.
+13. Lock recovery must retry only the retained publish in short bounded attempts. A reconstructible guarded edit may be reapplied to a newer source ETag; an opaque local transformation must fail closed when the source changed.
+14. After bounded retries, the Worker must ask whether to retry the original, return an edited copy, or cancel. It must not silently create a copy or use checkout to block coauthors.
+15. A fallback copy must be created under Agent User identity and returned through the originating Teams context with an explicit warning that it has independent sharing, comments, and version history.
+16. Pending publishes must be bound to a hashed stable conversation scope. A new native transcript may recover matching internal operation IDs through that scope, but operation IDs and scope values must never appear in user-visible output, memory, Work History, learning records, or diagnostics.
+17. Activity Protocol may acknowledge a Teams attachment before its agent callback finishes, so HTTP concurrency alone is not a processing lease. The bridge scale-down cooldown must exceed the maximum runtime turn timeout; the default is 900 seconds for a 600-second Hermes timeout. The bridge still scales to zero after the bounded cooldown.
+18. Open XML validation must target Microsoft 365 rather than the Open XML SDK's Office 2007 default. Modern schema extensions are valid input, while genuine package or schema errors remain hard failures.
+19. If native Hermes session finalization returns HTTP 5xx after tool execution, the bridge must poll the existing transcript for up to 120 seconds and deliver only a newly persisted assistant response. It must not rerun tools.
+20. Existing Office files may contain Word-tolerated schema defects. The Worker must record a private validation baseline before editing and reject newly introduced errors; unchanged source errors may pass with explicit diagnostics and must not be silently repaired.
+21. Learning transaction leases must identify the runtime process that owns them. A live process rejects concurrent turns; a replacement Sandbox restores and releases an interrupted predecessor transaction immediately instead of waiting for lease expiry.
+22. An Agent 365 Activity Protocol endpoint must keep at least one lightweight bridge replica ready. ACA cold start can exceed the workload response window before application acknowledgement code runs. This does not keep the Worker Sandbox running; expensive agent compute still starts on demand and scales independently.
+23. Teams transcript IDs must rotate hourly by default while the stable Hermes memory key remains unchanged. Large private document/tool results must not accumulate for a full day, and fixed document wrappers must not load redundant upstream skill text into every turn.
+24. A fallback file created in Agent User storage must be explicitly shared with the invoking user before its URL is sent through Teams. Existing-file URL delivery is not evidence of access. The copy workflow must verify a user-specific Graph permission and remove an unshareable copy.
+25. Persistent Office locks must expose sanitized Graph error classification and request correlation. Retry policy must distinguish known transient lock responses from unexplained or effectively permanent write failures.
+26. User-facing lock guidance must state that WOPI locks can persist for 30 minutes and be refreshed by Microsoft 365 clients or services. A Graph `423 notAllowed` without holder metadata must be reported as holder unavailable, never attributed to a person.
+27. A persistent document lock must produce predefined Teams suggested actions with two `Action.Submit` choices: background original retry or an immediate shared copy. Action tokens must be encrypted, authenticated, user/conversation/Worker-bound, expiring, and idempotent.
+28. Background document retries must use a fixed runtime state machine and the existing per-Worker Service Bus queue, not repeated LLM turns. Queue messages must not contain document bytes, URLs, edit text, or delivery credentials.
+29. Background state must remain private on the Worker Data Disk, safely rebase guarded edits on changed ETags, retry for at most 24 hours, then create and explicitly share a copy.
+30. Document mutation is terminal only after a receipt is durable; user delivery is terminal only after Teams returns and the runtime persists an activity ID. A durable delivery lease must prevent concurrent or immediate duplicate sends across queue redelivery and repeated card actions.
 
 ## Role Blueprint and Worker lifecycle
 
@@ -653,8 +673,9 @@ Work History                         |
 - OpenClaw does not yet implement the complete Hermes Role Blueprint and Collective Learning Review lifecycle.
 - Multi-Worker Collective Learning Review is live-validated with two independent Worker packets.
 - Scheduled Dreaming and user schedules share the unified Service Bus/KEDA bridge trigger; the former ACA scheduled Job is removed.
-- Agent 365 Email and Office comment notifications are not yet implemented.
-- Teams and Agent 365 document attachment ingestion is not yet implemented.
+- Agent 365 Email and Word/Excel/PowerPoint comment notification routing is implemented on the existing Activity Protocol endpoint; live workload mention validation remains.
+- Hermes supports bounded Teams DOCX and UTF-8 text attachment ingestion; OpenClaw rejects attachments until it has an equivalent private learning transaction.
+- PDF and image attachment ingestion remain unsupported. A14 supports shared Excel workbook range collaboration and bounded shared PowerPoint text extraction, not direct Teams attachment ingestion for those formats.
 - Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.
 
 ## Non-goals

@@ -6,6 +6,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+**/bin/
+**/obj/
 *.log
 .local/
 terraform/**/.terraform/

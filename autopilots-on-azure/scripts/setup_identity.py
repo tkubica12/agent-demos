@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from scripts.provision_agent365_instance import GraphClient, load_state, state_file
+from scripts.provision_agent365_instance import GraphClient, load_state
 from scripts.setup_agent365 import agent365_workspace, load_json, write_json
 from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, output, resolve_executable, terraform_output, write_tfvars
 
@@ -25,6 +25,31 @@ SHIPMENTS_DELEGATED_SCOPE = "Shipments.Read"
 
 def runtime_app_tfvars_path(runtime: str, state_name: str = "") -> Path:
     return REPO_ROOT / ".local" / (state_name or runtime) / "apps" / "generated.app.auto.tfvars.json"
+
+
+def resolve_instance_state_file(
+    runtime: str,
+    state_name: str,
+    *,
+    state_file_value: str = "",
+    mail_nickname: str = "",
+) -> Path:
+    if state_file_value:
+        return Path(state_file_value)
+    workspace = agent365_workspace(state_name)
+    if mail_nickname:
+        return workspace / f"instance.{mail_nickname}.json"
+    candidates = sorted(workspace.glob("instance.*.json"))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No Agent 365 instance state exists in {workspace}."
+        )
+    raise RuntimeError(
+        f"Multiple Agent 365 instance states exist in {workspace}; "
+        "pass --state-file or --mail-nickname."
+    )
 
 
 def generated_blueprint_id(runtime: str, state_name: str = "") -> str:
@@ -252,18 +277,48 @@ def ensure_federated_credential(
     managed_identity_principal_id: str,
 ) -> None:
     payload = graph.request("GET", f"/applications/{blueprint_object_id}/federatedIdentityCredentials")
-    existing = next((item for item in payload.get("value", []) if item.get("name") == name), None)
     expected_issuer = f"https://login.microsoftonline.com/{tenant_id}/v2.0"
-    if existing:
-        if existing.get("issuer") == expected_issuer and existing.get("subject") == managed_identity_principal_id:
-            return
+    credentials = payload.get("value", [])
+    existing = next(
+        (item for item in credentials if item.get("name") == name),
+        None,
+    )
+    if existing and (
+        existing.get("issuer") != expected_issuer
+        or existing.get("subject") != managed_identity_principal_id
+        or "api://AzureADTokenExchange"
+        not in (existing.get("audiences") or [])
+    ):
         credential_id = existing.get("id")
         if not credential_id:
-            raise RuntimeError(f"Federated credential {name} cannot be replaced because its id is missing.")
+            raise RuntimeError(
+                f"Federated credential {name} cannot be replaced "
+                "because its id is missing."
+            )
         graph.request(
             "DELETE",
-            f"/applications/{blueprint_object_id}/federatedIdentityCredentials/{credential_id}",
+            f"/applications/{blueprint_object_id}/"
+            f"federatedIdentityCredentials/{credential_id}",
         )
+        credentials = [
+            item for item in credentials if item is not existing
+        ]
+        existing = None
+    matching_subject = next(
+        (
+            item
+            for item in credentials
+            if item.get("issuer") == expected_issuer
+            and item.get("subject") == managed_identity_principal_id
+            and "api://AzureADTokenExchange"
+            in (item.get("audiences") or [])
+        ),
+        None,
+    )
+    if matching_subject:
+        return
+    if existing:
+        return
     graph.request(
         "POST",
         f"/applications/{blueprint_object_id}/federatedIdentityCredentials",
@@ -499,8 +554,12 @@ def main() -> None:
 
     runtime = args.runtime
     state_name = args.state_name or runtime
-    mail_nickname = args.mail_nickname or f"{runtime}1"
-    instance_path = Path(args.state_file) if args.state_file else state_file(runtime, mail_nickname)
+    instance_path = resolve_instance_state_file(
+        runtime,
+        state_name,
+        state_file_value=args.state_file,
+        mail_nickname=args.mail_nickname,
+    )
     identity_state = load_state(instance_path)
     required = ["agentIdentityId", "agentIdentityAppId", "agentUserId", "agentUserPrincipalName"]
     missing = [name for name in required if not identity_state.get(name)]

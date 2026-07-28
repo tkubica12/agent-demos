@@ -29,9 +29,19 @@ WORKER_REFRESH_PREFLIGHT_TIMEOUT_SECONDS = 300
 WORKER_REFRESH_RETRY_SECONDS = 3
 WORKER_REFRESH_TRANSIENT_STATUS_CODES = {502, 503, 504}
 AGENT_MCP_PROXY_PORT = 18081
+M365_COLLABORATION_MCP_PORT = 18082
 PRIVATE_MCP_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/private-incidents"
 PUBLIC_SHIPMENTS_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/public-shipments"
 WORKIQ_MAIL_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/workiq-mail"
+WORKIQ_WORD_LOCAL_URL = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/workiq-word"
+ADDITIONAL_WORKIQ_SERVERS = {
+    "workiq-teams": "WORKIQ_TEAMS_MCP_URL",
+    "workiq-calendar": "WORKIQ_CALENDAR_MCP_URL",
+    "workiq-onedrive": "WORKIQ_ONEDRIVE_MCP_URL",
+    "workiq-sharepoint": "WORKIQ_SHAREPOINT_MCP_URL",
+    "workiq-excel": "WORKIQ_EXCEL_MCP_URL",
+    "workiq-copilot": "WORKIQ_COPILOT_MCP_URL",
+}
 
 
 @dataclass(frozen=True)
@@ -58,6 +68,11 @@ class AgentSandboxConfig:
     public_shipments_mcp_scope: str = ""
     workiq_mail_mcp_url: str = ""
     workiq_mail_mcp_scope: str = ""
+    workiq_word_mcp_url: str = ""
+    workiq_word_mcp_scope: str = ""
+    additional_agent_user_mcp_servers: dict[str, dict[str, str]] = field(
+        default_factory=dict
+    )
     agent365_tenant_id: str = ""
     agent365_blueprint_client_id: str = ""
     agent365_agent_identity_client_id: str = ""
@@ -313,6 +328,16 @@ def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
         "AGENT365_AGENT_IDENTITY_CLIENT_ID": config.agent365_agent_identity_client_id,
         "AGENT365_AGENT_USER_ID": config.agent365_agent_user_id,
     }
+    if config.agent365_agent_user_id:
+        environment["M365_COLLABORATION_MCP_URL"] = (
+            f"http://127.0.0.1:{M365_COLLABORATION_MCP_PORT}/mcp"
+        )
+        environment["M365_COLLABORATION_MCP_PORT"] = str(
+            M365_COLLABORATION_MCP_PORT
+        )
+        environment["M365_GRAPH_SCOPE"] = (
+            "https://graph.microsoft.com/.default"
+        )
     if config.private_incidents_mcp_url and config.private_incidents_mcp_scope:
         servers["private-incidents"] = {
             "upstreamUrl": config.private_incidents_mcp_url,
@@ -334,13 +359,37 @@ def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
             "identityMode": "agent_user",
         }
         environment["WORKIQ_MAIL_MCP_URL"] = WORKIQ_MAIL_LOCAL_URL
+    if config.workiq_word_mcp_url and config.workiq_word_mcp_scope:
+        servers["workiq-word"] = {
+            "upstreamUrl": config.workiq_word_mcp_url,
+            "scope": config.workiq_word_mcp_scope,
+            "identityMode": "agent_user",
+        }
+        environment["WORKIQ_WORD_MCP_URL"] = WORKIQ_WORD_LOCAL_URL
+    for name, environment_name in ADDITIONAL_WORKIQ_SERVERS.items():
+        server = config.additional_agent_user_mcp_servers.get(name) or {}
+        upstream_url = str(server.get("upstreamUrl") or "")
+        scope = str(server.get("scope") or "")
+        if not upstream_url or not scope:
+            continue
+        servers[name] = {
+            "upstreamUrl": upstream_url,
+            "scope": scope,
+            "identityMode": "agent_user",
+        }
+        environment[environment_name] = (
+            f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/{name}"
+        )
     if servers:
         required = {
             "AGENT365_TENANT_ID": config.agent365_tenant_id,
             "AGENT365_BLUEPRINT_CLIENT_ID": config.agent365_blueprint_client_id,
             "AGENT365_AGENT_IDENTITY_CLIENT_ID": config.agent365_agent_identity_client_id,
         }
-        if "workiq-mail" in servers:
+        if any(
+            server.get("identityMode") == "agent_user"
+            for server in servers.values()
+        ):
             required["AGENT365_AGENT_USER_ID"] = config.agent365_agent_user_id
         missing = [name for name, value in required.items() if not value]
         if missing:
@@ -455,6 +504,11 @@ def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         public_shipments_mcp_scope=overrides.get("public_shipments_mcp_scope") or "",
         workiq_mail_mcp_url=overrides.get("workiq_mail_mcp_url") or "",
         workiq_mail_mcp_scope=overrides.get("workiq_mail_mcp_scope") or "",
+        workiq_word_mcp_url=overrides.get("workiq_word_mcp_url") or "",
+        workiq_word_mcp_scope=overrides.get("workiq_word_mcp_scope") or "",
+        additional_agent_user_mcp_servers=(
+            overrides.get("additional_agent_user_mcp_servers") or {}
+        ),
         agent365_tenant_id=overrides.get("agent365_tenant_id") or "",
         agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
         agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
@@ -527,6 +581,11 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         public_shipments_mcp_scope=overrides.get("public_shipments_mcp_scope") or "",
         workiq_mail_mcp_url=overrides.get("workiq_mail_mcp_url") or "",
         workiq_mail_mcp_scope=overrides.get("workiq_mail_mcp_scope") or "",
+        workiq_word_mcp_url=overrides.get("workiq_word_mcp_url") or "",
+        workiq_word_mcp_scope=overrides.get("workiq_word_mcp_scope") or "",
+        additional_agent_user_mcp_servers=(
+            overrides.get("additional_agent_user_mcp_servers") or {}
+        ),
         agent365_tenant_id=overrides.get("agent365_tenant_id") or "",
         agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
         agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
@@ -633,6 +692,11 @@ def create_gateway_sandbox(client: SandboxGroupClient, **kwargs):
         public_shipments_mcp_scope=kwargs.get("public_shipments_mcp_scope", ""),
         workiq_mail_mcp_url=kwargs.get("workiq_mail_mcp_url", ""),
         workiq_mail_mcp_scope=kwargs.get("workiq_mail_mcp_scope", ""),
+        workiq_word_mcp_url=kwargs.get("workiq_word_mcp_url", ""),
+        workiq_word_mcp_scope=kwargs.get("workiq_word_mcp_scope", ""),
+        additional_agent_user_mcp_servers=(
+            kwargs.get("additional_agent_user_mcp_servers") or {}
+        ),
         agent365_tenant_id=kwargs.get("agent365_tenant_id", ""),
         agent365_blueprint_client_id=kwargs.get("agent365_blueprint_client_id", ""),
         agent365_agent_identity_client_id=kwargs.get("agent365_agent_identity_client_id", ""),
@@ -775,6 +839,19 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "public_shipments_mcp_scope": overrides.get("public_shipments_mcp_scope") or get_config("PUBLIC_SHIPMENTS_MCP_SCOPE"),
         "workiq_mail_mcp_url": overrides.get("workiq_mail_mcp_url") or get_config("WORKIQ_MAIL_MCP_UPSTREAM_URL"),
         "workiq_mail_mcp_scope": overrides.get("workiq_mail_mcp_scope") or get_config("WORKIQ_MAIL_MCP_SCOPE"),
+        "workiq_word_mcp_url": overrides.get("workiq_word_mcp_url") or get_config("WORKIQ_WORD_MCP_UPSTREAM_URL"),
+        "workiq_word_mcp_scope": overrides.get("workiq_word_mcp_scope") or get_config("WORKIQ_WORD_MCP_SCOPE"),
+        "additional_agent_user_mcp_servers": {
+            name: {
+                "upstreamUrl": get_config(
+                    f"{environment_name.removesuffix('_MCP_URL')}_MCP_UPSTREAM_URL"
+                ),
+                "scope": get_config(
+                    f"{environment_name.removesuffix('_MCP_URL')}_MCP_SCOPE"
+                ),
+            }
+            for name, environment_name in ADDITIONAL_WORKIQ_SERVERS.items()
+        },
         "agent365_tenant_id": overrides.get("agent365_tenant_id") or get_config("AGENT365_TENANT_ID"),
         "agent365_blueprint_client_id": overrides.get("agent365_blueprint_client_id") or get_config("AGENT365_BLUEPRINT_CLIENT_ID", get_config("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID")),
         "agent365_agent_identity_client_id": overrides.get("agent365_agent_identity_client_id") or get_config("AGENT365_AGENT_IDENTITY_CLIENT_ID"),

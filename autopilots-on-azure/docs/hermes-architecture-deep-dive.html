@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Detailed visual architecture of Hermes digital Workers on Azure: bridge, Sandbox, Data Disk, Service Bus scheduling, Teams, identity, Foundry, and MCP connectivity.">
+  <meta name="description" content="Detailed visual architecture of Hermes digital Workers on Azure: bridge, Sandbox, Data Disk, Service Bus scheduling, Teams, Agent User Microsoft 365 collaboration, notifications, identity, Foundry, and MCP connectivity.">
   <title>Hermes on Azure — Architecture Deep Dive</title>
   <style>
     :root {
@@ -451,6 +451,7 @@
       <p>Data plane</p>
       <a href="#model">Foundry model path</a>
       <a href="#mcp">MCP connectivity</a>
+      <a href="#documents">Documents &amp; notifications</a>
       <a href="#network">Network boundaries</a>
       <p>Operate it</p>
       <a href="#ownership">State ownership</a>
@@ -463,9 +464,10 @@
         <h1>A thin control plane. <em>A durable Worker.</em></h1>
         <p class="hero-lead">
           This is the current, deployed architecture: Microsoft Teams and Agent 365 at the edge,
-          one scale-to-zero bridge per Worker, Hermes inside an Azure Container Apps Sandbox,
+          one always-ready lightweight Agent 365 bridge per Worker, scale-to-zero Hermes inside an Azure Container Apps Sandbox,
           durable private state on an attached Data Disk, Service Bus as the wake-up clock,
-          and identity-aware loopback proxies for Foundry and MCP.
+          identity-aware loopback proxies for Foundry and MCP, and Agent User-attributed
+          Microsoft 365 collaboration across Teams, Mail, Office documents, and notifications.
         </p>
         <div class="hero-links">
           <a class="guide-link" href="hermes-on-azure-overview.html">← Main visual overview</a>
@@ -482,15 +484,15 @@
           <div class="lane">
             <div class="lane-title">Microsoft 365 edge</div>
             <div class="nodes">
-              <div class="node accent"><strong>Microsoft Teams</strong><span>Personal chat, group chat, channel mentions, proactive continuation</span></div>
-              <div class="node"><strong>Agent 365</strong><span>Platform blueprint, Agent User, package, Activity Protocol</span></div>
+              <div class="node accent"><strong>Microsoft Teams</strong><span>Personal/group/channel ingress, proactive chats, messages, and file delivery</span></div>
+              <div class="node"><strong>Agent 365</strong><span>Platform blueprint, Agent User, Activity Protocol, email and Office notifications</span></div>
             </div>
           </div>
           <div class="arrow">↓</div>
           <div class="lane">
             <div class="lane-title">Per-Worker Container Apps control plane</div>
             <div class="nodes">
-              <div class="node accent"><strong>Bridge Container App</strong><span>Agents SDK, auth boundary, lifecycle, queue consumer, proactive send</span></div>
+              <div class="node accent"><strong>Bridge Container App</strong><span>Agents SDK, attachment boundary, notification routing, lifecycle, queue consumer</span></div>
               <div class="node azure"><strong>Service Bus queue</strong><span>One queue per Worker, scheduled messages, PeekLock, KEDA trigger</span></div>
             </div>
           </div>
@@ -500,10 +502,10 @@
             <div class="boundary">
               <span class="boundary-label">Azure Container Apps Sandbox</span>
               <div class="nodes">
-                <div class="node accent"><strong>Hermes Gateway</strong><span>Sessions, agent loop, native cron, memory, skills, Dreaming</span></div>
+                <div class="node accent"><strong>Hermes Gateway</strong><span>Sessions, agent loop, native cron, memory, governed skills, document skills, Dreaming</span></div>
                 <div class="node"><strong>Health wrapper</strong><span>Stable runtime API, Role Release, governed learning, cron receipts</span></div>
                 <div class="node private"><strong>Attached Data Disk</strong><span>Worker profile and private state survive Sandbox replacement</span></div>
-                <div class="node purple"><strong>Loopback identity proxies</strong><span>Managed tokens for Foundry and upstream MCP servers</span></div>
+                <div class="node purple"><strong>Loopback identity adapters</strong><span>Foundry tokens, Agent User MCP tokens, Graph file bridge</span></div>
               </div>
             </div>
           </div>
@@ -514,7 +516,8 @@
               <div class="node azure"><strong>Azure AI Foundry</strong><span><code>gpt-5-6-terra</code> through managed-identity proxy</span></div>
               <div class="node private"><strong>Private MCP in a VNet</strong><span>Internal endpoint + Entra authorization; incidents is the repository example</span></div>
               <div class="node"><strong>Public MCP</strong><span>Public HTTPS + Entra authorization; shipments is the repository example</span></div>
-              <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Work IQ Mail is the current Agent User example</span></div>
+              <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Mail, Word, Teams, Calendar, OneDrive, SharePoint, Excel, M365 Copilot</span></div>
+              <div class="node accent"><strong>Microsoft Graph + Office toolchain</strong><span>Agent User file versions, Excel ranges, MiniMax/Open XML, MarkItDown, validation</span></div>
             </div>
           </div>
         </div>
@@ -572,6 +575,8 @@
               <tr><td><code>state.db</code> + session data</td><td><strong>Work History</strong>, messages, tools, search</td><td>Preserved</td></tr>
               <tr><td><code>skills/role/</code></td><td>Role Skills installed from the pinned Role Release</td><td>Transactionally refreshed</td></tr>
               <tr><td><code>skills/candidates/</code></td><td>Local Candidate Improvements</td><td>Preserved or archived by Worker Refresh</td></tr>
+              <tr><td><code>skills/minimax-*</code> + <code>office-collaboration</code></td><td>Pinned MIT document skills and identity-safe collaboration policy</td><td>Installed from the immutable runtime image</td></tr>
+              <tr><td><code>workspace/m365-files/</code></td><td>Per-operation Office downloads and validated pending publishes</td><td>Deleted immediately after terminal outcomes; locked publishes expire after one hour and the janitor removes them within one minute</td></tr>
               <tr><td><code>cron/</code> + <code>local/*receipts.json</code></td><td>User schedules, Platform Dreaming, queue reconciliation, delivery receipts</td><td>Preserved</td></tr>
             </tbody>
           </table>
@@ -587,11 +592,11 @@
           <div class="card">
             <span class="card-index">INTERACTIVE TURN</span>
             <div class="sequence">
-              <div class="sequence-step"><div><strong>Teams sends an activity</strong><p>Personal chat, explicit mention, reaction, or supported targeted activity reaches Agent 365.</p></div></div>
-              <div class="sequence-step"><div><strong>Agents SDK authenticates ingress</strong><p>The bridge identifies the Worker, user, conversation type, and selected authorization mode.</p></div></div>
+              <div class="sequence-step"><div><strong>Teams sends an activity</strong><p>Personal chat, explicit mention, reaction, targeted activity, or a bounded Office attachment reaches Agent 365.</p></div></div>
+              <div class="sequence-step"><div><strong>Agents SDK authenticates ingress</strong><p>The bridge identifies the Worker, user, conversation type, authorization mode, and private attachment boundary.</p></div></div>
               <div class="sequence-step"><div><strong>Bridge wakes the Sandbox</strong><p>It creates, resumes, or reuses the labeled Sandbox and waits for health.</p></div></div>
               <div class="sequence-step"><div><strong>Hermes runs the turn</strong><p>The Gateway owns the session, model calls, tools, memory, skills, and learning transaction.</p></div></div>
-              <div class="sequence-step"><div><strong>Bridge returns the activity</strong><p>Text, reactions, and supported Teams behavior are sent through the same Agent 365 connection.</p></div></div>
+              <div class="sequence-step"><div><strong>Bridge returns the activity</strong><p>Text and reactions use Activity Protocol; Work IQ Teams can also create chats and send messages or files as the Agent User.</p></div></div>
             </div>
           </div>
           <div class="card purple">
@@ -606,14 +611,19 @@
         </div>
         <div class="callout">
           <strong>Current boundary</strong>
-          <p>Proactive continuation can post into an existing installed conversation. Creating a brand-new chat or contacting a new person belongs to Work IQ Teams/Graph actions, not Activity Protocol continuation.</p>
+          <p>Activity Protocol continuation posts into an existing installed conversation. Work IQ Teams creates a new one-to-one chat, contacts a relevant person, and sends Microsoft 365 files as the Agent User. These are distinct delivery contracts.</p>
+        </div>
+        <div class="callout">
+          <strong>Teams conversation is not a lifetime model transcript</strong>
+          <p>ADR 0017 keeps one stable Hermes memory key per authenticated Teams conversation/thread while rotating short-term transcripts hourly. The bridge creates native Hermes API sessions; Personal Memory and Work History preserve durable facts without replaying hundreds of old messages and tool results.</p>
+          <a class="callout-link" href="adr/0017-messaging-session-lifecycle.md">Read ADR 0017 →</a>
         </div>
       </section>
 
       <section id="scheduling">
         <div class="section-head">
           <div><span class="section-number">05 / SCALE TO ZERO</span><h2>Service Bus is the alarm clock.</h2></div>
-          <p>Hermes owns schedule meaning. Service Bus holds one minimal next-occurrence message. KEDA turns that message into compute only when work is due.</p>
+          <p>Hermes owns user schedule meaning; deterministic system workflows own their own durable state. Service Bus holds minimal due messages and KEDA turns them into compute only when work is due.</p>
         </div>
         <div class="diagram">
           <div class="lane">
@@ -628,7 +638,7 @@
           <div class="lane">
             <div class="lane-title">Wake, execute, settle</div>
             <div class="nodes">
-              <div class="node azure"><strong>KEDA scaler</strong><span>Bridge 0 → 1 from queue depth</span></div>
+              <div class="node azure"><strong>KEDA scalers</strong><span>Service Bus wakes due work; explicit HTTP concurrency keeps active Teams and notification turns alive</span></div>
               <div class="node accent"><strong>PeekLock consumer</strong><span>Lock renewal, single concurrency, retry, DLQ</span></div>
               <div class="node"><strong>Sandbox + Hermes</strong><span>Claim, execute, durable receipt, re-arm</span></div>
               <div class="node"><strong>Complete message</strong><span>Only after durable outcome and required delivery</span></div>
@@ -646,6 +656,11 @@
             <h3>Same wake path, no agent prompt</h3>
             <p>A reserved daily Hermes schedule dispatches the existing Dreaming coordinator. Two-phase system receipts provide at-most-once execution and packet-preparation evidence. The former ACA scheduled Job is gone.</p>
           </article>
+          <article class="card azure">
+            <span class="card-index">DOCUMENT TASK · <code>document.publish.retry</code></span>
+            <h3>Deterministic retry without a model turn</h3>
+            <p>A private Data Disk operation owns staged bytes, ETag, retry deadline, recipient, and delivery reference. Service Bus carries only operation ID, attempt, Worker, and due time; success or 24-hour copy fallback is proactively delivered exactly once.</p>
+          </article>
         </div>
       </section>
 
@@ -657,7 +672,7 @@
         <div class="grid-3">
           <article class="card azure"><span class="card-index">WORKLOAD CREDENTIAL</span><h3>Sandbox Group / bridge managed identity</h3><p>Bootstraps Azure access, Sandbox lifecycle, ACR, Service Bus receive, and the first federated exchange. It is not the business principal exposed to tools.</p></article>
           <article class="card"><span class="card-index">AUTONOMOUS PRINCIPAL</span><h3>Agent Identity</h3><p>Obtains resource-specific application tokens for Foundry, custom private/public MCP servers, and Service Bus scheduling. Servers validate audience, tenant, issuer, object/client identity, and app role.</p></article>
-          <article class="card purple"><span class="card-index">DIGITAL TEAMMATE</span><h3>Agent User</h3><p>Uses <code>user_fic</code> to access licensed Worker-owned Microsoft 365 resources, currently demonstrated with Work IQ Mail. It is not the invoking human.</p></article>
+          <article class="card purple"><span class="card-index">DIGITAL TEAMMATE</span><h3>Agent User</h3><p>Uses <code>user_fic</code> for licensed Worker-owned Microsoft 365 resources. Mail, proactive Teams, files, Word comments, Excel ranges, and Graph versions are attributed to this identity—not the invoking human.</p></article>
         </div>
         <div class="diagram" style="margin-top:18px;">
           <div class="sequence">
@@ -687,7 +702,7 @@
       <section id="mcp">
         <div class="section-head">
           <div><span class="section-number">08 / MCP</span><h2>One loopback contract, different network paths.</h2></div>
-          <p>Hermes connects to loopback MCP endpoints. The local identity adapter chooses Agent Identity or Agent User, obtains the upstream token, and forwards to the real MCP server.</p>
+          <p>Hermes connects to loopback MCP endpoints. The identity adapter chooses Agent Identity or Agent User and forwards to managed/custom servers; a second loopback MCP exposes fixed Agent User Graph collaboration tools without exposing bearer tokens.</p>
         </div>
         <div class="diagram">
           <div class="lane">
@@ -695,6 +710,7 @@
             <div class="nodes">
               <div class="node accent"><strong>Hermes MCP client</strong><span>Stable local MCP configuration</span></div>
               <div class="node purple"><strong><code>autopilots_identity.mcp_proxy</code></strong><span>Loopback HTTP, token exchange, refresh, upstream routing</span></div>
+              <div class="node accent"><strong><code>m365-collaboration</code></strong><span>Private file workspace, Graph ETags/versions, Excel ranges, fixed document CLI wrappers</span></div>
             </div>
           </div>
           <div class="arrow">↓ target-specific token + route</div>
@@ -703,13 +719,17 @@
             <div class="nodes">
               <div class="node private"><strong>Private MCP in a VNet</strong><span>Internal Container App, public access disabled, private DNS, Entra application authorization</span></div>
               <div class="node azure"><strong>Public MCP</strong><span>Public HTTPS endpoint, optional scale to zero, exact Entra audience and role validation</span></div>
-              <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Work IQ Mail example, Agent User token, licensed Worker-owned context</span></div>
+              <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Work IQ Mail, Word, Teams, Calendar, OneDrive, SharePoint, Excel, and M365 Copilot under Agent User identity</span></div>
             </div>
           </div>
         </div>
         <div class="grid-2" style="margin-top:18px;">
           <article class="card private"><span class="card-index">PRIVATE DOES NOT MEAN UNAUTHENTICATED</span><h3>Two independent controls</h3><p>VNet routing and private DNS establish reachability. Entra application authorization still decides whether the Worker may call the MCP server. Incidents is the repository example.</p></article>
           <article class="card"><span class="card-index">PUBLIC DOES NOT MEAN ANONYMOUS</span><h3>HTTPS plus exact audience</h3><p>A public MCP endpoint is internet-routable, but it accepts only valid tenant/issuer/audience claims and the required application or delegated role. Shipments is the repository example.</p></article>
+        </div>
+        <div class="callout">
+          <strong>Managed first, custom only for the product gap</strong>
+          <p>Work IQ remains the preferred surface. The local Graph bridge exists because current managed tools do not edit an existing Word body, expose general Excel range writes, or provide Agent User-attributed same-item upload with ETag conflict protection.</p>
         </div>
         <div class="callout">
           <strong>Generic Entra pattern; repository-specific scope names</strong>
@@ -725,9 +745,77 @@
         </div>
       </section>
 
+      <section id="documents">
+        <div class="section-head">
+          <div><span class="section-number">09 / DOCUMENTS &amp; NOTIFICATIONS</span><h2>Managed semantics. Local fidelity. Agent User attribution.</h2></div>
+          <p>Document work combines Microsoft-managed tools, a thin Graph file boundary, pinned permissive skills, and fail-closed validation. Office and email notifications reuse the same Agent 365 ingress.</p>
+        </div>
+        <div class="diagram">
+          <div class="lane">
+            <div class="lane-title">Read, review, and comment</div>
+            <div class="nodes">
+              <div class="node accent"><strong>Teams attachment or sharing URL</strong><span>Current-turn connector access or existing OneDrive/SharePoint permission</span></div>
+              <div class="node purple"><strong>Work IQ Word / Excel</strong><span>Semantic content, comments, replies, new files, workbook metadata</span></div>
+              <div class="node"><strong>Private turn transaction</strong><span>Attachment facts cannot enter memory, skills, provenance, or Learning Packets</span></div>
+            </div>
+          </div>
+          <div class="arrow">↓ explicit body edit</div>
+          <div class="lane">
+            <div class="lane-title">Same-item collaborative edit</div>
+            <div class="nodes">
+              <div class="node purple"><strong>Agent User Graph download</strong><span>Sharing URL → drive item, bytes, original ETag, modifier metadata</span></div>
+              <div class="node accent"><strong>Pinned MiniMax skills</strong><span>MIT source pin; DOCX, XLSX, PPTX, and PDF workflows</span></div>
+              <div class="node azure"><strong>Microsoft Open XML + MarkItDown</strong><span>Fixed typed operations, semantic before/after assertion, business and package validation</span></div>
+              <div class="node private"><strong>ETag-protected upload</strong><span>Prefer the shared original; reject conflicts; create an Agent User-attributed Microsoft 365 version</span></div>
+              <div class="node"><strong>Bounded pending publish</strong><span>Retain a validated locked edit privately on the Data Disk; bind it to user, conversation, ETag, and 24-hour deadline</span></div>
+              <div class="node accent"><strong>Teams suggested actions</strong><span>Encrypted <code>Action.Submit</code> choice: background original retry or explicitly shared copy now</span></div>
+              <div class="node azure"><strong>Service Bus completion</strong><span>Fixed retries without LLM calls; proactive original success or automatic shared-copy fallback after 24 hours</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="grid-4" style="margin-top:18px;">
+          <article class="card">
+            <span class="card-index">WORD</span>
+            <h3>Managed comments, validated body edits</h3>
+            <p>Work IQ handles create/read/comment/reply. MiniMax DOCX and Microsoft Open XML handle existing-body edits, templates, fills, and narrow tracked operations.</p>
+          </article>
+          <article class="card azure">
+            <span class="card-index">EXCEL</span>
+            <h3>Prefer the live workbook API</h3>
+            <p>Work IQ creates, reads, and comments. Graph range operations preserve workbook identity and calculation semantics; local MiniMax XLSX is reserved for structural offline work.</p>
+          </article>
+          <article class="card purple">
+            <span class="card-index">POWERPOINT &amp; PDF</span>
+            <h3>Permissive skills, explicit gaps</h3>
+            <p>Pinned MIT PPTX/PDF skills provide local workflows. PowerPoint has no tracked-changes model; PDF has no Office-style revision model.</p>
+          </article>
+          <article class="card private">
+            <span class="card-index">ATTACHMENT POLICY</span>
+            <h3>Bound before parsing</h3>
+            <p>20 files, 50 MiB each, 300 MiB total, 1M extracted characters, DNS pinning, Microsoft host allowlists, RFC 6598/private-address rejection, and streaming ZIP limits.</p>
+          </article>
+        </div>
+        <div class="diagram" style="margin-top:18px;">
+          <div class="lane">
+            <div class="lane-title">Agent 365 notification wake</div>
+            <div class="nodes">
+              <div class="node purple"><strong>Email or Office mention</strong><span><code>channelId=agents</code>; subchannel <code>email</code>, <code>word</code>, <code>excel</code>, or <code>powerpoint</code></span></div>
+              <div class="node accent"><strong>Existing <code>/api/messages</code></strong><span>Same Activity Protocol authentication and ACA HTTP scale-from-zero path</span></div>
+              <div class="node"><strong>Stable workload identifiers</strong><span>Email, conversation, document, parent-comment, and comment IDs support idempotency</span></div>
+              <div class="node private"><strong>Originating-workload reply</strong><span>Email stays email; Office comments stay Office; no silent redirect to Teams</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="callout">
+          <strong>Why not copy Hermes/Anthropic document skills?</strong>
+          <p>The document skills present in Hermes source retain restrictive Anthropic per-skill terms and are absent from the deployed PyPI runtime. ADR 0016 selects reviewed MIT MiniMax skills pinned to an immutable commit instead of copying restricted material or maintaining a bespoke Office engine.</p>
+          <a class="callout-link" href="adr/0016-office-document-collaboration.md">Read ADR 0016 →</a>
+        </div>
+      </section>
+
       <section id="network">
         <div class="section-head">
-          <div><span class="section-number">09 / NETWORK</span><h2>Control plane public. Private data plane private.</h2></div>
+          <div><span class="section-number">10 / NETWORK</span><h2>Control plane public. Private data plane private.</h2></div>
           <p>The architecture deliberately separates user-facing ingress from private tool reachability. The bridge is not a relay for MCP traffic.</p>
         </div>
         <div class="grid-2">
@@ -747,7 +835,7 @@
 
       <section id="ownership">
         <div class="section-head">
-          <div><span class="section-number">10 / OWNERSHIP</span><h2>Know which layer is authoritative.</h2></div>
+          <div><span class="section-number">11 / OWNERSHIP</span><h2>Know which layer is authoritative.</h2></div>
           <p>Most architecture mistakes come from putting behavior, state, or authorization in the wrong layer.</p>
         </div>
         <div class="table-wrap">
@@ -761,6 +849,10 @@
               <tr><td><strong>User schedule meaning</strong></td><td>Hermes cron store</td><td>Service Bus</td></tr>
               <tr><td><strong>Future wake</strong></td><td>Service Bus scheduled message + KEDA</td><td>Sandbox ticker</td></tr>
               <tr><td><strong>Business authorization</strong></td><td>Agent Identity / Agent User token</td><td>Workload managed identity alone</td></tr>
+              <tr><td><strong>Microsoft 365 semantics</strong></td><td>Work IQ managed MCP servers</td><td>Bridge prompt logic</td></tr>
+              <tr><td><strong>File identity and versions</strong></td><td>Microsoft Graph drive item + Agent User + ETag</td><td>Local filename</td></tr>
+              <tr><td><strong>Document manipulation</strong></td><td>Pinned MiniMax skills + Microsoft Open XML / Graph workbook APIs</td><td>Identity proxy</td></tr>
+              <tr><td><strong>Email and Office notification ingress</strong></td><td>Agent 365 Activity Protocol on <code>/api/messages</code></td><td>Service Bus scheduler</td></tr>
               <tr><td><strong>Network reachability</strong></td><td>VNet, peering, DNS, ingress policy</td><td>Entra token</td></tr>
               <tr><td><strong>Shared role evolution</strong></td><td>Git Role Release + reviewed Promotion</td><td>Private Worker memory</td></tr>
             </tbody>
@@ -770,27 +862,33 @@
 
       <section id="failure">
         <div class="section-head">
-          <div><span class="section-number">11 / FAILURE MODEL</span><h2>Durability is explicit, not hopeful.</h2></div>
+          <div><span class="section-number">12 / FAILURE MODEL</span><h2>Durability is explicit, not hopeful.</h2></div>
           <p>Scale-to-zero and distributed delivery introduce retries and races. The implementation records enough state to distinguish stale work, duplicate work, interrupted work, and delivered work.</p>
         </div>
         <div class="grid-3">
           <article class="card"><span class="card-index">QUEUE</span><h3>PeekLock + renewal</h3><p>Complete only after durable execution and required delivery. Retry transient failures; dead-letter bounded terminal failures for operator inspection.</p></article>
           <article class="card"><span class="card-index">HERMES</span><h3>Claims + revisions</h3><p>Schedule revision rejects stale cancellation/update races. Claims and receipts prevent redelivery from rerunning an occurrence.</p></article>
+          <article class="card"><span class="card-index">SESSION CONTEXT</span><h3>Rotate transcript, retain memory identity</h3><p>Native Hermes transcript sessions rotate hourly; stable per-conversation memory keys, compression, Personal Memory, and Work History provide bounded continuity.</p></article>
           <article class="card"><span class="card-index">DREAMING</span><h3>At-most-once occurrence</h3><p><code>claiming → running → completing → completed</code>. An expired running lease records interruption and re-arms; it does not duplicate Dreaming side effects.</p></article>
-          <article class="card"><span class="card-index">TEAMS</span><h3>Activity ID required</h3><p>No success-shaped acknowledgement. A proactive send must return a concrete activity ID before its queue message completes.</p></article>
+          <article class="card"><span class="card-index">TEAMS</span><h3>Warm ingress, elastic Worker</h3><p>One lightweight bridge replica stays ready because ACA cold start can exceed the Activity Protocol response window. Hermes Sandbox compute still scales independently to zero; a 900-second bridge cooldown protects acknowledged callbacks.</p></article>
+          <article class="card"><span class="card-index">SERVERLESS REVIEW</span><h3>Express is a gated future option</h3><p>ACA Express advertises subsecond scale-from-zero, but currently lacks required identity, networking, probes, regions, and SLA. ADR 0001 requires capability gates and measured Agent 365 p95 acknowledgement before returning the bridge to zero replicas.</p></article>
           <article class="card"><span class="card-index">SANDBOX</span><h3>Replace compute, retain disk</h3><p>Config/image/identity label drift replaces the Sandbox. Worker state remains on the named Data Disk.</p></article>
+          <article class="card"><span class="card-index">DOCUMENT VERSION</span><h3>Baseline, validate, then publish</h3><p>Microsoft 365-targeted Open XML validation records source defects before editing. Unchanged legacy errors may remain; any error introduced by Hermes blocks upload. ETag conflicts never overwrite human work.</p></article>
+          <article class="card"><span class="card-index">OFFICE LOCK</span><h3>Original first, explicit escape hatch</h3><p>A validated <code>423 Locked</code> edit remains in bounded private storage while short upload-only retries run. Persistent locks offer retry-original, send-copy, or cancel; checkout is never used to block coauthors.</p></article>
+          <article class="card"><span class="card-index">PRIVATE FILE</span><h3>Cleanup is part of the transaction</h3><p>Downloads remain under one private workspace. Success, cancellation, validation failure, terminal failure, or bounded pending-operation expiry deletes the staged bytes and edit intent.</p></article>
+          <article class="card"><span class="card-index">NOTIFICATION</span><h3>Unknown delivery guarantees</h3><p>Microsoft does not document retry semantics for Agent 365 notifications. Stable email/document/comment IDs make handlers defensively idempotent.</p></article>
           <article class="card"><span class="card-index">OBSERVABILITY</span><h3>Sanitized persistent diagnostics</h3><p>Queue counters, provider schedule, bindings, execution receipts, system receipts, and packet summaries exclude prompts and token material.</p></article>
         </div>
         <div class="callout">
           <strong>Repeatable proof</strong>
-          <p><code>scripts.user_schedule_smoke</code> proves user-task scale-to-zero and exact output. <code>scripts.servicebus_dream_smoke</code> enqueues a unique operator occurrence, proves Dreaming and packet preparation, and leaves the production daily schedule unchanged.</p>
+          <p><code>scripts.user_schedule_smoke</code> proves scheduled scale-to-zero; <code>scripts.servicebus_dream_smoke</code> proves queue-driven Dreaming; <code>scripts.document_smoke</code> proves Word create/read/comment/reply; and <code>scripts.m365_actions_smoke</code> proves proactive Agent User chat with independent message read-back.</p>
           <a class="callout-link" href="../DEMO.md">Open the demonstration guide →</a>
         </div>
       </section>
 
       <footer class="footer">
         <span>Autopilots on Azure · Hermes architecture</span>
-        <span>Current implementation · Updated 2026-07-24</span>
+        <span>Current implementation · Updated 2026-07-25</span>
       </footer>
     </main>
   </div>

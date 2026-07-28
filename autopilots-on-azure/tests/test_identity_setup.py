@@ -22,6 +22,23 @@ class FakeGraph:
 
 
 class IdentitySetupTests(unittest.TestCase):
+    def test_named_worker_discovers_its_only_instance_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            expected = workspace / "instance.hermes2.json"
+            expected.write_text("{}", encoding="utf-8")
+            with patch.object(
+                identity,
+                "agent365_workspace",
+                return_value=workspace,
+            ):
+                resolved = identity.resolve_instance_state_file(
+                    "hermes",
+                    "hermes2",
+                )
+
+        self.assertEqual(resolved, expected)
+
     def test_application_discovery_recovers_without_local_state(self) -> None:
         graph = FakeGraph(
             {
@@ -93,6 +110,66 @@ class IdentitySetupTests(unittest.TestCase):
         ):
             self.assertTrue(byo.catalog_server_available("ext_Shipments"))
             self.assertFalse(byo.catalog_server_available("ext_Other"))
+
+    def test_federated_credential_reuses_matching_subject_with_other_name(self) -> None:
+        graph = FakeGraph(
+            {
+                "value": [
+                    {
+                        "id": "fic-1",
+                        "name": "existing-name",
+                        "issuer": "https://login.microsoftonline.com/tenant/v2.0",
+                        "subject": "managed-identity",
+                        "audiences": ["api://AzureADTokenExchange"],
+                    }
+                ]
+            }
+        )
+
+        identity.ensure_federated_credential(
+            graph,
+            blueprint_object_id="blueprint",
+            tenant_id="tenant",
+            name="new-name",
+            managed_identity_principal_id="managed-identity",
+        )
+
+        self.assertEqual(len(graph.paths), 1)
+        self.assertTrue(graph.paths[0].startswith("GET "))
+
+    def test_federated_credential_removes_stale_canonical_name(self) -> None:
+        graph = FakeGraph(
+            {
+                "value": [
+                    {
+                        "id": "stale",
+                        "name": "canonical",
+                        "issuer": "https://login.microsoftonline.com/tenant/v2.0",
+                        "subject": "old-identity",
+                        "audiences": ["api://AzureADTokenExchange"],
+                    },
+                    {
+                        "id": "matching",
+                        "name": "alternate",
+                        "issuer": "https://login.microsoftonline.com/tenant/v2.0",
+                        "subject": "managed-identity",
+                        "audiences": ["api://AzureADTokenExchange"],
+                    },
+                ]
+            }
+        )
+
+        identity.ensure_federated_credential(
+            graph,
+            blueprint_object_id="blueprint",
+            tenant_id="tenant",
+            name="canonical",
+            managed_identity_principal_id="managed-identity",
+        )
+
+        self.assertEqual(len(graph.paths), 2)
+        self.assertIn("DELETE", graph.paths[1])
+        self.assertIn("stale", graph.paths[1])
 
 
 if __name__ == "__main__":

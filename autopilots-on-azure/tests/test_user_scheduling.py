@@ -13,8 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import bridge.app as bridge_app
 from bridge.proactive_delivery import delivery_reference_key, send_proactive_activity
-from bridge.servicebus_scheduler import ServiceBusScheduleConsumer
+from bridge.servicebus_scheduler import (
+    ServiceBusScheduleConsumer,
+    ServiceBusScheduleSender,
+)
 
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
@@ -46,6 +50,20 @@ class FakeReceiver:
 
 
 class UserSchedulingTests(unittest.TestCase):
+    def test_document_retry_enables_consumer_without_user_cron(self):
+        with patch.dict(
+            os.environ,
+            {
+                "USER_SCHEDULING_ENABLED": "false",
+                "DOCUMENT_RETRY_ENABLED": "true",
+            },
+        ):
+            consumer = ServiceBusScheduleConsumer(
+                handler=lambda payload: asyncio.sleep(0)
+            )
+
+        self.assertTrue(consumer.status()["enabled"])
+
     def test_azure_provider_plugin_directory_matches_configured_name(self):
         self.assertTrue((RUNTIME_DIR / "plugins" / "azure" / "__init__.py").is_file())
         self.assertFalse((RUNTIME_DIR / "plugins" / "azure_cron").exists())
@@ -146,6 +164,111 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(len(receiver.completed), 1)
         self.assertEqual(consumer.status()["completed"], 1)
         self.assertEqual(receiver.abandoned, [])
+
+    def test_document_retry_message_is_scheduled_with_identity(self):
+        scheduled = []
+        cancelled = []
+
+        class Sender:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def schedule_messages(self, message, due_at):
+                scheduled.append((message, due_at))
+                return [42]
+
+            def cancel_scheduled_messages(self, sequence_numbers):
+                cancelled.extend(sequence_numbers)
+
+        class Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get_queue_sender(self, queue):
+                self.queue = queue
+                return Sender()
+
+        with patch.dict(
+            os.environ,
+            {
+                "WORKER_ID": "hermes2",
+                "SCHEDULER_SERVICEBUS_NAMESPACE": (
+                    "namespace.servicebus.windows.net"
+                ),
+                "SCHEDULER_SERVICEBUS_QUEUE": "worker-hermes2",
+            },
+        ):
+            sender = ServiceBusScheduleSender(
+                client_factory=lambda *args, **kwargs: Client(),
+                credential_factory=lambda: object(),
+            )
+            result = sender.schedule_document_retry(
+                operation_id="a" * 24,
+                attempt=1,
+                due_at_unix=time.time() + 60,
+            )
+            sender.cancel_scheduled(result["sequenceNumber"])
+
+        body = json.loads(
+            b"".join(
+                bytes(part) for part in scheduled[0][0].body
+            )
+        )
+        self.assertEqual(
+            body["type"],
+            "document.publish.retry",
+        )
+        self.assertEqual(body["workerId"], "hermes2")
+        self.assertEqual(result["sequenceNumber"], 42)
+        self.assertEqual(cancelled, [42])
+
+    def test_scheduled_document_lock_rearms_without_model_turn(self):
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def process_document_background(self, operation_id):
+                self.operation_id = operation_id
+                return {
+                    "status": "locked",
+                    "operationId": operation_id,
+                    "attempt": 2,
+                    "nextAttemptUnix": time.time() + 60,
+                }
+
+        adapter = Adapter()
+        with (
+            patch.object(
+                bridge_app,
+                "runtime_adapter",
+                return_value=adapter,
+            ),
+            patch.object(
+                bridge_app.schedule_sender,
+                "schedule_document_retry",
+                return_value={"sequenceNumber": 42},
+            ) as schedule,
+        ):
+            result = asyncio.run(
+                bridge_app.process_scheduled_message(
+                    {
+                        "version": "1.0",
+                        "type": "document.publish.retry",
+                        "workerId": "hermes2",
+                        "operationId": "a" * 24,
+                        "attempt": 1,
+                    }
+                )
+            )
+
+        self.assertEqual(result["status"], "scheduled")
+        self.assertEqual(adapter.operation_id, "a" * 24)
+        schedule.assert_called_once()
 
     def test_proactive_delivery_uses_app_id_when_claims_are_empty(self):
         fake_conversation = SimpleNamespace(

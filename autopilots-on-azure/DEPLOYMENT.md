@@ -74,6 +74,8 @@ uv run python -m scripts.build_images --runtime openclaw
 
 The command writes image digests into the active generated Terraform values. Rebuild after runtime or bridge code changes.
 
+Agent 365 Workers keep one lightweight bridge replica ready because an ACA cold start can exceed the Activity Protocol response window before acknowledgement code runs. The Hermes Sandbox remains independently scale-to-zero. Hermes bridge scaling also uses a 900-second cooldown: Agent 365 can acknowledge an attachment before its callback finishes, so the HTTP request is no longer an active KEDA lease while Hermes continues processing.
+
 ## 3. Configure a Hermes Worker
 
 Choose:
@@ -266,6 +268,32 @@ uv run python -m scripts.demo_ops smoke `
   --message "Reply exactly: $worker ready" `
   --timeout 600
 ```
+
+Live Work IQ Word smoke:
+
+```powershell
+uv run python -m scripts.document_smoke `
+  --state-name $worker `
+  --timeout 1200
+```
+
+This creates a temporary DOCX in the Worker Agent User's OneDrive, reads back a unique marker, adds a comment, replies to it, and validates the returned SharePoint URL and operation results. Work IQ Word currently has no delete tool, so remove smoke documents from the Agent User's OneDrive when they are no longer useful.
+
+Dry-run or execute a real proactive Agent User Teams message:
+
+```powershell
+uv run python -m scripts.m365_actions_smoke `
+  --state-name $worker `
+  --recipient user@contoso.com
+
+uv run python -m scripts.m365_actions_smoke `
+  --state-name $worker `
+  --recipient user@contoso.com `
+  --execute `
+  --timeout 1200
+```
+
+The executed smoke creates or reuses a one-to-one chat, sends a unique project follow-up as the Agent User, then reads the exact message back through Work IQ Teams.
 
 Health and Role Release:
 

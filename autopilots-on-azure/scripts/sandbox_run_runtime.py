@@ -35,6 +35,8 @@ def main() -> None:
     parser.add_argument("--public-shipments-mcp-scope", default="")
     parser.add_argument("--workiq-mail-mcp-url", default="")
     parser.add_argument("--workiq-mail-mcp-scope", default="")
+    parser.add_argument("--workiq-word-mcp-url", default="")
+    parser.add_argument("--workiq-word-mcp-scope", default="")
     parser.add_argument("--agent365-tenant-id", default="")
     parser.add_argument("--agent365-blueprint-client-id", default="")
     parser.add_argument("--agent365-agent-identity-client-id", default="")
@@ -68,6 +70,8 @@ def main() -> None:
         public_shipments_mcp_scope=args.public_shipments_mcp_scope,
         workiq_mail_mcp_url=args.workiq_mail_mcp_url,
         workiq_mail_mcp_scope=args.workiq_mail_mcp_scope,
+        workiq_word_mcp_url=args.workiq_word_mcp_url,
+        workiq_word_mcp_scope=args.workiq_word_mcp_scope,
         agent365_tenant_id=args.agent365_tenant_id,
         agent365_blueprint_client_id=args.agent365_blueprint_client_id,
         agent365_agent_identity_client_id=args.agent365_agent_identity_client_id,

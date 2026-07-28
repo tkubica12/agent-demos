@@ -222,7 +222,7 @@ def build_tfvars(
             "user_scheduling_scale_down_seconds": (
                 user_scheduling_scale_down_seconds
                 if user_scheduling_scale_down_seconds is not None
-                else int(previous.get("user_scheduling_scale_down_seconds", 60))
+                else int(previous.get("user_scheduling_scale_down_seconds", 900))
             ),
             "servicebus_dream_enabled": (
                 servicebus_dream_enabled

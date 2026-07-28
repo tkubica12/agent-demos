@@ -147,7 +147,7 @@ The A11 scheduled ACA Job was removed after the Service Bus path proved:
 
 ## Rejected alternatives
 
-- **Always-on bridge:** simplest but defeats scale-to-zero.
+- **Always-on Worker compute:** rejected because it defeats the expensive Sandbox scale-to-zero boundary. One lightweight bridge replica is now accepted for Agent 365 ingress because standard ACA cold start can miss the Activity Protocol deadline; ADR 0001 defines the Express migration gates.
 - **Fixed polling:** wastes executions and adds interval-sized latency.
 - **Per-task ACA Jobs:** turns schedule data into ARM-resource churn and complicates update/cancel.
 - **Logic Apps:** adds another workflow engine and billed polling without replacing Hermes schedule state.

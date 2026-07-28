@@ -18,9 +18,11 @@ SCHEMA_VERSION = "2.0"
 PACKET_VERSION = "2.0"
 ROLE_SKILLS_ROOT = PurePosixPath("skills/role")
 PRIVATE_PLAYBOOKS_ROOT = PurePosixPath("skills/private")
+MEMORIES_ROOT = PurePosixPath("memories")
 CANDIDATE_IMPROVEMENTS_ROOT = PurePosixPath("skills/candidates")
 GOVERNED_ROOTS = (ROLE_SKILLS_ROOT, CANDIDATE_IMPROVEMENTS_ROOT)
 ALL_A10_ROOTS = (*GOVERNED_ROOTS, PRIVATE_PLAYBOOKS_ROOT)
+ATTACHMENT_PROTECTED_ROOTS = (*ALL_A10_ROOTS, MEMORIES_ROOT)
 CLASSIFICATIONS = {"role_skill_improvement", "candidate_improvement"}
 SOURCE_STAGES = {"foreground", "dream", "background_review", "operator"}
 SOURCE_TYPES = {"private_session", "tool_result", "public_source"}
@@ -50,6 +52,7 @@ PRIVATE_EXCLUSIONS = [
 ]
 MAX_SNAPSHOT_FILE_BYTES = 1_000_000
 LEARNING_LEASE_SECONDS = 900
+LEARNING_PROCESS_INSTANCE_ID = secrets.token_hex(16)
 GOVERNED_TEXT_SUFFIXES = {
     ".md",
     ".txt",
@@ -202,9 +205,13 @@ def _namespace_for_artifact(artifact_path: str) -> str:
     return path.parts[1]
 
 
-def _file_snapshot(profile_home: Path) -> dict[str, str]:
+def _file_snapshot(
+    profile_home: Path,
+    *,
+    roots: tuple[PurePosixPath, ...] = ALL_A10_ROOTS,
+) -> dict[str, str]:
     snapshot: dict[str, str] = {}
-    for root in ALL_A10_ROOTS:
+    for root in roots:
         directory = profile_home.joinpath(*root.parts)
         if not directory.exists():
             continue
@@ -434,6 +441,15 @@ def _remove_journal_records(profile_home: Path, record_ids: set[str]) -> None:
 
 def _recover_pending_transaction(profile_home: Path, path: Path) -> None:
     transaction = json.loads(path.read_text(encoding="utf-8"))
+    if transaction.get("attachmentPrivate"):
+        _restore_attachment_protected_files(
+            profile_home,
+            _decoded_snapshot(
+                transaction.get("attachmentProtectedFiles") or {}
+            ),
+        )
+        path.unlink()
+        return
     before = _decoded_snapshot(transaction["files"])
     commit_record_ids = set(transaction.get("commitRecordIds") or [])
     after_files = transaction.get("afterGovernedFiles")
@@ -473,7 +489,15 @@ def _acquire_lease(profile_home: Path, token: str) -> None:
     if lock.exists():
         lease = _read_lease(profile_home)
         created = lease.get("createdAtEpoch")
-        if isinstance(created, (int, float)) and time.time() - created < LEARNING_LEASE_SECONDS:
+        same_process = (
+            lease.get("processInstanceId")
+            == LEARNING_PROCESS_INSTANCE_ID
+        )
+        if (
+            same_process
+            and isinstance(created, (int, float))
+            and time.time() - created < LEARNING_LEASE_SECONDS
+        ):
             raise LearningRecordError("Another Worker learning transaction is active.")
         pending_paths = sorted((profile_home / "learning" / "pending").glob("lt-*.json"))
         for path in pending_paths:
@@ -485,13 +509,18 @@ def _acquire_lease(profile_home: Path, token: str) -> None:
         {
             "leaseVersion": "1.0",
             "token": token,
+            "processInstanceId": LEARNING_PROCESS_INSTANCE_ID,
             "createdAt": utc_now(),
             "createdAtEpoch": time.time(),
         },
     )
 
 
-def begin_learning_turn(profile_home: Path) -> dict[str, Any]:
+def begin_learning_turn(
+    profile_home: Path,
+    *,
+    attachment_private: bool = False,
+) -> dict[str, Any]:
     ensure_learning_state(profile_home)
     token = f"lt-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(6)}"
     _acquire_lease(profile_home, token)
@@ -508,6 +537,15 @@ def begin_learning_turn(profile_home: Path) -> dict[str, Any]:
             "token": token,
             "createdAt": utc_now(),
             "files": _file_snapshot(profile_home),
+            "attachmentPrivate": attachment_private,
+            "attachmentProtectedFiles": (
+                _file_snapshot(
+                    profile_home,
+                    roots=ATTACHMENT_PROTECTED_ROOTS,
+                )
+                if attachment_private
+                else {}
+            ),
             "quarantineFiles": quarantine_entries,
         }
         path = profile_home / "learning" / "pending" / f"{token}.json"
@@ -524,7 +562,18 @@ def abort_learning_turn(profile_home: Path, *, token: str) -> dict[str, Any]:
     pending_path = profile_home / "learning" / "pending" / f"{token}.json"
     if pending_path.is_file():
         transaction = json.loads(pending_path.read_text(encoding="utf-8"))
-        _restore_governed_files(profile_home, _decoded_snapshot(transaction["files"]))
+        if transaction.get("attachmentPrivate"):
+            _restore_attachment_protected_files(
+                profile_home,
+                _decoded_snapshot(
+                    transaction.get("attachmentProtectedFiles") or {}
+                ),
+            )
+        else:
+            _restore_governed_files(
+                profile_home,
+                _decoded_snapshot(transaction["files"]),
+            )
         commit_record_ids = set(transaction.get("commitRecordIds") or [])
         if commit_record_ids:
             _remove_journal_records(profile_home, commit_record_ids)
@@ -546,7 +595,7 @@ def _restore_skill_files(
         directory.mkdir(parents=True, exist_ok=True)
     for relative, content in before.items():
         path = _safe_relative_path(relative)
-        if PurePosixPath(*path.parts[:2]) not in roots:
+        if not any(path.is_relative_to(root) for root in roots):
             continue
         destination = profile_home.joinpath(*path.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -555,6 +604,17 @@ def _restore_skill_files(
 
 def _restore_governed_files(profile_home: Path, before: dict[str, bytes]) -> None:
     _restore_skill_files(profile_home, before, GOVERNED_ROOTS)
+
+
+def _restore_attachment_protected_files(
+    profile_home: Path,
+    before: dict[str, bytes],
+) -> None:
+    _restore_skill_files(
+        profile_home,
+        before,
+        ATTACHMENT_PROTECTED_ROOTS,
+    )
 
 
 def _validate_evidence(value: Any) -> list[dict[str, str]]:
@@ -684,10 +744,24 @@ def reconcile_learning_turn(
         raise LearningRecordError(f"Unknown or expired learning snapshot {token}.")
     snapshot = json.loads(pending_path.read_text(encoding="utf-8"))
     before = _decoded_snapshot(snapshot["files"])
+    attachment_private = bool(snapshot.get("attachmentPrivate"))
+    attachment_before = _decoded_snapshot(
+        snapshot.get("attachmentProtectedFiles") or {}
+    )
     try:
         after = _decoded_snapshot(_file_snapshot(profile_home))
     except LearningRecordError:
-        _restore_skill_files(profile_home, before, ALL_A10_ROOTS)
+        if attachment_private:
+            _restore_attachment_protected_files(
+                profile_home,
+                attachment_before,
+            )
+        else:
+            _restore_skill_files(
+                profile_home,
+                before,
+                ALL_A10_ROOTS,
+            )
         pending_path.unlink()
         _release_lease(profile_home, token)
         raise
@@ -809,7 +883,26 @@ def reconcile_learning_turn(
                 }
             )
 
-    if rejected and governed_artifacts:
+    if attachment_private:
+        _restore_attachment_protected_files(
+            profile_home,
+            attachment_before,
+        )
+        rejected.extend(
+            {
+                "artifactPath": artifact_path,
+                "reason": (
+                    "Attachment turns cannot persist memory or skill changes."
+                ),
+            }
+            for artifact_path in changed_artifacts
+        )
+        accepted = []
+        records_to_append = []
+        skipped_duplicates = []
+        private_playbooks = []
+        governed_artifacts = []
+    elif rejected and governed_artifacts:
         _restore_governed_files(profile_home, before)
         records_to_append = []
         skipped_duplicates = []
@@ -851,7 +944,11 @@ def reconcile_learning_turn(
         "skippedDuplicates": skipped_duplicates,
         "privatePlaybooksChanged": private_playbooks,
         "governedArtifactsChanged": governed_artifacts,
-        "rolledBack": bool(rejected and governed_artifacts),
+        "rolledBack": (
+            attachment_private
+            or bool(rejected and governed_artifacts)
+        ),
+        "attachmentPersistenceBlocked": attachment_private,
     }
 
 
