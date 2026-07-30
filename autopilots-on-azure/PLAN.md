@@ -42,7 +42,9 @@ As of 2026-07-28:
 | A12.1 - Unified Dreaming scheduler | Complete | Queue-driven `system.dream`, scale-to-zero wake, packet-preparation parity, durable system receipts, and removal of the A11 ACA Job. |
 | A13 - Document-aware work and attachments | Complete | Secure DOCX/text attachment ingestion and live Work IQ Word create/read/comment/reply operations are validated in Teams and through the repeatable smoke. |
 | A14 - Microsoft 365 knowledge and actions | Complete | Agent User knowledge and actions across SharePoint, OneDrive, Mail, Teams, Calendar, Word, Excel, and workload notifications. |
-| A15 - Teams targeted private messaging | Planned | Private `/WorkerName` invocation inside supported group conversations. |
+| A15 - Teams targeted private messaging | Deferred | Waiting for a supported Agent 365 Agent User package contract for targeted receive and `/WorkerName`; no companion bot workaround. |
+| A16 - Governed Adaptive Cards | Complete | Bridge-rendered display, choice, and confirmation cards with encrypted one-time actions and Hermes continuation are live-validated in Teams. |
+| A17 - Hermes-generated web apps | Complete | Hermes builds, tests, and deploys Entra-gated applications to OnDemand child ACA Sandboxes with bounded lifecycle. |
 
 ## Immediate work
 
@@ -267,10 +269,12 @@ Exit criteria:
 
 Goal: let a user privately invoke a Worker inside a channel, group chat, or meeting chat with `/WorkerName` while preserving the surrounding conversation context and strict user-only visibility.
 
+Status: Deferred. Teams targeted messaging requires a `bots[].supportsTargetedMessages` app capability. Agent 365 AI teammate packages use `agenticUserTemplates`; Microsoft 365 accepts them in Agent Registry, but Teams app-store upload rejects them as unsupported agentic apps and no `/WorkerName` entry appears. Do not add a companion bot package.
+
 Tasks:
 
-- Post-process the Agent 365 Teams package with `bots[].supportsTargetedMessages: true`; the Agent 365 CLI does not add this capability or command lists automatically.
-- Add the Worker-name slash entry that switches a group compose box into targeted-message mode.
+- Wait for Agent 365 to expose a supported Agent User equivalent of `supportsTargetedMessages` in its standard AI teammate package and upload lifecycle.
+- Add the Worker-name slash entry only through that supported package contract.
 - Add a targeted-private `/learn` command only after private transcript isolation and targeted response delivery are enforced.
 - Do not expose `/new` in group/channel/meeting scopes: public reset semantics are ambiguous, and a private per-user reset adds unnecessary session semantics inside a shared thread.
 - Keep personal-chat `/learn` and `/new` as documented text commands. Teams personal chats expose manifest prompt starters through the persistent View Prompts flyout, not custom `/` autocomplete; do not add prompt starters unless user testing shows the flyout improves discovery.
@@ -294,31 +298,58 @@ Exit criteria:
 - The bridge and runtime retain the correct private-user authorization boundary.
 - Unsupported clients or package configurations fall back safely to 1:1 chat.
 
-### A16 - Interactive and generative UI
+### A16 - Governed Adaptive Cards
 
-Goal: establish a governed cross-host UI model for agent interactions beyond plain text while preserving identity, accessibility, localization, privacy, and deterministic consequential actions.
+Goal: give Hermes native Teams cards for confirmations, choices, voting, short forms, status, risk, and progress without allowing model-authored actions or unbounded card JSON.
 
-Status: Pending. A14 introduces predefined document-lock suggested actions as a deliberately narrow precursor. A live probe showed proactive Agent 365 delivery strips Adaptive Card attachments, making host-specific cards versus MCP Apps an explicit A16 question.
+Status: Complete. The bridge compiles bounded display, choice, and confirmation requests into Adaptive Cards, owns all action data, and resumes Hermes after a durable one-time action claim. Direct Teams rendering, card replacement, and confirmation continuation are live-validated. Suggested actions and text remain the fallback where proactive delivery does not preserve card attachments.
 
 Tasks:
 
-- Inventory Teams Adaptive Cards, Microsoft 365 Copilot UI capabilities, Agent 365 host extensions, MCP Apps, and text-only fallbacks.
-- Decide the boundary between server-owned interaction contracts, agent-supplied safe content, and fully generated UI.
-- Prefer typed predefined cards for consequential actions; do not let a model invent operation identifiers, authorization data, callback URLs, or unbounded card JSON.
-- Evaluate MCP Apps for portable interactive views and determine how they coexist with native Teams cards rather than assuming one replaces the other.
+- Add a small typed interaction contract and Teams Adaptive Card renderer in the bridge.
+- Use reviewed templates for consequential actions. Hermes supplies bounded labels and content; the bridge owns verbs, operation identifiers, callback data, tokens, and authorization binding.
+- Add a constrained display-only DSL for sections, facts, short tables, status/risk indicators, images, and bounded chart or diagram specifications. Compile and schema-validate it; do not accept arbitrary card JSON.
+- Support a safe text/suggested-action fallback when the host or delivery path does not preserve cards.
 - Define signed/encrypted action tokens, user/conversation binding, expiry, replay protection, idempotency, confirmation, cancellation, and audit requirements.
-- Define update/replace semantics for cards and long-running operations, including progress, completion, failure, and stale-action UX.
-- Cover personal chat, targeted private messages, group/channel visibility, mobile clients, accessibility, localization, and unsupported-host fallbacks.
+- Implement and validate `Action.Execute` invoke responses with `Action.Submit` fallback where required.
+- Define update/replace semantics for progress, completion, failure, and stale actions.
+- Cover personal chat, group/channel visibility, mobile compatibility, accessibility, localization, and unsupported-host fallbacks. Targeted-private cards remain blocked with A15.
 - Add schema validation, render snapshots, action simulations, host compatibility tests, security tests, and interaction-quality evaluations.
 - Measure card delivery/action latency, abandonment, duplicate actions, and model/UI token cost.
-- Decide whether Hermes receives a curated UI skill, a typed UI MCP, MCP Apps resources, or a combination only after prototypes are compared.
+- Add a small Hermes interaction skill only after the typed contract exists; the skill teaches when and which interaction to request, not how to author JSON.
 
 Exit criteria:
 
-- At least two representative workflows run through the selected typed UI contract in Teams and one additional supported host.
+- At least two representative workflows run through the typed interaction contract in Teams.
 - Consequential actions are deterministic, authenticated, idempotent, accessible, localized, and auditable.
-- Unsupported hosts receive an equivalent safe text interaction.
-- The chosen relationship between Adaptive Cards, agent-generated content, and MCP Apps is recorded in an ADR.
+- Unsupported delivery paths receive an equivalent safe text interaction.
+- Direct reply and proactive delivery behavior are measured separately.
+
+### A17 - Hermes-generated web apps in ACA Sandboxes
+
+Goal: let Hermes build rich, authenticated team applications, dashboards, presentations, and interactive artifacts without forcing arbitrary HTML and JavaScript into a chat message.
+
+Status: Complete. Hermes generated, tested, and published a real presentation app through the governed tool. The native `*.adcproxy.io` URL requires Entra authentication, uses `activationMode: OnDemand`, and resumes idle compute without routing application traffic through the bridge. New apps default to five-minute idle suspension and native deletion 24 hours after suspension. Owner-bound cards provide open, 1/6/24/72-hour retention, and delete controls without a model turn or Service Bus. Deploy, list, update, renew, delete, lifecycle cleanup, failed-update preservation, and unauthorized access are covered.
+
+Tasks:
+
+- Start from Microsoft's MIT `aca-sandboxes` skill and add a small Hermes skill for generated-app requirements, testing, deployment, sharing, update, and cleanup.
+- Generate source in the Hermes private workspace so Hermes can iterate and learn coding practices; never serve user applications from the Worker runtime process.
+- Create a child sandbox in a dedicated generated-app Sandbox Group, upload the reviewed artifact, run tests, start the app, and expose one HTTPS port with Entra authentication.
+- Register the port with native `activationMode: OnDemand` so the ADC proxy authenticates the participant, resumes idle compute, and forwards the request. Return the native Sandbox URL; the bridge never hosts app traffic.
+- Allow only explicitly selected participant email addresses or UPNs supported by the current Sandbox port API. Keep deny-default egress and a reviewed host allowlist.
+- Give the Worker Agent Identity only `Container Apps SandboxGroup Data Owner` on the generated-app group; do not grant broad Azure Contributor.
+- Enforce per-Worker quotas, owner labels, five-minute idle auto-suspend, 24-hour post-suspension retention by default, native 1/6/24/72-hour renewal, deterministic deletion, and operator inventory/cleanup.
+- Keep secrets group-scoped and out of generated source. Keep app data ephemeral unless a reviewed shared volume is explicitly required.
+- Distinguish ephemeral generated apps from promoted applications. Promotion requires source control review and deployment to standard ACA with Easy Auth, managed identity, observability, and durable operations.
+- Monitor ACA Express. Adopt it only when Entra auth, managed identity, secrets, required regions, networking, and cleanup meet the same contract.
+
+Exit criteria:
+
+- Hermes creates, tests, publishes, updates, shares, and deletes one real authenticated team web app through the governed child-sandbox path.
+- An unauthorized user cannot access the app.
+- App code remains inspectable; deployment state and cleanup are auditable.
+- Idle and expired apps stop consuming compute and are deleted deterministically.
 
 ## Deferred
 
@@ -331,3 +362,4 @@ Exit criteria:
 - Deeper multi-user profile isolation.
 - An administrative dashboard backed by GitHub rather than a parallel Role Skill source of truth.
 - Foundry Hosted Agents as an optional thin adapter, not the default OpenClaw or Hermes host.
+- MCP Apps for Hermes/Agent User conversations. Microsoft 365 Copilot supports MCP Apps for declarative agents, but Hermes 0.18 and Agent 365 AI teammate conversations are not MCP Apps hosts. Re-evaluate when that client path negotiates `io.modelcontextprotocol/ui`, preserves `_meta.ui`, reads `ui://` resources, and renders the widget without a parallel declarative agent.

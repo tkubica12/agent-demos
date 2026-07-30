@@ -24,7 +24,7 @@ The Agent 365 Notifications SDK is also not a subscription system for Teams conv
 | --- | --- | --- |
 | Teams 1:1 message | Verified | Hermes and OpenClaw live tests |
 | Explicit channel mention | Verified | Hermes and OpenClaw live tests |
-| Targeted private message in a group conversation | Public developer preview; bridge detection exists, package opt-in and live delivery pending | Teams targeted-messaging documentation requires `supportsTargetedMessages` |
+| Targeted private message in a group conversation | Deferred for Agent User packages; no supported targeted receive capability | Teams requires `bots[].supportsTargetedMessages`, while Agent 365 AI teammate packages use `agenticUserTemplates` |
 | Unmentioned channel message | Not delivered | Live bridge logs and Team/RSC inspection |
 | Unmentioned reply in a thread where the agent already replied | Not delivered | Live test showed no bridge activity |
 | Full thread history | Not pushed | Requires a separate Graph/MCP read; bridge currently keeps only delivered activities in local memory |

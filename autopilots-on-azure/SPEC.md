@@ -674,6 +674,8 @@ Work History                         |
 - Multi-Worker Collective Learning Review is live-validated with two independent Worker packets.
 - Scheduled Dreaming and user schedules share the unified Service Bus/KEDA bridge trigger; the former ACA scheduled Job is removed.
 - Agent 365 Email and Word/Excel/PowerPoint comment notification routing is live-validated on the existing Activity Protocol endpoint.
+- Teams targeted private messaging is deferred until Agent 365 Agent User packages expose a supported targeted-message capability. A separate companion bot package is intentionally out of scope.
+- Interactive UI is split by host contract: governed Adaptive Cards for Teams, and Hermes-generated authenticated web apps in child ACA Sandboxes for rich team experiences. MCP Apps remain deferred until the Hermes/Agent User client path supports the extension directly.
 - Hermes supports bounded Teams DOCX and UTF-8 text attachment ingestion; OpenClaw rejects attachments until it has an equivalent private learning transaction.
 - PDF and image attachment ingestion remain unsupported. A14 supports shared Excel workbook range collaboration and bounded shared PowerPoint text extraction, not direct Teams attachment ingestion for those formats.
 - Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.

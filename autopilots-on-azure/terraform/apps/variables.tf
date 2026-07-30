@@ -85,11 +85,11 @@ variable "user_scheduling_keda_polling_seconds" {
 
 variable "user_scheduling_scale_down_seconds" {
   type    = number
-  default = 900
+  default = 1200
 
   validation {
-    condition     = var.user_scheduling_scale_down_seconds >= 660 && var.user_scheduling_scale_down_seconds <= 3600
-    error_message = "user_scheduling_scale_down_seconds must be between 660 and 3600 seconds so detached Activity Protocol turns outlive the 600-second runtime timeout."
+    condition     = var.user_scheduling_scale_down_seconds >= 960 && var.user_scheduling_scale_down_seconds <= 3600
+    error_message = "user_scheduling_scale_down_seconds must be between 960 and 3600 seconds so detached Activity Protocol turns outlive the 900-second runtime timeout."
   }
 }
 
@@ -186,6 +186,11 @@ variable "collective_learning_approval_public_key" {
 }
 
 variable "runtime_image" {
+  type    = string
+  default = ""
+}
+
+variable "runtime_disk_source_image" {
   type    = string
   default = ""
 }

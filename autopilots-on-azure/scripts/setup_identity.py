@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from scripts.provision_agent365_instance import GraphClient, load_state
-from scripts.setup_agent365 import agent365_workspace, load_json, write_json
+from scripts.setup_agent365 import (
+    agent365_workspace,
+    load_json,
+    missing_tooling_permissions,
+    write_json,
+)
 from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, output, resolve_executable, terraform_output, write_tfvars
 
 
@@ -436,24 +441,10 @@ def update_runtime_tfvars(
 
 
 def workiq_permissions_configured(runtime: str, state_name: str = "") -> bool:
-    generated_path = agent365_workspace(state_name or runtime) / "a365.generated.config.json"
-    if not generated_path.exists():
-        return False
-    generated = load_json(generated_path)
-    consents = generated.get("resourceConsents", [])
-    manifest = load_json(TOOLING_MANIFEST)
-    for server in manifest.get("mcpServers", []):
-        audience = str(server.get("audience", "")).strip()
-        scope = str(server.get("scope", "")).strip()
-        if not any(
-            consent.get("resourceAppId") == audience
-            and consent.get("consentGranted") is True
-            and consent.get("inheritablePermissionsConfigured") is True
-            and scope in consent.get("scopes", [])
-            for consent in consents
-        ):
-            return False
-    return True
+    return not missing_tooling_permissions(
+        agent365_workspace(state_name or runtime),
+        TOOLING_MANIFEST,
+    )
 
 
 def configure_workiq_permissions(

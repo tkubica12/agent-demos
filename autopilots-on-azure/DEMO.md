@@ -545,7 +545,7 @@ To demonstrate lock recovery, keep the shared document open in Word or Teams whi
 
 A changed original ETag must safely rebase a guarded Word patch or fall back to a copy; it must never overwrite a human edit.
 
-The initial "Document received" message is an Activity Protocol acknowledgement, not completion. The bridge remains available for the bounded Hermes turn through the KEDA cooldown and posts the final result proactively. If system logs show `KEDAScaleTargetDeactivated` before the final response, verify that `user_scheduling_scale_down_seconds` is at least 660 seconds; the supported default is 900.
+The initial "Document received" message is an Activity Protocol acknowledgement, not completion. The bridge remains available for the bounded Hermes turn through the KEDA cooldown and posts the final result proactively. If system logs show `KEDAScaleTargetDeactivated` before the final response, verify that `user_scheduling_scale_down_seconds` is at least 960 seconds; the supported default is 1200.
 
 Agent 365 configuration keeps one lightweight bridge replica ready. Do not expect the messaging endpoint itself to scale to zero: cold start can exceed the workload response window before acknowledgement. The Hermes Sandbox remains the expensive scale-to-zero boundary.
 
@@ -587,6 +587,26 @@ Notifications reuse `/api/messages`, Agent 365 Activity Protocol authentication,
 
 For a Word comment that requests a body edit, the comment thread is the primary review surface. An unlocked document is updated and acknowledged there. If Microsoft 365 blocks publication, Hermes replies with the exact proposed content, concise rationale, explicit not-applied status, and a fresh-mention retry instruction instead of returning only a lock notice.
 
+## 18. Governed Adaptive Cards
+
+In a Hermes 2 personal chat, send:
+
+```text
+Use your interactive UI capability to show a confirmation card asking whether I approve the A16 architecture. Do not confirm it yourself.
+```
+
+Confirm that Teams renders a native card, the button replaces it with the selected state, and Hermes posts a continuation using only the visible selected label. Reusing the same action must not run a second continuation. Raw model-authored card JSON and action payloads are never delivered.
+
+## 19. Hermes-generated web apps
+
+Ask Hermes 2 to create a small multi-page presentation or dashboard, test it, and publish it for you. The long-running skill sends an early Teams progress update and returns an app ID plus a native `*.adcproxy.io` URL.
+
+Verify that an anonymous request returns `401`, your Entra-authenticated browser opens the app, and reopening it after idle suspension wakes the child Sandbox. The result card must show **Open site**, **Keep 1h / 6h / 24h / 72h**, and **Delete now**. Retention buttons update ACA's native lifecycle policy without a model turn or Service Bus. The current Agent 365 host shows its standard action acknowledgement but does not refresh the original card; ask Hermes for the site list again to see current state.
+
+Ask `What sites do I have running?` and confirm Hermes returns only that authenticated user's live sites in governed cards. A stopped site remains listed and its URL wakes it OnDemand; a deleted site does not appear. Ask Hermes to update and delete an app; updates retain the logical app ID and failed updates preserve the prior working deployment.
+
+Generated apps are ephemeral: one child Sandbox per app, deny-default egress, at most five active apps per Worker, 80 files/2 MiB per artifact, five-minute idle suspend, and native deletion 24 hours after suspension by default. Production promotion requires reviewed source and a standard Container Apps deployment.
+
 ## What the demo proves
 
 - Worker identity is autonomous and independently authorized.
@@ -594,6 +614,8 @@ For a Word comment that requests a body edit, the comment thread is the primary 
 - Private and public MCP paths use explicit Entra resource boundaries.
 - Document content can enter private turn context and managed Word operations without entering durable learning.
 - Agent User actions are attributable in Teams, Mail, OneDrive/SharePoint version history, Word comments, and Excel workbooks.
+- Native Teams cards remain governed by reviewed rendering and one-time action handling.
+- Rich Hermes-authored applications run behind Entra in isolated OnDemand child Sandboxes rather than inside chat or the Worker process.
 - Multiple Workers can share one Role Blueprint without sharing private state.
 - Ordinary Hermes turns may learn natively, while explicit `/learn` uses one deterministic transactional learning turn without keyword-triggered retries.
 - Dreaming can discover reusable learning retrospectively.

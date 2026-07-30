@@ -156,6 +156,7 @@ def build_tfvars(
     approved_device_token: str = "",
     api_server_key: str = "",
     runtime_image: str = "",
+    runtime_disk_source_image: str = "",
     runtime_disk_image_name: str = "",
     bridge_image: str = "",
     private_mcp_image: str = "",
@@ -302,6 +303,10 @@ def build_tfvars(
         )
         if runtime_image:
             tfvars["runtime_image"] = runtime_image
+        if runtime_disk_source_image:
+            tfvars["runtime_disk_source_image"] = (
+                runtime_disk_source_image
+            )
         if runtime_disk_image_name:
             tfvars["runtime_disk_image_name"] = runtime_disk_image_name
     elif runtime == "hermes":
@@ -336,6 +341,11 @@ def build_tfvars(
             else ""
         )
         tfvars["runtime_image"] = runtime_image or previous.get("runtime_image", "")
+        tfvars["runtime_disk_source_image"] = (
+            runtime_disk_source_image
+            or previous.get("runtime_disk_source_image", "")
+            or tfvars["runtime_image"]
+        )
         tfvars["runtime_disk_image_name"] = runtime_disk_image_name or previous.get("runtime_disk_image_name", "hermes-api-server-image")
         tfvars["collective_learning_approval_private_key"] = (
             collective_approval_private_key
@@ -456,6 +466,14 @@ def main() -> None:
     )
     parser.add_argument("--collective-approval-identity-file", default="", help="Local Ed25519 approval identity file.")
     parser.add_argument("--runtime-image", default="", help="Runtime image digest. Recommended for Hermes to avoid reusing an OpenClaw image tfvars value.")
+    parser.add_argument(
+        "--runtime-disk-source-image",
+        default="",
+        help=(
+            "Tagged OCI image used only to build the ACA Sandbox disk "
+            "image. Runtime deployment remains pinned by --runtime-image."
+        ),
+    )
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
     parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
     parser.add_argument("--private-mcp-image", default="", help="Private incidents MCP image digest.")
@@ -512,6 +530,7 @@ def main() -> None:
         approved_device_token=args.approved_device_token,
         api_server_key=args.api_server_key,
         runtime_image=args.runtime_image,
+        runtime_disk_source_image=args.runtime_disk_source_image,
         runtime_disk_image_name=args.runtime_disk_image_name,
         bridge_image=args.bridge_image,
         private_mcp_image=args.private_mcp_image,

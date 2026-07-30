@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shlex
 import shutil
 import subprocess
 import time
@@ -225,6 +226,22 @@ def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig
         if any(labels.get(key) != value for key, value in expected_labels.items()):
             stale.append(sandbox)
     return stale
+
+
+def recycle_stopped_agent_sandbox(
+    client: SandboxGroupClient,
+    sandbox: dict | None,
+) -> dict | None:
+    if not sandbox:
+        return sandbox
+    state = str(sandbox.get("state") or "")
+    if state not in {"Stopped", "Failed"}:
+        return sandbox
+    client.begin_delete_sandbox(
+        sandbox["id"],
+        polling_timeout=600,
+    ).result()
+    return None
 
 
 def require_worker_refresh_ready(
@@ -459,6 +476,7 @@ def hermes_runtime_environment(
             "true" if servicebus_dream_enabled else "false"
         ),
         "SERVICEBUS_DREAM_CRON_EXPRESSION": servicebus_dream_cron_expression,
+        "AUTOPILOT_BRIDGE_URL": get_config("AUTOPILOT_BRIDGE_URL"),
     }
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
@@ -656,8 +674,8 @@ def create_agent_sandbox(
         "ports": [
             AddPortRequest(config.port, protocol="Http", auth=PortAuthConfig(anonymous=True))._to_dict(),
         ],
-        "command": list(config.command),
-        "args": list(config.args),
+        "entrypoint": list(config.command),
+        "cmd": list(config.args),
         "skipEgressProxy": False,
     }
     if config.customer_vnet_connection_name:
@@ -674,6 +692,32 @@ def create_agent_sandbox(
             raise RuntimeError(f"Sandbox {sandbox_id} reached state {current.state}.")
         time.sleep(3)
     raise TimeoutError(f"Timed out waiting for sandbox {sandbox_id} to start.")
+
+
+def ensure_sandbox_runtime_process(
+    sandbox_client,
+    config: AgentSandboxConfig,
+) -> None:
+    command = shlex.join([*config.command, *config.args])
+    launch = (
+        f"if curl -fsS --max-time 2 "
+        f"http://127.0.0.1:{config.port}{config.health_path} "
+        ">/dev/null 2>&1; "
+        "then exit 0; fi; "
+        f"if pgrep -f -x {shlex.quote(command)} >/dev/null 2>&1; "
+        "then exit 0; fi; "
+        f"nohup {command} "
+        ">/tmp/autopilot-runtime.log 2>&1 </dev/null & "
+        "echo $! >/tmp/autopilot-runtime.pid"
+    )
+    result = sandbox_client.exec(
+        f"sh -lc {shlex.quote(launch)}"
+    )
+    if getattr(result, "exit_code", 1) != 0:
+        raise RuntimeError(
+            "Could not start the Sandbox runtime process: "
+            + str(getattr(result, "stderr", "") or "")
+        )
 
 
 def create_gateway_sandbox(client: SandboxGroupClient, **kwargs):
@@ -747,7 +791,10 @@ def ensure_agent_sandbox(
         require_worker_refresh_ready(client, config, stale)
         client.begin_delete_sandbox(stale["id"], polling_timeout=600).result()
 
-    existing_sandbox = existing_agent_sandbox(client, config)
+    existing_sandbox = recycle_stopped_agent_sandbox(
+        client,
+        existing_agent_sandbox(client, config),
+    )
     reused_existing_sandbox = existing_sandbox is not None
     if existing_sandbox:
         sandbox_id = existing_sandbox["id"]
@@ -792,6 +839,7 @@ def ensure_agent_sandbox(
             token=token,
         )
 
+    ensure_sandbox_runtime_process(sandbox_client, config)
     sandbox_id = getattr(current, "id")
     if wait_for_ready_seconds > 0:
         time.sleep(wait_for_ready_seconds)
@@ -831,7 +879,11 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "resource_group": overrides.get("resource_group") or get_config("AZURE_RESOURCE_GROUP"),
         "sandbox_group": overrides.get("sandbox_group") or get_config("AZURE_SANDBOX_GROUP"),
         "region": overrides.get("region") or get_config("AZURE_REGION", get_config("AZURE_LOCATION")),
-        "image_name": overrides.get("image_name") or get_config("AGENT_RUNTIME_IMAGE"),
+        "image_name": (
+            overrides.get("image_name")
+            or get_config("AGENT_RUNTIME_DISK_SOURCE_IMAGE")
+            or get_config("AGENT_RUNTIME_IMAGE")
+        ),
         "customer_vnet_connection_name": overrides.get("customer_vnet_connection_name") or get_config("SANDBOX_VNET_CONNECTION_NAME"),
         "private_incidents_mcp_url": overrides.get("private_incidents_mcp_url") or get_config("PRIVATE_INCIDENTS_MCP_URL"),
         "private_incidents_mcp_scope": overrides.get("private_incidents_mcp_scope") or get_config("PRIVATE_INCIDENTS_MCP_SCOPE"),

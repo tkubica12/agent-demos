@@ -308,6 +308,21 @@ resource "azapi_resource" "sandbox_group" {
   schema_validation_enabled = false
 }
 
+resource "azapi_resource" "generated_apps_sandbox_group" {
+  type      = "Microsoft.App/sandboxGroups@2026-02-01-preview"
+  name      = "autopilots-generated-apps-se-${local.suffix}"
+  parent_id = azurerm_resource_group.main.id
+  location  = var.sandbox_location
+  tags      = merge(local.tags, { purpose = "generated-apps" })
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  response_export_values    = ["identity.principalId"]
+  schema_validation_enabled = false
+}
+
 resource "azapi_resource" "sandbox_vnet_connection" {
   type      = "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
   name      = "autopilots-vnet"
@@ -329,6 +344,14 @@ locals {
 
 resource "azurerm_role_assignment" "deployer_sandbox_data_owner" {
   scope                            = azapi_resource.sandbox_group.id
+  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
+  principal_id                     = data.azurerm_client_config.current.object_id
+  principal_type                   = "User"
+  skip_service_principal_aad_check = true
+}
+
+resource "azurerm_role_assignment" "deployer_generated_apps_data_owner" {
+  scope                            = azapi_resource.generated_apps_sandbox_group.id
   role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
   principal_id                     = data.azurerm_client_config.current.object_id
   principal_type                   = "User"

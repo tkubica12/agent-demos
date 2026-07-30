@@ -14,6 +14,7 @@ GENERATED_CONFIG = "a365.generated.config.json"
 MANIFEST_DIR = "manifest"
 MANIFEST_FILE = "manifest.json"
 MANIFEST_PACKAGE = "manifest.zip"
+TOOLING_MANIFEST = REPO_ROOT / "agent365" / "ToolingManifest.json"
 SECRET_KEYS = {
     "agentBlueprintClientSecret",
     "agentBlueprintClientSecretProtected",
@@ -104,10 +105,20 @@ def messaging_endpoint_from_outputs(path: Path) -> str:
     return normalize_messaging_endpoint(bridge_url)
 
 
-def resolve_messaging_endpoint(*, runtime_kind: str, explicit_endpoint: str, outputs_file: str) -> str:
+def resolve_messaging_endpoint(
+    *,
+    runtime_kind: str,
+    explicit_endpoint: str,
+    outputs_file: str,
+    state_name: str = "",
+) -> str:
     if explicit_endpoint:
         return normalize_messaging_endpoint(explicit_endpoint)
-    path = Path(outputs_file) if outputs_file else runtime_outputs_path(runtime_kind)
+    path = (
+        Path(outputs_file)
+        if outputs_file
+        else runtime_outputs_path(state_name or runtime_kind)
+    )
     if path.exists():
         return messaging_endpoint_from_outputs(path)
     return bridge_messaging_endpoint()
@@ -164,6 +175,38 @@ def merge_config(existing: dict[str, Any], generated: dict[str, Any]) -> dict[st
 
 def non_secret_generated_fields(generated: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in generated.items() if key not in SECRET_KEYS and "secret" not in key.lower()}
+
+
+def missing_tooling_permissions(
+    workspace: Path,
+    tooling_manifest: Path | None = None,
+) -> list[str]:
+    generated_path = workspace / GENERATED_CONFIG
+    if not generated_path.exists():
+        return ["Agent 365 generated configuration"]
+    generated = load_json(generated_path)
+    consents = generated.get("resourceConsents", [])
+    manifest = load_json(tooling_manifest or TOOLING_MANIFEST)
+    missing = []
+    for server in manifest.get("mcpServers", []):
+        audience = str(server.get("audience") or "").strip()
+        scope = str(server.get("scope") or "").strip()
+        if any(
+            consent.get("resourceAppId") == audience
+            and consent.get("consentGranted") is True
+            and consent.get("inheritablePermissionsConfigured") is True
+            and scope in consent.get("scopes", [])
+            for consent in consents
+        ):
+            continue
+        missing.append(
+            str(
+                server.get("mcpServerName")
+                or server.get("mcpServerUniqueName")
+                or audience
+            )
+        )
+    return missing
 
 
 def build_metadata(config: dict[str, Any], generated: dict[str, Any]) -> dict[str, Any]:
@@ -246,6 +289,24 @@ def update_endpoint_command(messaging_endpoint: str) -> list[str]:
     return ["a365", "setup", "blueprint", "--update-endpoint", messaging_endpoint]
 
 
+def bump_manifest_patch_version(manifest: dict[str, Any]) -> None:
+    version = str(manifest.get("version") or "")
+    parts = version.split(".")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        raise ValueError(
+            "Agent 365 manifest version must be numeric semantic versioning."
+        )
+    major, minor, patch = (int(part) for part in parts)
+    manifest["version"] = f"{major}.{minor}.{patch + 1}"
+
+
+def remove_unsupported_agentic_bot_capability(
+    manifest: dict[str, Any],
+) -> None:
+    if manifest.get("agenticUserTemplates"):
+        manifest.pop("bots", None)
+
+
 def customize_manifest(workspace: Path, branding: Agent365Branding) -> Path:
     manifest_dir = workspace / MANIFEST_DIR
     manifest_path = manifest_dir / MANIFEST_FILE
@@ -269,6 +330,8 @@ def customize_manifest(workspace: Path, branding: Agent365Branding) -> Path:
         "privacyUrl": "https://github.com/tkubica12/agent-demos",
         "termsOfUseUrl": "https://github.com/tkubica12/agent-demos",
     }
+    remove_unsupported_agentic_bot_capability(manifest)
+    bump_manifest_patch_version(manifest)
     write_json(manifest_path, manifest)
 
     with ZipFile(package_path, "w", compression=ZIP_DEFLATED) as archive:
@@ -356,6 +419,7 @@ def main() -> None:
         runtime_kind=branding.runtime_kind,
         explicit_endpoint=args.messaging_endpoint,
         outputs_file=args.runtime_outputs_file,
+        state_name=branding.autopilot_name,
     )
     ai_teammate = not args.blueprint_agent
     config = agent365_config_payload(
@@ -392,6 +456,15 @@ def main() -> None:
 
     maybe_run(setup, cwd=workspace, enabled=args.run_setup)
     maybe_run(endpoint_update, cwd=workspace, enabled=args.update_endpoint)
+    if args.publish:
+        missing_permissions = missing_tooling_permissions(workspace)
+        if missing_permissions:
+            raise RuntimeError(
+                "Agent 365 permissions are behind ToolingManifest.json: "
+                + ", ".join(missing_permissions)
+                + ". Run scripts.setup_identity for this Worker before "
+                "publishing its package."
+            )
     maybe_run(publish, cwd=workspace, enabled=args.publish)
     if args.publish:
         package_path = customize_manifest(workspace, branding)

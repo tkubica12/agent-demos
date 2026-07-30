@@ -42,11 +42,102 @@ MICROSOFT_FILE_HOST_SUFFIXES = (
 )
 MICROSOFT_FILE_HOSTS = {"1drv.ms", "onedrive.live.com"}
 logger = logging.getLogger(__name__)
+GENERATED_APP_MAX_FILES = 80
+GENERATED_APP_MAX_BYTES = 2 * 1024 * 1024
 
 
 @cache
 def token_provider() -> AgentIdentityTokenProvider:
     return AgentIdentityTokenProvider.from_environment()
+
+
+def generated_app_workspace() -> Path:
+    return (
+        Path(os.getenv("HERMES_HOME", "/data/hermes"))
+        / "workspace"
+        / "generated-apps"
+    )
+
+
+def generated_app_files(local_directory: str) -> list[dict[str, str]]:
+    root = Path(local_directory).resolve()
+    allowed = generated_app_workspace().resolve()
+    if root != allowed and allowed not in root.parents:
+        raise ValueError(
+            f"Generated apps must be under {allowed}."
+        )
+    if not root.is_dir():
+        raise ValueError("Generated app directory does not exist.")
+    files = []
+    total = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("Generated apps cannot contain symlinks.")
+        if not path.is_file():
+            continue
+        size = path.stat().st_size
+        if total + size > GENERATED_APP_MAX_BYTES:
+            raise ValueError(
+                f"Generated app exceeds {GENERATED_APP_MAX_BYTES} bytes."
+            )
+        relative = path.relative_to(root).as_posix()
+        content = path.read_bytes()
+        total += len(content)
+        if len(files) >= GENERATED_APP_MAX_FILES:
+            raise ValueError(
+                f"Generated app exceeds {GENERATED_APP_MAX_FILES} files."
+            )
+        if total > GENERATED_APP_MAX_BYTES:
+            raise ValueError(
+                f"Generated app exceeds {GENERATED_APP_MAX_BYTES} bytes."
+            )
+        files.append(
+            {
+                "path": relative,
+                "contentBase64": base64.b64encode(content).decode("ascii"),
+            }
+        )
+    if not files:
+        raise ValueError("Generated app directory is empty.")
+    return files
+
+
+async def generated_apps_bridge_request(
+    method: str,
+    path: str,
+    *,
+    payload: dict | None = None,
+) -> dict:
+    base_url = os.getenv("AUTOPILOT_BRIDGE_URL", "").strip().rstrip("/")
+    api_key = os.getenv(
+        "API_SERVER_KEY",
+        os.getenv("HERMES_API_SERVER_KEY", ""),
+    ).strip()
+    if not base_url or not api_key:
+        raise RuntimeError(
+            "Generated app deployment bridge is not configured."
+        )
+    async with httpx.AsyncClient(timeout=900) as client:
+        response = await client.request(
+            method,
+            f"{base_url}{path}",
+            headers={"X-Autopilot-Key": api_key},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = response.text
+        raise RuntimeError(
+            f"Generated app deployment failed: {detail}"
+        )
+    result = response.json()
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            "Generated app deployment returned an invalid response."
+        )
+    return result
 
 
 async def graph_token() -> str:
@@ -812,6 +903,99 @@ mcp = FastMCP(
     json_response=True,
     lifespan=collaboration_lifespan,
 )
+
+
+@mcp.tool()
+async def deploy_generated_web_app(
+    local_directory: str,
+    name: str,
+    requesting_user_id: str,
+    requesting_user_email: str,
+    participant_emails: list[str],
+    runtime: str,
+    port: int,
+    start_command: list[str],
+    ttl_seconds: int = 86400,
+    install_command: list[str] | None = None,
+    test_command: list[str] | None = None,
+    egress_hosts: list[str] | None = None,
+    app_id: str = "",
+) -> dict:
+    """Deploy or update a tested generated app in an Entra-gated child Sandbox.
+
+    Source must live under the Hermes generated-apps workspace. Every
+    participant must be explicit. A matching app_id replaces the previous
+    deployment while preserving the logical app identity.
+    """
+    return await generated_apps_bridge_request(
+        "POST",
+        "/internal/generated-apps/deploy",
+        payload={
+            "appId": app_id,
+            "name": name,
+            "runtime": runtime,
+            "files": generated_app_files(local_directory),
+            "requestingUserId": requesting_user_id,
+            "requestingUserEmail": requesting_user_email,
+            "participantEmails": participant_emails,
+            "port": port,
+            "installCommand": install_command or [],
+            "testCommand": test_command or [],
+            "startCommand": start_command,
+            "ttlSeconds": ttl_seconds,
+            "egressHosts": egress_hosts or [],
+        },
+    )
+
+
+@mcp.tool()
+async def list_generated_web_apps(
+    requesting_user_id: str,
+) -> dict:
+    """List generated web apps owned by the invoking Teams user."""
+    return await generated_apps_bridge_request(
+        "GET",
+        (
+            "/internal/generated-apps?requestingUserId="
+            f"{quote(requesting_user_id, safe='')}"
+        ),
+    )
+
+
+@mcp.tool()
+async def renew_generated_web_app(
+    app_id: str,
+    requesting_user_id: str,
+    retention_seconds: int,
+) -> dict:
+    """Set native post-suspension retention to 1, 6, 24, or 72 hours."""
+    return await generated_apps_bridge_request(
+        "POST",
+        (
+            f"/internal/generated-apps/"
+            f"{quote(app_id, safe='')}/renew"
+        ),
+        payload={
+            "requestingUserId": requesting_user_id,
+            "retentionSeconds": retention_seconds,
+        },
+    )
+
+
+@mcp.tool()
+async def delete_generated_web_app(
+    app_id: str,
+    requesting_user_id: str,
+) -> dict:
+    """Delete one invoking-user-owned app and its isolated child Sandbox."""
+    return await generated_apps_bridge_request(
+        "DELETE",
+        (
+            f"/internal/generated-apps/{quote(app_id, safe='')}"
+            "?requestingUserId="
+            f"{quote(requesting_user_id, safe='')}"
+        ),
+    )
 
 
 @mcp.tool()

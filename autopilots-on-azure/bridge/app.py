@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from microsoft_agents.activity import (
     Activity,
+    Attachment,
     CardAction,
     SuggestedActions,
     load_configuration_from_env,
@@ -44,6 +45,26 @@ from bridge.document_cards import (
     create_action_token,
     decode_action_token,
     office_operation_scope,
+)
+from bridge.interactions import (
+    CARD_CONTENT_TYPE,
+    completed_card,
+    decode_interaction_token,
+    extract_interaction_request,
+    interaction_action_data,
+    render_card,
+)
+from bridge.generated_apps import (
+    GeneratedAppsManager,
+    GeneratedAppsSettings,
+)
+from bridge.generated_app_cards import (
+    decode_generated_app_action_token,
+    extract_generated_app_card_request,
+    generated_app_action_completed_card,
+    generated_app_action_data,
+    generated_apps_activity,
+    generated_apps_card,
 )
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.factory import create_runtime_adapter, runtime_kind_from_env
@@ -96,6 +117,12 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
 
 agent365_app, agent365_adapter = create_agent365_app()
 agent_notifications = AgentNotification(agent365_app)
+background_turns: set[asyncio.Task[Any]] = set()
+generated_app_action_lock = asyncio.Lock()
+generated_app_action_results: dict[
+    str,
+    tuple[float, str],
+] = {}
 
 
 scheduled_learning = ScheduledLearningCoordinator(
@@ -108,6 +135,19 @@ schedule_consumer = ServiceBusScheduleConsumer(
     handler=lambda payload: process_scheduled_message(payload)
 )
 schedule_sender = ServiceBusScheduleSender()
+
+
+def start_background_turn(coroutine: Any) -> None:
+    task = asyncio.create_task(coroutine)
+    background_turns.add(task)
+    task.add_done_callback(background_turns.discard)
+
+
+@cache
+def generated_apps_manager() -> GeneratedAppsManager:
+    return GeneratedAppsManager(
+        GeneratedAppsSettings.from_environment()
+    )
 
 
 class InvokeRequest(BaseModel):
@@ -999,6 +1039,80 @@ async def ensure_runtime_status(http_request: Request) -> dict[str, Any]:
     return await adapter.ensure_runtime()
 
 
+@app.post("/internal/generated-apps/deploy")
+async def generated_app_deploy(
+    http_request: Request,
+) -> dict[str, Any]:
+    require_operator_key(http_request)
+    payload = await http_request.json()
+    try:
+        return await asyncio.to_thread(
+            generated_apps_manager().deploy_app,
+            payload,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/internal/generated-apps")
+async def generated_app_list(
+    http_request: Request,
+) -> dict[str, Any]:
+    require_operator_key(http_request)
+    requesting_user_id = str(
+        http_request.query_params.get("requestingUserId") or ""
+    )
+    try:
+        return await asyncio.to_thread(
+            generated_apps_manager().list_apps,
+            requesting_user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/internal/generated-apps/{app_id}")
+async def generated_app_delete(
+    app_id: str,
+    http_request: Request,
+) -> dict[str, Any]:
+    require_operator_key(http_request)
+    requesting_user_id = str(
+        http_request.query_params.get("requestingUserId") or ""
+    )
+    try:
+        return await asyncio.to_thread(
+            generated_apps_manager().delete_app,
+            app_id,
+            requesting_user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/internal/generated-apps/{app_id}/renew")
+async def generated_app_renew(
+    app_id: str,
+    http_request: Request,
+) -> dict[str, Any]:
+    require_operator_key(http_request)
+    payload = await http_request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Generated app renewal must be an object.",
+        )
+    try:
+        return await asyncio.to_thread(
+            generated_apps_manager().renew_app,
+            app_id,
+            str(payload.get("requestingUserId") or ""),
+            int(payload.get("retentionSeconds") or 0),
+        )
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/internal/document-card/preview")
 async def document_card_preview(
     http_request: Request,
@@ -1813,11 +1927,312 @@ async def handle_document_card_action(
     return True
 
 
+async def continue_interaction_action(
+    *,
+    token: dict[str, Any],
+    delivery_reference: dict[str, Any],
+    auth_context: AgentAuthContext,
+    source: str,
+) -> None:
+    conversation_id = str(token["conversationId"])
+    interaction_id = str(token["interactionId"])
+    try:
+        adapter = runtime_adapter()
+        claim = await adapter.claim_interaction_action(
+            interaction_id=interaction_id,
+            choice_id=str(token["choiceId"]),
+            expires_at_unix=float(token["expiresAtUnix"]),
+        )
+        if not claim.get("claimed"):
+            record_teams_diag(
+                {
+                    "event": "interactionActionDuplicate",
+                    "conversationId": conversation_id,
+                    "interactionId": interaction_id,
+                }
+            )
+            return
+        result = await invoke_agent_runtime(
+            conversation_id=conversation_id,
+            session_key=str(token["sessionKey"]),
+            message=(
+                "The authenticated user selected a choice from a governed "
+                "Adaptive Card. Treat this as the user's next instruction.\n\n"
+                f"Selection: {token['choiceMessage']}"
+            ),
+            source=source,
+            user_id=str(token["userId"]),
+            must_answer=True,
+            metadata={
+                "deliveryReference": delivery_reference,
+                "interactionAction": True,
+                "interactionId": interaction_id,
+                "maxRecords": 3,
+            },
+            auth_context=auth_context,
+        )
+        visible, _interaction = extract_interaction_request(result.text)
+        if not visible.strip():
+            visible = "The selection was processed."
+        await send_proactive_activity(
+            agent365_adapter,
+            delivery_reference,
+            visible,
+        )
+        record_teams_diag(
+            {
+                "event": "interactionActionCompleted",
+                "conversationId": conversation_id,
+                "interactionId": interaction_id,
+                "choice": token["choiceId"],
+            }
+        )
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "interactionActionFailed",
+                "conversationId": conversation_id,
+                "interactionId": interaction_id,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+        try:
+            await send_proactive_activity(
+                agent365_adapter,
+                delivery_reference,
+                (
+                    f"{runtime_display_name()} could not process that "
+                    f"selection: {exc}"
+                ),
+            )
+        except Exception:
+            pass
+
+
+async def accept_interaction_action(
+    ctx: TurnContext,
+) -> tuple[bool, str]:
+    action = interaction_action_data(
+        field_value(ctx.activity, "value")
+    )
+    if not action:
+        return False, ""
+    conversation_id = teams_conversation_id(ctx.activity)
+    invoking_user_id = user_id(ctx.activity)
+    token = decode_interaction_token(
+        action["token"],
+        user_id=invoking_user_id,
+        conversation_id=conversation_id,
+    )
+    if token.get("choiceId") != action["choice"]:
+        raise ValueError("The Adaptive Card choice is invalid.")
+    auth_context = agent_auth_context(ctx.activity)
+    delivery_reference = delivery_reference_metadata(
+        ctx,
+        worker_id=os.getenv(
+            "WORKER_ID",
+            os.getenv("AUTOPILOT_NAME", "worker"),
+        ),
+        boundary=auth_context.conversation_boundary,
+    )
+    if not isinstance(delivery_reference, dict):
+        raise RuntimeError(
+            "The Teams conversation cannot receive interaction updates."
+        )
+    start_background_turn(
+        continue_interaction_action(
+            token=token,
+            delivery_reference=delivery_reference,
+            auth_context=auth_context,
+            source=teams_runtime_source(ctx.activity),
+        )
+    )
+    record_teams_diag(
+        {
+            "event": "interactionActionAccepted",
+            "conversationId": conversation_id,
+            "interactionId": token["interactionId"],
+            "choice": token["choiceId"],
+        }
+    )
+    return True, str(token["choiceMessage"])
+
+
+async def accept_generated_app_action(
+    ctx: TurnContext,
+) -> tuple[bool, str]:
+    action = generated_app_action_data(
+        field_value(ctx.activity, "value")
+    )
+    if not action:
+        return False, ""
+    conversation_id = teams_conversation_id(ctx.activity)
+    invoking_user_id = user_id(ctx.activity)
+    token = decode_generated_app_action_token(
+        action["token"],
+        user_id=invoking_user_id,
+        conversation_id=conversation_id,
+    )
+    if token.get("action") != action["action"]:
+        raise ValueError(
+            "The generated app action is invalid."
+        )
+    action_id = str(token["actionId"])
+    expires_at = float(token["expiresAtUnix"])
+    async with generated_app_action_lock:
+        now = time.time()
+        for cached_id, (cached_expiry, _cached_result) in list(
+            generated_app_action_results.items()
+        ):
+            if cached_expiry <= now:
+                generated_app_action_results.pop(
+                    cached_id,
+                    None,
+                )
+        cached = generated_app_action_results.get(action_id)
+        if cached is not None:
+            return True, cached[1]
+        manager = generated_apps_manager()
+        app_id = str(token["appId"])
+        if token["action"] == "renew":
+            result = await asyncio.to_thread(
+                manager.renew_app,
+                app_id,
+                invoking_user_id,
+                int(token["retentionSeconds"]),
+            )
+            hours = int(token["retentionSeconds"]) // 3600
+            confirmation = (
+                "Retention updated to "
+                f"{hours} {'hour' if hours == 1 else 'hours'} "
+                "after suspension."
+            )
+        else:
+            inventory = await asyncio.to_thread(
+                manager.list_apps,
+                invoking_user_id,
+            )
+            matched = next(
+                (
+                    item
+                    for item in inventory["apps"]
+                    if item.get("appId") == app_id
+                ),
+                None,
+            )
+            await asyncio.to_thread(
+                manager.delete_app,
+                app_id,
+                invoking_user_id,
+            )
+            confirmation = (
+                f"{str((matched or {}).get('name') or 'Generated site')} "
+                "deleted."
+            )
+        generated_app_action_results[action_id] = (
+            expires_at,
+            confirmation,
+        )
+    record_teams_diag(
+        {
+            "event": "generatedAppActionCompleted",
+            "conversationId": conversation_id,
+            "appId": app_id,
+            "action": token["action"],
+            "retentionSeconds": int(
+                token.get("retentionSeconds") or 0
+            ),
+        }
+    )
+    return True, confirmation
+
+
 @agent365_app.activity("invoke")
 async def handle_teams_invoke(
     ctx: TurnContext,
     _state: TurnState,
 ) -> None:
+    try:
+        generated_app_handled, generated_app_confirmation = (
+            await accept_generated_app_action(ctx)
+        )
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "generatedAppActionRejected",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+        ctx.turn_state[TurnContext._INVOKE_RESPONSE_KEY] = Activity(
+            type="invoke_response",
+            value={
+                "status": 200,
+                "body": {
+                    "statusCode": 400,
+                    "type": "application/vnd.microsoft.error",
+                    "value": {"message": str(exc)},
+                },
+            },
+        )
+        return
+    if generated_app_handled:
+        ctx.turn_state[TurnContext._INVOKE_RESPONSE_KEY] = Activity(
+            type="invoke_response",
+            value={
+                "status": 200,
+                "body": {
+                    "statusCode": 200,
+                    "type": CARD_CONTENT_TYPE,
+                    "value": generated_app_action_completed_card(
+                        generated_app_confirmation
+                    ),
+                },
+            },
+        )
+        return
+    interaction_handled = False
+    interaction_label = ""
+    try:
+        interaction_handled, interaction_label = (
+            await accept_interaction_action(ctx)
+        )
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "interactionActionRejected",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+        ctx.turn_state[TurnContext._INVOKE_RESPONSE_KEY] = Activity(
+            type="invoke_response",
+            value={
+                "status": 200,
+                "body": {
+                    "statusCode": 400,
+                    "type": "application/vnd.microsoft.error",
+                    "value": {"message": str(exc)},
+                },
+            },
+        )
+        return
+    if interaction_handled:
+        ctx.turn_state[TurnContext._INVOKE_RESPONSE_KEY] = Activity(
+            type="invoke_response",
+            value={
+                "status": 200,
+                "body": {
+                    "statusCode": 200,
+                    "type": CARD_CONTENT_TYPE,
+                    "value": completed_card(
+                        choice_label=interaction_label,
+                    ),
+                },
+            },
+        )
+        return
     handled = await handle_document_card_action(ctx)
     if not handled:
         record_teams_diag(
@@ -1839,6 +2254,32 @@ async def handle_teams_invoke(
 
 @agent365_app.activity("message")
 async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
+    try:
+        generated_app_handled, generated_app_confirmation = (
+            await accept_generated_app_action(ctx)
+        )
+    except Exception as exc:
+        await ctx.send_activity(
+            f"{runtime_display_name()} could not apply that site action: {exc}"
+        )
+        return
+    if generated_app_handled:
+        await ctx.send_activity(generated_app_confirmation)
+        return
+    try:
+        interaction_handled, interaction_label = (
+            await accept_interaction_action(ctx)
+        )
+    except Exception as exc:
+        await ctx.send_activity(
+            f"{runtime_display_name()} could not accept that choice: {exc}"
+        )
+        return
+    if interaction_handled:
+        await ctx.send_activity(
+            f"Response received: {interaction_label}"
+        )
+        return
     if await handle_document_card_action(ctx):
         return
     conversation_type = teams_conversation_type(ctx.activity)
@@ -2228,7 +2669,77 @@ async def run_agent_runtime_for_teams(
             auth_context=auth_context,
             on_delta=emit_delta if show_public_progress else None,
         )
-        visible_response, requested_reaction = split_teams_response_instructions(result.text)
+        generated_response, generated_app_request = (
+            extract_generated_app_card_request(result.text)
+        )
+        model_response, interaction_spec = extract_interaction_request(
+            generated_response
+        )
+        visible_response, requested_reaction = (
+            split_teams_response_instructions(model_response)
+        )
+        interaction_activity = None
+        interaction_id = ""
+        if interaction_spec and not attachments:
+            interaction_activity, interaction_id = render_card(
+                interaction_spec,
+                session_key=session_key,
+                user_id=user_id(ctx.activity),
+                conversation_id=conversation_id,
+            )
+            if visible_response:
+                interaction_activity.text = visible_response
+        elif interaction_spec:
+            record_teams_diag(
+                {
+                    "event": "interactionFallback",
+                    "conversationId": conversation_id,
+                    "reason": "attachmentTurn",
+                }
+            )
+        generated_app_activity = None
+        if generated_app_request and not attachments:
+            inventory = await asyncio.to_thread(
+                generated_apps_manager().list_apps,
+                user_id(ctx.activity),
+            )
+            apps = inventory["apps"]
+            if generated_app_request["mode"] == "app":
+                apps = [
+                    item
+                    for item in apps
+                    if item.get("appId")
+                    == generated_app_request["appId"]
+                ]
+            generated_app_activity = generated_apps_activity(
+                apps,
+                user_id=user_id(ctx.activity),
+                conversation_id=conversation_id,
+                title=(
+                    "Generated site ready"
+                    if generated_app_request["mode"] == "app"
+                    else "Your generated sites"
+                ),
+            )
+            if visible_response:
+                generated_app_activity.text = visible_response
+            if interaction_activity is not None:
+                record_teams_diag(
+                    {
+                        "event": "interactionFallback",
+                        "conversationId": conversation_id,
+                        "reason": "generatedAppCardTakesPriority",
+                    }
+                )
+                interaction_activity = None
+        elif generated_app_request:
+            record_teams_diag(
+                {
+                    "event": "generatedAppCardFallback",
+                    "conversationId": conversation_id,
+                    "reason": "attachmentTurn",
+                }
+            )
         document_card = None
         if attachments:
             try:
@@ -2254,11 +2765,13 @@ async def run_agent_runtime_for_teams(
             await send_message_reaction(ctx, field_value(ctx.activity, "id"), requested_reaction)
         if (
             document_card is None
+            and generated_app_activity is None
+            and interaction_activity is None
             and (
-                response_should_be_suppressed(result.text)
+                response_should_be_suppressed(model_response)
                 or (
                     requested_reaction
-                    and not response_has_visible_text(result.text)
+                    and not response_has_visible_text(model_response)
                 )
             )
         ):
@@ -2282,6 +2795,66 @@ async def run_agent_runtime_for_teams(
                         "conversationId": conversation_id,
                     }
                 )
+            elif generated_app_activity is not None:
+                try:
+                    sent = await ctx.send_activity(
+                        generated_app_activity
+                    )
+                    sent_activity_id = str(
+                        field_value(sent, "id") or ""
+                    ) or None
+                    record_teams_diag(
+                        {
+                            "event": "generatedAppCardSent",
+                            "conversationId": conversation_id,
+                            "method": "directReply",
+                        }
+                    )
+                except Exception as card_exc:
+                    record_teams_diag(
+                        {
+                            "event": "generatedAppCardFailed",
+                            "conversationId": conversation_id,
+                            "type": card_exc.__class__.__name__,
+                            "message": str(card_exc),
+                        }
+                    )
+                    sent_activity_id = await send_teams_response(
+                        ctx,
+                        visible_response
+                        or str(generated_app_activity.text or ""),
+                    )
+            elif interaction_activity is not None:
+                try:
+                    sent = await ctx.send_activity(
+                        interaction_activity
+                    )
+                    sent_activity_id = str(
+                        field_value(sent, "id") or ""
+                    ) or None
+                    record_teams_diag(
+                        {
+                            "event": "interactionCardSent",
+                            "conversationId": conversation_id,
+                            "interactionId": interaction_id,
+                            "method": "directReply",
+                        }
+                    )
+                except Exception as card_exc:
+                    record_teams_diag(
+                        {
+                            "event": "interactionCardFailed",
+                            "conversationId": conversation_id,
+                            "interactionId": interaction_id,
+                            "type": card_exc.__class__.__name__,
+                            "message": str(card_exc),
+                        }
+                    )
+                    sent_activity_id = await send_teams_response(
+                        ctx,
+                        visible_response
+                        or str(interaction_activity.text or ""),
+                    )
             elif attachments:
                 delivery_result = await send_proactive_activity(
                     agent365_adapter,

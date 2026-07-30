@@ -267,6 +267,34 @@ def bridge_instructions(request: AgentRequest) -> str:
             "to Personal Memory, Private Playbooks, Role Skills, Candidate Improvements, learning provenance, or any other "
             "durable file."
         )
+    interactions = ""
+    if (
+        request.source.startswith("teams_")
+        and not request.metadata.get("attachmentsPrivate")
+    ):
+        interactions = (
+            "\n\nWhen a bounded Teams choice, confirmation, vote, short "
+            "form, status, risk display, facts, or short table would "
+            "materially improve the answer, load the interactive-ui skill "
+            "and use its semantic Adaptive Card request. Plain text remains "
+            "the default. Never author raw Adaptive Card JSON or action "
+            "tokens."
+        )
+    generated_apps = ""
+    if _configured_env("AUTOPILOT_BRIDGE_URL"):
+        generated_apps = (
+            "\n\nWhen the user requests a rich web application, dashboard, "
+            "presentation, visualization, or multi-step experience beyond an "
+            "Adaptive Card, or asks to list or manage generated sites, load "
+            "the generated-web-app skill. Generate and test inspectable source "
+            "in the governed generated-apps workspace, then use the fixed "
+            "deployment tools. Never serve user apps from the Hermes process "
+            "or deploy anonymously. Pass the authenticated invokingUserId to "
+            "every generated-app tool. After a successful deploy or update, "
+            "and after a non-empty inventory lookup, emit the generated-app "
+            "card request required by that skill so the bridge supplies "
+            "owner-bound open, retention, and delete controls."
+        )
     return (
         f"{BRIDGE_INSTRUCTIONS}\n\n"
         f"{ROLE_POLICY_REFERENCE} {GOVERNED_LEARNING_BOUNDARY} "
@@ -279,6 +307,8 @@ def bridge_instructions(request: AgentRequest) -> str:
         f"{scheduling}"
         f"{microsoft_365}"
         f"{attachments}"
+        f"{interactions}"
+        f"{generated_apps}"
     )
 
 
@@ -774,6 +804,22 @@ class HermesRuntimeAdapter:
         return await self._document_operation_request(
             "/internal/documents/pending",
             {"operationScope": operation_scope},
+        )
+
+    async def claim_interaction_action(
+        self,
+        *,
+        interaction_id: str,
+        choice_id: str,
+        expires_at_unix: float,
+    ) -> dict[str, Any]:
+        return await self._document_operation_request(
+            "/internal/interactions/claim",
+            {
+                "interactionId": interaction_id,
+                "choiceId": choice_id,
+                "expiresAtUnix": expires_at_unix,
+            },
         )
 
     async def get_delivery_reference(

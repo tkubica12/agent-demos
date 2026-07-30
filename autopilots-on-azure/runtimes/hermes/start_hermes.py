@@ -27,6 +27,7 @@ from autopilots_identity.document_operations import (
     pending_choices as pending_document_choices,
     process_background_retry,
 )
+from autopilots_identity.interaction_actions import claim_interaction
 from autopilots_identity.collaboration_mcp import (
     bind_pending_publish_scope,
 )
@@ -211,6 +212,8 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     if collaboration_url:
         mcp_servers["m365-collaboration"] = {
             "url": collaboration_url,
+            "connect_timeout": 30,
+            "timeout": 900,
         }
     if mcp_servers:
         runtime_config["mcp_servers"] = mcp_servers
@@ -681,6 +684,27 @@ def create_health_app(
     def cron_jobs(request: Request) -> dict[str, Any]:
         require_internal_key(request)
         return {"jobs": list_cron_jobs(profile_home)}
+
+    @app.post("/internal/interactions/claim")
+    async def interaction_claim(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        try:
+            return claim_interaction(
+                profile_home,
+                interaction_id=str(
+                    payload.get("interactionId") or ""
+                ),
+                choice_id=str(payload.get("choiceId") or ""),
+                expires_at_unix=float(
+                    payload.get("expiresAtUnix") or 0
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
 
     @app.post("/internal/cron/reconcile")
     async def cron_reconcile(request: Request) -> dict[str, Any]:

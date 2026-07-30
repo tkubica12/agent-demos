@@ -70,6 +70,14 @@ output "sandbox_group_principal_id" {
   value = azapi_resource.sandbox_group.output.identity.principalId
 }
 
+output "generated_apps_sandbox_group_name" {
+  value = azapi_resource.generated_apps_sandbox_group.name
+}
+
+output "generated_apps_sandbox_group_id" {
+  value = azapi_resource.generated_apps_sandbox_group.id
+}
+
 output "sandbox_vnet_connection_name" {
   value = azapi_resource.sandbox_vnet_connection.name
 }

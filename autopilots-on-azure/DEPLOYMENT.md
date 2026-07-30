@@ -48,7 +48,7 @@ Workers can share the same Role Blueprint, Role Release, images, Foundry deploym
 
 ## 1. Deploy the shared platform
 
-The platform layer creates networking, ACR, Container Apps environments, the Sandbox Group, and Foundry.
+The platform layer creates networking, ACR, Container Apps environments, the Worker Sandbox Group, the separate generated-app Sandbox Group, and Foundry.
 
 ```powershell
 Set-Location .\terraform\platform
@@ -72,9 +72,11 @@ uv run python -m scripts.build_images --runtime hermes
 uv run python -m scripts.build_images --runtime openclaw
 ```
 
-The command writes image digests into the active generated Terraform values. Rebuild after runtime or bridge code changes.
+The command writes image digests into the active generated Terraform values. Runtime deployment stays pinned to a digest; ACA Sandbox disk-image conversion uses the matching tagged OCI source because conversion does not accept a digest reference reliably. Rebuild after runtime or bridge code changes.
 
-Agent 365 Workers keep one lightweight bridge replica ready because an ACA cold start can exceed the Activity Protocol response window before acknowledgement code runs. The Hermes Sandbox remains independently scale-to-zero. Hermes bridge scaling also uses a 900-second cooldown: Agent 365 can acknowledge an attachment before its callback finishes, so the HTTP request is no longer an active KEDA lease while Hermes continues processing.
+Agent 365 Workers keep one lightweight bridge replica ready because an ACA cold start can exceed the Activity Protocol response window before acknowledgement code runs. The Hermes Sandbox remains independently scale-to-zero. Hermes turns have a 900-second bridge budget and the bridge uses a 1200-second cooldown so detached Activity Protocol work is not scaled down while Hermes is still processing.
+
+Generated web apps run in one child Sandbox per app in the dedicated group. The bridge identity receives only Sandbox Group Data Owner there. Each public port is Entra-authenticated, participant-limited, and `OnDemand`; the ADC proxy authenticates the user, resumes stopped compute, and forwards directly to the app. Apps suspend after five idle minutes and default to native deletion 24 hours after suspension. Owner-bound Adaptive Card actions update the native retention policy or delete the Sandbox directly; Service Bus is not part of this lifecycle. The bridge manages lifecycle but never proxies app traffic.
 
 ## 3. Configure a Hermes Worker
 
@@ -226,6 +228,22 @@ uv run python -m scripts.setup_identity `
   --mail-nickname $worker `
   --state-file ".local\$worker\agent365\instance.$worker.json"
 ```
+
+Run this reconciliation for every existing Worker whenever `agent365\ToolingManifest.json` changes. The script compares each Worker's recorded consents with the current manifest and requests only missing permissions.
+
+After permissions are current, generate the Teams package:
+
+```powershell
+uv run python -m scripts.setup_agent365 `
+  --runtime hermes `
+  --autopilot-name $worker `
+  --agent-name $worker `
+  --publish
+```
+
+Publishing now fails with the missing server names when a Worker's consents lag behind `ToolingManifest.json`. The post-processor otherwise bumps the manifest version and removes unsupported bot capabilities from Agent User packages. Upload `.local\<worker>\agent365\manifest\manifest.zip` only through Microsoft 365 admin center **Agents > All agents > Upload custom agent**. Teams app-store upload rejects `agenticUserTemplates` packages; see ADR 0018.
+
+The Agent Registry permission summary can lag or omit inherited Agent User permissions. Treat `a365 query-entra inheritance` as the authoritative configuration check and require every listed resource to report effective inheritance. Confirm actual access with the workload smoke rather than the Registry label.
 
 Use `--skip-workiq-permissions` when the Worker has no mailbox/Copilot scenario.
 

@@ -446,6 +446,7 @@
       <a href="#runtime">Sandbox &amp; disk</a>
       <p>Control flow</p>
       <a href="#teams">Teams &amp; bridge</a>
+      <a href="#interaction-apps">Cards &amp; generated apps</a>
       <a href="#scheduling">Scheduling &amp; wake</a>
       <a href="#identity">Identity chain</a>
       <p>Data plane</p>
@@ -467,7 +468,8 @@
           one always-ready lightweight Agent 365 bridge per Worker, scale-to-zero Hermes inside an Azure Container Apps Sandbox,
           durable private state on an attached Data Disk, Service Bus as the wake-up clock,
           identity-aware loopback proxies for Foundry and MCP, and Agent User-attributed
-          Microsoft 365 collaboration across Teams, Mail, Office documents, and notifications.
+          Microsoft 365 collaboration across Teams, Mail, Office documents, and notifications,
+          plus governed Adaptive Cards and Entra-protected generated applications.
         </p>
         <div class="hero-links">
           <a class="guide-link" href="hermes-on-azure-overview.html">← Main visual overview</a>
@@ -620,9 +622,36 @@
         </div>
       </section>
 
+      <section id="interaction-apps">
+        <div class="section-head">
+          <div><span class="section-number">05 / INTERACTION SURFACES</span><h2>Native cards for choices. Sandboxes for applications.</h2></div>
+          <p>The bridge keeps consequential chat actions deterministic. Rich Hermes-authored code runs in a separate execution boundary with its own identity, URL, and lifecycle.</p>
+        </div>
+        <div class="grid-2">
+          <article class="card accent-card">
+            <span class="card-index">A16 · ADAPTIVE CARDS</span>
+            <h3>Bridge-rendered Teams interaction</h3>
+            <p>Hermes emits a bounded display, choice, or confirmation request. The bridge owns card JSON, verbs, encrypted user/conversation-bound tokens, expiry, one-time claims, replacement, and continuation. Suggested actions or text cover unsupported delivery paths.</p>
+          </article>
+          <article class="card purple">
+            <span class="card-index">A17 · GENERATED WEB APP</span>
+            <h3>One child Sandbox per app</h3>
+            <p>Hermes writes and tests inspectable source under its private workspace. A fixed tool deploys it to the dedicated generated-app Sandbox Group with deny-default egress, owner scope, quotas, five-minute idle suspend, native 24-hour post-suspension retention, and an Entra participant allowlist.</p>
+          </article>
+        </div>
+        <div class="diagram" style="margin-top:18px;">
+          <div class="nodes">
+            <div class="node accent"><strong>Hermes Worker</strong><span>Generate source, run tests, request governed deployment</span></div>
+            <div class="node purple"><strong>Bridge lifecycle manager</strong><span>Owner-bound, replay-safe list/renew/delete card actions; no Worker wake, model turn, or Service Bus</span></div>
+            <div class="node azure"><strong>ADC proxy + Entra</strong><span>Authenticate participant and activate stopped compute OnDemand</span></div>
+            <div class="node private"><strong>Child app Sandbox</strong><span>Direct native URL, five-minute suspend, native retention policy</span></div>
+          </div>
+        </div>
+      </section>
+
       <section id="scheduling">
         <div class="section-head">
-          <div><span class="section-number">05 / SCALE TO ZERO</span><h2>Service Bus is the alarm clock.</h2></div>
+          <div><span class="section-number">06 / SCALE TO ZERO</span><h2>Service Bus is the alarm clock.</h2></div>
           <p>Hermes owns user schedule meaning; deterministic system workflows own their own durable state. Service Bus holds minimal due messages and KEDA turns them into compute only when work is due.</p>
         </div>
         <div class="diagram">
@@ -666,7 +695,7 @@
 
       <section id="identity">
         <div class="section-head">
-          <div><span class="section-number">06 / IDENTITY</span><h2>Execution identity is not business identity.</h2></div>
+          <div><span class="section-number">07 / IDENTITY</span><h2>Execution identity is not business identity.</h2></div>
           <p>Managed identity proves where code runs. Agent Identity authorizes autonomous application work. Agent User represents the digital teammate for Worker-owned Microsoft 365 resources.</p>
         </div>
         <div class="grid-3">
@@ -686,7 +715,7 @@
 
       <section id="model">
         <div class="section-head">
-          <div><span class="section-number">07 / MODEL</span><h2>Hermes sees OpenAI. Azure sees identity.</h2></div>
+          <div><span class="section-number">08 / MODEL</span><h2>Hermes sees OpenAI. Azure sees identity.</h2></div>
           <p>Hermes expects an OpenAI-compatible endpoint and key. A small loopback proxy preserves that interface while acquiring Foundry tokens with managed identity.</p>
         </div>
         <div class="diagram">
@@ -701,7 +730,7 @@
 
       <section id="mcp">
         <div class="section-head">
-          <div><span class="section-number">08 / MCP</span><h2>One loopback contract, different network paths.</h2></div>
+          <div><span class="section-number">09 / MCP</span><h2>One loopback contract, different network paths.</h2></div>
           <p>Hermes connects to loopback MCP endpoints. The identity adapter chooses Agent Identity or Agent User and forwards to managed/custom servers; a second loopback MCP exposes fixed Agent User Graph collaboration tools without exposing bearer tokens.</p>
         </div>
         <div class="diagram">
@@ -747,7 +776,7 @@
 
       <section id="documents">
         <div class="section-head">
-          <div><span class="section-number">09 / DOCUMENTS &amp; NOTIFICATIONS</span><h2>Managed semantics. Local fidelity. Agent User attribution.</h2></div>
+          <div><span class="section-number">10 / DOCUMENTS &amp; NOTIFICATIONS</span><h2>Managed semantics. Local fidelity. Agent User attribution.</h2></div>
           <p>Document work combines Microsoft-managed tools, a thin Graph file boundary, pinned permissive skills, and fail-closed validation. Office and email notifications reuse the same Agent 365 ingress.</p>
         </div>
         <div class="diagram">
@@ -815,7 +844,7 @@
 
       <section id="network">
         <div class="section-head">
-          <div><span class="section-number">10 / NETWORK</span><h2>Control plane public. Private data plane private.</h2></div>
+          <div><span class="section-number">11 / NETWORK</span><h2>Control plane public. Private data plane private.</h2></div>
           <p>The architecture deliberately separates user-facing ingress from private tool reachability. The bridge is not a relay for MCP traffic.</p>
         </div>
         <div class="grid-2">
@@ -835,7 +864,7 @@
 
       <section id="ownership">
         <div class="section-head">
-          <div><span class="section-number">11 / OWNERSHIP</span><h2>Know which layer is authoritative.</h2></div>
+          <div><span class="section-number">12 / OWNERSHIP</span><h2>Know which layer is authoritative.</h2></div>
           <p>Most architecture mistakes come from putting behavior, state, or authorization in the wrong layer.</p>
         </div>
         <div class="table-wrap">
@@ -862,7 +891,7 @@
 
       <section id="failure">
         <div class="section-head">
-          <div><span class="section-number">12 / FAILURE MODEL</span><h2>Durability is explicit, not hopeful.</h2></div>
+          <div><span class="section-number">13 / FAILURE MODEL</span><h2>Durability is explicit, not hopeful.</h2></div>
           <p>Scale-to-zero and distributed delivery introduce retries and races. The implementation records enough state to distinguish stale work, duplicate work, interrupted work, and delivered work.</p>
         </div>
         <div class="grid-3">
@@ -888,7 +917,7 @@
 
       <footer class="footer">
         <span>Autopilots on Azure · Hermes architecture</span>
-        <span>Current implementation · Updated 2026-07-28</span>
+        <span>Current implementation · Updated 2026-07-29</span>
       </footer>
     </main>
   </div>

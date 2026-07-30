@@ -1,12 +1,14 @@
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from scripts.setup_agent365 import (
     Agent365Branding,
     agent365_config_payload,
     agent365_workspace,
+    bump_manifest_patch_version,
     build_metadata,
     customize_manifest,
     default_branding,
@@ -14,9 +16,11 @@ from scripts.setup_agent365 import (
     metadata_file_name,
     merge_config,
     messaging_endpoint_from_outputs,
+    missing_tooling_permissions,
     non_secret_generated_fields,
     normalize_messaging_endpoint,
     publish_command,
+    remove_unsupported_agentic_bot_capability,
     resolve_messaging_endpoint,
     setup_command,
     update_endpoint_command,
@@ -216,6 +220,36 @@ class Agent365SetupTests(unittest.TestCase):
                 "https://explicit.example/api/messages",
             )
 
+    def test_resolve_messaging_endpoint_uses_worker_state_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            outputs_path = (
+                Path(temp_dir)
+                / ".local"
+                / "hermes2"
+                / "apps"
+                / "terraform-outputs.json"
+            )
+            outputs_path.parent.mkdir(parents=True)
+            outputs_path.write_text(
+                '{"bridge_url":"https://hermes2.example"}',
+                encoding="utf-8",
+            )
+            with patch(
+                "scripts.setup_agent365.REPO_ROOT",
+                Path(temp_dir),
+            ):
+                endpoint = resolve_messaging_endpoint(
+                    runtime_kind="hermes",
+                    state_name="hermes2",
+                    explicit_endpoint="",
+                    outputs_file="",
+                )
+
+        self.assertEqual(
+            endpoint,
+            "https://hermes2.example/api/messages",
+        )
+
     def test_developer_portal_url_is_empty_without_blueprint_id(self):
         self.assertEqual(developer_portal_url(""), "")
 
@@ -226,7 +260,7 @@ class Agent365SetupTests(unittest.TestCase):
             (manifest_dir / "manifest.json").write_text(
                 (
                     '{"id":"blueprint-1","name":{"short":"OpenClaw Blueprint","full":"OpenClaw Blueprint"},'
-                    '"description":{"short":"x","full":"y"},"developer":{}}'
+                    '"description":{"short":"x","full":"y"},"developer":{},"version":"1.2.3"}'
                 ),
                 encoding="utf-8",
             )
@@ -239,6 +273,7 @@ class Agent365SetupTests(unittest.TestCase):
             manifest = (manifest_dir / "manifest.json").read_text(encoding="utf-8")
             self.assertIn('"short": "OpenClaw Autopilot"', manifest)
             self.assertIn('"full": "OpenClaw Autopilot on Azure"', manifest)
+            self.assertIn('"version": "1.2.4"', manifest)
             with ZipFile(package_path) as archive:
                 self.assertIn("manifest.json", archive.namelist())
                 self.assertIn("color.png", archive.namelist())
@@ -257,7 +292,12 @@ class Agent365SetupTests(unittest.TestCase):
             manifest_dir = Path(temp_dir) / "manifest"
             manifest_dir.mkdir()
             (manifest_dir / "manifest.json").write_text(
-                '{"name":{"short":"Old","full":"Old Full"},"description":{"short":"x","full":"y"},"developer":{}}',
+                (
+                    '{"id":"11111111-1111-1111-1111-111111111111",'
+                    '"name":{"short":"Old","full":"Old Full"},'
+                    '"description":{"short":"x","full":"y"},'
+                    '"developer":{},"version":"2.0.0"}'
+                ),
                 encoding="utf-8",
             )
             (manifest_dir / "color.png").write_bytes(b"color")
@@ -267,6 +307,57 @@ class Agent365SetupTests(unittest.TestCase):
             manifest = (manifest_dir / "manifest.json").read_text(encoding="utf-8")
             self.assertIn('"short": "Hermes Autopilot"', manifest)
             self.assertIn('"full": "Hermes Autopilot on Azure"', manifest)
+            self.assertIn('"version": "2.0.1"', manifest)
+
+    def test_missing_tooling_permissions_detects_stale_worker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "agent365"
+            workspace.mkdir()
+            tooling_manifest = root / "ToolingManifest.json"
+            tooling_manifest.write_text(
+                (
+                    '{"mcpServers":['
+                    '{"mcpServerName":"Mail","audience":"mail",'
+                    '"scope":"Tools.ListInvoke.All"},'
+                    '{"mcpServerName":"Word","audience":"word",'
+                    '"scope":"Tools.ListInvoke.All"}]}'
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "a365.generated.config.json").write_text(
+                (
+                    '{"resourceConsents":[{"resourceAppId":"mail",'
+                    '"consentGranted":true,'
+                    '"inheritablePermissionsConfigured":true,'
+                    '"scopes":["Tools.ListInvoke.All"]}]}'
+                ),
+                encoding="utf-8",
+            )
+
+            missing = missing_tooling_permissions(
+                workspace,
+                tooling_manifest,
+            )
+
+        self.assertEqual(missing, ["Word"])
+
+    def test_agentic_package_removes_unsupported_bot_capability(self):
+        manifest = {
+            "agenticUserTemplates": [
+                {"id": "template-1", "file": "agentic.json"}
+            ],
+            "bots": [
+                {
+                    "botId": "11111111-1111-1111-1111-111111111111",
+                    "supportsTargetedMessages": True,
+                }
+            ],
+        }
+
+        remove_unsupported_agentic_bot_capability(manifest)
+
+        self.assertNotIn("bots", manifest)
 
 
 if __name__ == "__main__":

@@ -91,6 +91,9 @@ def main() -> None:
         built_images[var_name] = tfvars[var_name]
         if var_name == "runtime_image":
             tfvars["agent_runtime"] = args.runtime
+            tfvars["runtime_disk_source_image"] = (
+                f"{login_server}/{repository}:{tag}"
+            )
             tfvars["runtime_disk_image_name"] = f"{args.runtime}-runtime-{digest.removeprefix('sha256:')[:12]}"
 
     write_tfvars(runtime_path, tfvars)

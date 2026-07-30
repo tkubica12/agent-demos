@@ -12,6 +12,11 @@ data "azurerm_container_registry" "acr" {
   resource_group_name = data.terraform_remote_state.platform.outputs.resource_group_name
 }
 
+data "azurerm_container_app_environment" "bridge" {
+  name                = data.terraform_remote_state.platform.outputs.bridge_env_name
+  resource_group_name = data.terraform_remote_state.platform.outputs.resource_group_name
+}
+
 locals {
   suffix              = data.terraform_remote_state.platform.outputs.suffix
   resource_group_name = data.terraform_remote_state.platform.outputs.resource_group_name
@@ -43,6 +48,11 @@ locals {
     )
   )
   runtime_image = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
+  runtime_disk_source_image = (
+    var.runtime_disk_source_image != ""
+    ? var.runtime_disk_source_image
+    : local.runtime_image
+  )
   runtime_disk_image_name = (
     var.runtime_disk_image_name != "openclaw-gateway-image-with-private-mcp" || var.openclaw_disk_image_name == ""
     ? var.runtime_disk_image_name
@@ -97,6 +107,13 @@ resource "azurerm_role_assignment" "bridge_acr_pull" {
 
 resource "azurerm_role_assignment" "bridge_sandbox_data_owner" {
   scope              = data.terraform_remote_state.platform.outputs.sandbox_group_id
+  role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
+  principal_id       = azurerm_user_assigned_identity.bridge.principal_id
+  principal_type     = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "bridge_generated_apps_data_owner" {
+  scope              = data.terraform_remote_state.platform.outputs.generated_apps_sandbox_group_id
   role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
   principal_id       = azurerm_user_assigned_identity.bridge.principal_id
   principal_type     = "ServicePrincipal"
@@ -522,6 +539,10 @@ resource "azapi_resource" "bridge_app" {
                 value = "ClientSecret"
               },
               {
+                name  = "HERMES_BRIDGE_TIMEOUT_SECONDS"
+                value = "900"
+              },
+              {
                 name  = "AZURE_SANDBOX_GROUP"
                 value = data.terraform_remote_state.platform.outputs.sandbox_group_name
               },
@@ -546,12 +567,28 @@ resource "azapi_resource" "bridge_app" {
                 value = local.runtime_image
               },
               {
+                name  = "AGENT_RUNTIME_DISK_SOURCE_IMAGE"
+                value = local.runtime_disk_source_image
+              },
+              {
                 name  = "OPENCLAW_DISK_IMAGE_NAME"
                 value = local.runtime_disk_image_name
               },
               {
                 name  = "AGENT_RUNTIME_DISK_IMAGE_NAME"
                 value = local.runtime_disk_image_name
+              },
+              {
+                name  = "GENERATED_APPS_SANDBOX_GROUP"
+                value = data.terraform_remote_state.platform.outputs.generated_apps_sandbox_group_name
+              },
+              {
+                name  = "GENERATED_APPS_REGION"
+                value = data.terraform_remote_state.platform.outputs.sandbox_location
+              },
+              {
+                name  = "AUTOPILOT_BRIDGE_URL"
+                value = "https://${local.bridge_app_name}.${data.azurerm_container_app_environment.bridge.default_domain}"
               },
               {
                 name  = "ACR_NAME"
