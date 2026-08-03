@@ -45,6 +45,8 @@ As of 2026-07-28:
 | A15 - Teams targeted private messaging | Deferred | Waiting for a supported Agent 365 Agent User package contract for targeted receive and `/WorkerName`; no companion bot workaround. |
 | A16 - Governed Adaptive Cards | Complete | Bridge-rendered display, choice, and confirmation cards with encrypted one-time actions and Hermes continuation are live-validated in Teams. |
 | A17 - Hermes-generated web apps | Complete | Hermes builds, tests, and deploys Entra-gated applications to OnDemand child ACA Sandboxes with bounded lifecycle. |
+| A18 - External tool access | Planned | Registry-driven MCP access to Azure DevOps, Foundry IQ, GitHub, and Clarity under one three-tier agent identity model. |
+| A19 - External event ingress | Planned | Native, webhook, and polling event paths converge on the existing per-Worker Service Bus wake. |
 
 ## Immediate work
 
@@ -351,6 +353,166 @@ Exit criteria:
 - App code remains inspectable; deployment state and cleanup are auditable.
 - Idle and expired apps stop consuming compute and are deleted deterministically.
 
+### A18 - External tool access
+
+Goal: give Hermes governed access to external systems of record through MCP, under one identity model that keeps the Worker acting as its own principal rather than on behalf of a human or through a shared system account.
+
+Status: Planned. Sub-milestones are independent so that work can proceed where access exists and pause where it does not.
+
+Identity tiers. Every integration is classified into exactly one tier, and the tier drives the design:
+
+| Tier | Meaning | Example |
+| --- | --- | --- |
+| 1 - Native agent identity | The target accepts the Worker's own Entra token directly. | Azure DevOps, Foundry IQ |
+| 2 - Federated user-like identity | The target issues the Worker a real account of its own, provisioned from Entra. | GitHub Enterprise Managed Users |
+| 3 - Brokered mapped account | The target cannot represent the Worker; a governed hop maps the authenticated Worker to a dedicated integration account. | Clarity |
+
+Tier 3 is a deliberate design, not an exception. The mapping is one-to-one, the Worker authenticates as itself to the broker, and the downstream credential never reaches the agent process.
+
+#### A18.0 - Tool access fabric and identity model
+
+Goal: establish the shared registry and identity rules once so each later sub-milestone is configuration rather than new plumbing.
+
+Tasks:
+
+- Promote `AGENT_MCP_SERVERS_JSON` to a first-class per-Worker Terraform-driven registry with per-server tool allow-lists and optional static request headers.
+- Keep the loopback identity proxy Entra-only for token minting: `identityMode` remains `agent` or `agent_user`.
+- Add a narrow `brokered_secret` mode in which the proxy resolves a Key Vault secret with its managed identity and injects it as the upstream credential. The secret never enters the Worker image, environment, or agent process. Use this only where the target cannot accept an Entra token.
+- Front any upstream that needs a richer credential exchange with a Worker-owned MCP server that accepts Entra inbound.
+- Add diagnostics reporting configured servers, tier, identity mode, scope, allow-listed tools, and reachability.
+- Record the tier taxonomy and the rule for adding a new integration in an ADR. Do not create placeholder milestones for future tools.
+
+Exit criteria:
+
+- A new remote MCP server is added by Terraform variable change and Worker restart, with no container image rebuild.
+- Diagnostics show every configured server, its tier, and its identity mode.
+- Each integration in A18.1 to A18.4 is classified into exactly one tier with a recorded rationale.
+
+#### A18.1 - Azure DevOps
+
+Goal: let Hermes read and update Azure DevOps work items and pull requests as its own Agent User.
+
+Status: Planned. Tier 1. Verified: the hosted remote server is `https://mcp.dev.azure.com/{organization}` over streamable HTTP with Microsoft Entra authentication; personal access tokens are not supported. Its protected-resource metadata declares scope `https://mcp.dev.azure.com/.default` against `login.microsoftonline.com/organizations`, which the existing `agent_user` token path already satisfies. No self-hosted MCP server is required.
+
+Tasks:
+
+- Add the Agent User to the Azure DevOps organization, license it, and grant the minimum project permissions.
+- Register the hosted server in the registry with `identityMode: agent_user` and the verified scope.
+- Restrict the tool surface with `X-MCP-Toolsets` and use `X-MCP-Readonly` wherever write access is not required.
+- Confirm that work item and pull request changes are attributed to the Agent User in Azure DevOps history and audit.
+- Test whether the Agent User can be selected in the `System.AssignedTo` identity picker. This result gates the A19.1 demonstration.
+
+Exit criteria:
+
+- Hermes reads and updates Azure DevOps work items using its own Agent User token with no stored secret.
+- Azure DevOps history and audit show the Agent User as the actor.
+- The exposed tool surface is restricted to the toolsets the Role requires.
+- The assignability result is recorded.
+
+#### A18.2 - Foundry IQ knowledge
+
+Goal: give each Role curated document knowledge with grounded, cited answers.
+
+Status: Planned. Tier 1. Verified: each Azure AI Search knowledge base is itself an MCP server exposing `knowledge_base_retrieve` at `https://<service>.search.windows.net/knowledgebases/<name>/mcp?api-version=<version>`, authenticated with a bearer token, requiring `Search Index Data Reader` on the search service. Agent wiring is one registry entry; the substance of this milestone is the ingestion pipeline.
+
+Tasks:
+
+- Build a scripted pipeline from blob storage through indexing to a knowledge source and knowledge base.
+- Create one index and knowledge base per Role Blueprint. Ingest only the documents that Role may access, so retrieval needs no per-document authorization.
+- Grant the Worker principal `Search Index Data Reader` and register the knowledge base in the registry with scope `https://search.azure.com/.default`.
+- Record the rejected alternative in the ADR: native document-level access control using POSIX-like ACLs and RBAC scope from ADLS Gen2, with permission filters driven by the caller's own token. It is preview, requires ADLS Gen2, and is deferred in favour of per-Role knowledge bases.
+- Add grounding and citation evaluations covering answerable, unanswerable, and out-of-scope questions.
+
+Exit criteria:
+
+- Hermes answers from curated knowledge with citations traceable to source documents.
+- A document outside the Role's knowledge base is not retrievable by that Role.
+- Ingestion and re-indexing are scripted and repeatable.
+
+#### A18.3 - GitHub as a managed user
+
+Goal: let Hermes act in GitHub as its own user, assignable and mentionable like a colleague, rather than as an application bot.
+
+Status: Planned. Tier 2, gated on one bootstrap experiment.
+
+Verified:
+
+- `agentUser` is published in Microsoft Graph v1.0, and Microsoft documents that agent users can be provisioned into applications via SCIM. Outbound SCIM supports users and groups, not agent identities or service principals, so the agent user is the intended bridge to third-party SaaS.
+- In this tenant, the Agent User is `userType: Member`, enabled, licensed, present in `/users` alongside human users, and can be added to and removed from a security group.
+- GitHub Enterprise Managed Users supports group-based provisioning, and managed users can hold classic and fine-grained personal access tokens and use the REST and GraphQL APIs.
+- An authorized personal access token remains valid until revoked, edited, or expired; it does not depend on a live identity provider session.
+- The hosted GitHub MCP server accepts personal access tokens and GitHub App tokens, including installation tokens.
+
+Open blocker: creating a personal access token is a user web-interface action. No SCIM, admin, or enterprise-owner API mints a token for another user, and there is no impersonation path. Microsoft documents non-interactive SAML assertion acquisition for agent users through blueprint authentication, federated identity credential, `user_fic`, and on-behalf-of exchange, which extends the token chain already implemented. GitHub has not confirmed that this pattern establishes a session capable of creating a token.
+
+Tasks:
+
+- Populate `givenName`, `surname`, and `mail` on the Agent User. GitHub SCIM requires given name, family name, display name, and a primary email.
+- Assign a security group containing the Agent User to the GitHub Enterprise Managed User SAML gallery application with SCIM role `user`. Validate the payload with provision-on-demand before group rollout, and verify the resulting shortcode login.
+- Run the bootstrap experiment: acquire a SAML assertion for the Agent User through the documented on-behalf-of flow, present it to GitHub, and attempt token creation. Automate if it succeeds.
+- If the experiment fails, perform a single human-operated token bootstrap, escrow the token in Key Vault, and document the manual step and its rotation procedure.
+- Register the hosted GitHub MCP server using the `brokered_secret` mode from A18.0 so the token is resolved by the proxy and never reaches the agent process. Restrict the surface with `X-MCP-Toolsets` and `X-MCP-Readonly`.
+- If OIDC managed users are used, account for per-request Conditional Access address validation from the Worker egress address.
+- Record in an ADR why a GitHub App with Key Vault signing was not chosen as the primary path: it is fully secretless but its bot identity cannot be assigned issues or requested as a reviewer, which conflicts with the separate-user principle.
+
+Exit criteria:
+
+- Hermes reads and comments on issues and pull requests in a private enterprise repository under its own managed-user login.
+- The Agent User can be assigned an issue and mentioned. This result gates the A19.2 demonstration.
+- No GitHub credential exists in the Worker image, environment, or agent process.
+- The bootstrap path is documented and reproducible, including whether it is automated or one-time manual.
+
+#### A18.4 - Clarity by Broadcom
+
+Goal: give Hermes bounded access to project and portfolio records in Clarity.
+
+Status: Blocked pending tenant access. Tier 3. No managed connector, catalog entry, or published MCP server exists for Clarity, so a Worker-owned adapter is required.
+
+Tasks:
+
+- Build a Worker-owned MCP server on Container Apps inside the existing VNET, with Entra inbound authentication validating the Worker principal.
+- Map the Worker identity one-to-one to a dedicated Clarity integration user. Hold the Clarity API key in Key Vault, read it with the server managed identity, and present the `x-api-ppm-client` and authorization headers to Clarity.
+- Expose a narrow, mostly read-only tool surface over the Clarity REST API. Prefer REST over XOG unless an object is only reachable through XOG.
+- Log the identity mapping on every call so Worker actions remain traceable through the broker to the Clarity account.
+- Record the mapping, its approval, and its rotation procedure in the ADR.
+
+Exit criteria:
+
+- Hermes reads Clarity records through the broker with no credential in the Worker.
+- Every call is attributable to both the Worker identity and the mapped Clarity account.
+- The tool surface and write scope are explicitly bounded and reviewed.
+
+### A19 - External event ingress
+
+Goal: let external systems wake Hermes when work arrives, using the per-Worker Service Bus queue and KEDA wake path that already exists, without a distinct integration shape per source.
+
+Status: Planned. Each sub-milestone depends on the matching A18 sub-milestone, because reacting to an event requires the tools to act on it.
+
+Shared design:
+
+- Normalize every source into one signal envelope carrying source, type, subject, link, and a durable deduplication key. The Worker never sees vendor payload shapes.
+- Acknowledge quickly, enqueue durably, and process idempotently. Deduplicate on the source-native identifier, such as delivery identifier, work item revision, or polling watermark.
+- Carry a pointer, not a payload. The Worker fetches current state through its A18 tools, which keeps private content off the queue and avoids stale data.
+- A signal wakes the Worker to evaluate and propose. Consequential action requires an approval interaction through the A16 card path.
+
+Sub-milestones:
+
+- A19.1 - Azure DevOps. Use the native Service Bus service hook consumer with an Azure Resource Manager service connection backed by workload identity federation, publishing directly to the existing Worker queue. No custom code and no shared access signature. Subscribe to work item created, updated, and commented events, with publisher-side filters such as area path and changed fields.
+- A19.2 - GitHub. Receive GitHub App webhooks on a bridge endpoint, validate the signature over the raw request bytes, deduplicate on the delivery identifier, and enqueue. GitHub has no native Azure delivery target and does not retry failed deliveries, so redelivery and replay handling belong to the bridge.
+- A19.3 - Clarity. Run a scale-to-zero polling adapter that holds its own watermark and emits normalized signals. Clarity has no supported outbound webhook contract.
+
+Rejected paths, to be recorded in the ADR:
+
+- ACA Sandbox connector triggers for GitHub. The connector issue triggers do not support organization repositories.
+- Email notification as a primary trigger. Delivery is user-configurable, template-dependent, unacknowledged, and unreplayable. It remains acceptable only as a fallback signal.
+
+Exit criteria:
+
+- At least two sources deliver signals through the same envelope onto the existing queue and wake the Worker from zero.
+- Duplicate and replayed deliveries produce exactly one unit of work.
+- A consequential response is proposed through an approval card rather than executed directly.
+- Ingress failures are observable and replayable.
+
 ## Deferred
 
 - Human OBO with explicit per-turn consent.
@@ -363,3 +525,5 @@ Exit criteria:
 - An administrative dashboard backed by GitHub rather than a parallel Role Skill source of truth.
 - Foundry Hosted Agents as an optional thin adapter, not the default OpenClaw or Hermes host.
 - MCP Apps for Hermes/Agent User conversations. Microsoft 365 Copilot supports MCP Apps for declarative agents, but Hermes 0.18 and Agent 365 AI teammate conversations are not MCP Apps hosts. Re-evaluate when that client path negotiates `io.modelcontextprotocol/ui`, preserves `_meta.ui`, reads `ui://` resources, and renders the widget without a parallel declarative agent.
+- ACA Sandbox connector attachment for MCP access. Connection identifiers are fixed at sandbox creation, capped at ten, and are not inherited by sandboxes created later, which conflicts with the long-lived Worker Sandbox and its Data Disk recreation path. Re-evaluate if attachment becomes mutable.
+- Connector Namespace as an MCP source. Its managed MCP endpoint can be consumed directly as a remote server, but connections are shared credentials consented by one human account rather than the Worker's own identity, and the service is preview without an SLA. Re-evaluate for targets that cannot accept an Entra token and have no self-hosted server.
