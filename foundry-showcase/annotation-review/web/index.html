@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Response Review</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <h1>Agent Response Review</h1>
+        <p>Rate real customer-support answers. Your rating is saved onto the original trace.</p>
+      </div>
+      <div id="account" class="account"></div>
+    </header>
+
+    <section id="signin" class="panel hidden">
+      <h2>Sign in to review</h2>
+      <p>Use your work account. You will only see the agent conversations you are allowed to see.</p>
+      <a class="primary" href="/auth/login">Sign in with Microsoft</a>
+    </section>
+
+    <main id="workspace" class="hidden">
+      <div class="toolbar">
+        <label>
+          Period
+          <select id="days">
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+        </label>
+        <label>
+          Show
+          <select id="filter">
+            <option value="all" selected>All answers</option>
+            <option value="unrated">Not yet rated</option>
+            <option value="bad">Flagged as bad</option>
+            <option value="good">Marked as good</option>
+          </select>
+        </label>
+        <button id="refresh" class="secondary">Refresh</button>
+        <span class="spacer"></span>
+        <span id="counts" class="counts"></span>
+        <button id="export" class="primary">Export flagged as evaluation set</button>
+      </div>
+
+      <div id="status" class="status hidden"></div>
+      <div id="list" class="list"></div>
+    </main>
+
+    <div id="drawer" class="drawer hidden">
+      <div class="drawer-inner">
+        <button id="drawer-close" class="close">Close</button>
+        <h2>Conversation detail</h2>
+        <div id="drawer-body"></div>
+      </div>
+    </div>
+
+    <script src="/web/app.js" type="module"></script>
+  </body>
+</html>

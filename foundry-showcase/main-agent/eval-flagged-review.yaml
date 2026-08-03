@@ -1,0 +1,15 @@
+name: flagged-review
+agent:
+    name: foundry-showcase-main
+    kind: hosted
+    version: "31"
+    model: gpt-5.4-mini
+    config: .agent_configs\baseline\metadata.yaml
+dataset:
+    local_uri: datasets\flagged-review\flagged-review_dg.jsonl
+evaluators:
+    - builtin.task_adherence
+    - builtin.intent_resolution
+options:
+    eval_model: gpt-5.4-mini
+max_samples: 1

@@ -18,6 +18,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from jwt import PyJWKClient
 from opentelemetry import propagate, trace
 
+from feedback import record_feedback
+
 
 WEB_DIR = Path(__file__).with_name("web")
 FOUNDRY_SCOPE = "https://ai.azure.com/.default"
@@ -172,15 +174,20 @@ async def foundry_headers(
     return headers
 
 
+SERVICE_NAME = "foundry-showcase-agui-bff"
+
+
 def configure_telemetry() -> None:
     connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
     if not connection_string:
         return
     from azure.monitor.opentelemetry import configure_azure_monitor
+    from opentelemetry.sdk.resources import SERVICE_NAME as SERVICE_NAME_KEY
+    from opentelemetry.sdk.resources import Resource
 
     configure_azure_monitor(
         connection_string=connection_string,
-        service_name="foundry-showcase-agui-bff",
+        resource=Resource.create({SERVICE_NAME_KEY: SERVICE_NAME}),
     )
 
 
@@ -215,6 +222,13 @@ def create_app(
     async def index() -> FileResponse:
         return FileResponse(WEB_DIR / "index.html")
 
+    @app.get("/vendor/msal-browser.min.js")
+    async def msal_browser() -> FileResponse:
+        return FileResponse(
+            WEB_DIR / "vendor" / "msal-browser.min.js",
+            media_type="text/javascript",
+        )
+
     @app.get("/config")
     async def public_config() -> dict[str, str]:
         return {
@@ -243,6 +257,8 @@ def create_app(
         target = required_config("FOUNDRY_AGENT_INVOCATIONS_URL")
 
         async def stream() -> AsyncGenerator[str]:
+            trace_id = ""
+            span_id = ""
             yield sse(
                 {
                     "type": "RUN_STARTED",
@@ -263,6 +279,10 @@ def create_app(
                 with tracer.start_as_current_span("agui.foundry_invocation") as current:
                     current.set_attribute("correlation.id", correlation_id)
                     current.set_attribute("user.tenant_id", user.tenant_id)
+                    span_context = current.get_span_context()
+                    if span_context.is_valid:
+                        trace_id = format(span_context.trace_id, "032x")
+                        span_id = format(span_context.span_id, "016x")
                     async with app.state.client_factory() as client:
                         response = await client.post(
                             target,
@@ -314,6 +334,8 @@ def create_app(
                     "threadId": thread_id,
                     "runId": run_id,
                     "correlationId": correlation_id,
+                    "traceId": trace_id,
+                    "spanId": span_id,
                 }
             )
 
@@ -322,6 +344,26 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
+
+    @app.post("/feedback")
+    async def feedback(request: Request) -> dict[str, Any]:
+        user, _ = authenticate(request)
+        payload = await request.json()
+        if not isinstance(payload.get("passed"), bool):
+            raise HTTPException(status_code=400, detail="passed must be a boolean.")
+        comment = payload.get("comment")
+        if comment is not None and not isinstance(comment, str):
+            raise HTTPException(status_code=400, detail="comment must be a string.")
+        try:
+            return record_feedback(
+                trace_id=payload.get("traceId"),
+                span_id=payload.get("spanId"),
+                passed=payload["passed"],
+                comment=(comment or "").strip() or None,
+                reviewer=user.name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
 

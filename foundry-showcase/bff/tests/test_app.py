@@ -74,6 +74,65 @@ def test_agui_streams_foundry_text(monkeypatch) -> None:
     ]
     assert events[2]["delta"] == "hello from Foundry"
     assert events[-1]["correlationId"] == "corr-1"
+    assert "traceId" in events[-1]
+    assert "spanId" in events[-1]
+
+
+def test_feedback_records_annotation_for_signed_in_user(monkeypatch) -> None:
+    monkeypatch.setenv("BFF_AUTH_MODE", "disabled")
+    captured: dict[str, object] = {}
+
+    def fake_record(**kwargs):
+        captured.update(kwargs)
+        return {"traceId": kwargs["trace_id"], "label": "fail"}
+
+    monkeypatch.setattr(app, "record_feedback", fake_record)
+    response = TestClient(app.create_app()).post(
+        "/feedback",
+        json={
+            "traceId": "38cf2c1fc140195dcc2de68e9ff0d4e6",
+            "spanId": "f52be5677a2c7aca",
+            "passed": False,
+            "comment": "  Not helpful  ",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["passed"] is False
+    assert captured["comment"] == "Not helpful"
+    assert captured["reviewer"] == "Local Developer"
+
+
+def test_feedback_rejects_missing_verdict(monkeypatch) -> None:
+    monkeypatch.setenv("BFF_AUTH_MODE", "disabled")
+    response = TestClient(app.create_app()).post(
+        "/feedback",
+        json={"traceId": "38cf2c1fc140195dcc2de68e9ff0d4e6", "spanId": "f52be5677a2c7aca"},
+    )
+    assert response.status_code == 400
+
+
+def test_feedback_rejects_bad_trace_id(monkeypatch) -> None:
+    monkeypatch.setenv("BFF_AUTH_MODE", "disabled")
+    response = TestClient(app.create_app()).post(
+        "/feedback",
+        json={"traceId": "nope", "spanId": "f52be5677a2c7aca", "passed": True},
+    )
+    assert response.status_code == 400
+
+
+def test_sign_in_library_is_served_locally(monkeypatch) -> None:
+    monkeypatch.setenv("BFF_AUTH_MODE", "disabled")
+    client = TestClient(app.create_app())
+
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "/vendor/msal-browser.min.js" in page.text
+    assert "alcdn.msauth.net" not in page.text
+
+    script = client.get("/vendor/msal-browser.min.js")
+    assert script.status_code == 200
+    assert "PublicClientApplication" in script.text
 
 
 def test_jwt_auth_requires_scope(monkeypatch) -> None:
