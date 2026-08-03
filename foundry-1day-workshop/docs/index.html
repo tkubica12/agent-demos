@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en" data-page="index">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microsoft Foundry Technical Workshop</title>
+<meta name="description" content="Attendee guides and reference material for the Microsoft Foundry technical workshop.">
+<script>
+  /* Resolve the theme before first paint so the page never flashes. */
+  (function () {
+    try {
+      var stored = window.localStorage.getItem("foundryws-workshop-theme");
+      if (stored === "light" || stored === "dark") {
+        document.documentElement.setAttribute("data-theme", stored);
+        return;
+      }
+    } catch (error) {
+      /* Storage is unavailable; fall through to the system preference. */
+    }
+    var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  })();
+</script>
+<link rel="stylesheet" href="assets/workshop.css">
+<script src="assets/workshop.js" defer></script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to the contents</a>
+
+<div class="controls">
+  <span class="controls__label">Workshop</span>
+  <span>
+    <button class="button" type="button" data-theme-toggle hidden>Theme</button>
+  </span>
+</div>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Microsoft Foundry</p>
+    <h1>Technical workshop</h1>
+    <p>A single progressive builder journey: see a capability demonstrated, work with it
+       in your own environment, then connect it to how it would run in production.</p>
+  </header>
+
+  <main class="content" id="content">
+
+    <section id="labs" aria-labelledby="labs-heading">
+      <p class="section-label">Hands-on</p>
+      <h2 id="labs-heading">Labs</h2>
+      <p>Each lab runs in your own prepared environment and ends with a result you can
+         defend, not a screenshot you followed.</p>
+
+      <div class="grid">
+        <article class="card">
+          <h3><a href="guides/chapter-2-build-agent.html">Chapter 2: Build an agent and prove its guardrail</a></h3>
+          <p>Build one agent in the Foundry portal, judge two models from different vendors
+             against criteria you write down first, attach a named guardrail, and find out
+             where that control actually applies. 30 minutes.</p>
+        </article>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="page-footer">
+  <p>Microsoft Foundry Technical Workshop</p>
+</footer>
+
+</body>
+</html>

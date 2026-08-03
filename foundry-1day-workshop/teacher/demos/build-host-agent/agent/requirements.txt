@@ -1,0 +1,9 @@
+# Preview packages are required by the current Foundry Responses 2.0 hosting SDK.
+azure-ai-agentserver-responses==1.0.0b9
+azure-ai-contentunderstanding==1.2.0b2
+azure-ai-projects==2.4.0
+azure-identity==1.25.3
+langchain==1.3.14
+langchain-azure-ai[hosting,opentelemetry]==1.2.8
+langchain-openai==1.4.1
+python-dotenv==1.2.2

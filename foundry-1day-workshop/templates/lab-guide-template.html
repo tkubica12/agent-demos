@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-page="lab-guide">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab title - Microsoft Foundry Technical Workshop</title>
+<meta name="description" content="One sentence describing the outcome of this lab.">
+<script>
+  /* Resolve the theme before first paint so the page never flashes. */
+  (function () {
+    try {
+      var stored = window.localStorage.getItem("foundryws-workshop-theme");
+      if (stored === "light" || stored === "dark") {
+        document.documentElement.setAttribute("data-theme", stored);
+        return;
+      }
+    } catch (error) {
+      /* Storage is unavailable; fall through to the system preference. */
+    }
+    var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  })();
+</script>
+<link rel="stylesheet" href="../assets/workshop.css">
+<script src="../assets/workshop.js" defer></script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to the lab steps</a>
+
+<div class="controls">
+  <span class="controls__label">Chapter N lab</span>
+  <span>
+    <button class="button" type="button" data-disclosure="expand" hidden>Expand all</button>
+    <button class="button" type="button" data-disclosure="collapse" hidden>Collapse all</button>
+    <button class="button" type="button" data-theme-toggle hidden>Theme</button>
+  </span>
+</div>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Chapter N &middot; Hands-on</p>
+    <h1>Lab title stating the outcome</h1>
+    <p>One or two sentences describing what you will have working at the end, in the
+       second person and without classroom narration.</p>
+    <ul class="meta">
+      <li><strong>Time</strong>NN minutes</li>
+      <li><strong>Environment</strong>Your prepared seat</li>
+      <li><strong>Outcome</strong>Short outcome statement</li>
+    </ul>
+  </header>
+
+  <div class="layout">
+
+    <nav class="toc" aria-label="Lab contents">
+      <h2>On this page</h2>
+      <ol>
+        <li><a href="#before-you-start">Before you start</a></li>
+        <li><a href="#part-one">Part one</a></li>
+        <li><a href="#part-two">Part two</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#extensions">Optional extensions</a></li>
+      </ol>
+    </nav>
+
+    <main class="content" id="content">
+
+      <section id="before-you-start" aria-labelledby="before-you-start-heading">
+        <p class="section-label">Preparation</p>
+        <h2 id="before-you-start-heading">Before you start</h2>
+        <p class="lede">State the access path explicitly: URL, sign-in identity, expected
+           tenant and subscription, and the exact resource names.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption class="visually-hidden">Values you need for this lab</caption>
+            <thead>
+              <tr><th scope="col">What</th><th scope="col">Value</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Portal</td><td><a href="#">https://ai.azure.com</a></td></tr>
+              <tr><td>Sign in as</td><td><code>seat-user@example</code></td></tr>
+              <tr><td>Project</td><td><code>project-name</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <span class="callout__label">Note</span>
+          <p>Use this for side information worth surfacing. Keep callouts rare.</p>
+        </div>
+      </section>
+
+      <section id="part-one" aria-labelledby="part-one-heading">
+        <p class="section-label">Part one</p>
+        <h2 id="part-one-heading">What you achieve in this part</h2>
+
+        <ol class="steps">
+          <li>
+            <h3>Imperative step title</h3>
+            <p>One short instruction. Say what to do and what you should see.</p>
+
+            <div class="code">
+              <div class="code__bar"><span class="code__label">PowerShell</span></div>
+              <pre><code>command --exactly-as-written</code></pre>
+            </div>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>Describe precisely what confirms the step worked.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Next step title</h3>
+            <p>Keep the core path short. Move explanation into a disclosure.</p>
+
+            <details>
+              <summary>Why this works</summary>
+              <p>Concise explanation, available at the moment it is useful without
+                 interrupting the core path.</p>
+            </details>
+          </li>
+        </ol>
+      </section>
+
+      <section id="part-two" aria-labelledby="part-two-heading">
+        <p class="section-label">Part two</p>
+        <h2 id="part-two-heading">What you achieve in this part</h2>
+        <ol class="steps">
+          <li>
+            <h3>Imperative step title</h3>
+            <p>Instruction.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section id="troubleshooting" aria-labelledby="troubleshooting-heading">
+        <p class="section-label">If something goes wrong</p>
+        <h2 id="troubleshooting-heading">Troubleshooting</h2>
+        <p>Tie every entry to an observable symptom rather than a cause.</p>
+
+        <details>
+          <summary>Symptom stated exactly as you would see it</summary>
+          <p>What it means and what to do next.</p>
+        </details>
+
+        <h3>Reset and resume</h3>
+        <p>How to return to a known state and continue without redoing the lab.</p>
+      </section>
+
+      <section id="extensions" aria-labelledby="extensions-heading">
+        <p class="section-label">Optional</p>
+        <h2 id="extensions-heading">Optional extensions</h2>
+        <p>Depth for anyone who finishes early. Nothing here is required.</p>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<footer class="page-footer">
+  <ul>
+    <li><a href="../index.html">Workshop index</a></li>
+    <li><a href="#">Related demonstration</a></li>
+  </ul>
+  <p>Microsoft Foundry Technical Workshop</p>
+</footer>
+
+</body>
+</html>

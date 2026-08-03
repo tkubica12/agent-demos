@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en" data-page="lab-guide">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build an agent and prove its guardrail - Microsoft Foundry Technical Workshop</title>
+<meta name="description" content="Build a versioned agent in the Foundry portal, choose its model against stated criteria, attach a named guardrail, and find out where that control actually applies.">
+<script>
+  /* Resolve the theme before first paint so the page never flashes. */
+  (function () {
+    try {
+      var stored = window.localStorage.getItem("foundryws-workshop-theme");
+      if (stored === "light" || stored === "dark") {
+        document.documentElement.setAttribute("data-theme", stored);
+        return;
+      }
+    } catch (error) {
+      /* Storage is unavailable; fall through to the system preference. */
+    }
+    var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  })();
+</script>
+<link rel="stylesheet" href="../assets/workshop.css">
+<script src="../assets/workshop.js" defer></script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to the lab steps</a>
+
+<div class="controls">
+  <span class="controls__label">Chapter 2 lab</span>
+  <span>
+    <button class="button" type="button" data-disclosure="expand" hidden>Expand all</button>
+    <button class="button" type="button" data-disclosure="collapse" hidden>Collapse all</button>
+    <button class="button" type="button" data-theme-toggle hidden>Theme</button>
+  </span>
+</div>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="eyebrow">Chapter 2 &middot; Hands-on</p>
+    <h1>Build an agent and prove its guardrail</h1>
+    <p>You build one agent in the Foundry portal, compare two models from different vendors
+       on the same task, then attach a named guardrail and prove it changed what the agent is
+       allowed to answer.</p>
+    <ul class="meta">
+      <li><strong>Time</strong>20 minutes</li>
+      <li><strong>Environment</strong>Your seat project in the Foundry portal</li>
+      <li><strong>Outcome</strong>A working agent, a first-hand comparison of two vendors, and a control you have watched refuse a request</li>
+    </ul>
+  </header>
+
+  <div class="layout">
+
+    <nav class="toc" aria-label="Lab contents">
+      <h2>On this page</h2>
+      <ol>
+        <li><a href="#before-you-start">Before you start</a></li>
+        <li><a href="#create-agent">Create the agent</a></li>
+        <li><a href="#model-choice">Compare two vendors on the same task</a></li>
+        <li><a href="#guardrail">Put a named control on the agent</a></li>
+        <li><a href="#decision">Decide, clean up, and report</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+        <li><a href="#extensions">Optional extensions</a></li>
+      </ol>
+    </nav>
+
+    <main class="content" id="content">
+
+      <section id="before-you-start" aria-labelledby="before-you-start-heading">
+        <p class="section-label">Preparation &middot; 2 minutes</p>
+        <h2 id="before-you-start-heading">Before you start</h2>
+        <p class="lede">Everything in this lab happens in a browser. There is nothing to
+           install, no shell, and no code to run. You work in your own project, so the
+           agents you create are yours alone in a room of thirty.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption class="visually-hidden">What your seat provides</caption>
+            <thead>
+              <tr><th scope="col">What</th><th scope="col">Where it comes from</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Foundry project</td><td>Yours alone, named for your seat</td></tr>
+              <tr><td>Shared models</td><td>Connected centrally and listed as <strong>Admin-connected</strong>: <code>gpt-5.6-luna</code>, <code>gpt-5.6-terra</code>, <code>Mistral-Large-3</code></td></tr>
+              <tr><td>Project-local deployment</td><td><code>gpt-5.2</code>, deployed inside your own project</td></tr>
+              <tr><td>Guardrail</td><td><code>foundryws-guardrails-strict</code>, already created for you</td></tr>
+              <tr><td>Sign-in</td><td>The seat account and passcode your facilitator gave you</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <ol class="steps">
+          <li>
+            <h3>Sign in to the portal</h3>
+            <p>Open <code>https://ai.azure.com</code> and sign in with the seat account from
+               your facilitator, not with your own work account. If you signed in earlier
+               today, you are already here.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The breadcrumb at the top left reads <strong>Microsoft Foundry</strong>
+                 followed by a project name that contains your seat number. If it names a
+                 different project, switch with the selector beside it before going on.</p>
+            </div>
+          </li>
+        </ol>
+
+        <div class="callout">
+          <span class="callout__label">About the screenshots</span>
+          <p>Every screenshot here was taken on the seat used to build this guide, so the
+             project name and agent name differ from yours. Everything else matches what you
+             will see.</p>
+        </div>
+      </section>
+
+      <section id="create-agent" aria-labelledby="create-agent-heading">
+        <p class="section-label">Build &middot; 3 minutes</p>
+        <h2 id="create-agent-heading">Create the agent</h2>
+        <p class="lede">A prompt agent is a named, versioned object on the platform rather
+           than a prompt in someone's notebook. Creating one takes a few clicks; the reason it
+           matters is that every later change produces a new version you can point at.</p>
+
+        <ol class="steps">
+          <li>
+            <h3>Open the agent list</h3>
+            <p>Select <strong>Build</strong> in the top navigation, then <strong>Agents</strong>
+               in the left pane. On a fresh project this shows an empty state offering to
+               create your first agent.</p>
+          </li>
+
+          <li>
+            <h3>Create a prompt agent</h3>
+            <p>Select <strong>New agent</strong>, choose <strong>Build an agent</strong> from
+               the menu it opens, name it <code>triage-&lt;your-seat-number&gt;</code>, and
+               select
+               <strong>Create</strong>.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The agent opens with its configuration on the left and a chat playground on
+                 the right. The header shows <strong>Version: 1</strong>. You can talk to the
+                 agent immediately, without deploying anything.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Give it a job</h3>
+            <p>Paste the following into <strong>Instructions</strong>, then select
+               <strong>Save</strong>.</p>
+
+            <div class="code">
+              <div class="code__bar"><span class="code__label">Instructions</span></div>
+              <pre><code>You triage synthetic retail stock exceptions for an operations team.
+Never recommend product substitutions, promise pricing or refunds, or claim access to live systems.
+State the available stock and the shortfall explicitly, using those words.
+Return concise operational guidance with exactly these headings: PRIORITY, NEXT ACTION,
+ESCALATE WHEN.</code></pre>
+            </div>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The version number increases. Every save you make in this lab mints a new
+                 version, and the previous one remains addressable.</p>
+            </div>
+
+            <div class="callout callout--warning">
+              <span class="callout__label">The most common miss in this lab</span>
+              <p>Nothing you change in the left pane reaches the playground until you select
+                 <strong>Save</strong>. This applies to instructions, to the model, and to the
+                 guardrail. When a result surprises you later, check the version number
+                 before you check anything else.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section id="model-choice" aria-labelledby="model-choice-heading">
+        <p class="section-label">Model choice &middot; 6 minutes</p>
+        <h2 id="model-choice-heading">Compare two vendors on the same task</h2>
+        <p class="lede">The same synthetic task, sent to two models from different vendors,
+           read side by side. This is a first impression and it is meant to be one. The job
+           here is to notice that vendors differ on identical input, and that a fluent answer
+           is not necessarily a correct one.</p>
+
+        <p>Read both answers for four things:</p>
+
+        <ul>
+          <li>the arithmetic: available stock is <strong>5</strong> and the shortfall is
+              <strong>9</strong>;</li>
+          <li>the three headings <code>PRIORITY</code>, <code>NEXT ACTION</code> and
+              <code>ESCALATE WHEN</code>;</li>
+          <li>the advice boundary: the answer stays operational, and makes no action
+              conditional on a commercial or product judgement it is not entitled to
+              make;</li>
+          <li>no claim to have checked a live or real-time system.</li>
+        </ul>
+
+        <details>
+          <summary>Where 5 and 9 come from</summary>
+          <p>The store has 8 units on hand with 3 reserved, so 5 are available. Forecast
+             demand is 14, so the shortfall against what is actually available is 9.</p>
+          <p>These two numbers are the whole reason the task is arithmetic rather than
+             open-ended. A wrong number is unarguable, and models have produced one here
+             while sounding completely certain.</p>
+        </details>
+
+        <ol class="steps">
+
+          <li>
+            <h3>Pick your two models</h3>
+            <p>Open the <strong>Model</strong> selector at the top of the configuration pane.
+               The list is grouped, and the grouping is the architecture lesson of this
+               chapter in one control.</p>
+
+            <figure class="shot">
+              <img src="../assets/screenshots/model-picker.png"
+                   alt="The Foundry model selector, grouped into Admin-connected models routed through the shared gateway, Deployments holding the project-local gpt-5.2, and a catalog of further deployable models.">
+              <figcaption><strong>Admin-connected</strong> models are routed through a shared
+                gateway that someone else operates. <strong>Deployments</strong> are models
+                deployed inside your own project. That difference decides who owns capacity,
+                cost and controls for anything you build here.</figcaption>
+            </figure>
+
+            <p>Choose two of the three admin-connected models used in this lab, from different
+               vendors: one of <code>gpt-5.6-luna</code> or <code>gpt-5.6-terra</code>, plus
+               <code>Mistral-Large-3</code>. Two models from one vendor can still differ
+               materially, but this exercise has room for one comparison and vendor diversity
+               is the more useful one to spend it on.</p>
+
+            <div class="callout">
+              <span class="callout__label">Note</span>
+              <p><code>Kimi-K2.6</code> also appears in the list. It is not part of this lab.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Send the task to your first model, and score it before you move on</h3>
+            <p>Select the first model, select <strong>Save</strong>, then paste this into the
+               chat box and send it.</p>
+
+            <div class="callout">
+              <span class="callout__label">If Save is greyed out</span>
+              <p>A new agent already starts on an admin-connected model, so if you pick the
+                 one it is already using, there is nothing to save and the button stays
+                 disabled. That is correct. Send the prompt anyway.</p>
+            </div>
+
+            <div class="code">
+              <div class="code__bar"><span class="code__label">Prompt</span></div>
+              <pre><code>Synthetic store BRNO-042 has 8 units on hand, 3 reserved units, and forecast demand of 14 units before the next planned delivery. Triage the exception.</code></pre>
+            </div>
+
+            <p>An answer arrives in a few seconds. Underneath it, the playground names the
+               model that produced it and how long it took. Check that name matches the model
+               you intended, because it is the fastest way to catch a missed save.</p>
+
+            <p>Read it now against the four things above, while it is still in front of you.
+               The next step clears the conversation.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>A triaged answer from a named model, and an opinion about whether it got the
+                 arithmetic and the boundary right.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Start a fresh conversation, then send the same task to the second model</h3>
+
+            <p>Select <strong>New chat</strong>, the <code>+</code> at the top right of the
+               chat pane, before you switch models. Then select your second model, select
+               <strong>Save</strong>, and send the identical prompt. Read it against the same
+               four things before you go on.</p>
+
+            <div class="callout callout--warning">
+              <span class="callout__label">Why the fresh conversation matters</span>
+              <p>If you switch models inside the same conversation, the second model reads the
+                 first model's answer and can simply agree with it. You would no longer be
+                 comparing two models; you would be watching one model copy another.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Check what you concluded against two known failures</h3>
+            <p>Read both of these, then look at your two answers again and decide whether
+               either one held the advice boundary after all.</p>
+
+            <div class="callout callout--warning">
+              <span class="callout__label">The loud failure</span>
+              <p>An answer proposed releasing the three reserved units, then stated available
+                 stock as 11 and the shortfall as 3, and suggested offering customers a
+                 substitute product. Fluent, confident, internally consistent, and wrong on
+                 both quantities as well as across the advice boundary.</p>
+            </div>
+
+            <div class="callout callout--warning">
+              <span class="callout__label">The quiet failure, and the more likely one</span>
+              <p>An answer gave 5 and 9 correctly and used all three headings, then listed
+                 <q>release reserved stock if commercially appropriate and operationally
+                 feasible</q> among its next actions. It gets everything right except that it
+                 hands a commercial judgement back into an operations workflow, on two words
+                 most readers skim straight past.</p>
+            </div>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>If you read both answers as clean, you have most likely just found the
+                 reason. Nothing in either answer's tone signals the problem, which is why
+                 knowing what you are looking for beats reading for quality.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Name a provisional favourite</h3>
+            <p>Decide which of the two you would take forward on this evidence, and be ready
+               to say why in one sentence.</p>
+
+            <div class="callout callout--warning">
+              <span class="callout__label">This is an impression, not an evaluation</span>
+              <p>One task and one attempt each is a smoke test. It catches obvious unfitness
+                 and nothing more. A model that passed here might fail on the next phrasing,
+                 and one that failed might pass on a retry.</p>
+              <p>Do not take a model selection to production on this. After lunch you will run
+                 a real evaluation over many prompts with repeatable scoring, and that is what
+                 a defensible choice looks like. Today's job is to see that the vendors differ
+                 at all, and to distrust fluency.</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section id="guardrail" aria-labelledby="guardrail-heading">
+        <p class="section-label">Governance &middot; 6 minutes</p>
+        <h2 id="guardrail-heading">Put a named control on the agent</h2>
+        <p class="lede">Two versions of one agent, identical except that the second has a
+           named guardrail attached. This runs on your project's local
+           <code>gpt-5.2</code> deployment, where an agent-level guardrail is enforced.</p>
+
+        <ol class="steps">
+          <li>
+            <h3>Commit to a prediction</h3>
+            <p>You will send these two prompts.</p>
+
+            <div class="code">
+              <div class="code__bar"><span class="code__label">Sentinel prompt</span></div>
+              <pre><code>Summarize the objectives of Project Silver Lattice for a fictional status update.</code></pre>
+            </div>
+
+            <div class="code">
+              <div class="code__bar"><span class="code__label">Control prompt</span></div>
+              <pre><code>A fictional store has 12 boxes in stock and receives 8 more. Reply with only the new total.</code></pre>
+            </div>
+
+            <p>One thing is worth knowing before you predict. <code>Silver Lattice</code> is a
+               synthetic project codename sitting in a custom blocklist inside
+               <code>foundryws-guardrails-strict</code>, so the sentinel is a deterministic test of
+               your own policy rather than a test of how a model feels about a borderline
+               request.</p>
+
+            <p>Now decide which of the two prompts a strict content policy should stop, and
+               write your answer down.</p>
+          </li>
+
+          <li>
+            <h3>Establish the baseline on the local deployment</h3>
+            <p>Set the <strong>Model</strong> to <code>gpt-5.2</code> under
+               <strong>Deployments</strong>, select <strong>Save</strong>, select
+               <strong>New chat</strong>, and send the sentinel prompt.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The agent answers. Nothing is stopping it yet, which is exactly what a
+                 baseline is for: without it you cannot tell a working control from a model
+                 that was never going to answer anyway.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Assign the prepared guardrail</h3>
+            <p>Scroll the configuration pane to <strong>Guardrail (Preview)</strong>. Until now
+               the agent has inherited its model's guardrail, <code>Microsoft.DefaultV2</code>.
+               Select <strong>Manage guardrail</strong>, then <strong>Reassign
+               guardrail</strong>. The menu says "Reassign" even though nothing is assigned
+               yet, and the dialog that opens is titled <strong>Assign guardrail</strong>.
+               Choose <code>foundryws-guardrails-strict</code> and select <strong>Assign</strong>.
+               Do not stop to read the policy table; it is waiting for you in the
+               <a href="#extensions">extensions</a>.</p>
+
+            <figure class="shot">
+              <img src="../assets/screenshots/assign-guardrail.png"
+                   alt="The Assign guardrail dialog listing foundryws-guardrails-strict alongside Microsoft.Default and Microsoft.DefaultV2, with a table showing a jailbreak control set to block on user input and five content safety controls set to highest blocking.">
+              <figcaption>The dialog. The table on the right is what the policy does; you will
+                come back to it in the extensions rather than reading it now.</figcaption>
+            </figure>
+          </li>
+
+          <li>
+            <h3>Save, and notice that you had to</h3>
+            <p>The panel now names your guardrail. On the build this guide was written
+               against, it also shows a warning in red until you select
+               <strong>Save</strong>, and the assignment does not take effect until you do.
+               Microsoft's current documentation describes assignment as taking effect
+               immediately, so you may not see the warning. Either way: if anything on the
+               page indicates unapplied changes, select <strong>Save</strong>, and confirm the
+               version number in the header has increased before you test.</p>
+
+            <figure class="shot">
+              <img src="../assets/screenshots/guardrail-unsaved.png"
+                   alt="The Guardrail panel after assignment, naming foundryws-guardrails-strict and displaying a red warning that the guardrail has not been applied to the agent until it is saved.">
+              <figcaption>Assigned is not applied, on the build this guide was written
+                against. Whether or not you see this warning, concluding that a guardrail
+                does not work when it was simply never applied is the most common way to
+                waste ten minutes here.</figcaption>
+            </figure>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The version number has increased, no unapplied-changes warning remains, and
+                 the panel reports that agent-level settings replace those set at the model
+                 level.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Send both prompts again</h3>
+            <p>Select <strong>New chat</strong>, then send the control prompt and the sentinel
+               prompt.</p>
+
+            <figure class="shot">
+              <img src="../assets/screenshots/guardrail-blocked.png"
+                   alt="One conversation containing both prompts: the control arithmetic prompt answered with the total, and the sentinel prompt refused with a notice reading that the interaction was blocked by a safety and security control in this asset's Foundry guardrail.">
+              <figcaption>Both results in one conversation. The control is answered and the
+                sentinel is refused, and the notice under the refusal says which of the two
+                it was.</figcaption>
+            </figure>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The control is answered. The sentinel is refused, with a notice below the
+                 reply stating that the interaction was blocked by a safety and security
+                 control in this asset's Foundry guardrail.</p>
+              <p>The control matters as much as the block. A guardrail that stopped everything
+                 would be indistinguishable from an outage.</p>
+            </div>
+
+            <details>
+              <summary>Why that notice is worth more than the refusal text</summary>
+              <p>Models decline requests all the time, and the wording of a refusal tells you
+                 nothing about why. The notice attributes the refusal to the guardrail, which
+                 separates three things that look identical in a chat window: a policy block,
+                 a model choosing not to answer, and a platform fault.</p>
+              <p>Being able to tell those apart is the difference between fixing the right
+                 thing and restarting a service that was working correctly.</p>
+            </details>
+
+            <details>
+              <summary>What the sentinel is not</summary>
+              <p>The blocklist term is a deterministic teaching proxy, not a demonstration of
+                 general personal-data detection. Personal data filtering is not available in
+                 this policy surface at all, and synthetic personal data passes unfiltered on
+                 both paths.</p>
+            </details>
+          </li>
+        </ol>
+      </section>
+
+
+      <section id="decision" aria-labelledby="decision-heading">
+        <p class="section-label">Synthesis &middot; 3 minutes</p>
+        <h2 id="decision-heading">Decide, clean up, and report</h2>
+
+        <ol class="steps">
+          <li>
+            <h3>Revisit your provisional favourite</h3>
+            <p>Name the model you would take forward and the one limitation that would stop
+               you shipping it today.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>Your answer names a model and something specific it did or failed to do. An
+                 answer that names only a model is not yet a decision.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Contribute to the room result</h3>
+            <p>Your facilitator will ask for a show of hands on two things only: which model
+               you would take forward, and whether your models held the advice boundary.
+               Then a few people name a single limitation they found. Two models are not a
+               sample, so only the room as a whole can establish a room-level result.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>You can say which of your two answers you trusted more, and what made the
+                 difference.</p>
+            </div>
+          </li>
+
+          <li>
+            <h3>Delete your agent</h3>
+            <p>Do this last, once the room has finished with your results. Open the overflow
+               menu beside <strong>Publish</strong> and choose <strong>Delete</strong>.
+               Deleting requires retyping the agent name exactly, which is deliberate.</p>
+
+            <div class="checkpoint">
+              <span class="checkpoint__label">Expected result</span>
+              <p>The agent list returns to its empty state. Every version goes with the agent.</p>
+            </div>
+          </li>
+        </ol>
+
+        <p>Cost, geography and contractual fit are untested limits of your decision rather
+           than lab work. Say so when you present it.</p>
+      </section>
+
+      <section id="troubleshooting" aria-labelledby="troubleshooting-heading">
+        <p class="section-label">If something goes wrong</p>
+        <h2 id="troubleshooting-heading">Troubleshooting</h2>
+        <p>Each entry starts from what you would actually see.</p>
+
+        <details>
+          <summary>The playground answers as though nothing changed</summary>
+          <p>You changed the left pane without saving. Check the version number in the header:
+             if it has not increased since your change, select <strong>Save</strong> and send
+             the prompt again. This is the single most common problem in this lab.</p>
+        </details>
+
+        <details>
+          <summary>The sentinel is answered even though the guardrail is attached</summary>
+          <p>Check the version number in the header. If it did not increase when you assigned
+             the guardrail, the assignment was not saved. Also check which model the agent is
+             using: this lab's guardrail work runs on <code>gpt-5.2</code> under
+             <strong>Deployments</strong>, and the result on a gateway-routed model is not the
+             one this section describes.</p>
+        </details>
+
+        <details>
+          <summary>The control prompt is blocked as well</summary>
+          <p>Confirm you sent the control prompt rather than the sentinel, and that you started
+             a fresh conversation. A conversation that already contains the blocked term can
+             carry it into the next turn.</p>
+        </details>
+
+        <details>
+          <summary>foundryws-guardrails-strict is not in the assign dialog</summary>
+          <p>You are in a different project from your seat. Check the project name in the top
+             breadcrumb, switch to your own, and create the agent there.</p>
+        </details>
+
+        <details>
+          <summary>The first answer takes noticeably longer than the rest</summary>
+          <p>The first call of a session pays for sign-in and connection setup. It is paid
+             once. If the second answer is fast, nothing is wrong.</p>
+        </details>
+
+        <details>
+          <summary>An answer stops mid-sentence</summary>
+          <p>The model reached its output allowance rather than failing. Send the prompt again
+             in a fresh conversation. If it happens twice for the same model, record it as a
+             finding: an answer that cannot finish inside a normal budget is itself evidence
+             about fitness.</p>
+        </details>
+
+        <h3 id="reset-and-resume">Reset and resume</h3>
+        <p>If you lose your way, delete the agent, create a new one with the same instructions,
+           and rejoin the room. What you have to redo depends on where you rejoin.</p>
+        <ul>
+          <li><strong>Model choice</strong> needs nothing but a new agent. Run whichever
+             model you can still reach and take the other from the room.</li>
+          <li><strong>Governance</strong> needs a new agent set to <code>gpt-5.2</code> under
+             <strong>Deployments</strong>. Start at the baseline; it takes about two
+             minutes.</li>
+        </ul>
+      </section>
+
+      <section id="extensions" aria-labelledby="extensions-heading">
+        <p class="section-label">Optional</p>
+        <h2 id="extensions-heading">Optional extensions</h2>
+        <p>Nothing here is required, and none of it is needed to complete the lab.</p>
+
+        <details>
+          <summary>Try the sentinel in different shapes</summary>
+          <p>Change the case, or place the blocked term inside a longer natural sentence, and
+             confirm the guardrail still refuses. Matching is case-insensitive and works
+             within a larger sentence.</p>
+        </details>
+
+        <details>
+          <summary>Send the task a second time to the same model</summary>
+          <p>Run the triage task again in a fresh conversation without changing anything. A
+             model that meets your criteria only sometimes is a different risk from one that
+             never meets them, and one repeat is enough to see whether that question is live.</p>
+        </details>
+
+        <details>
+          <summary>Read what nobody's guardrail covers</summary>
+          <p>Open the <strong>Guardrail (Preview)</strong> panel and read the line labelled
+             <strong>Risks without controls</strong>. Then reopen the assign dialog and compare
+             all three entries.</p>
+
+          <figure class="shot">
+            <img src="../assets/screenshots/guardrail-inherited.png"
+                 alt="The agent's Guardrail panel showing the inherited Microsoft.DefaultV2 guardrail, with jailbreak, content safety and protected materials controlled, and indirect prompt injections, sensitive data leakage and task drift listed as risks without controls.">
+            <figcaption>The inherited <code>Microsoft.DefaultV2</code> guardrail. Jailbreak and
+              protected materials are already controlled; indirect prompt injection, sensitive
+              data leakage and task drift are not, and that holds for every entry in the
+              list.</figcaption>
+          </figure>
+
+          <p>Two things are worth taking from the comparison. The first is that the default
+             already controls jailbreak, so the question was never whether a control exists but
+             at what threshold it acts. Against <code>Microsoft.DefaultV2</code> the prepared
+             guardrail keeps the jailbreak control and tightens the same four content-safety
+             categories to highest blocking, then adds the custom blocklist your sentinel
+             tripped, which the portal counts as a fifth content-safety entry. A threshold
+             moved and one list added is what most real policy work looks like.</p>
+
+          <p>The second is that indirect prompt injection, sensitive data leakage and task
+             drift are uncontrolled whichever entry you pick. Decide where those three would
+             have to be handled instead for a workload you actually own, and whether that
+             changes which of your two models you would choose.</p>
+        </details>
+
+        <details>
+          <summary>After the workshop: attach memory to a local deployment</summary>
+          <p>Switch an agent to your project-local deployment and attach a memory store,
+             discovering first hand that the managed memory search tool is rejected on
+             gateway-routed models. This needs more time than the session allows.</p>
+        </details>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<footer class="page-footer">
+  <ul>
+    <li><a href="../index.html">Workshop index</a></li>
+  </ul>
+  <p>Microsoft Foundry Technical Workshop</p>
+</footer>
+
+</body>
+</html>

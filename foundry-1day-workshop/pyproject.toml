@@ -1,0 +1,26 @@
+[project]
+name = "foundry-1day-workshop"
+version = "0.1.0"
+description = "Automation and demonstrations for the Microsoft Foundry technical workshop"
+requires-python = ">=3.13"
+dependencies = [
+  "azure-ai-agentserver-responses>=1.0.0b9,<2",
+  "azure-ai-contentunderstanding==1.2.0b2",
+  "azure-ai-projects>=2.3.0,<3",
+  "azure-identity==1.25.3",
+  "httpx>=0.28.1,<1",
+  "langchain>=1.2.0,<2",
+  "langchain-azure-ai[hosting,opentelemetry]>=1.2.8,<2",
+  "langchain-openai>=1.1.0,<2",
+  "python-dotenv>=1.2.1,<2",
+]
+
+[dependency-groups]
+dev = [
+  "playwright>=1.58.0,<2",
+  "pytest>=9.0.2,<10",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
