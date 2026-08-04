@@ -22,7 +22,8 @@ resource "azuread_service_principal" "case_mcp" {
 }
 
 resource "azuread_app_role_assignment" "hosted_agent_case_access" {
+  for_each            = toset(var.hosted_agent_principal_ids)
   app_role_id         = random_uuid.case_api_role.result
-  principal_object_id = var.hosted_agent_principal_id
+  principal_object_id = each.value
   resource_object_id  = azuread_service_principal.case_mcp.object_id
 }

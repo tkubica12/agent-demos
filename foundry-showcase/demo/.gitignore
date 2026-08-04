@@ -1,0 +1,4 @@
+capture/.profile/
+capture/.venv/
+out/
+*.standalone.html

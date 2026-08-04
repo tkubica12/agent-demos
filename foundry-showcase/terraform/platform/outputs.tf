@@ -50,10 +50,10 @@ output "case_api_audience" {
   value = azuread_application.case_mcp.client_id
 }
 
-output "hosted_agent_client_id" {
-  value = var.hosted_agent_client_id
+output "hosted_agent_client_ids" {
+  value = join(",", var.hosted_agent_client_ids)
 }
 
-output "hosted_agent_principal_id" {
-  value = var.hosted_agent_principal_id
+output "hosted_agent_principal_ids" {
+  value = join(",", var.hosted_agent_principal_ids)
 }

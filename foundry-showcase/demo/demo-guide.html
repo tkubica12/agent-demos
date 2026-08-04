@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demoing Microsoft Foundry</title>
+<meta name="description" content="A stop-by-stop guide to the Foundry showcase: what each screen demonstrates and the claim it supports.">
+<meta name="doc-id" content="foundry-showcase-demo-guide">
+
+<script>
+(function () {
+  var d = document.documentElement;
+  d.classList.add("js");
+  var p = new URLSearchParams(location.search);
+  var t = p.get("theme");
+  if (t !== "light" && t !== "dark") {
+    try { t = localStorage.getItem("doc-theme"); } catch (e) { t = null; }
+  }
+  if (t !== "light" && t !== "dark") {
+    t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  d.setAttribute("data-theme", t);
+  if (p.get("view") === "slides") d.setAttribute("data-view", "slides");
+})();
+</script>
+
+<style>
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #f5f6f8; --surface-3: #eaecf0;
+  --border: #dee1e6; --border-strong: #c2c7cf;
+  --text: #14171a; --text-muted: #565c66; --text-faint: #767d87;
+  --accent: #0078d4; --accent-strong: #005a9e; --accent-quiet: #4a9fe0;
+  --accent-soft: #eaf3fb; --accent-border: #a9d0ef;
+  --warn: #8a5300; --warn-soft: #fdf5e8; --warn-border: #e6c99a;
+  --code-bg: #f5f6f8; --code-border: #e2e5ea;
+  --focus: #0078d4;
+  --shadow-1: 0 1px 2px rgba(16,19,23,.06);
+  --shadow-2: 0 2px 4px rgba(16,19,23,.06), 0 12px 28px rgba(16,19,23,.08);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1013; --surface: #15181d; --surface-2: #1b1f26; --surface-3: #232830;
+  --border: #2b313a; --border-strong: #3d4550;
+  --text: #eceef1; --text-muted: #a7aeb8; --text-faint: #868e99;
+  --accent: #4aa3e8; --accent-strong: #7cc0f3; --accent-quiet: #2f80c4;
+  --accent-soft: #142430; --accent-border: #2c4f6d;
+  --warn: #e0b055; --warn-soft: #241d10; --warn-border: #574627;
+  --code-bg: #12151a; --code-border: #262c34;
+  --focus: #6cb8f0;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.4), 0 12px 28px rgba(0,0,0,.45);
+}
+</style>
+
+<link rel="stylesheet" href="assets/article.css">
+<script src="assets/article.js" defer></script>
+</head>
+
+<body>
+
+<div class="controls" role="group" aria-label="Article controls">
+  <button type="button" class="ctrl" data-action="expand-all">Expand all</button>
+  <button type="button" class="ctrl" data-action="collapse-all">Collapse all</button>
+  <button type="button" class="ctrl" data-action="toggle-slides" aria-pressed="false">Slides</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+</div>
+
+<div class="doc">
+
+  <header class="doc-header">
+    <p class="eyebrow">Demo guide</p>
+    <h1>Demoing Microsoft Foundry</h1>
+    <p class="subtitle">Six sections of the Foundry showcase, in order. Each stop states the claim it supports and what is on screen when you make it. Every screen is one live project; every score, trace and alert is a real run.</p>
+    <p class="meta"><time datetime="2026-08-04">4 August 2026</time></p>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-label">Contents</p>
+    <ol>
+      <li><a href="#ch-setup">Scope and structure</a></li>
+      <li><a href="#ch-models">Models and services</a></li>
+      <li><a href="#ch-agents">The agents</a></li>
+      <li><a href="#ch-attach">What you attach to an agent</a></li>
+      <li><a href="#ch-loop">The improvement loop</a></li>
+      <li><a href="#ch-enterprise">Enterprise readiness</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section class="chapter" id="ch-setup">
+      <h2 class="chapter-label">Scope and structure</h2>
+
+      <article class="card card--lead" id="card-what-this-is" data-open>
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="true">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">This is a capability tour, not a product pitch</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The showcase is a working support-desk agent in a live Foundry project. Every screen here is that project. Every score, trace and alert is a real run.</p>
+          <p>The tour runs capability first, so the platform's range is established. Then one agent, taken apart. Then the discipline that keeps the agent honest, which is where Foundry separates itself from a model endpoint with a UI.</p>
+          <ul class="arrow-list">
+            <li>Six sections, about an hour with questions.</li>
+            <li>Every screen is the same project and the same agent.</li>
+            <li>Nothing is staged, and the numbers move between runs.</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="card" id="card-short-path">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">With twenty minutes, cut to four stops</span>
+              <span class="card-sub">The short path still carries the whole argument.</span>            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <ol class="steps">
+            <li>
+              <h4>Deployments</h4>
+              <p>Five vendors, one endpoint, one identity.</p>
+            </li>
+            <li>
+              <h4>The prompt agent page</h4>
+              <p>Everything an agent is, on one screen.</p>
+            </li>
+            <li>
+              <h4>One trace</h4>
+              <p>Thirty-nine spans of decisions you can argue with.</p>
+            </li>
+            <li>
+              <h4>The optimizer run</h4>
+              <p>A measured improvement, with the reason attached.</p>
+            </li>
+          </ol>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>Those four cover the claim end to end: every model behind one contract, one agent definition, complete visibility, measured improvement.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-resource-project">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A resource is the billing boundary; a project is the workspace</span>
+              <span class="card-sub">The two-level model everything else sits inside.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The account owns model deployments, quota and keys. The project owns agents, knowledge, memory, traces and evaluations. One account carries many projects, which is how teams share quota without sharing agents.</p>
+          <p>The home page carries the project endpoint and the field that reads <em>API key authentication is disabled for this project</em>. Microsoft Entra is the only way in.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/01-project-home.png">
+              <img src="images/01-project-home.png" alt="The Foundry project home page showing the project endpoint, the Azure OpenAI endpoint, and a notice that API key authentication is disabled." width="1920" height="840">
+            </a>
+            <figcaption>Project home, showing the project endpoint and the disabled-key notice.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+    </section>
+    <section class="chapter" id="ch-models">
+      <h2 class="chapter-label">Models and services</h2>
+
+      <article class="card" id="card-deployments">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Five vendors sit behind one endpoint and one identity</span>
+              <span class="card-sub">One project, five model vendors, one client.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>OpenAI, Microsoft, DeepSeek, Mistral and MoonshotAI, deployed side by side in one project. Selecting <code>Kimi-K2.6</code> shows the same project endpoint, the same disabled-key notice, and a Python sample built on the OpenAI client with an Entra token provider.</p>
+          <p>Switching vendor is switching one string. The endpoint, the authentication and the client stay where they are.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/02-deployments.png">
+              <img src="images/02-deployments.png" alt="The Deployments list with Kimi, Mistral, DeepSeek, Microsoft and OpenAI models, and a detail pane showing a Python code sample using the OpenAI client with a bearer token provider." width="1920" height="840">
+            </a>
+            <figcaption>Deployed models. The detail pane for a MoonshotAI model calls it through <code>from openai import OpenAI</code>.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-deployment-types">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Deployment type is a residency and capacity decision</span>
+              <span class="card-sub">Global, data zone and provisioned, in one column.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The Deployment type column answers a compliance question, not a performance one. Global Standard draws on Microsoft's global capacity. Data Zone Standard keeps inference inside a geography. Provisioned buys dedicated throughput, and the PTU Calculator button sizes it.</p>
+          <p>In this project <code>Mistral-Large-3</code> runs on Data Zone Standard and everything else on Global Standard, so the contrast is visible without leaving the page.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the two tabs people miss</button>
+            <div class="reveal-body">
+              <p><strong>Batch jobs</strong> sits next to Deployed models. Batch runs asynchronously against a separate quota pool at a lower price, which is the right answer for backfills, bulk classification and offline evaluation.</p>
+              <p><strong>Managed compute deployments</strong> is the toggle above the list. Serverless is per-token on shared capacity; managed compute puts an open-weights model on dedicated GPUs you can size, which is where a model you brought yourself would land.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-fine-tune">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Fine-tuning is available, and it is the last resort</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>One completed job: a supervised fine-tune of <code>qwen3-32b</code>. It earns its cost in two cases. Style and format that prompting cannot hold. A smaller model that has to behave like a larger one. Little else.</p>
+          <aside class="callout callout--rule">
+            <p class="callout-label">Rule</p>
+            <p>Reach for instructions, then skills, then knowledge, then the optimizer. Fine-tune when those four have run out.</p>
+          </aside>
+          <figure class="figure">
+            <a class="zoom" href="images/03-fine-tune.png">
+              <img src="images/03-fine-tune.png" alt="The Fine-tuning page listing one completed supervised fine-tuning job with qwen3-32b as the base model." width="1920" height="840">
+            </a>
+            <figcaption>One completed supervised job against an open-weights base model.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-services">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Not every problem is a language model</span>
+              <span class="card-sub">Fifteen playgrounds, none of them chat.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Speech, translation, language and content understanding, each with its own playground. Three of the fifteen are PII redaction alone: text, document and conversational. Wiring a language model to redact PII or extract document layout is slower, less accurate and more expensive than the service that already does it.</p>
+          <p>The Customizations tab holds a custom neural voice or a trained extraction schema, for the cases where the stock service is close but not exact.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/04-services.png">
+              <img src="images/04-services.png" alt="The Services page listing fifteen playgrounds across speech, translation, language and content understanding." width="1920" height="840">
+            </a>
+            <figcaption>Services. Speech, Translator, Language and Content Understanding, with a Customizations tab beside them.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+    </section>
+    <section class="chapter" id="ch-agents">
+      <h2 class="chapter-label">The agents</h2>
+
+      <article class="card" id="card-agent-kinds">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Three kinds of agent, one list</span>
+              <span class="card-sub">The Type column is the whole taxonomy.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p><strong>Prompt</strong> agents are configuration: a model, instructions, attachments, no code. <strong>Hosted</strong> agents are your code on Foundry's runtime. <strong>External</strong> agents run wherever you like — this one is on Azure Container Apps — and register back, so traces, evaluations and monitoring still work.</p>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>An agent does not have to run on Foundry to be governed by Foundry.</p>
+          </aside>
+          <figure class="figure">
+            <a class="zoom" href="images/05-agents.png">
+              <img src="images/05-agents.png" alt="The Agents list showing hosted, external and prompt agents side by side with a Type column." width="1920" height="840">
+            </a>
+            <figcaption>All three kinds in one list, with version and status per agent.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-routines">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Agents can start themselves</span>
+              <span class="card-sub">Scheduled work with no external scheduler.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A routine is a schedule, a prompt and an agent. No external scheduler, no function app, no cron container. <code>daily-support-quality-review</code> runs weekdays at 09:00 and last ran two hours before this screenshot; <code>case-follow-up-reminder</code> is paused, so both ends of the lifecycle are on one page.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/06-routines.png">
+              <img src="images/06-routines.png" alt="The Routines tab listing a paused reminder routine and an active weekday-morning quality review routine bound to the main agent." width="1920" height="840">
+            </a>
+            <figcaption>Two routines against the same agent, one active on a weekday cron and one paused.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-prompt-agent">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">An agent is a model plus six attachments</span>
+              <span class="card-sub">The whole conceptual model on one screen.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Model, voice mode, instructions, tools, knowledge, memory, guardrail. The left rail is the entire conceptual model of a Foundry agent, and it is the same list whether the agent is built here or in code. The rest of the tour fills in each row.</p>
+          <p><strong>Improve instructions</strong> rewrites the system prompt with a model, in seconds, against the agent's current configuration.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Is the portal agent the same object as the code agent?</button>
+            <div class="reveal-body">
+              <p>Yes. The <strong>YAML</strong> tab on the right shows the definition the SDK posts, and <strong>Call agent</strong> hands back the client snippet. The portal is a view over the API, not a parallel product.</p>
+            </div>
+          </div>
+          <figure class="figure">
+            <a class="zoom" href="images/07-prompt-agent.png">
+              <img src="images/07-prompt-agent.png" alt="A prompt agent build page scrolled to show instructions with an improve button, tools, knowledge, memory and guardrail sections beside a chat playground." width="1920" height="840">
+            </a>
+            <figcaption>The build page, scrolled to the attachments. Model and voice mode sit just above Instructions.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-a2a">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">One agent, several specialists, one trace</span>
+              <span class="card-sub">Multi-agent without adopting a framework.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The main hosted agent takes a support case, decides it needs documented policy, and calls a prompt agent over A2A. Two different agent kinds, one conversation. Filtering the trace to <code>a2a</code> reduces thirty-nine spans to the three that carry the delegation.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>The <code>SendMessage</code> span took 34.97 s of a 49.1 s run. Delegation is not free, and the trace prices it.</p>
+          </aside>
+          <figure class="figure">
+            <a class="zoom" href="images/08-a2a-delegation.png">
+              <img src="images/08-a2a-delegation.png" alt="A trace filtered to a2a spans, showing the main agent invoking a knowledge expert agent through an A2A SendMessage tool call." width="1920" height="840">
+            </a>
+            <figcaption>The same trace filtered to <code>a2a</code>. The hosted agent calls the prompt agent as if it were a tool.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+    </section>
+    <section class="chapter" id="ch-attach">
+      <h2 class="chapter-label">What you attach to an agent</h2>
+
+      <article class="card" id="card-tools">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Tools are connections, not code</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Six tools, three kinds: Azure AI Search, Agent2agent and Model Context Protocol. Registering an MCP server publishes its tools to every agent in the project. Registering an A2A agent makes another agent look like a tool. Same list, same permissions, same audit trail.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/09-tools.png">
+              <img src="images/09-tools.png" alt="The Tools tab listing six connected tools typed as Azure AI Search, Agent2agent and Model Context Protocol." width="1920" height="840">
+            </a>
+            <figcaption>Connected tools, typed by protocol.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-toolboxes">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A toolbox is the fix for tool sprawl</span>
+              <span class="card-sub">Progressive disclosure, and one endpoint instead of many.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A toolbox groups tools behind a search interface, so the agent receives a short relevant list instead of a hundred schemas pinned into its system prompt. <strong>Get code</strong> returns a single MCP endpoint fronting the whole box, versioned — the support toolbox here is on version 3.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/10-toolboxes.png">
+              <img src="images/10-toolboxes.png" alt="The Toolboxes tab listing three versioned toolboxes, each with a Get code button that returns a unified MCP endpoint." width="1920" height="840">
+            </a>
+            <figcaption>Three toolboxes. Each one is a single versioned MCP endpoint.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-skills">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Skills are instructions the agent loads when it needs them</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Three markdown skills: when to escalate, when a user-profile fact may be stored, and how a support reply should read. Upload a <code>.md</code> or a <code>.zip</code> to register one. The agent calls <code>load_skill</code> at run time, which keeps the system prompt small and lets policy change without a redeploy.</p>
+          <p>Those <code>load_skill</code> calls appear as spans in the trace later in the tour, and as rewritable surface in the optimizer after that.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/11-skills.png">
+              <img src="images/11-skills.png" alt="The Skills tab listing three markdown skills covering escalation policy, profile update policy and support writing style." width="1920" height="840">
+            </a>
+            <figcaption>Three skills, each a versioned markdown manifest with a description the model uses to decide when to load it.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-guardrails">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Guardrails cover the tool call, not just the chat box</span>
+              <span class="card-sub">Risk type, intervention point, action.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A guardrail is a set of rows: a risk type, an intervention point, an action. Indirect prompt injections, blocked. A content-safety threshold beside it. The <strong>intervention point</strong> column carries the important claim, because the same policy can apply where the agent reads a tool result — which is exactly where indirect injection arrives.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show what else is on this screen</button>
+            <div class="reveal-body">
+              <p><strong>Blocklists</strong> for exact terms, and an <strong>Integrations</strong> tab in preview for third-party filters.</p>
+              <p><code>Microsoft.DefaultV2</code> is applied to the gpt-5.4 family without anyone asking, so a project is never unprotected by accident.</p>
+              <p><strong>Try in playground</strong> runs a prompt against the guardrail alone and shows the block firing.</p>
+            </div>
+          </div>
+          <figure class="figure">
+            <a class="zoom" href="images/12-guardrails.png">
+              <img src="images/12-guardrails.png" alt="A guardrail detail pane expanded to show indirect prompt injection and content safety rules with risk type, intervention point and action columns." width="1920" height="840">
+            </a>
+            <figcaption>One guardrail, expanded. Risk type, intervention point, action.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-knowledge">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Foundry IQ is retrieval you configure, not retrieval you build</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>One knowledge base, two sources: an Azure AI Search index of documents and a web source, both active. No chunking script, no embedding pipeline, no retrieval orchestration inside the agent.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/13-knowledge-bases.png">
+              <img src="images/13-knowledge-bases.png" alt="The Knowledge page listing one active knowledge base built from a document index and a web source." width="1920" height="840">
+            </a>
+            <figcaption>The knowledge base list, with its sources and status in the row.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-knowledge-detail">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The retrieval strategy is a text box</span>
+              <span class="card-sub">Where Foundry IQ stops being a search index.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A chat model and a retrieval reasoning effort turn one question into a plan of several queries. <strong>Retrieval instructions</strong> then route between sources in plain English: internal documents for operations and procedures, web only for current public information, cite sources. Agentic retrieval, written as a paragraph.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the ingestion side</button>
+            <div class="reveal-body">
+              <p><strong>Add sources</strong> and <strong>Upload files</strong> handle ingestion. Verbalization turns images and diagrams into searchable text, so a figure inside a PDF stops being invisible.</p>
+              <p>Web sources carry a Grounding with Bing notice stating that customer data flows outside the Azure compliance and geo boundary. That constraint decides whether a web source belongs in a regulated workload.</p>
+            </div>
+          </div>
+          <figure class="figure">
+            <a class="zoom" href="images/14-knowledge-base-detail.png">
+              <img src="images/14-knowledge-base-detail.png" alt="A knowledge base detail page showing the chat model, retrieval reasoning effort, natural-language retrieval instructions and two active knowledge sources." width="1920" height="840">
+            </a>
+            <figcaption>Retrieval instructions route between a document index and a web source in plain English.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-memory">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Memory is a store you provision, with a shape you cannot change later</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Three features: chat summary, procedural memory and user profile. They are fixed when the store is created and cannot be changed afterwards, so the shape of what an agent remembers is a provisioning decision. The default time-to-live of 2,592,000 seconds is thirty days.</p>
+          <aside class="callout callout--warning">
+            <p class="callout-label">Warning</p>
+            <p>The user-profile prompt in this store excludes credentials, financials, precise location and critical PII. Memory without that instruction is a data-protection incident waiting to happen.</p>
+          </aside>
+          <figure class="figure">
+            <a class="zoom" href="images/15-memory.png">
+              <img src="images/15-memory.png" alt="A memory store detail page showing its chat and embedding models, a thirty-day time to live, and immutable toggles for chat summary, procedural memory and user profile." width="1920" height="840">
+            </a>
+            <figcaption>The memory store. The features are set at creation; only the profile prompt stays editable.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+    </section>
+    <section class="chapter" id="ch-loop">
+      <h2 class="chapter-label">The improvement loop</h2>
+
+      <article class="card" id="card-traces">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Every run is recorded whether anyone asked or not</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Duration, tokens in and out, estimated cost, evaluator scores and the agent version, per run, filterable by all of them. Two controls matter more than the table: <strong>Annotate</strong> on every row, and <strong>Create dataset</strong> in the corner.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/16-traces.png">
+              <img src="images/16-traces.png" alt="The Traces list showing per-run duration, token counts, estimated cost, evaluator scores, an annotate button on each row and a create dataset button." width="1920" height="840">
+            </a>
+            <figcaption>Traces for one agent, with evaluator scores already attached to some runs.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-trace-anatomy">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Read one trace and the agent stops being a black box</span>
+              <span class="card-sub">Thirty-nine spans, and every one is a decision you can argue with.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The managed-identity token fetch, the POST to the toolbox MCP endpoint, three <code>load_skill</code> calls, seven model calls, the A2A hop. Everything claimed earlier in the tour appears here as a span with a duration.</p>
+          <p>The right pane is raw OpenTelemetry — <code>gen_ai.agent.id</code>, <code>gen_ai.operation.name</code> — so the same data lands in whatever you already run.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/17-trace-anatomy.png">
+              <img src="images/17-trace-anatomy.png" alt="An expanded trace showing nested spans for identity token fetch, toolbox MCP calls, three load_skill tool executions and several model calls, beside raw OpenTelemetry metadata." width="1920" height="840">
+            </a>
+            <figcaption>One run, expanded. The skills load as tool calls; the toolbox is reached over MCP.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-annotations">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A thumbs-down is an evaluation waiting to happen</span>
+              <span class="card-sub">From user feedback to evaluation set without writing one.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Annotations reach a trace three ways: from the end-user application through the feedback API, from a reviewer working the trace list after the fact, and from automatic evaluators that already scored the run. Filter to the bad ones, press <strong>Create dataset</strong>, and yesterday's failures become tomorrow's evaluation set.</p>
+          <ol class="sequence">
+            <li><span class="seq-title">Run</span><span class="seq-note">Traced without being asked.</span></li>
+            <li><span class="seq-title">Annotation</span><span class="seq-note">User, reviewer or evaluator.</span></li>
+            <li><span class="seq-title">Dataset</span><span class="seq-note">Built by filtering, not by hand.</span></li>
+            <li><span class="seq-title">Evaluation</span><span class="seq-note">The opinion becomes a number.</span></li>
+            <li><span class="seq-title">Optimizer</span><span class="seq-note">The number moves the agent.</span></li>
+          </ol>
+          <aside class="callout callout--rule">
+            <p class="callout-label">Rule</p>
+            <p>Never write an evaluation set by hand while a trace list is sitting there full of real failures.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-evaluations">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Evaluation is where an opinion becomes a number</span>
+              <span class="card-sub">On demand, scheduled, and continuous against live traffic.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The list mixes built-in evaluators, a rubric-based custom evaluator, and scheduled quality runs. One row reads <em>Continuous Eval Run</em> with a rule name attached: that is production traffic being sampled and scored on a schedule, with nobody starting a run.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the boundary that bites</button>
+            <div class="reveal-body">
+              <p>Continuous evaluation samples responses the evaluation service can read back. Prompt agents invoked through the project Responses API qualify. Hosted agents called through their own endpoint produce session-scoped ids, and the sampled run fails with <code>session_not_accessible</code>.</p>
+              <p>A rule also takes several minutes to activate. Responses emitted immediately after it is created are never sampled, and runs appear roughly six minutes after the response.</p>
+            </div>
+          </div>
+          <figure class="figure">
+            <a class="zoom" href="images/18-evaluations.png">
+              <img src="images/18-evaluations.png" alt="The Evaluations list including a continuous evaluation run tied to a sampling rule, scheduled quality runs and red team evaluations." width="1920" height="840">
+            </a>
+            <figcaption>Evaluations, including one run created by a continuous sampling rule rather than by a person.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-red-team">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Red teaming is an evaluation you run against yourself</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Eleven runs on the third tab. The AI red teaming agent generates attack prompts across risk categories and reports issues found per run. The jailbreak attempts blocked in the Operate alerts, one chapter later, are exactly what red teaming is built to provoke.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/19-red-team.png">
+              <img src="images/19-red-team.png" alt="The Red team tab listing eleven automated red teaming runs against agent versions, one reporting six issues." width="1920" height="840">
+            </a>
+            <figcaption>Red teaming runs against successive agent versions, with issues counted per run.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-optimize">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The optimizer edits the prompt and the skills for you</span>
+              <span class="card-sub">On the agent page, next to Evaluation.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Give it an agent, a dataset and an evaluator. It proposes candidate configurations, scores each one against the dataset, and ranks them. It changes two surfaces: the system prompt and the skills.</p>
+          <p>Skills are not documentation. They are editable surface the optimizer is allowed to rewrite, which is why they were worth registering earlier.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/20-optimize.png">
+              <img src="images/20-optimize.png" alt="The Optimize tab on an agent showing one succeeded optimization run with baseline and best scores." width="1920" height="840">
+            </a>
+            <figcaption>The Optimize tab lives beside Traces, Monitor and Evaluation on the agent itself.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-optimize-run">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">0.591 to 0.637, and the table says which change earned it</span>
+              <span class="card-sub">A measured improvement, with its cause attached.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Four candidates against a baseline of 0.591. Two rewrote skills, two rewrote the system prompt, and two of the four made the agent worse. The winner reached 0.637 in 54 minutes. Every row links to the evaluation run behind its score, and <strong>Deploy best candidate</strong> promotes it.</p>
+          <aside class="callout callout--source">
+            <p class="callout-label">Source</p>
+            <p>Run <code>opt_0205d8caeaf54401ac82714d3621701e</code> on <code>foundry-showcase-optimize</code>, 4 August 2026. Task-weighted average on a 0 to 1 scale, evaluated with gpt-5.4-mini.</p>
+          </aside>
+          <figure class="figure">
+            <a class="zoom" href="images/21-optimize-run.png">
+              <img src="images/21-optimize-run.png" alt="An optimization run detail page showing a baseline of 0.591, a best candidate at 0.637, and a table of four candidates labelled as skills or system prompt changes with positive and negative deltas." width="1920" height="840">
+            </a>
+            <figcaption>The candidate table. Two skills changes, two prompt changes, two regressions, one winner.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+    </section>
+    <section class="chapter" id="ch-enterprise">
+      <h2 class="chapter-label">Enterprise readiness</h2>
+
+      <article class="card" id="card-operate">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Operate is the half of the portal that is not for builders</span>
+              <span class="card-sub">The same platform, from the security and platform team's side.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Overview, Assets, Compliance, Quota, Admin — scoped to a subscription across every project, not to one agent. Running agents, estimated cost, success rate, token usage and security alerts on one page.</p>
+          <p>Two MEDIUM alerts here read <em>A Jailbreak attempt on your Azure AI model deployment was blocked by Prompt Shields</em>, each with a Review action. The guardrails from earlier in the tour, surfaced as security findings rather than as configuration.</p>
+          <figure class="figure">
+            <a class="zoom" href="images/22-operate.png">
+              <img src="images/22-operate.png" alt="The Operate overview showing two medium-severity jailbreak alerts blocked by Prompt Shields, running agent counts, estimated cost, success rate and token usage across all projects." width="1920" height="840">
+            </a>
+            <figcaption>Operate overview across nine projects, with a Register asset button in the corner.</figcaption>
+          </figure>
+        </div>
+      </article>
+
+      <article class="card" id="card-gateway">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Register asset is the answer to "we already have agents elsewhere"</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The button takes an agent that is not running on Foundry and brings it under the same inventory, policy and alerting as the agents Foundry hosts. Existing agents on other platforms join the estate without being rebuilt.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show what the wizard asks for</button>
+            <div class="reveal-body">
+              <p>A protocol (A2A or MCP), the agent's URL, the agent card URL, and the OpenTelemetry agent id that ties incoming traces to the registered asset. For this showcase every value comes from the external-agent deployment output.</p>
+              <p>Registration is a portal step. There is no script for it in this repository.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-isolation">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Network, keys and storage are resource-level decisions</span>
+              <span class="card-sub">Configured on the account, not in the project.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Private endpoints and VNet injection, customer-managed keys, and bring-your-own storage and search are configured on the account in the Azure portal, not in the project. An agent inherits them; it does not choose them.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>The Foundry account behind this showcase is shared and not network-isolated. The VNet and private endpoint in the showcase's own Terraform protect its container apps and storage, not the Foundry account.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-publishing">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The agent reaches users where they already are</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A Foundry agent is reachable over the Responses API, over A2A and over MCP with no extra work — that covers most integrations by itself. Beyond it, the Microsoft 365 Agents Toolkit publishes to Teams and Microsoft 365 Copilot, and Agent 365 governs agent identities across the tenant.</p>
+          <p>Everything earlier in the tour — the guardrails, the traces, the evaluations, the optimizer — stays attached to the agent through all of those surfaces.</p>
+        </div>
+      </article>
+
+    </section>
+
+  </main>
+
+  <p class="takeaway">Foundry's argument is not that it can run an agent. It is that it can tell you, in a number with a trace behind it, whether the agent got better.</p>
+
+  <footer class="doc-footer">
+    <span>Captured from the Foundry showcase project on 4 August 2026.</span>
+    <span>Screenshots reproduced with <code>demo/capture/capture.py</code>.</span>
+  </footer>
+
+</div>
+
+</body>
+</html>

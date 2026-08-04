@@ -1,0 +1,27 @@
+[project]
+name = "foundry-showcase-demo-capture"
+version = "0.1.0"
+description = "Playwright capture harness for the Foundry Showcase demo guide"
+requires-python = ">=3.12"
+dependencies = ["playwright>=1.62.0"]
+
+[tool.uv]
+environments = ["sys_platform == 'win32'"]
+
+[[tool.uv.dependency-metadata]]
+name = "playwright"
+version = "1.62.0"
+requires-dist = ["greenlet>=3.1.1,<4.0.0", "pyee>=13,<14"]
+requires-python = ">=3.10"
+
+[[tool.uv.dependency-metadata]]
+name = "greenlet"
+version = "3.5.4"
+requires-dist = []
+requires-python = ">=3.9"
+
+[[tool.uv.dependency-metadata]]
+name = "pyee"
+version = "13.0.1"
+requires-dist = ["typing-extensions"]
+requires-python = ">=3.8"

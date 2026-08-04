@@ -1,0 +1,2639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hosted agent identity, isolation, and scaling</title>
+<meta name="description" content="How a middle tier picks which micro-VM a Foundry hosted agent request lands on, which user it counts as, and which conversation it continues.">
+<meta name="doc-id" content="foundry-hosted-agent-identity">
+
+<script>
+(function () {
+  var d = document.documentElement;
+  d.classList.add("js");
+  var p = new URLSearchParams(location.search);
+  var t = p.get("theme");
+  if (t !== "light" && t !== "dark") {
+    try { t = localStorage.getItem("doc-theme"); } catch (e) { t = null; }
+  }
+  if (t !== "light" && t !== "dark") {
+    t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  d.setAttribute("data-theme", t);
+  if (p.get("view") === "slides") d.setAttribute("data-view", "slides");
+})();
+</script>
+
+<style>
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #f5f6f8; --surface-3: #eaecf0;
+  --border: #dee1e6; --border-strong: #c2c7cf;
+  --text: #14171a; --text-muted: #565c66; --text-faint: #767d87;
+  --accent: #0078d4; --accent-strong: #005a9e; --accent-quiet: #4a9fe0;
+  --accent-soft: #eaf3fb; --accent-border: #a9d0ef;
+  --warn: #8a5300; --warn-soft: #fdf5e8; --warn-border: #e6c99a;
+  --code-bg: #f5f6f8; --code-border: #e2e5ea;
+  --focus: #0078d4;
+  --shadow-1: 0 1px 2px rgba(16,19,23,.06);
+  --shadow-2: 0 2px 4px rgba(16,19,23,.06), 0 12px 28px rgba(16,19,23,.08);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1013; --surface: #15181d; --surface-2: #1b1f26; --surface-3: #232830;
+  --border: #2b313a; --border-strong: #3d4550;
+  --text: #eceef1; --text-muted: #a7aeb8; --text-faint: #868e99;
+  --accent: #4aa3e8; --accent-strong: #7cc0f3; --accent-quiet: #2f80c4;
+  --accent-soft: #142430; --accent-border: #2c4f6d;
+  --warn: #e0b055; --warn-soft: #241d10; --warn-border: #574627;
+  --code-bg: #12151a; --code-border: #262c34;
+  --focus: #6cb8f0;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.4), 0 12px 28px rgba(0,0,0,.45);
+}
+</style>
+
+<style>
+/* =========================================================================
+   html-docs / article runtime
+   Shared stylesheet for dynamic articles. Never edit per page.
+
+   Requires the canonical token block inline in the page <head>. The fallback
+   layer below only exists so a page is still legible if the inline block is
+   missing; unlayered inline tokens always win over this layer.
+   ========================================================================= */
+
+@layer tokens-fallback {
+  :root {
+    color-scheme: light;
+    --bg: #ffffff; --surface: #ffffff; --surface-2: #f5f6f8; --surface-3: #eaecf0;
+    --border: #dee1e6; --border-strong: #c2c7cf;
+    --text: #14171a; --text-muted: #565c66; --text-faint: #767d87;
+    --accent: #0078d4; --accent-strong: #005a9e; --accent-quiet: #4a9fe0;
+    --accent-soft: #eaf3fb; --accent-border: #a9d0ef;
+    --warn: #8a5300; --warn-soft: #fdf5e8; --warn-border: #e6c99a;
+    --code-bg: #f5f6f8; --code-border: #e2e5ea;
+    --focus: #0078d4;
+    --shadow-1: 0 1px 2px rgba(16,19,23,.06);
+    --shadow-2: 0 2px 4px rgba(16,19,23,.06), 0 12px 28px rgba(16,19,23,.08);
+    --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+  }
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1013; --surface: #15181d; --surface-2: #1b1f26; --surface-3: #232830;
+    --border: #2b313a; --border-strong: #3d4550;
+    --text: #eceef1; --text-muted: #a7aeb8; --text-faint: #868e99;
+    --accent: #4aa3e8; --accent-strong: #7cc0f3; --accent-quiet: #2f80c4;
+    --accent-soft: #142430; --accent-border: #2c4f6d;
+    --warn: #e0b055; --warn-soft: #241d10; --warn-border: #574627;
+    --code-bg: #12151a; --code-border: #262c34;
+    --focus: #6cb8f0;
+    --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+    --shadow-2: 0 2px 4px rgba(0,0,0,.4), 0 12px 28px rgba(0,0,0,.45);
+  }
+}
+
+/* ---------- base ---------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 24px 96px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.62;
+  counter-reset: card;
+}
+
+.doc {
+  max-width: var(--canvas);
+  margin: 0 auto;
+}
+
+p { margin: 0 0 1em; }
+p:last-child { margin-bottom: 0; }
+
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:hover { color: var(--accent-strong); }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+h1, h2, h3, h4 { line-height: 1.24; font-weight: 650; }
+
+hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin: 0.28em 0; }
+
+strong { font-weight: 650; }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+:not(pre) > code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.08em 0.34em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1em;
+  font-size: 0.96em;
+}
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ---------- controls bar -------------------------------------------- */
+
+.controls {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 40;
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  backdrop-filter: blur(8px);
+}
+
+.ctrl {
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.ctrl:hover { background: var(--surface-2); color: var(--text); }
+.ctrl[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+/* ---------- header, nav, toc ---------------------------------------- */
+
+.doc-header { padding: 84px 0 8px; }
+
+.eyebrow {
+  margin: 0 0 14px;
+  font-size: 0.74rem;
+  font-weight: 620;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.doc-header h1 {
+  margin: 0 0 14px;
+  font-size: clamp(2.1rem, 4.6vw, 3.1rem);
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin: 0 0 14px;
+  max-width: 74ch;
+  font-size: 1.14rem;
+  color: var(--text-muted);
+}
+
+.meta {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-faint);
+}
+
+.doc-nav, .doc-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 18px 0;
+  font-size: 0.9rem;
+}
+.doc-nav { border-bottom: 1px solid var(--border); margin-bottom: 44px; }
+.doc-footer {
+  border-top: 1px solid var(--border);
+  margin-top: 64px;
+  color: var(--text-muted);
+}
+
+.toc {
+  margin: 0 0 48px;
+  padding: 20px 24px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.toc-label {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.toc ol { margin: 0; padding-left: 1.2em; }
+.toc li { margin: 0.2em 0; }
+
+/* ---------- chapter -------------------------------------------------- */
+
+.chapter { margin: 0 0 56px; }
+
+.chapter-label {
+  margin: 0 0 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.76rem;
+  font-weight: 620;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---------- card ------------------------------------------------------ */
+
+.card {
+  margin: 0 0 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+}
+.card:last-child { margin-bottom: 0; }
+.card[data-open] { box-shadow: var(--shadow-2); }
+
+.card:not(.card--lead) { counter-increment: card; }
+
+.card-head { margin: 0; font-size: 1rem; }
+
+.card-toggle {
+  display: grid;
+  grid-template-columns: 46px 1fr 18px 24px;
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  padding: 18px 20px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.card-toggle:hover { background: var(--surface-2); }
+
+.card-num {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  padding-top: 0.34em;
+}
+.card:not(.card--lead) .card-num:empty::before {
+  content: counter(card, decimal-leading-zero);
+}
+.card--lead .card-toggle { grid-template-columns: 46px 1fr 18px 24px; }
+
+/* Read marker. Space is reserved whether or not the card is marked, so
+   marking one never shifts the layout. Unread is invisible until the head is
+   hovered, which hints that the mark exists without decorating every row. */
+.card-read {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  margin-top: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.card-head:hover .card-read { opacity: 0.3; }
+.card[data-read="true"] .card-read,
+.card[data-read="true"] .card-head:hover .card-read {
+  opacity: 1;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* Drawn rather than typed: a check glyph in this range reads as an emoji to
+   text extractors, and drawing it keeps the weight matched to the border. */
+.card[data-read="true"] .card-read::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(42deg);
+}
+
+.card-titles { display: block; min-width: 0; }
+
+.card-title {
+  display: block;
+  font-size: 1.22rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.card-sub {
+  display: block;
+  margin-top: 5px;
+  font-size: 0.96rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.card-mark {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  margin-top: 4px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.card-mark::before, .card-mark::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 1.5px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.card-mark::after { transform: translate(-50%, -50%) rotate(90deg); }
+.card[data-open] .card-mark { border-color: var(--accent-border); color: var(--accent); }
+.card[data-open] .card-mark::after { opacity: 0; transform: translate(-50%, -50%) rotate(0deg); }
+
+.card-body { padding: 0 20px 22px 78px; }
+
+.js .card-body { display: none; }
+.js .card[data-open] > .card-body { display: block; animation: doc-open 0.18s ease; }
+
+@keyframes doc-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.card-body > h4 {
+  margin: 26px 0 10px;
+  font-size: 1.02rem;
+  letter-spacing: 0.01em;
+}
+.card-body > h4:first-child { margin-top: 0; }
+
+/* ---------- reveal ---------------------------------------------------- */
+
+.reveal {
+  margin: 20px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.reveal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 0.98rem;
+  text-align: left;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.reveal-toggle::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.18s ease;
+}
+.reveal[data-open] > .reveal-toggle::before { transform: rotate(45deg); }
+.reveal-toggle:hover { background: var(--surface-3); }
+
+.reveal-body {
+  padding: 2px 16px 16px 33px;
+  font-size: 1rem;
+}
+.js .reveal-body { display: none; }
+.js .reveal[data-open] > .reveal-body { display: block; animation: doc-open 0.18s ease; }
+
+/* ---------- tabs ------------------------------------------------------ */
+
+.tabs { margin: 22px 0; }
+
+.tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: -1px;
+}
+
+.tablist [role="tab"] {
+  font: inherit;
+  font-size: 0.92rem;
+  padding: 9px 15px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+}
+.tablist [role="tab"]:hover { color: var(--text); background: var(--surface-2); }
+.tablist [role="tab"][aria-selected="true"] {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  border-bottom-color: var(--accent-soft);
+  font-weight: 600;
+}
+
+.tabpanel {
+  padding: 18px 20px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) var(--radius-sm);
+}
+
+html:not(.js) .tablist { display: none; }
+html:not(.js) .tabpanel[hidden] { display: block; }
+html:not(.js) .tabpanel { margin-bottom: 8px; border-radius: var(--radius-sm); }
+html:not(.js) .tabpanel[data-tab-label]::before {
+  content: attr(data-tab-label);
+  display: block;
+  margin-bottom: 10px;
+  font-size: 0.74rem;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+/* ---------- detail grid ---------------------------------------------- */
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.detail-tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.detail-open {
+  display: block;
+  width: 100%;
+  padding: 16px 18px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.detail-open:hover { background: var(--surface-3); }
+
+.detail-title {
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 620;
+  margin-bottom: 5px;
+}
+.detail-summary { display: block; color: var(--text-muted); font-size: 0.98rem; }
+.detail-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.detail-more::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.6px solid currentColor;
+  border-top: 1.6px solid currentColor;
+  transform: rotate(45deg);
+}
+html:not(.js) .detail-more { display: none; }
+
+.detail-body { padding: 0 18px 16px; }
+.js .detail-body { display: none; }
+
+/* ---------- dialog ---------------------------------------------------- */
+
+.doc-dialog {
+  width: min(720px, calc(100vw - 40px));
+  max-height: calc(100vh - 80px);
+  padding: 0;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+}
+.doc-dialog::backdrop { background: rgba(8, 10, 13, 0.55); }
+
+.doc-dialog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 12px;
+}
+.doc-dialog-head h2 { margin: 0; font-size: 1.2rem; }
+
+.doc-dialog-body {
+  padding: 0 22px 24px;
+  overflow: auto;
+  max-height: calc(100vh - 190px);
+}
+.js .doc-dialog-body .detail-body { display: block; padding: 0; }
+
+.doc-dialog-close {
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.doc-dialog-close:hover { color: var(--text); background: var(--surface-2); }
+
+/* ---------- sequence -------------------------------------------------- */
+
+.sequence {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: seq;
+}
+.sequence > li {
+  position: relative;
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-quiet);
+  border-radius: var(--radius-sm);
+}
+.sequence > li:last-child { border-left-color: var(--accent-strong); background: var(--accent-soft); }
+.sequence > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -9px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid var(--border-strong);
+  border-top: 1.6px solid var(--border-strong);
+  transform: translateY(-50%) rotate(45deg);
+}
+.seq-title {
+  display: block;
+  font-weight: 620;
+  font-size: 0.98rem;
+  margin-bottom: 4px;
+}
+.seq-note { display: block; font-size: 0.9rem; color: var(--text-muted); }
+
+/* ---------- steps ------------------------------------------------------ */
+
+.steps {
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.steps > li {
+  position: relative;
+  counter-increment: step;
+  margin: 0 0 14px;
+  padding-left: 46px;
+}
+.steps > li:last-child { margin-bottom: 0; }
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+}
+.steps h3, .steps h4 { margin: 4px 0 4px; font-size: 1.02rem; }
+
+/* ---------- summary grid ---------------------------------------------- */
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.summary-item {
+  padding: 16px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.summary-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* ---------- arrow list -------------------------------------------------- */
+
+.arrow-list {
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+.arrow-list > li {
+  position: relative;
+  margin: 0 0 9px;
+  padding-left: 28px;
+}
+.arrow-list > li::before {
+  content: "\2192";
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* ---------- callouts ---------------------------------------------------- */
+
+.callout {
+  margin: 22px 0;
+  padding: 14px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.98rem;
+}
+.callout-label {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.callout--warning {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  border-left-color: var(--warn);
+}
+.callout--warning .callout-label { color: var(--warn); }
+.callout--verdict { background: var(--accent-soft); border-color: var(--accent-border); border-left-color: var(--accent-strong); }
+.callout--source, .callout--author { border-left-color: var(--border-strong); }
+.callout--source .callout-label, .callout--author .callout-label { color: var(--text-muted); }
+.callout--source { font-size: 0.92rem; color: var(--text-muted); }
+
+/* note is the base appearance; the modifier exists so that every callout in a
+   document names its meaning explicitly */
+.callout--note { border-left-color: var(--accent); }
+.callout--rule { border-left-color: var(--text); background: var(--surface-3); }
+.callout--rule .callout-label { color: var(--text); }
+
+/* ---------- code -------------------------------------------------------- */
+
+.code { margin: 22px 0; }
+
+.code-label {
+  margin: 0 0 -1px;
+  display: inline-block;
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.code pre {
+  margin: 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+.code pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.code:not(:has(.code-label)) pre { border-radius: var(--radius-sm); }
+
+/* ---------- figures ------------------------------------------------------ */
+
+.figure { margin: 24px 0; }
+.figure a.zoom {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+  line-height: 0;
+}
+.figure img { display: block; width: 100%; height: auto; }
+.figure figcaption {
+  margin-top: 9px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ---------- lightbox ------------------------------------------------------ */
+
+.lightbox {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+}
+.lightbox::backdrop { background: rgba(6, 8, 10, 0.9); }
+
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.lightbox-stage[data-panning] { cursor: grabbing; }
+.lightbox-stage img {
+  max-width: 96vw;
+  max-height: 92vh;
+  transform: translate(var(--lb-x, 0px), var(--lb-y, 0px)) scale(var(--lb-scale, 1));
+  transform-origin: center center;
+  transition: transform 0.08s linear;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lightbox-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-2);
+}
+.lightbox-bar button {
+  font: inherit;
+  font-size: 0.8rem;
+  min-width: 38px;
+  padding: 7px 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.lightbox-bar button:hover { background: var(--surface-2); color: var(--text); }
+
+.lightbox-caption {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(80ch, 90vw);
+  padding: 8px 14px;
+  font-size: 0.86rem;
+  text-align: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.lightbox-caption:empty { display: none; }
+
+/* ---------- takeaway ------------------------------------------------------ */
+
+.takeaway {
+  margin: 56px 0 0;
+  padding: 28px 32px;
+  font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+  line-height: 1.45;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* ---------- slides mode ---------------------------------------------------- */
+
+.slide-ui { display: none; }
+
+[data-view="slides"] body {
+  padding: 0;
+  overflow: hidden;
+  height: 100vh;
+}
+[data-view="slides"] .doc { max-width: none; }
+[data-view="slides"] .doc-header,
+[data-view="slides"] .doc-nav,
+[data-view="slides"] .doc-footer,
+[data-view="slides"] .toc,
+[data-view="slides"] .takeaway:not([data-slide-current]) { display: none; }
+[data-view="slides"] .chapter { margin: 0; }
+[data-view="slides"] .chapter-label { display: none; }
+[data-view="slides"] .card { display: none; margin: 0; }
+
+[data-view="slides"] .controls {
+  opacity: 0.22;
+  transition: opacity 0.35s ease;
+}
+/* Declared before the hover rule: both selectors weigh the same, so whichever
+   comes last would win, and hover must always be able to reach full opacity. */
+[data-view="slides"][data-chrome="awake"] .controls { opacity: 0.75; }
+[data-view="slides"] .controls:hover,
+[data-view="slides"] .controls:focus-within { opacity: 1; }
+[data-view="slides"] .ctrl[data-action="expand-all"],
+[data-view="slides"] .ctrl[data-action="collapse-all"],
+[data-view="slides"] .ctrl[data-action="clear-read"] { display: none; }
+/* While presenting, the Slides toggle is the way back to the article, but it
+   must not glow: an accent pill in the corner of every slide pulls the eye.
+   It reads as pressed only once the bar is hovered. */
+[data-view="slides"] .ctrl[aria-pressed="true"] {
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+[data-view="slides"] .controls:hover .ctrl[aria-pressed="true"],
+[data-view="slides"] .controls:focus-within .ctrl[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+[data-view="slides"] .slide-ui {
+  display: flex;
+  position: fixed;
+  z-index: 60;
+}
+[data-view="slides"] .slide-nav {
+  opacity: 0.22;
+  transition: opacity 0.35s ease;
+}
+[data-view="slides"][data-chrome="awake"] .slide-nav { opacity: 0.75; }
+[data-view="slides"] .slide-nav:hover,
+[data-view="slides"] .slide-nav:focus-within { opacity: 1; }
+[data-view="slides"] .slide-progress {
+  bottom: 14px;
+  right: 18px;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+[data-view="slides"] .slide-nav {
+  bottom: 12px;
+  left: 18px;
+  gap: 6px;
+}
+.slide-nav button {
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+}
+.slide-nav button:hover { color: var(--text); background: var(--surface-3); }
+
+/* Slide index. Same shape as the deck's, so the two document types behave
+   identically once you are presenting. */
+.slide-index {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  padding: 0;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+}
+.slide-index::backdrop { background: rgba(8, 10, 13, 0.6); }
+.slide-index h2 {
+  margin: 0;
+  padding: 20px 24px 12px;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.slide-index ol {
+  margin: 0;
+  padding: 0 12px 16px;
+  list-style: none;
+  overflow: auto;
+  max-height: calc(100vh - 190px);
+}
+.slide-index button {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.slide-index button:hover { background: var(--surface-2); }
+.slide-index button[aria-current="true"] { background: var(--accent-soft); color: var(--accent-strong); }
+.slide-index .idx-num { font-family: var(--font-mono); color: var(--text-faint); }
+.slide-index .idx-kind { color: var(--text-faint); font-size: 0.8rem; }
+
+[data-view="slides"] .card[data-slide-current] > * { zoom: var(--slide-zoom, 1); }
+
+[data-view="slides"] .card[data-slide-current] {
+  display: block;
+  position: fixed;
+  inset: 0;
+  padding: 5vh 6vw 9vh;
+  overflow: hidden;
+  background: var(--bg);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+[data-view="slides"] .card[data-slide-current] .card-toggle {
+  grid-template-columns: 62px 1fr;
+  padding: 0 0 18px;
+  cursor: default;
+  border-bottom: 1px solid var(--border);
+}
+[data-view="slides"] .card[data-slide-current] .card-toggle:hover { background: transparent; }
+[data-view="slides"] .card[data-slide-current] .card-mark { display: none; }
+[data-view="slides"] .card[data-slide-current] .card-num { font-size: 1rem; padding-top: 0.5em; }
+[data-view="slides"] .card[data-slide-current] .card-title { font-size: 2.1rem; }
+[data-view="slides"] .card[data-slide-current] .card-sub { font-size: 1.1rem; }
+[data-view="slides"] .card[data-slide-current] .card-body {
+  display: block;
+  padding: 26px 0 0 62px;
+  font-size: 1.16rem;
+}
+[data-view="slides"] .card[data-slide-current] .reveal-body { display: none; }
+[data-view="slides"] .card[data-slide-current] .reveal[data-open] > .reveal-body { display: block; }
+
+[data-view="slides"] .chapter[data-slide-current] > .chapter-label {
+  display: grid;
+  align-content: center;
+  position: fixed;
+  inset: 0;
+  padding: 0 8vw;
+  margin: 0;
+  border: 0;
+  font-size: clamp(2rem, 6vw, 4rem);
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: var(--bg);
+}
+
+[data-view="slides"] .takeaway[data-slide-current] {
+  display: grid;
+  align-content: center;
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  padding: 0 10vw;
+  border: 0;
+  border-radius: 0;
+  font-size: clamp(1.6rem, 3.6vw, 2.6rem);
+  background: var(--accent-soft);
+}
+
+/* ---------- responsive ------------------------------------------------------ */
+
+@media (max-width: 760px) {
+  body { padding: 0 16px 72px; font-size: 16px; }
+  .doc-header { padding-top: 96px; }
+  .card-toggle { grid-template-columns: 34px 1fr 22px; gap: 9px; padding: 15px 14px; }
+  .card-body { padding: 0 16px 18px 16px; }
+  .detail-grid, .summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .sequence { grid-auto-flow: row; }
+  .sequence > li:not(:last-child)::after {
+    top: auto; right: auto; bottom: -9px; left: 22px;
+    transform: rotate(135deg);
+  }
+  .controls { top: auto; bottom: 12px; right: 12px; left: 12px; justify-content: center; }
+}
+
+/* ---------- motion, print -------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  body { padding: 0; font-size: 11pt; }
+  .controls, .slide-ui, .doc-nav, .doc-footer { display: none; }
+  .js .card-body, .js .reveal-body, .js .detail-body { display: block !important; }
+  html:not(.js) .tabpanel[hidden], .tabpanel[hidden] { display: block !important; }
+  .card { break-inside: avoid; box-shadow: none; }
+  .card-mark, .detail-more { display: none; }
+  a { color: inherit; text-decoration: underline; }
+}
+</style>
+<script>
+(function () {
+  function boot() {
+/* =========================================================================
+   html-docs / article runtime
+   Shared script for dynamic articles. Never edit per page.
+
+   This script adds behavior only. Every piece of content is already present
+   and readable in the HTML with JavaScript disabled.
+
+   Provides: card and reveal collapsing, expand/collapse all, tabs, detail-grid
+   dialogs, image lightbox with zoom and pan, theme toggle, optional slides mode.
+   ========================================================================= */
+
+(() => {
+  "use strict";
+
+  const root = document.documentElement;
+  const THEME_KEY = "doc-theme";
+  /* Below this the body text stops being readable from the back of a room.
+     A card that still overflows here has to be split by the author. */
+  const MIN_ZOOM = 0.5;
+
+  const els = (sel, scope) => Array.from((scope || document).querySelectorAll(sel));
+  const el = (sel, scope) => (scope || document).querySelector(sel);
+
+  /* Slides state is declared first: the page may already be in slides mode on
+     first paint (?view=slides), and component setup below calls fitCurrentSlide. */
+  const slidesEnabled = !!el('[data-action="toggle-slides"]');
+  let slides = [];
+  let slideIndex = 0;
+  let slideDialog = null;
+  let chromeTimer = null;
+
+  /* ---------- theme ------------------------------------------------- */
+
+  function currentTheme() {
+    return root.getAttribute("data-theme") === "dark" ? "dark" : "light";
+  }
+
+  function applyTheme(theme) {
+    root.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch (err) {
+      /* storage blocked; theme still applies for this page view */
+    }
+    els('[data-action="toggle-theme"]').forEach((btn) => {
+      const next = theme === "dark" ? "light" : "dark";
+      btn.textContent = next === "dark" ? "Dark" : "Light";
+      btn.setAttribute("aria-label", "Switch to " + next + " theme");
+    });
+  }
+
+  applyTheme(currentTheme());
+
+  /* ---------- collapsibles ------------------------------------------ */
+
+  function setOpen(container, toggle, open) {
+    if (open) {
+      container.setAttribute("data-open", "");
+    } else {
+      container.removeAttribute("data-open");
+    }
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  function initCollapsible(container, toggleSel, bodySel) {
+    const toggle = el(toggleSel, container);
+    const body = el(bodySel, container);
+    if (!toggle || !body) return;
+
+    if (!body.id) {
+      body.id = (container.id || "sec-" + Math.random().toString(36).slice(2, 8)) + "-body";
+    }
+    toggle.setAttribute("aria-controls", body.id);
+
+    const startOpen = container.hasAttribute("data-open") ||
+      toggle.getAttribute("aria-expanded") === "true";
+    setOpen(container, toggle, startOpen);
+
+    toggle.addEventListener("click", () => {
+      const open = !container.hasAttribute("data-open");
+      setOpen(container, toggle, open);
+      if (root.getAttribute("data-view") === "slides") fitCurrentSlide();
+    });
+  }
+
+  /* Card numbers are a CSS counter so the page numbers itself without JS. In
+     slides mode non-current cards are display:none, which restarts the counter,
+     so freeze the numbers into the DOM once. The :empty rule in the stylesheet
+     then stops the counter from rendering a second value. */
+  let cardNumber = 0;
+  els(".card").forEach((card) => {
+    if (!card.id) {
+      card.id = "card-" + Math.random().toString(36).slice(2, 8);
+      card.setAttribute("data-auto-id", "");
+    }
+    const num = el(":scope > .card-head > .card-toggle > .card-num", card);
+    if (num && !card.classList.contains("card--lead")) {
+      cardNumber += 1;
+      num.textContent = cardNumber < 10 ? "0" + cardNumber : String(cardNumber);
+    }
+    initCollapsible(card, ":scope > .card-head > .card-toggle", ":scope > .card-body");
+  });
+
+  els(".reveal").forEach((reveal) => {
+    initCollapsible(reveal, ":scope > .reveal-toggle", ":scope > .reveal-body");
+  });
+
+  function setAllCards(open) {
+    els(".card").forEach((card) => {
+      const toggle = el(":scope > .card-head > .card-toggle", card);
+      if (toggle) setOpen(card, toggle, open);
+    });
+  }
+
+  els('[data-action="expand-all"]').forEach((b) =>
+    b.addEventListener("click", () => setAllCards(true)));
+  els('[data-action="collapse-all"]').forEach((b) =>
+    b.addEventListener("click", () => setAllCards(false)));
+  els('[data-action="toggle-theme"]').forEach((b) =>
+    b.addEventListener("click", () => applyTheme(currentTheme() === "dark" ? "light" : "dark")));
+
+  /* ---------- read tracking -------------------------------------------- */
+
+  /* A card is marked once it has been open and on screen long enough to have
+     actually been read. That is a different claim from "was clicked", which is
+     why this is measured rather than wired to the toggle. State is per
+     document and survives reloads, so a long article can be resumed. */
+
+  const cards = els(".card");
+
+  const READ_KEY = "doc-read:" + (() => {
+    const meta = el('meta[name="doc-id"]');
+    if (meta && meta.content) return meta.content;
+    return location.pathname.split("/").pop() || "index";
+  })();
+
+  /* Auto-generated ids are random per load, so they cannot key stored state.
+     Those cards fall back to their position. Authored ids survive edits. */
+  const cardKey = (card) =>
+    card.hasAttribute("data-auto-id") ? "n" + cards.indexOf(card) : card.id;
+
+  let readSet = new Set();
+  try {
+    readSet = new Set(JSON.parse(localStorage.getItem(READ_KEY) || "[]"));
+  } catch (e) { readSet = new Set(); }
+
+  function persistRead() {
+    try { localStorage.setItem(READ_KEY, JSON.stringify(Array.from(readSet))); }
+    catch (e) { /* private mode; marks simply do not persist */ }
+  }
+
+  function paintRead() {
+    cards.forEach((card) => {
+      card.setAttribute("data-read", readSet.has(cardKey(card)) ? "true" : "false");
+    });
+  }
+
+  const dwell = new Map();
+
+  function clearDwell(card) {
+    if (!dwell.has(card)) return;
+    clearTimeout(dwell.get(card));
+    dwell.delete(card);
+  }
+
+  function startDwell(card) {
+    if (dwell.has(card)) return;
+    dwell.set(card, setTimeout(() => {
+      dwell.delete(card);
+      readSet.add(cardKey(card));
+      persistRead();
+      paintRead();
+    }, 900));
+  }
+
+  function scanRead() {
+    /* Slides mode shows one card at a time, full screen. Counting that as
+       reading would mark the whole article read the moment it is presented. */
+    if (root.getAttribute("data-view") === "slides") return;
+    const vh = window.innerHeight;
+    if (!vh) return;
+    cards.forEach((card) => {
+      if (readSet.has(cardKey(card))) return;
+      if (!card.hasAttribute("data-open")) { clearDwell(card); return; }
+      const box = card.getBoundingClientRect();
+      const visible = Math.min(box.bottom, vh) - Math.max(box.top, 0);
+      if (visible <= 0) { clearDwell(card); return; }
+      /* A card shorter than the viewport counts once half of it is showing.
+         A taller one counts only once its end has been reached, which is the
+         only honest signal that the reader passed through the whole thing. */
+      const enough = box.height > vh * 0.9
+        ? box.bottom <= vh + 24
+        : visible >= box.height * 0.5;
+      if (enough) startDwell(card); else clearDwell(card);
+    });
+  }
+
+  let scanQueued = false;
+  function queueScan() {
+    if (scanQueued) return;
+    scanQueued = true;
+    requestAnimationFrame(() => { scanQueued = false; scanRead(); });
+  }
+
+  if (cards.length) {
+    cards.forEach((card) => {
+      const toggle = el(":scope > .card-head > .card-toggle", card);
+      const mark = toggle && el(":scope > .card-mark", toggle);
+      if (!toggle || !mark) return;
+      const dot = document.createElement("span");
+      dot.className = "card-read";
+      dot.setAttribute("aria-hidden", "true");
+      toggle.insertBefore(dot, mark);
+    });
+
+    const controls = el(".controls");
+    if (controls) {
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "ctrl";
+      clear.setAttribute("data-action", "clear-read");
+      clear.textContent = "Clear marks";
+      clear.addEventListener("click", () => {
+        readSet.clear();
+        dwell.forEach((id) => clearTimeout(id));
+        dwell.clear();
+        persistRead();
+        paintRead();
+        queueScan();
+      });
+
+      controls.prepend(clear);
+    }
+
+    paintRead();
+    addEventListener("scroll", queueScan, { passive: true });
+    addEventListener("resize", queueScan, { passive: true });
+    document.addEventListener("click", (event) => {
+      if (event.target.closest(".card-toggle, [data-action]")) queueScan();
+    });
+    queueScan();
+  }
+
+  /* ---------- tabs ---------------------------------------------------- */
+
+  els(".tabs").forEach((group) => {
+    const tabs = els('[role="tab"]', group);
+    const panels = els('[role="tabpanel"]', group);
+    if (!tabs.length || tabs.length !== panels.length) return;
+
+    function select(index, focus) {
+      tabs.forEach((tab, i) => {
+        const active = i === index;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+        panels[i].hidden = !active;
+      });
+      if (focus) tabs[index].focus();
+      if (root.getAttribute("data-view") === "slides") fitCurrentSlide();
+    }
+
+    let selected = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true");
+    if (selected < 0) selected = 0;
+    select(selected, false);
+
+    tabs.forEach((tab, i) => {
+      tab.addEventListener("click", () => {
+        selected = i;
+        select(i, false);
+      });
+      tab.addEventListener("keydown", (event) => {
+        const last = tabs.length - 1;
+        let next = null;
+        if (event.key === "ArrowRight") next = i === last ? 0 : i + 1;
+        else if (event.key === "ArrowLeft") next = i === 0 ? last : i - 1;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = last;
+        if (next === null) return;
+        event.preventDefault();
+        selected = next;
+        select(next, true);
+      });
+    });
+  });
+
+  /* ---------- detail grid dialog ---------------------------------------- */
+
+  let detailDialog = null;
+  let detailAnchor = null;
+  let detailSource = null;
+
+  function ensureDetailDialog() {
+    if (detailDialog) return detailDialog;
+    detailDialog = document.createElement("dialog");
+    detailDialog.className = "doc-dialog";
+    detailDialog.innerHTML =
+      '<div class="doc-dialog-head"><h2></h2>' +
+      '<button type="button" class="doc-dialog-close">Close</button></div>' +
+      '<div class="doc-dialog-body"></div>';
+    document.body.appendChild(detailDialog);
+    el(".doc-dialog-close", detailDialog).addEventListener("click", () => detailDialog.close());
+    detailDialog.addEventListener("close", restoreDetail);
+    return detailDialog;
+  }
+
+  function restoreDetail() {
+    if (detailSource && detailAnchor && detailAnchor.parentNode) {
+      detailAnchor.parentNode.insertBefore(detailSource, detailAnchor);
+      detailAnchor.remove();
+    }
+    detailSource = null;
+    detailAnchor = null;
+  }
+
+  els(".detail-tile").forEach((tile) => {
+    const button = el(".detail-open", tile);
+    const body = el(".detail-body", tile);
+    const title = el(".detail-title", tile);
+    if (!button || !body) return;
+
+    if (!body.id) body.id = "detail-" + Math.random().toString(36).slice(2, 8);
+    button.setAttribute("aria-controls", body.id);
+    button.setAttribute("aria-haspopup", "dialog");
+
+    button.addEventListener("click", () => {
+      const dialog = ensureDetailDialog();
+      restoreDetail();
+      el(".doc-dialog-head h2", dialog).textContent = title ? title.textContent : "Detail";
+      detailSource = body;
+      detailAnchor = document.createComment("detail-anchor");
+      body.parentNode.insertBefore(detailAnchor, body);
+      el(".doc-dialog-body", dialog).replaceChildren(body);
+      dialog.showModal();
+    });
+  });
+
+  /* ---------- lightbox --------------------------------------------------- */
+
+  let lightbox = null;
+  let lbScale = 1;
+  let lbX = 0;
+  let lbY = 0;
+
+  function lbApply() {
+    const stage = el(".lightbox-stage", lightbox);
+    stage.style.setProperty("--lb-scale", String(lbScale));
+    stage.style.setProperty("--lb-x", lbX + "px");
+    stage.style.setProperty("--lb-y", lbY + "px");
+  }
+
+  function lbZoom(factor) {
+    lbScale = Math.min(8, Math.max(1, lbScale * factor));
+    if (lbScale === 1) {
+      lbX = 0;
+      lbY = 0;
+    }
+    lbApply();
+  }
+
+  function ensureLightbox() {
+    if (lightbox) return lightbox;
+    lightbox = document.createElement("dialog");
+    lightbox.className = "lightbox";
+    lightbox.innerHTML =
+      '<div class="lightbox-stage"><img alt=""></div>' +
+      '<p class="lightbox-caption"></p>' +
+      '<div class="lightbox-bar">' +
+      '<button type="button" data-lb="out" aria-label="Zoom out">&minus;</button>' +
+      '<button type="button" data-lb="reset">Reset</button>' +
+      '<button type="button" data-lb="in" aria-label="Zoom in">+</button>' +
+      '<button type="button" data-lb="close">Close</button>' +
+      "</div>";
+    document.body.appendChild(lightbox);
+
+    const stage = el(".lightbox-stage", lightbox);
+
+    lightbox.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-lb]");
+      if (!action) return;
+      const kind = action.getAttribute("data-lb");
+      if (kind === "in") lbZoom(1.4);
+      else if (kind === "out") lbZoom(1 / 1.4);
+      else if (kind === "reset") { lbScale = 1; lbX = 0; lbY = 0; lbApply(); }
+      else lightbox.close();
+    });
+
+    lightbox.addEventListener("keydown", (event) => {
+      if (event.key === "+" || event.key === "=") { event.preventDefault(); lbZoom(1.4); }
+      else if (event.key === "-") { event.preventDefault(); lbZoom(1 / 1.4); }
+      else if (event.key === "0") { event.preventDefault(); lbScale = 1; lbX = 0; lbY = 0; lbApply(); }
+    });
+
+    stage.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      lbZoom(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+    }, { passive: false });
+
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    const pointers = new Map();
+    let pinchStart = 0;
+    let pinchScale = 1;
+
+    stage.addEventListener("pointerdown", (event) => {
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      stage.setPointerCapture(event.pointerId);
+      if (pointers.size === 2) {
+        const [a, b] = Array.from(pointers.values());
+        pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
+        pinchScale = lbScale;
+        dragging = false;
+        return;
+      }
+      if (lbScale > 1) {
+        dragging = true;
+        startX = event.clientX - lbX;
+        startY = event.clientY - lbY;
+        stage.setAttribute("data-panning", "");
+      }
+    });
+
+    stage.addEventListener("pointermove", (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+      if (pointers.size === 2 && pinchStart > 0) {
+        const [a, b] = Array.from(pointers.values());
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        lbScale = Math.min(8, Math.max(1, pinchScale * (dist / pinchStart)));
+        if (lbScale === 1) { lbX = 0; lbY = 0; }
+        lbApply();
+        return;
+      }
+      if (!dragging) return;
+      lbX = event.clientX - startX;
+      lbY = event.clientY - startY;
+      lbApply();
+    });
+
+    const endPointer = (event) => {
+      pointers.delete(event.pointerId);
+      if (pointers.size < 2) pinchStart = 0;
+      if (pointers.size === 0) {
+        dragging = false;
+        stage.removeAttribute("data-panning");
+      }
+    };
+    stage.addEventListener("pointerup", endPointer);
+    stage.addEventListener("pointercancel", endPointer);
+
+    return lightbox;
+  }
+
+  els("a.zoom").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+      event.preventDefault();
+      const dialog = ensureLightbox();
+      const image = el(".lightbox-stage img", dialog);
+      const source = el("img", link);
+      image.src = link.getAttribute("href");
+      image.alt = source ? source.alt : "";
+      const figure = link.closest("figure");
+      const caption = figure ? el("figcaption", figure) : null;
+      el(".lightbox-caption", dialog).textContent = caption ? caption.textContent : "";
+      lbScale = 1;
+      lbX = 0;
+      lbY = 0;
+      lbApply();
+      dialog.showModal();
+    });
+  });
+
+  /* ---------- slides mode --------------------------------------------- */
+
+  function buildSlides() {
+    const list = [];
+    const chapters = els("main .chapter");
+    if (chapters.length) {
+      chapters.forEach((chapter) => {
+        if (el(":scope > .chapter-label", chapter)) list.push(chapter);
+        els(":scope > .card", chapter).forEach((card) => list.push(card));
+      });
+    } else {
+      els("main .card").forEach((card) => list.push(card));
+    }
+    const takeaway = el(".takeaway");
+    if (takeaway) list.push(takeaway);
+    list.forEach((node, i) => {
+      if (!node.id) node.id = "slide-" + (i + 1);
+    });
+    return list;
+  }
+
+  function ensureSlideUi() {
+    if (el(".slide-progress")) return;
+    const nav = document.createElement("div");
+    nav.className = "slide-ui slide-nav";
+    nav.innerHTML =
+      '<button type="button" data-slide="prev" aria-label="Previous slide">Prev</button>' +
+      '<button type="button" data-slide="next" aria-label="Next slide">Next</button>' +
+      '<button type="button" data-slide="index" aria-label="Jump to a slide">Index</button>';
+    const progress = document.createElement("div");
+    progress.className = "slide-ui slide-progress";
+    progress.setAttribute("aria-live", "polite");
+    document.body.appendChild(nav);
+    document.body.appendChild(progress);
+
+    nav.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-slide]");
+      if (!button) return;
+      const kind = button.getAttribute("data-slide");
+      if (kind === "prev") go(slideIndex - 1);
+      else if (kind === "next") go(slideIndex + 1);
+      else if (kind === "index") openSlideIndex();
+      dropPointerFocus(event, button);
+    });
+  }
+
+  /* ---------- slide index ---------------------------------------------- */
+
+  function slideLabel(node) {
+    /* Inside a card the wrapping <h3> comes first in document order, so ask for
+       .card-title explicitly; a chapter slide contains its cards, so there the
+       document-order match is the chapter's own heading. */
+    const title = (node.classList.contains("card") && el(".card-title", node)) ||
+      el(".card-title, .chapter-title, h2, h3", node);
+    if (title && title.textContent.trim()) return title.textContent.trim();
+    const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+    if (text) return text.length > 64 ? text.slice(0, 63).trimEnd() + "\u2026" : text;
+    return node.id;
+  }
+
+  function slideKind(node) {
+    if (node.classList.contains("chapter")) return "Chapter";
+    if (node.classList.contains("takeaway")) return "Closing";
+    return "";
+  }
+
+  function markSlideIndex() {
+    if (!slideDialog) return;
+    els("button", slideDialog).forEach((button, i) =>
+      button.setAttribute("aria-current", i === slideIndex ? "true" : "false"));
+  }
+
+  function openSlideIndex() {
+    if (!slideDialog) {
+      slideDialog = document.createElement("dialog");
+      slideDialog.className = "slide-index";
+      const escape = (text) =>
+        text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      slideDialog.innerHTML = "<h2>Slides</h2><ol>" + slides.map((node, i) =>
+        '<li><button type="button" data-go="' + i + '">' +
+        '<span class="idx-num">' + (i + 1) + "</span><span>" +
+        escape(slideLabel(node)) +
+        (slideKind(node) ? ' <span class="idx-kind">' + slideKind(node) + "</span>" : "") +
+        "</span></button></li>").join("") + "</ol>";
+      document.body.appendChild(slideDialog);
+      slideDialog.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-go]");
+        if (!button) return;
+        go(parseInt(button.getAttribute("data-go"), 10));
+        slideDialog.close();
+        /* Closing returns focus to the Index button, which would otherwise
+           keep the nav bar lit. */
+        dropPointerFocus(event, document.activeElement);
+      });
+    }
+    markSlideIndex();
+    slideDialog.showModal();
+    const current = el('button[aria-current="true"]', slideDialog);
+    if (current) current.focus();
+  }
+
+  function fitSlide(node) {
+    if (!node || !node.classList.contains("card")) return;
+    const kids = Array.from(node.children);
+    if (!kids.length) return;
+    const apply = (value) => kids.forEach((kid) => kid.style.setProperty("--slide-zoom", String(value)));
+
+    apply(1);
+    if (node.scrollHeight <= node.clientHeight + 1) return;
+
+    /* Converge instead of trusting one ratio: margins between children and
+       sub-pixel rounding both survive the zoom, so a single computed guess
+       reliably leaves a few pixels of content clipped. */
+    let zoom = Math.max(MIN_ZOOM, (node.clientHeight / node.scrollHeight) * 0.98);
+    apply(zoom);
+    let guard = 0;
+    while (node.scrollHeight > node.clientHeight + 1 && zoom > MIN_ZOOM && guard < 20) {
+      zoom = Math.max(MIN_ZOOM, zoom - 0.02);
+      apply(zoom);
+      guard += 1;
+    }
+    if (node.scrollHeight > node.clientHeight + 1) {
+      console.warn("html-docs: slide content does not fit at readable size. Split this card: #" + node.id);
+    }
+  }
+
+  function fitCurrentSlide() {
+    fitSlide(slides[slideIndex]);
+  }
+
+  function go(index) {
+    if (!slides.length) return;
+    slideIndex = Math.min(slides.length - 1, Math.max(0, index));
+    slides.forEach((node) => node.removeAttribute("data-slide-current"));
+    const node = slides[slideIndex];
+    node.setAttribute("data-slide-current", "");
+    if (node.classList.contains("card")) {
+      const toggle = el(":scope > .card-head > .card-toggle", node);
+      if (toggle) setOpen(node, toggle, true);
+    }
+    const progress = el(".slide-progress");
+    if (progress) progress.textContent = (slideIndex + 1) + " / " + slides.length;
+    markSlideIndex();
+    fitSlide(node);
+    syncUrl();
+  }
+
+  function syncUrl() {
+    const params = new URLSearchParams(location.search);
+    const inSlides = root.getAttribute("data-view") === "slides";
+    if (inSlides) params.set("view", "slides");
+    else params.delete("view");
+    const query = params.toString();
+    const hash = inSlides && slides[slideIndex] ? "#" + slides[slideIndex].id : location.hash;
+    history.replaceState(null, "", location.pathname + (query ? "?" + query : "") + hash);
+  }
+
+  /* The presenting chrome rests near-invisible so it stays out of a recording.
+     That only works if the reader has been shown it once, so it is held up for
+     several seconds on entry and lifted again whenever the mouse moves. */
+  function wakeChrome(ms) {
+    root.setAttribute("data-chrome", "awake");
+    clearTimeout(chromeTimer);
+    chromeTimer = setTimeout(() => root.removeAttribute("data-chrome"), ms);
+  }
+
+  /* A pointer click leaves the button focused, and :focus-within holds the
+     whole bar at full opacity for the rest of the talk. Keyboard activation
+     reports detail 0 and keeps its focus ring. */
+  function dropPointerFocus(event, node) {
+    if (event.detail > 0 && node && node.blur) node.blur();
+  }
+
+  function setView(view) {
+    const inSlides = view === "slides";
+    if (inSlides) {
+      slides = buildSlides();
+      ensureSlideUi();
+      root.setAttribute("data-view", "slides");
+      const target = slides.findIndex((node) => "#" + node.id === location.hash);
+      go(target >= 0 ? target : slideIndex);
+      wakeChrome(4200);
+    } else {
+      const node = slides[slideIndex];
+      root.removeAttribute("data-view");
+      slides.forEach((item) => {
+        item.removeAttribute("data-slide-current");
+        Array.from(item.children).forEach((kid) => kid.style.removeProperty("--slide-zoom"));
+      });
+      syncUrl();
+      if (node) node.scrollIntoView({ block: "start" });
+    }
+    els('[data-action="toggle-slides"]').forEach((button) =>
+      button.setAttribute("aria-pressed", inSlides ? "true" : "false"));
+  }
+
+  if (slidesEnabled) {
+    els('[data-action="toggle-slides"]').forEach((button) => {
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", (event) => {
+        setView(root.getAttribute("data-view") === "slides" ? "article" : "slides");
+        dropPointerFocus(event, button);
+      });
+    });
+
+    document.addEventListener("keydown", (event) => {
+      const inSlides = root.getAttribute("data-view") === "slides";
+      if (!inSlides) return;
+      if (el("dialog[open]")) return;
+      const key = event.key;
+      if (key === "ArrowRight" || key === "PageDown" || key === " " || key === "Spacebar") {
+        event.preventDefault();
+        go(slideIndex + 1);
+      } else if (key === "ArrowLeft" || key === "PageUp") {
+        event.preventDefault();
+        go(slideIndex - 1);
+      } else if (key === "Home") {
+        event.preventDefault();
+        go(0);
+      } else if (key === "End") {
+        event.preventDefault();
+        go(slides.length - 1);
+      } else if (key === "f" || key === "F") {
+        event.preventDefault();
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen().catch(() => {});
+      } else if (key === "o" || key === "O") {
+        event.preventDefault();
+        openSlideIndex();
+      } else if (key === "Escape") {
+        setView("article");
+      }
+    });
+
+    /* The slide chrome sits at 0.12 opacity so it never competes with the
+       content, which also makes it easy to miss. Any pointer movement brings
+       it part-way up for a moment; hovering still takes it to full strength. */
+    document.addEventListener("mousemove", () => {
+      if (root.getAttribute("data-view") !== "slides") return;
+      wakeChrome(2400);
+    }, { passive: true });
+
+    document.addEventListener("click", (event) => {
+      if (root.getAttribute("data-view") !== "slides") return;
+      if (event.target.closest("button, a, input, select, textarea, dialog")) return;
+      go(slideIndex + 1);
+    });
+
+    let touchX = null;
+    document.addEventListener("touchstart", (event) => {
+      if (root.getAttribute("data-view") !== "slides") return;
+      touchX = event.changedTouches[0].clientX;
+    }, { passive: true });
+    document.addEventListener("touchend", (event) => {
+      if (root.getAttribute("data-view") !== "slides" || touchX === null) return;
+      const delta = event.changedTouches[0].clientX - touchX;
+      touchX = null;
+      if (Math.abs(delta) < 45) return;
+      go(delta < 0 ? slideIndex + 1 : slideIndex - 1);
+    }, { passive: true });
+
+    window.addEventListener("resize", () => {
+      if (root.getAttribute("data-view") === "slides") fitCurrentSlide();
+    });
+
+    const wanted = new URLSearchParams(location.search).get("view");
+    if (wanted === "slides" || root.getAttribute("data-view") === "slides") {
+      setView("slides");
+    }
+  }
+
+  /* ---------- deep links ------------------------------------------------ */
+
+  function openAncestors(node) {
+    let current = node;
+    while (current && current !== document.body) {
+      if (current.classList && (current.classList.contains("card") || current.classList.contains("reveal"))) {
+        const toggle = el(":scope > .card-head > .card-toggle", current) ||
+          el(":scope > .reveal-toggle", current);
+        if (toggle) setOpen(current, toggle, true);
+      }
+      current = current.parentElement;
+    }
+  }
+
+  function revealHash() {
+    if (root.getAttribute("data-view") === "slides") return;
+    const id = location.hash.slice(1);
+    if (!id) return;
+    const target = document.getElementById(id);
+    if (!target) return;
+    openAncestors(target);
+    target.scrollIntoView({ block: "start" });
+  }
+
+  window.addEventListener("hashchange", revealHash);
+  revealHash();
+})();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else { boot(); }
+})();
+</script>
+</head>
+
+<body>
+
+<div class="controls" role="group" aria-label="Article controls">
+  <button type="button" class="ctrl" data-action="expand-all">Expand all</button>
+  <button type="button" class="ctrl" data-action="collapse-all">Collapse all</button>
+  <button type="button" class="ctrl" data-action="toggle-slides" aria-pressed="false">Slides</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+</div>
+
+<div class="doc">
+
+  <header class="doc-header">
+    <p class="eyebrow">MICROSOFT FOUNDRY</p>
+    <h1>Hosted agent identity, isolation, and scaling</h1>
+    <p class="subtitle">Four identifiers decide which micro-VM a request lands on, which user it counts as, and which conversation it continues. This explains what each one does, what a middle tier should send in three different deployment shapes, and what a live agent actually did under load.</p>
+    <p class="meta"><time datetime="2026-08-03">3 August 2026</time> &middot; measured against <code>foundry-showcase-main</code> v31, Sweden Central</p>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-label">Contents</p>
+    <ol>
+      <li><a href="#ch-model">The model</a></li>
+      <li><a href="#ch-identifiers">The four identifiers</a></li>
+      <li><a href="#ch-recipes">Three middle-tier recipes</a></li>
+      <li><a href="#ch-state">Where state lives</a></li>
+      <li><a href="#ch-measured">Measured behaviour</a></li>
+      <li><a href="#ch-choosing">Choosing a shape</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-model">
+      <h2 class="chapter-label">The model</h2>
+
+      <article class="card card--lead" id="card-what-a-session-is" data-open>
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="true">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A hosted agent session is a micro-VM you address by name</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The platform runs one instance of your container per <code>agent_session_id</code>. Send the same string twice and both requests land on the same running instance: same processes, same memory, same disk. Send a different string and you get a different instance, isolated from the first at the virtual machine boundary.</p>
+          <p>You invent that string. The platform does not hand you a session ID to store; your middle tier chooses one on every call. A session appears the first time you name it and is deprovisioned after 15 minutes with no traffic.</p>
+          <p>Every question about isolation, concurrency and cost reduces to one decision: which strings does the middle tier choose?</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show how the session ID travels on each protocol</button>
+            <div class="reveal-body">
+              <p>Container protocol 2.0.0, through the Responses API, carries it in the request body:</p>
+              <div class="code">
+                <p class="code-label">middle tier, Responses</p>
+                <pre><code>response = responses_client.create(
+    input=user_message,
+    extra_body={"agent_session_id": session_id},
+    extra_headers={"x-ms-user-identity": user_id},
+)</code></pre>
+              </div>
+              <p>Container protocol 1.0.0, through the Invocations endpoint, carries it as a query parameter. This is the only binding the Invocations path honours, which the load lab in this repository relies on:</p>
+              <div class="code">
+                <p class="code-label">middle tier, Invocations</p>
+                <pre><code>POST .../endpoint/protocols/invocations?api-version=v1&amp;agent_session_id=pool-0</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-routing-key">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Only <code>agent_session_id</code> decides which micro-VM serves a request</span>
+              <span class="card-sub">The user identity headers have no effect on placement.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>This is the point where mental models usually go wrong. <code>x-ms-user-identity</code> looks like a routing key because it identifies a person, and people map to replicas in most systems. It does not route anything here.</p>
+          <table>
+            <thead><tr><th>Identifier</th><th>Effect on placement</th><th>Effect on isolation</th></tr></thead>
+            <tbody>
+              <tr><td><code>agent_session_id</code></td><td>Selects the micro-VM. This is the load-balancing knob.</td><td>Separate VM, separate RAM, separate disk.</td></tr>
+              <tr><td><code>x-ms-user-identity</code></td><td>None.</td><td>Partitions conversation state inside whichever VM the session ID chose.</td></tr>
+              <tr><td><code>previous_response_id</code></td><td>None.</td><td>Selects one conversation belonging to that user.</td></tr>
+            </tbody>
+          </table>
+          <aside class="callout callout--rule">
+            <p class="callout-label">Rule</p>
+            <p>The session ID is a capacity decision. The user identity is a security decision. Change the session ID to spread load; never change the user identity for the same reason.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-permission-gate">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The platform checks who may claim a user, not which user is claimed</span>
+              <span class="card-sub">The header value is an opaque string. The gate is on the caller's role.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Sending <code>x-ms-user-identity</code> requires the data action <code>Microsoft.CognitiveServices/accounts/AIServices/agents/endpoints/UserIdentityImpersonation/action</code>. No built-in role grants it, including Foundry Owner. Without it the call fails with <code>403</code>.</p>
+          <p>Once the caller holds that permission, the value itself is not validated against a directory. Microsoft's own multiplexing sample hardcodes two plain labels:</p>
+          <div class="code">
+            <p class="code-label">foundry-samples &middot; invoke_previous_response_isolation.py</p>
+            <pre><code>user_a="alice",
+user_b="bob",
+...
+"extra_headers": {"x-ms-user-identity": user_id},</code></pre>
+          </div>
+          <p>So an arbitrary GUID would work. The trust boundary is the calling service, proven by role assignment; the platform then treats whatever that service asserts as the truth and re-emits it to your container.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the 403 and the custom role that fixes it</button>
+            <div class="reveal-body">
+              <p>Sending the header from an account holding Owner at management-group scope still fails, which confirms the permission is genuinely separate from ownership:</p>
+              <div class="code">
+                <p class="code-label">response</p>
+                <pre><code>403 forbidden
+Caller is not authorized to delegate to another user
+via the x-ms-user-identity header.</code></pre>
+              </div>
+              <div class="code">
+                <p class="code-label">custom-impersonation-role.json</p>
+                <pre><code>{
+  "Name": "Foundry Agent User Identity Impersonation",
+  "IsCustom": true,
+  "Actions": [],
+  "DataActions": [
+    "Microsoft.CognitiveServices/accounts/AIServices/agents/endpoints/UserIdentityImpersonation/action"
+  ],
+  "AssignableScopes": ["/subscriptions/.../providers/Microsoft.CognitiveServices/accounts/&lt;account&gt;"]
+}</code></pre>
+              </div>
+              <p>Assign it to the middle tier's managed identity at project or agent scope.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-identifiers">
+      <h2 class="chapter-label">The four identifiers</h2>
+
+      <article class="card" id="card-hierarchy">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Four identifiers answer four separate questions</span>
+              <span class="card-sub">Agent, session, user, conversation &mdash; strictly nested.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <figure class="figure">
+            <a class="zoom" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNTAwIDYyMCIgd2lkdGg9IjE1MDAiIGhlaWdodD0iNjIwIiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkZvdXIgbmVzdGVkIGxldmVsczogb25lIGhvc3RlZCBhZ2VudCBjb250YWlucyBzZXZlcmFsIHNlc3Npb25zIGFkZHJlc3NlZCBieSBhZ2VudF9zZXNzaW9uX2lkLCBlYWNoIHNlc3Npb24gY29udGFpbnMgc2V2ZXJhbCB1c2VycyBpZGVudGlmaWVkIGJ5IHgtYWdlbnQtdXNlci1pZCwgYW5kIGVhY2ggdXNlciBvd25zIGNvbnZlcnNhdGlvbiBjaGFpbnMgY29udGludWVkIHdpdGggcHJldmlvdXNfcmVzcG9uc2VfaWQuIj4NCiAgPHN0eWxlPg0KICAgIC5iZyAgICAgIHsgZmlsbDogI2ZmZmZmZjsgfQ0KICAgIC5hZ2VudCAgIHsgZmlsbDogI2VhZjNmYjsgc3Ryb2tlOiAjYTlkMGVmOyBzdHJva2Utd2lkdGg6IDI7IH0NCiAgICAuc2Vzc2lvbiB7IGZpbGw6ICNmNWY2Zjg7IHN0cm9rZTogI2MyYzdjZjsgc3Ryb2tlLXdpZHRoOiAyOyB9DQogICAgLnVzZXIgICAgeyBmaWxsOiAjZmZmZmZmOyBzdHJva2U6ICNjMmM3Y2Y7IHN0cm9rZS13aWR0aDogMS41OyB9DQogICAgLmNoaXAgICAgeyBmaWxsOiAjZWFlY2YwOyBzdHJva2U6ICNjMmM3Y2Y7IHN0cm9rZS13aWR0aDogMTsgfQ0KICAgIC5zcGFyZSAgIHsgZmlsbDogbm9uZTsgc3Ryb2tlOiAjYzJjN2NmOyBzdHJva2Utd2lkdGg6IDEuNTsgc3Ryb2tlLWRhc2hhcnJheTogNiA2OyB9DQogICAgLndpcmUgICAgeyBzdHJva2U6ICNjMmM3Y2Y7IHN0cm9rZS13aWR0aDogMjsgZmlsbDogbm9uZTsgfQ0KICAgIC50ICAgICAgIHsgZmlsbDogIzE0MTcxYTsgfQ0KICAgIC50bSAgICAgIHsgZmlsbDogIzU2NWM2NjsgfQ0KICAgIC50YSAgICAgIHsgZmlsbDogIzAwNzhkNDsgfQ0KICAgIEBtZWRpYSAocHJlZmVycy1jb2xvci1zY2hlbWU6IGRhcmspIHsNCiAgICAgIC5iZyAgICAgIHsgZmlsbDogIzBlMTAxMzsgfQ0KICAgICAgLmFnZW50ICAgeyBmaWxsOiAjMTQyNDMwOyBzdHJva2U6ICMyYzRmNmQ7IH0NCiAgICAgIC5zZXNzaW9uIHsgZmlsbDogIzFiMWYyNjsgc3Ryb2tlOiAjM2Q0NTUwOyB9DQogICAgICAudXNlciAgICB7IGZpbGw6ICMxNTE4MWQ7IHN0cm9rZTogIzNkNDU1MDsgfQ0KICAgICAgLmNoaXAgICAgeyBmaWxsOiAjMjMyODMwOyBzdHJva2U6ICMzZDQ1NTA7IH0NCiAgICAgIC5zcGFyZSAgIHsgc3Ryb2tlOiAjM2Q0NTUwOyB9DQogICAgICAud2lyZSAgICB7IHN0cm9rZTogIzNkNDU1MDsgfQ0KICAgICAgLnQgICAgICAgeyBmaWxsOiAjZWNlZWYxOyB9DQogICAgICAudG0gICAgICB7IGZpbGw6ICNhN2FlYjg7IH0NCiAgICAgIC50YSAgICAgIHsgZmlsbDogIzRhYTNlODsgfQ0KICAgIH0NCiAgICB0ZXh0IHsgZm9udC1mYW1pbHk6ICJTZWdvZSBVSSIsIC1hcHBsZS1zeXN0ZW0sIFJvYm90bywgQXJpYWwsIHNhbnMtc2VyaWY7IH0NCiAgICAubW9ubyB7IGZvbnQtZmFtaWx5OiAiQ2FzY2FkaWEgTW9ubyIsIENvbnNvbGFzLCB1aS1tb25vc3BhY2UsIG1vbm9zcGFjZTsgfQ0KICAgIC5sdmwgeyBmb250LXNpemU6IDE5cHg7IGZvbnQtd2VpZ2h0OiA2MjA7IGxldHRlci1zcGFjaW5nOiAuMDZlbTsgfQ0KICAgIC5sdmxzdWIgeyBmb250LXNpemU6IDE0cHg7IH0NCiAgPC9zdHlsZT4NCg0KICA8cmVjdCBjbGFzcz0iYmciIHdpZHRoPSIxNTAwIiBoZWlnaHQ9IjYyMCIvPg0KDQogIDwhLS0gZ3V0dGVyIGxldmVsIGxhYmVscyAtLT4NCiAgPHRleHQgY2xhc3M9InRhIGx2bCIgICAgeD0iMjI4IiB5PSI1OCIgIHRleHQtYW5jaG9yPSJlbmQiPkFHRU5UPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbHZsc3ViIG1vbm8iIHg9IjIyOCIgeT0iODIiICB0ZXh0LWFuY2hvcj0iZW5kIj5henVyZS55YW1sPC90ZXh0Pg0KDQogIDx0ZXh0IGNsYXNzPSJ0YSBsdmwiICAgIHg9IjIyOCIgeT0iMTkwIiB0ZXh0LWFuY2hvcj0iZW5kIj5TRVNTSU9OPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbHZsc3ViIG1vbm8iIHg9IjIyOCIgeT0iMjE0IiB0ZXh0LWFuY2hvcj0iZW5kIj5hZ2VudF9zZXNzaW9uX2lkPC90ZXh0Pg0KDQogIDx0ZXh0IGNsYXNzPSJ0YSBsdmwiICAgIHg9IjIyOCIgeT0iMjc2IiB0ZXh0LWFuY2hvcj0iZW5kIj5VU0VSPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbHZsc3ViIG1vbm8iIHg9IjIyOCIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0iZW5kIj54LWFnZW50LXVzZXItaWQ8L3RleHQ+DQoNCiAgPHRleHQgY2xhc3M9InRhIGx2bCIgICAgeD0iMjI4IiB5PSIzMzgiIHRleHQtYW5jaG9yPSJlbmQiPkNPTlZFUlNBVElPTjwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIGx2bHN1YiBtb25vIiB4PSIyMjgiIHk9IjM2MiIgdGV4dC1hbmNob3I9ImVuZCI+cHJldmlvdXNfcmVzcG9uc2VfaWQ8L3RleHQ+DQoNCiAgPCEtLSBhZ2VudCAtLT4NCiAgPHJlY3QgY2xhc3M9ImFnZW50IiB4PSIyNTAiIHk9IjMwIiB3aWR0aD0iMTIxMCIgaGVpZ2h0PSI3MiIgcng9IjEwIi8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iODU1IiB5PSI2MSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyMSIgZm9udC13ZWlnaHQ9IjYyMCI+Zm91bmRyeS1zaG93Y2FzZS1tYWluPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0iIHg9Ijg1NSIgeT0iODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPm9uZSBkZXBsb3ltZW50LCBvbmUgdmVyc2lvbiwgb25lIGNvbnRhaW5lciBpbWFnZTwvdGV4dD4NCg0KICA8IS0tIHdpcmVzIC0tPg0KICA8cGF0aCBjbGFzcz0id2lyZSIgZD0iTTg1NSAxMDIgTDg1NSAxMjYgTTQ0MSAxMjYgTDEyNjcgMTI2IE00NDEgMTI2IEw0NDEgMTUwIE04NTQgMTI2IEw4NTQgMTUwIE0xMjY3IDEyNiBMMTI2NyAxNTAiLz4NCg0KICA8IS0tIHNlc3Npb24gcG9vbC0wIC0tPg0KICA8cmVjdCBjbGFzcz0ic2Vzc2lvbiIgeD0iMjUwIiB5PSIxNTAiIHdpZHRoPSIzODMiIGhlaWdodD0iNDIwIiByeD0iMTAiLz4NCiAgPHRleHQgY2xhc3M9InQiICB4PSI0NDEiIHk9IjE4OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyMCIgZm9udC13ZWlnaHQ9IjYyMCI+cG9vbC0wPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbW9ubyIgeD0iNDQxIiB5PSIyMTQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPlJBTSArICRIT01FICsgL2ZpbGVzPC90ZXh0Pg0KDQogIDxyZWN0IGNsYXNzPSJ1c2VyIiB4PSIyNjgiIHk9IjI0MCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iNDQxIiB5PSIyNzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTkiIGZvbnQtd2VpZ2h0PSI2MjAiPmFsaWNlPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbW9ubyIgeD0iNDQxIiB5PSIzMDAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTMiPm1lbW9yeSArIGhpc3Rvcnk8L3RleHQ+DQogIDxyZWN0IGNsYXNzPSJjaGlwIiB4PSIyODIiIHk9IjMxOCIgd2lkdGg9IjE1NSIgaGVpZ2h0PSIzOCIgcng9IjYiLz4NCiAgPHRleHQgY2xhc3M9InRtIiB4PSIzNTkiIHk9IjM0MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+Y2hhaW4gMTwvdGV4dD4NCiAgPHJlY3QgY2xhc3M9ImNoaXAiIHg9IjQ1MiIgeT0iMzE4IiB3aWR0aD0iMTU1IiBoZWlnaHQ9IjM4IiByeD0iNiIvPg0KICA8dGV4dCBjbGFzcz0idG0iIHg9IjUyOSIgeT0iMzQzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0Ij5jaGFpbiAyPC90ZXh0Pg0KDQogIDxyZWN0IGNsYXNzPSJ1c2VyIiB4PSIyNjgiIHk9IjQwMCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iNDQxIiB5PSI0MzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTkiIGZvbnQtd2VpZ2h0PSI2MjAiPmJvYjwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9IjQ0MSIgeT0iNDYwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIj5tZW1vcnkgKyBoaXN0b3J5PC90ZXh0Pg0KICA8cmVjdCBjbGFzcz0iY2hpcCIgeD0iMjgyIiB5PSI0NzgiIHdpZHRoPSIxNTUiIGhlaWdodD0iMzgiIHJ4PSI2Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iMzU5IiB5PSI1MDMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPmNoYWluIDE8L3RleHQ+DQoNCiAgPCEtLSBzZXNzaW9uIHBvb2wtMSAtLT4NCiAgPHJlY3QgY2xhc3M9InNlc3Npb24iIHg9IjY2MyIgeT0iMTUwIiB3aWR0aD0iMzgzIiBoZWlnaHQ9IjQyMCIgcng9IjEwIi8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iODU0IiB5PSIxODgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI2MjAiPnBvb2wtMTwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9Ijg1NCIgeT0iMjE0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0Ij5SQU0gKyAkSE9NRSArIC9maWxlczwvdGV4dD4NCg0KICA8cmVjdCBjbGFzcz0idXNlciIgeD0iNjgxIiB5PSIyNDAiIHdpZHRoPSIzNDciIGhlaWdodD0iMTQwIiByeD0iOCIvPg0KICA8dGV4dCBjbGFzcz0idCIgIHg9Ijg1NCIgeT0iMjc0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE5IiBmb250LXdlaWdodD0iNjIwIj5jYXJvbDwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9Ijg1NCIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIj5tZW1vcnkgKyBoaXN0b3J5PC90ZXh0Pg0KICA8cmVjdCBjbGFzcz0iY2hpcCIgeD0iNjk1IiB5PSIzMTgiIHdpZHRoPSIxNTUiIGhlaWdodD0iMzgiIHJ4PSI2Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iNzcyIiB5PSIzNDMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPmNoYWluIDE8L3RleHQ+DQoNCiAgPHJlY3QgY2xhc3M9InNwYXJlIiB4PSI2ODEiIHk9IjQwMCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iODU0IiB5PSI0NzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTUiPnNwYXJlIGNhcGFjaXR5PC90ZXh0Pg0KDQogIDwhLS0gc2Vzc2lvbiBwb29sLTIgLS0+DQogIDxyZWN0IGNsYXNzPSJzZXNzaW9uIiB4PSIxMDc2IiB5PSIxNTAiIHdpZHRoPSIzODMiIGhlaWdodD0iNDIwIiByeD0iMTAiLz4NCiAgPHRleHQgY2xhc3M9InQiICB4PSIxMjY3IiB5PSIxODgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI2MjAiPnBvb2wtMjwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9IjEyNjciIHk9IjIxNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+UkFNICsgJEhPTUUgKyAvZmlsZXM8L3RleHQ+DQoNCiAgPHJlY3QgY2xhc3M9InVzZXIiIHg9IjEwOTQiIHk9IjI0MCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iMTI2NyIgeT0iMjc0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE5IiBmb250LXdlaWdodD0iNjIwIj5kYXZlPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbW9ubyIgeD0iMTI2NyIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIj5tZW1vcnkgKyBoaXN0b3J5PC90ZXh0Pg0KICA8cmVjdCBjbGFzcz0iY2hpcCIgeD0iMTEwOCIgeT0iMzE4IiB3aWR0aD0iMTU1IiBoZWlnaHQ9IjM4IiByeD0iNiIvPg0KICA8dGV4dCBjbGFzcz0idG0iIHg9IjExODUiIHk9IjM0MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+Y2hhaW4gMTwvdGV4dD4NCg0KICA8cmVjdCBjbGFzcz0ic3BhcmUiIHg9IjEwOTQiIHk9IjQwMCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iMTI2NyIgeT0iNDc3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE1Ij5zcGFyZSBjYXBhY2l0eTwvdGV4dD4NCjwvc3ZnPg0K">
+              <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNTAwIDYyMCIgd2lkdGg9IjE1MDAiIGhlaWdodD0iNjIwIiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkZvdXIgbmVzdGVkIGxldmVsczogb25lIGhvc3RlZCBhZ2VudCBjb250YWlucyBzZXZlcmFsIHNlc3Npb25zIGFkZHJlc3NlZCBieSBhZ2VudF9zZXNzaW9uX2lkLCBlYWNoIHNlc3Npb24gY29udGFpbnMgc2V2ZXJhbCB1c2VycyBpZGVudGlmaWVkIGJ5IHgtYWdlbnQtdXNlci1pZCwgYW5kIGVhY2ggdXNlciBvd25zIGNvbnZlcnNhdGlvbiBjaGFpbnMgY29udGludWVkIHdpdGggcHJldmlvdXNfcmVzcG9uc2VfaWQuIj4NCiAgPHN0eWxlPg0KICAgIC5iZyAgICAgIHsgZmlsbDogI2ZmZmZmZjsgfQ0KICAgIC5hZ2VudCAgIHsgZmlsbDogI2VhZjNmYjsgc3Ryb2tlOiAjYTlkMGVmOyBzdHJva2Utd2lkdGg6IDI7IH0NCiAgICAuc2Vzc2lvbiB7IGZpbGw6ICNmNWY2Zjg7IHN0cm9rZTogI2MyYzdjZjsgc3Ryb2tlLXdpZHRoOiAyOyB9DQogICAgLnVzZXIgICAgeyBmaWxsOiAjZmZmZmZmOyBzdHJva2U6ICNjMmM3Y2Y7IHN0cm9rZS13aWR0aDogMS41OyB9DQogICAgLmNoaXAgICAgeyBmaWxsOiAjZWFlY2YwOyBzdHJva2U6ICNjMmM3Y2Y7IHN0cm9rZS13aWR0aDogMTsgfQ0KICAgIC5zcGFyZSAgIHsgZmlsbDogbm9uZTsgc3Ryb2tlOiAjYzJjN2NmOyBzdHJva2Utd2lkdGg6IDEuNTsgc3Ryb2tlLWRhc2hhcnJheTogNiA2OyB9DQogICAgLndpcmUgICAgeyBzdHJva2U6ICNjMmM3Y2Y7IHN0cm9rZS13aWR0aDogMjsgZmlsbDogbm9uZTsgfQ0KICAgIC50ICAgICAgIHsgZmlsbDogIzE0MTcxYTsgfQ0KICAgIC50bSAgICAgIHsgZmlsbDogIzU2NWM2NjsgfQ0KICAgIC50YSAgICAgIHsgZmlsbDogIzAwNzhkNDsgfQ0KICAgIEBtZWRpYSAocHJlZmVycy1jb2xvci1zY2hlbWU6IGRhcmspIHsNCiAgICAgIC5iZyAgICAgIHsgZmlsbDogIzBlMTAxMzsgfQ0KICAgICAgLmFnZW50ICAgeyBmaWxsOiAjMTQyNDMwOyBzdHJva2U6ICMyYzRmNmQ7IH0NCiAgICAgIC5zZXNzaW9uIHsgZmlsbDogIzFiMWYyNjsgc3Ryb2tlOiAjM2Q0NTUwOyB9DQogICAgICAudXNlciAgICB7IGZpbGw6ICMxNTE4MWQ7IHN0cm9rZTogIzNkNDU1MDsgfQ0KICAgICAgLmNoaXAgICAgeyBmaWxsOiAjMjMyODMwOyBzdHJva2U6ICMzZDQ1NTA7IH0NCiAgICAgIC5zcGFyZSAgIHsgc3Ryb2tlOiAjM2Q0NTUwOyB9DQogICAgICAud2lyZSAgICB7IHN0cm9rZTogIzNkNDU1MDsgfQ0KICAgICAgLnQgICAgICAgeyBmaWxsOiAjZWNlZWYxOyB9DQogICAgICAudG0gICAgICB7IGZpbGw6ICNhN2FlYjg7IH0NCiAgICAgIC50YSAgICAgIHsgZmlsbDogIzRhYTNlODsgfQ0KICAgIH0NCiAgICB0ZXh0IHsgZm9udC1mYW1pbHk6ICJTZWdvZSBVSSIsIC1hcHBsZS1zeXN0ZW0sIFJvYm90bywgQXJpYWwsIHNhbnMtc2VyaWY7IH0NCiAgICAubW9ubyB7IGZvbnQtZmFtaWx5OiAiQ2FzY2FkaWEgTW9ubyIsIENvbnNvbGFzLCB1aS1tb25vc3BhY2UsIG1vbm9zcGFjZTsgfQ0KICAgIC5sdmwgeyBmb250LXNpemU6IDE5cHg7IGZvbnQtd2VpZ2h0OiA2MjA7IGxldHRlci1zcGFjaW5nOiAuMDZlbTsgfQ0KICAgIC5sdmxzdWIgeyBmb250LXNpemU6IDE0cHg7IH0NCiAgPC9zdHlsZT4NCg0KICA8cmVjdCBjbGFzcz0iYmciIHdpZHRoPSIxNTAwIiBoZWlnaHQ9IjYyMCIvPg0KDQogIDwhLS0gZ3V0dGVyIGxldmVsIGxhYmVscyAtLT4NCiAgPHRleHQgY2xhc3M9InRhIGx2bCIgICAgeD0iMjI4IiB5PSI1OCIgIHRleHQtYW5jaG9yPSJlbmQiPkFHRU5UPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbHZsc3ViIG1vbm8iIHg9IjIyOCIgeT0iODIiICB0ZXh0LWFuY2hvcj0iZW5kIj5henVyZS55YW1sPC90ZXh0Pg0KDQogIDx0ZXh0IGNsYXNzPSJ0YSBsdmwiICAgIHg9IjIyOCIgeT0iMTkwIiB0ZXh0LWFuY2hvcj0iZW5kIj5TRVNTSU9OPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbHZsc3ViIG1vbm8iIHg9IjIyOCIgeT0iMjE0IiB0ZXh0LWFuY2hvcj0iZW5kIj5hZ2VudF9zZXNzaW9uX2lkPC90ZXh0Pg0KDQogIDx0ZXh0IGNsYXNzPSJ0YSBsdmwiICAgIHg9IjIyOCIgeT0iMjc2IiB0ZXh0LWFuY2hvcj0iZW5kIj5VU0VSPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbHZsc3ViIG1vbm8iIHg9IjIyOCIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0iZW5kIj54LWFnZW50LXVzZXItaWQ8L3RleHQ+DQoNCiAgPHRleHQgY2xhc3M9InRhIGx2bCIgICAgeD0iMjI4IiB5PSIzMzgiIHRleHQtYW5jaG9yPSJlbmQiPkNPTlZFUlNBVElPTjwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIGx2bHN1YiBtb25vIiB4PSIyMjgiIHk9IjM2MiIgdGV4dC1hbmNob3I9ImVuZCI+cHJldmlvdXNfcmVzcG9uc2VfaWQ8L3RleHQ+DQoNCiAgPCEtLSBhZ2VudCAtLT4NCiAgPHJlY3QgY2xhc3M9ImFnZW50IiB4PSIyNTAiIHk9IjMwIiB3aWR0aD0iMTIxMCIgaGVpZ2h0PSI3MiIgcng9IjEwIi8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iODU1IiB5PSI2MSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyMSIgZm9udC13ZWlnaHQ9IjYyMCI+Zm91bmRyeS1zaG93Y2FzZS1tYWluPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0iIHg9Ijg1NSIgeT0iODUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPm9uZSBkZXBsb3ltZW50LCBvbmUgdmVyc2lvbiwgb25lIGNvbnRhaW5lciBpbWFnZTwvdGV4dD4NCg0KICA8IS0tIHdpcmVzIC0tPg0KICA8cGF0aCBjbGFzcz0id2lyZSIgZD0iTTg1NSAxMDIgTDg1NSAxMjYgTTQ0MSAxMjYgTDEyNjcgMTI2IE00NDEgMTI2IEw0NDEgMTUwIE04NTQgMTI2IEw4NTQgMTUwIE0xMjY3IDEyNiBMMTI2NyAxNTAiLz4NCg0KICA8IS0tIHNlc3Npb24gcG9vbC0wIC0tPg0KICA8cmVjdCBjbGFzcz0ic2Vzc2lvbiIgeD0iMjUwIiB5PSIxNTAiIHdpZHRoPSIzODMiIGhlaWdodD0iNDIwIiByeD0iMTAiLz4NCiAgPHRleHQgY2xhc3M9InQiICB4PSI0NDEiIHk9IjE4OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIyMCIgZm9udC13ZWlnaHQ9IjYyMCI+cG9vbC0wPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbW9ubyIgeD0iNDQxIiB5PSIyMTQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPlJBTSArICRIT01FICsgL2ZpbGVzPC90ZXh0Pg0KDQogIDxyZWN0IGNsYXNzPSJ1c2VyIiB4PSIyNjgiIHk9IjI0MCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iNDQxIiB5PSIyNzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTkiIGZvbnQtd2VpZ2h0PSI2MjAiPmFsaWNlPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbW9ubyIgeD0iNDQxIiB5PSIzMDAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTMiPm1lbW9yeSArIGhpc3Rvcnk8L3RleHQ+DQogIDxyZWN0IGNsYXNzPSJjaGlwIiB4PSIyODIiIHk9IjMxOCIgd2lkdGg9IjE1NSIgaGVpZ2h0PSIzOCIgcng9IjYiLz4NCiAgPHRleHQgY2xhc3M9InRtIiB4PSIzNTkiIHk9IjM0MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+Y2hhaW4gMTwvdGV4dD4NCiAgPHJlY3QgY2xhc3M9ImNoaXAiIHg9IjQ1MiIgeT0iMzE4IiB3aWR0aD0iMTU1IiBoZWlnaHQ9IjM4IiByeD0iNiIvPg0KICA8dGV4dCBjbGFzcz0idG0iIHg9IjUyOSIgeT0iMzQzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0Ij5jaGFpbiAyPC90ZXh0Pg0KDQogIDxyZWN0IGNsYXNzPSJ1c2VyIiB4PSIyNjgiIHk9IjQwMCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iNDQxIiB5PSI0MzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTkiIGZvbnQtd2VpZ2h0PSI2MjAiPmJvYjwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9IjQ0MSIgeT0iNDYwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIj5tZW1vcnkgKyBoaXN0b3J5PC90ZXh0Pg0KICA8cmVjdCBjbGFzcz0iY2hpcCIgeD0iMjgyIiB5PSI0NzgiIHdpZHRoPSIxNTUiIGhlaWdodD0iMzgiIHJ4PSI2Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iMzU5IiB5PSI1MDMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPmNoYWluIDE8L3RleHQ+DQoNCiAgPCEtLSBzZXNzaW9uIHBvb2wtMSAtLT4NCiAgPHJlY3QgY2xhc3M9InNlc3Npb24iIHg9IjY2MyIgeT0iMTUwIiB3aWR0aD0iMzgzIiBoZWlnaHQ9IjQyMCIgcng9IjEwIi8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iODU0IiB5PSIxODgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI2MjAiPnBvb2wtMTwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9Ijg1NCIgeT0iMjE0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0Ij5SQU0gKyAkSE9NRSArIC9maWxlczwvdGV4dD4NCg0KICA8cmVjdCBjbGFzcz0idXNlciIgeD0iNjgxIiB5PSIyNDAiIHdpZHRoPSIzNDciIGhlaWdodD0iMTQwIiByeD0iOCIvPg0KICA8dGV4dCBjbGFzcz0idCIgIHg9Ijg1NCIgeT0iMjc0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE5IiBmb250LXdlaWdodD0iNjIwIj5jYXJvbDwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9Ijg1NCIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIj5tZW1vcnkgKyBoaXN0b3J5PC90ZXh0Pg0KICA8cmVjdCBjbGFzcz0iY2hpcCIgeD0iNjk1IiB5PSIzMTgiIHdpZHRoPSIxNTUiIGhlaWdodD0iMzgiIHJ4PSI2Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iNzcyIiB5PSIzNDMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTQiPmNoYWluIDE8L3RleHQ+DQoNCiAgPHJlY3QgY2xhc3M9InNwYXJlIiB4PSI2ODEiIHk9IjQwMCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iODU0IiB5PSI0NzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTUiPnNwYXJlIGNhcGFjaXR5PC90ZXh0Pg0KDQogIDwhLS0gc2Vzc2lvbiBwb29sLTIgLS0+DQogIDxyZWN0IGNsYXNzPSJzZXNzaW9uIiB4PSIxMDc2IiB5PSIxNTAiIHdpZHRoPSIzODMiIGhlaWdodD0iNDIwIiByeD0iMTAiLz4NCiAgPHRleHQgY2xhc3M9InQiICB4PSIxMjY3IiB5PSIxODgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjAiIGZvbnQtd2VpZ2h0PSI2MjAiPnBvb2wtMjwvdGV4dD4NCiAgPHRleHQgY2xhc3M9InRtIG1vbm8iIHg9IjEyNjciIHk9IjIxNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+UkFNICsgJEhPTUUgKyAvZmlsZXM8L3RleHQ+DQoNCiAgPHJlY3QgY2xhc3M9InVzZXIiIHg9IjEwOTQiIHk9IjI0MCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0IiAgeD0iMTI2NyIgeT0iMjc0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE5IiBmb250LXdlaWdodD0iNjIwIj5kYXZlPC90ZXh0Pg0KICA8dGV4dCBjbGFzcz0idG0gbW9ubyIgeD0iMTI2NyIgeT0iMzAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIj5tZW1vcnkgKyBoaXN0b3J5PC90ZXh0Pg0KICA8cmVjdCBjbGFzcz0iY2hpcCIgeD0iMTEwOCIgeT0iMzE4IiB3aWR0aD0iMTU1IiBoZWlnaHQ9IjM4IiByeD0iNiIvPg0KICA8dGV4dCBjbGFzcz0idG0iIHg9IjExODUiIHk9IjM0MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNCI+Y2hhaW4gMTwvdGV4dD4NCg0KICA8cmVjdCBjbGFzcz0ic3BhcmUiIHg9IjEwOTQiIHk9IjQwMCIgd2lkdGg9IjM0NyIgaGVpZ2h0PSIxNDAiIHJ4PSI4Ii8+DQogIDx0ZXh0IGNsYXNzPSJ0bSIgeD0iMTI2NyIgeT0iNDc3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE1Ij5zcGFyZSBjYXBhY2l0eTwvdGV4dD4NCjwvc3ZnPg0K" alt="One hosted agent contains three sessions named pool-0, pool-1 and pool-2. Each session owns its RAM and disk. Inside pool-0 sit two users, alice and bob; each user owns conversation chains." width="1500" height="620">
+            </a>
+            <figcaption>One deployed agent serves many sessions; one session serves many users; one user owns many conversations.</figcaption>
+          </figure>
+          <table>
+            <thead><tr><th>Level</th><th>Identifier</th><th>Question it answers</th><th>Who chooses the value</th></tr></thead>
+            <tbody>
+              <tr><td>Agent</td><td><code>azure.yaml</code> name and version</td><td>Which code and which model?</td><td>You, at deploy time</td></tr>
+              <tr><td>Session</td><td><code>agent_session_id</code></td><td>Which micro-VM?</td><td>Your middle tier, per request</td></tr>
+              <tr><td>User</td><td><code>x-ms-user-identity</code> in, <code>x-agent-user-id</code> out</td><td>Whose data is this?</td><td>Your middle tier, from a validated token</td></tr>
+              <tr><td>Conversation</td><td><code>previous_response_id</code></td><td>Which thread continues?</td><td>The platform mints it; you store and replay it</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card" id="card-session-id">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A session name is a lease on a machine, not a record you look up</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Naming a session that does not exist creates it. Naming one that exists routes to it. Naming one whose compute was deprovisioned after idling resumes it with the disk intact.</p>
+          <p>That makes the session name a pure function of your routing policy: <code>user-&lt;oid&gt;</code> for per-user isolation, <code>shared</code> for full multiplexing, <code>pool-7</code> for bucketing. The middle tier can recompute it rather than persist it, as long as the function is deterministic.</p>
+          <p>Sessions can also be listed, inspected and stopped through a REST collection under the agent endpoint, or with <code>azd ai agent sessions</code>.</p>
+          <aside class="callout callout--warning">
+            <p class="callout-label">Warning</p>
+            <p>The accepted character set is undocumented and stricter than it looks. <code>sess_abc123</code>, GUIDs and <code>lab-run1-user3</code> are accepted; <code>probe-a</code> and <code>probea</code> both returned <code>400 invalid_session_id</code> in testing on 3 August 2026. Validate your naming function against the live endpoint before relying on it.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-user-id">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Two headers carry one user because the container has to be able to trust it</span>
+              <span class="card-sub">You set the inbound one; the platform sets the one your code reads.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th></th><th><code>x-ms-user-identity</code></th><th><code>x-agent-user-id</code></th></tr></thead>
+            <tbody>
+              <tr><th>Direction</th><td>middle tier to platform</td><td>platform to container</td></tr>
+              <tr><th>Who asserts it</th><td>the caller</td><td>the platform</td></tr>
+              <tr><th>Gate</th><td>the impersonation data action</td><td>you cannot set it at all</td></tr>
+              <tr><th>Meaning</th><td>a request: treat this call as Bob's</td><td>the resolved answer, safe to key data on</td></tr>
+            </tbody>
+          </table>
+          <p>If the container read a header the caller could set, any caller could read any user's data. Splitting the two lets the platform validate, resolve, then inject &mdash; so <code>get_request_context().user_id</code> is always platform-asserted.</p>
+          <p>With no delegation the platform derives the value from the caller's Entra token. Probing the showcase agent returned an <code>x-agent-user-id</code> exactly equal to the signed-in account's Entra object ID, so one caller then means one user regardless of how many people sit behind your front end.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show what the SDK says about scope and forwarding</button>
+            <div class="reveal-body">
+              <p>The header constants in <code>azure-ai-agentserver-core</code> define the contract more precisely than any documentation page:</p>
+              <div class="code">
+                <p class="code-label">azure/ai/agentserver/core/_platform_headers.py</p>
+                <pre><code>USER_ID: str = "x-agent-user-id"
+"""The platform-injected global, cross-agent partition key for
+per-user state. The same user yields the same value regardless of
+which agent they interact with. Use it as the primary partition key
+for per-user data (profiles, preferences, OAuth tokens, memory)."""</code></pre>
+              </div>
+              <p>Protocol 2.0.0 adds <code>x-agent-foundry-call-id</code>, an opaque per-request token the container must forward verbatim on outbound calls to Foundry services such as Storage, the Toolbox MCP proxy, and A2A. The user ID is deliberately not forwarded: first-party services do not trust it. The call ID is the capability; the user ID is only a partition key.</p>
+              <aside class="callout callout--note">
+                <p class="callout-label">Note</p>
+                <p>Whether a delegated <code>x-agent-user-id</code> is the literal string you sent or a canonicalised form of it is untested here, because the 403 blocked the experiment. It is stable per user either way, which is all a partition key needs.</p>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-conversation">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A conversation is a chain named by its own last response</span>
+              <span class="card-sub">There is no conversation ID parameter to invent.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Each call returns a response with an <code>id</code>. Passing that <code>id</code> as <code>previous_response_id</code> on the next call continues the thread. Store the latest ID per thread in your own database; that is the whole mechanism. The agent server SDK has no conversation object.</p>
+          <p>The platform ties every chain to the user who created it. If Bob sends Alice's <code>previous_response_id</code> while sitting in the same session, the call fails. Inside the container, <code>context.get_history()</code> returns only what the current request's user is authorised to see.</p>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>This is the one piece of multi-user isolation you get for free in a shared session, and it is the piece people worry about most. Everything else your container touches is your problem.</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-recipes">
+      <h2 class="chapter-label">Three middle-tier recipes</h2>
+
+      <article class="card" id="card-recipe-isolated">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Per-user micro-VM: derive the session name from the user's subject claim</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <div class="code">
+            <p class="code-label">middle tier</p>
+            <pre><code>oid = validated_token["oid"]              # stable, immutable
+
+session_id = f"user{oid.replace('-', '')}"
+user_id    = oid</code></pre>
+          </div>
+          <p>Use the subject claim your identity provider guarantees is immutable: <code>oid</code> for Microsoft Entra, <code>sub</code> for anything else. Never use email or user principal name; a rename would orphan the user's history and disk.</p>
+          <p>Every user gets a private machine with a private filesystem, isolated at the VM boundary. Nothing in your container code has to be concurrency-safe across users, because no two users share a process.</p>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>Correct when the sandbox does real work on the user's behalf: running code, holding a workspace, processing untrusted content. Expensive when it only relays prompts to a model.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-recipe-shared">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Full multiplexing: pin the session name to a constant</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <div class="code">
+            <p class="code-label">middle tier</p>
+            <pre><code>session_id = "shared"                     # one micro-VM for everyone
+user_id    = validated_token["oid"]       # still per user</code></pre>
+          </div>
+          <p>One container instance serves the entire population. Conversation history stays private per user because the platform partitions it. Everything the container writes itself &mdash; files, module variables, caches &mdash; is shared unless you key it by user.</p>
+          <p>This shape needs container protocol 2.0.0. On 1.0.0 a session is bound to a single caller identity, and concurrent users on one session interfere with each other.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-recipe-pool">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Bucketing: map users to a bounded pool of session names</span>
+              <span class="card-sub">The middle ground. One agent, many sessions, a cap you choose.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>There is no HTTP scaler and no platform concurrency setting. The pool lives entirely in your middle tier, which is why it can implement exactly the policy you want.</p>
+          <div class="code">
+            <p class="code-label">middle tier, sticky fill</p>
+            <pre><code>def session_for(user_id: str) -&gt; str:
+    if user_id in assigned:
+        return assigned[user_id]                    # returning user is sticky
+    slot = next((s for s, n in counts.items() if n &lt; max_users_per_session), None)
+    if slot is None:
+        slot = f"pool-{len(counts)}"                # grow only when all are full
+        counts[slot] = 0
+    assigned[user_id] = slot
+    counts[slot] += 1
+    return slot</code></pre>
+          </div>
+          <p>Sticky fill keeps a user's turns on one machine and opens a new session only when every existing one is at capacity. Hash-based assignment is stateless but reshuffles everyone when the pool resizes. Round-robin spreads load but scatters a user's turns.</p>
+          <p>Two caps do different jobs and should not be conflated. A limit on concurrent in-flight requests per session protects latency. A limit on users per session bounds the blast radius of a container-side bug. Neither is a platform feature; both are variables in your code.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>Because users read and type between turns, concurrent requests are a small fraction of the user count. Size the pool against measured peak concurrency, not against registered users.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-always-send-user">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Send the user identity even when the session is already per-user</span>
+              <span class="card-sub">Otherwise every user shares one memory partition.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>It is tempting to skip delegation when each user already has a private session. Conversation history would still be private, because the session is private.</p>
+          <p>Foundry memory is not. The SDK describes <code>x-agent-user-id</code> as a global, cross-agent partition key, and without delegation it resolves to the middle tier's own managed identity for every request. All one thousand users would then read and write a single memory partition.</p>
+          <aside class="callout callout--rule">
+            <p class="callout-label">Rule</p>
+            <p>Session name and user identity are independent settings. Choose the session name for capacity and isolation; always set the user identity to the real end user.</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-state">
+      <h2 class="chapter-label">Where state lives</h2>
+
+      <article class="card" id="card-state-map">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Four stores, three different keys, one of them yours</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>Store</th><th>Keyed by</th><th>Survives</th><th>Partitioned for you</th></tr></thead>
+            <tbody>
+              <tr><td>Process memory in the container</td><td>session</td><td>until idle deprovision</td><td>no</td></tr>
+              <tr><td><code>$HOME</code> and <code>/files</code></td><td>session</td><td>idle deprovision, up to 30 days</td><td>no</td></tr>
+              <tr><td>Conversation history</td><td>session and user</td><td>platform-managed</td><td>yes</td></tr>
+              <tr><td>Foundry memory</td><td>user, across sessions and agents</td><td>platform-managed</td><td>yes</td></tr>
+            </tbody>
+          </table>
+          <p>The two rows keyed by session are the ones that surprise people. They are per machine, not per person.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-disk">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The disk belongs to the session, so a shared session means a shared disk</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Two users on different session names get different filesystems, automatically and unconditionally. Two users on the same session name get one filesystem, and the platform does nothing to divide it. Building the drawers is your job:</p>
+          <div class="code">
+            <p class="code-label">container</p>
+            <pre><code>ctx  = get_request_context()
+path = Path.home() / ctx.user_id / "MEMORY.md"</code></pre>
+          </div>
+          <p>The disk outlives idle deprovision. Stopping a session and calling it again returned a new instance ID with a resume counter incremented and the marker file intact, and a resume cost 13.67 s at the median against 42.74 s cold. Sessions expire on a rolling 30-day window measured from last access.</p>
+          <aside class="callout callout--warning">
+            <p class="callout-label">Warning</p>
+            <p>Thirty idle days deletes the session and its disk. Treat <code>$HOME</code> as a warm working cache and write anything that must survive to Blob storage or a database.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-memory">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Memory and history follow the user; the machine follows the session name</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Move a user to a different session and their Foundry memory comes with them, because it is keyed on the user and scoped across agents. Their conversation history does not: history is scoped to the session as well as the user, so a user reassigned to a new bucket starts a fresh thread there.</p>
+          <p>That asymmetry decides pool design. Sticky assignment matters when threads must survive; if every turn carries its own <code>previous_response_id</code> from your database, reassignment is cheap.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>The memory half is documented: the agent server SDK calls <code>x-agent-user-id</code> a global, cross-agent partition key. The history half is inferred from the session-scoped storage model and was not tested here. Replaying a <code>previous_response_id</code> from a different session would settle it.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-your-state">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Module-level variables leak between users, and RAM leaks more quietly than files</span>
+              <span class="card-sub">The failure that never appears until the day you multiplex.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>One session is one Linux process running one Python interpreter with one module namespace. Ten concurrent requests are ten coroutines sharing it. Anything defined at module level is created once at container start and shared by everyone.</p>
+          <p>The most common instance in LangGraph is a constant thread key:</p>
+          <div class="code">
+            <p class="code-label">wrong</p>
+            <pre><code>graph = builder.compile(checkpointer=InMemorySaver())   # module level
+
+async def handler(request, context, _):
+    return await graph.ainvoke(
+        {"messages": [...]},
+        config={"configurable": {"thread_id": "chat"}},  # same for everyone
+    )</code></pre>
+          </div>
+          <p>Alice and Bob land in one shared conversation. No file is involved; the state is a dictionary in memory. Microsoft Agent Framework has the same shape when a thread is created once at module level and reused by every request.</p>
+          <div class="code">
+            <p class="code-label">right</p>
+            <pre><code>ctx = get_request_context()
+config = {"configurable": {"thread_id": f"{ctx.user_id}:{conversation_id}"}}</code></pre>
+          </div>
+          <p>Per-invocation framework state is safe: LangGraph state passed through <code>ainvoke</code>, a Microsoft Agent Framework run, a local variable. What is unsafe is anything you attach at module scope &mdash; a checkpointer with a constant key, a client built with the first caller's token, a global registry reconfigured per request.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show why one session per user hides this, and the fix list</button>
+            <div class="reveal-body">
+              <p>The race needs two things: shared state and an <code>await</code>. Between any two awaits another request runs.</p>
+              <div class="code">
+                <p class="code-label">the race</p>
+                <pre><code>_current_profile = None
+
+async def handle(req):
+    global _current_profile
+    _current_profile = load_profile(req.user_id)
+    answer = await model.chat(...)        # control yields here
+    return f"{_current_profile}: {answer}"</code></pre>
+              </div>
+              <p>Alice sets the global, yields, Bob overwrites it, Alice resumes and reads Bob's profile. With one session per user the process only ever serves one person, so a constant key is accidentally correct and the bug stays latent for the entire life of the project.</p>
+              <ul class="arrow-list">
+                <li>Keep module scope to immutable configuration and clients that carry no user identity.</li>
+                <li>Hold per-request state in locals, or in a <code>contextvars.ContextVar</code>, which is per-task and survives awaits &mdash; this is how the SDK implements <code>get_request_context()</code>.</li>
+                <li>Include the user ID in every cache key, checkpointer key and file path.</li>
+                <li>Guard read-modify-write on any shared file with an <code>asyncio.Lock</code>.</li>
+                <li>Test with two users interleaved; a single-user test cannot detect any of this.</li>
+              </ul>
+              <p>This repository's own <code>memory_store.py</code> shows the correct shape and the remaining gap: a module-level singleton backed by one sandbox-wide JSON file, whose contents are keyed <code>{"users": {user_id: ...}}</code> so the data model is multiplex-safe, but whose writes are unlocked read-modify-write and whose <code>MEMORY_DEFAULT_USER_ID</code> fallback would collapse users together if the real user ID were not threaded through.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-measured">
+      <h2 class="chapter-label">Measured behaviour</h2>
+
+      <article class="card" id="card-concurrency">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">One 0.5-vCPU sandbox served 24 concurrent turns without a failure</span>
+              <span class="card-sub">The platform does not serialise requests to a shared session.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>Scenario</th><th>Sandboxes</th><th>Peak in flight</th><th>p50</th><th>p95</th><th>Failures</th></tr></thead>
+            <tbody>
+              <tr><td>12 users, one shared session</td><td>1</td><td>12</td><td>14.41 s</td><td>14.69 s</td><td>0</td></tr>
+              <tr><td>12 users, one session each</td><td>12</td><td>1</td><td>13.66 s</td><td>15.43 s</td><td>0</td></tr>
+              <tr><td>12 users, pooled 4 per session</td><td>3</td><td>4</td><td>12.29 s</td><td>12.73 s</td><td>0</td></tr>
+              <tr><td>24 users, one shared session</td><td>1</td><td>24</td><td>11.43 s</td><td>13.46 s</td><td>0</td></tr>
+            </tbody>
+          </table>
+          <p>For a turn that spends its time waiting on a model, the sandbox is nearly idle. Model throughput limits bind first: the 24-user run absorbed 17 retries against request-rate throttling while sandbox CPU never became the constraint.</p>
+          <aside class="callout callout--source">
+            <p class="callout-label">Source</p>
+            <p>Measured 3 August 2026 with <code>scripts/session_scaling_lab.py</code> against <code>foundry-showcase-main</code> version 31, 0.5 vCPU and 1 GiB per session, model <code>gpt-5.4-mini</code>, Sweden Central. In-flight counts come from a counter inside the container, not inferred from the client.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-cost">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Isolation cost twelve times more than sharing for the same work</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Counting sandbox-minutes for a 12-user burst, including the 15-minute idle window each session holds before deprovisioning:</p>
+          <table>
+            <thead><tr><th>Shape</th><th>Sandbox-minutes</th></tr></thead>
+            <tbody>
+              <tr><td>One shared session</td><td>15.3</td></tr>
+              <tr><td>Pooled, 4 users per session</td><td>45.8</td></tr>
+              <tr><td>One session per user</td><td>183.3</td></tr>
+            </tbody>
+          </table>
+          <p>The idle window dominates. Twelve sessions each holding 15 minutes after a 15-second burst is almost entirely wasted capacity, and it scales linearly with user count.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-stop">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Stopping sessions removes most of the cost gap without losing the disk</span>
+              <span class="card-sub">This changes the isolate-versus-pool trade more than pooling does.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A session can be stopped explicitly instead of waiting out the idle timeout. Doing so at the end of a burst took the same workload from 31.4 to 1.4 sandbox-minutes.</p>
+          <p>Re-running the same session names afterwards produced new instance IDs, a resume counter of 1, and the marker file still present. Isolation therefore does not have to mean paying for idle time.</p>
+          <div class="code">
+            <p class="code-label">PowerShell</p>
+            <pre><code>az rest --resource https://ai.azure.com --method post `
+  --url "$base/agents/$agent/endpoint/sessions/$sessionId/stop?api-version=v1"</code></pre>
+          </div>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>If your middle tier knows when a user's work finishes, per-user isolation plus explicit stop beats pooling: near-identical cost, with a real VM boundary between users.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-limits">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Subnet addresses cap concurrent sessions before cost does</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td>Concurrent sessions</td><td>Roughly one per usable address in the delegated subnet. A /26 gives about 50, the documented maximum. Support can raise the ratio to one address per ten sessions.</td></tr>
+              <tr><td>Regional capacity</td><td><code>429 regional_session_quota_exceeded</code>; deleting your own sessions does not help.</td></tr>
+              <tr><td>Idle timeout</td><td>15 minutes, compute only. The disk survives.</td></tr>
+              <tr><td>Session lifetime</td><td>30 days, rolling from last access.</td></tr>
+              <tr><td>Agents and versions</td><td>About 200 agents per instance; 100 active and 1,000 total versions per agent.</td></tr>
+            </tbody>
+          </table>
+          <p>A thousand concurrent users on one session each is not a budget problem before it is an address-space problem. That constraint alone forces either pooling or aggressive stopping.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-choosing">
+      <h2 class="chapter-label">Choosing a shape</h2>
+
+      <article class="card" id="card-decision">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Isolate when the sandbox does work; multiplex when it only calls the model</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The deciding question is not user count. It is whether the container touches anything on the user's behalf.</p>
+          <div class="summary-grid">
+            <div class="summary-item">
+              <span class="summary-label">Isolate</span>
+              The container executes code, holds a workspace, or handles untrusted content, so a VM boundary is doing real security work.
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Multiplex</span>
+              The container assembles a prompt, calls remote tools, and reads a database, so the only state that matters is already partitioned.
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Pool</span>
+              You want a blast-radius cap without paying per user, and you can carry a user-to-session map in the middle tier.
+            </div>
+          </div>
+          <p>An agent built on remote tools alone multiplexes safely once its own state is keyed by user. A harness with local tools that writes files, runs shells, or clones repositories should get a machine per user.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-aca">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">For stateless multiplexed chat, Container Apps with an HTTP scaler fits better</span>
+              <span class="card-sub">The hosted-agent advantages concentrate where multiplexing is wrong.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>If the answer is one shared session for a thousand users, you are describing interchangeable stateless replicas. Azure Container Apps expresses that declaratively with concurrent-request scaling and replica bounds, and no routing code in your middle tier.</p>
+          <p>What hosted agents add is per-session durable compute: a named machine with a private filesystem that scales to zero and resumes with its state. Immutable versions, instant rollback, version-scoped evaluation targets, a sessions API and a per-agent Entra identity come with it. Registering an external agent gives a Container Apps deployment Foundry tracing and trace-based evaluation, but external agents are versionless, so lifecycle management does not carry over.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>Hosted agents appear to run on Azure Container Apps Sandboxes rather than dynamic sessions: probes report a host name of <code>adc-sandbox</code>, and the tier S shape of 0.5 core, 1 GB and 20 GB disk matches this agent's configuration exactly. This is inference from observed behaviour on 3 August 2026, not documented.</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+  </main>
+
+  <p class="takeaway">The session name is a capacity decision and the user identity is a security decision; almost every mistake in this area comes from letting one of them do the other's job.</p>
+
+  <footer class="doc-footer">
+    <p>Measurements from <code>foundry-showcase</code> in this repository, agent version 31, Sweden Central, 3 August 2026. Protocol details read from <code>azure-ai-agentserver-core</code> as installed, and from Microsoft Learn documentation for hosted agent session multiplexing, per-user isolation, and permissions.</p>
+  </footer>
+
+</div>
+
+</body>
+</html>

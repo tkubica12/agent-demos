@@ -2,17 +2,20 @@ name: foundry-showcase-phase5
 agent:
     name: foundry-showcase-main
     kind: hosted
-    version: "26"
+    version: "33"
     model: gpt-5.4-mini
     config: .agent_configs\baseline\metadata.yaml
+    model_search_space:
+        - gpt-5.4-mini
+        - gpt-5.4
 dataset:
     local_uri: datasets\foundry-showcase-phase5\foundry-showcase-phase5_dg.jsonl
 evaluators:
     - builtin.task_adherence
     - builtin.intent_resolution
     - name: foundry-showcase-phase5
-      version: "3"
+      version: "4"
       local_uri: evaluators\foundry-showcase-phase5\rubric_dimensions.json
 options:
     eval_model: gpt-5.4-mini
-max_samples: 30
+max_samples: 40

@@ -1,0 +1,152 @@
+# Shot list for the Foundry showcase demo guide.
+#
+# Numbering follows the article's chapter order. Sign in once with
+# `uv run python capture.py --login`, then `uv run python capture.py`.
+#
+# The viewport must stay wider than about 2.3:1. Slides mode scales a card with
+# CSS `zoom`, which has no effect on an image sized at 100% width, so a figure
+# has to fit the slide on its own height.
+
+[portal]
+host = "https://ai.azure.com"
+workspace_key = "ZzrzTWsoQdy8e_UHQYBF5g,ai-services,,tomaskubica-foundry-resource,tomaskubica-foundry-project"
+tenant_id = "6ce4f237-667f-43f5-aafd-cbef954adf97"
+account_hint = "tomas@tomasonline.net"
+login_url = "/build/evaluations/list"
+ready_text = "Evaluations"
+width = 1920
+height = 840
+settle_ms = 10000
+
+# --- 1. Resource and project ---
+
+[[shot]]
+id = "01-project-home"
+url = "/home"
+
+# --- 2. Deployments: many vendors, one endpoint ---
+
+[[shot]]
+id = "02-deployments"
+url = "/build/models/deployments"
+
+[[shot]]
+id = "03-fine-tune"
+url = "/build/fine-tune"
+
+# --- 3. Services: not everything is an LLM ---
+
+[[shot]]
+id = "04-services"
+url = "/build/services/playgrounds"
+
+# --- 4. Agents and routines ---
+
+[[shot]]
+id = "05-agents"
+url = "/build/agents"
+
+[[shot]]
+id = "06-routines"
+url = "/build/agents/routines"
+
+# --- 5. Anatomy of a prompt agent ---
+
+[[shot]]
+id = "07-prompt-agent"
+url = "/build/agents/foundry-showcase-knowledge-expert/build"
+actions = [{ type = "scroll", x = 460, y = 600, dy = 300 }]
+
+# --- 6. Multi-agent delegation over A2A ---
+
+[[shot]]
+id = "08-a2a-delegation"
+url = "/build/agents/foundry-showcase-main/traces"
+actions = [
+  { type = "click", selector = "[role='row'] [role='gridcell']" },
+  { type = "fill", selector = "input[placeholder*='Find in trace']", value = "a2a" },
+  { type = "wait", ms = 3000 },
+]
+
+# --- 7. Tools, toolboxes and skills ---
+
+[[shot]]
+id = "09-tools"
+url = "/build/tools?tab=tools"
+
+[[shot]]
+id = "10-toolboxes"
+url = "/build/tools?tab=toolboxes"
+
+[[shot]]
+id = "11-skills"
+url = "/build/tools?tab=skills"
+
+# --- 8. Guardrails ---
+
+[[shot]]
+id = "12-guardrails"
+url = "/build/guardrails/list"
+actions = [
+  { type = "click_text", text = "foundry-showcase-sensitive-data" },
+  { type = "click_text", text = "Indirect prompt injections", exact = false },
+  { type = "click_text", text = "Content safety", exact = false },
+  { type = "wait", ms = 2000 },
+]
+
+# --- 9. Knowledge and Foundry IQ ---
+
+[[shot]]
+id = "13-knowledge-bases"
+url = "/build/knowledge/search/c/srchfoundryiqvz5kj8w7561x"
+
+[[shot]]
+id = "14-knowledge-base-detail"
+url = "/build/knowledge/search/c/srchfoundryiqvz5kj8w7561x/bases/foundry-showcase-knowledge"
+actions = [{ type = "scroll", dy = 700 }]
+
+# --- 10. Memory ---
+
+[[shot]]
+id = "15-memory"
+url = "/build/memory/foundry-showcase-main/details"
+actions = [{ type = "scroll", x = 1060, y = 600, dy = 320 }]
+
+# --- 11. Traces ---
+
+[[shot]]
+id = "16-traces"
+url = "/build/agents/foundry-showcase-main/traces"
+
+[[shot]]
+id = "17-trace-anatomy"
+url = "/build/agents/foundry-showcase-main/traces"
+actions = [{ type = "click", selector = "[role='row'] [role='gridcell']" }]
+
+# --- 12. Evaluations ---
+
+[[shot]]
+id = "18-evaluations"
+url = "/build/evaluations/list"
+
+[[shot]]
+id = "19-red-team"
+url = "/build/evaluations/list"
+actions = [{ type = "click_text", text = "Red team", exact = true }]
+
+# --- 13. Optimize ---
+
+[[shot]]
+id = "20-optimize"
+url = "/build/agents/foundry-showcase-optimize/optimization"
+
+[[shot]]
+id = "21-optimize-run"
+url = "/build/agents/foundry-showcase-optimize/optimization"
+actions = [{ type = "click_text", text = "opt_0205d8caeaf54401ac82714d3621701e" }]
+
+# --- 14. Enterprise readiness ---
+
+[[shot]]
+id = "22-operate"
+url = "/operate/overview"

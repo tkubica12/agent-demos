@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hosted agent identity, isolation, and scaling</title>
+<meta name="description" content="How a middle tier picks which micro-VM a Foundry hosted agent request lands on, which user it counts as, and which conversation it continues.">
+<meta name="doc-id" content="foundry-hosted-agent-identity">
+
+<script>
+(function () {
+  var d = document.documentElement;
+  d.classList.add("js");
+  var p = new URLSearchParams(location.search);
+  var t = p.get("theme");
+  if (t !== "light" && t !== "dark") {
+    try { t = localStorage.getItem("doc-theme"); } catch (e) { t = null; }
+  }
+  if (t !== "light" && t !== "dark") {
+    t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  d.setAttribute("data-theme", t);
+  if (p.get("view") === "slides") d.setAttribute("data-view", "slides");
+})();
+</script>
+
+<style>
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #f5f6f8; --surface-3: #eaecf0;
+  --border: #dee1e6; --border-strong: #c2c7cf;
+  --text: #14171a; --text-muted: #565c66; --text-faint: #767d87;
+  --accent: #0078d4; --accent-strong: #005a9e; --accent-quiet: #4a9fe0;
+  --accent-soft: #eaf3fb; --accent-border: #a9d0ef;
+  --warn: #8a5300; --warn-soft: #fdf5e8; --warn-border: #e6c99a;
+  --code-bg: #f5f6f8; --code-border: #e2e5ea;
+  --focus: #0078d4;
+  --shadow-1: 0 1px 2px rgba(16,19,23,.06);
+  --shadow-2: 0 2px 4px rgba(16,19,23,.06), 0 12px 28px rgba(16,19,23,.08);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1013; --surface: #15181d; --surface-2: #1b1f26; --surface-3: #232830;
+  --border: #2b313a; --border-strong: #3d4550;
+  --text: #eceef1; --text-muted: #a7aeb8; --text-faint: #868e99;
+  --accent: #4aa3e8; --accent-strong: #7cc0f3; --accent-quiet: #2f80c4;
+  --accent-soft: #142430; --accent-border: #2c4f6d;
+  --warn: #e0b055; --warn-soft: #241d10; --warn-border: #574627;
+  --code-bg: #12151a; --code-border: #262c34;
+  --focus: #6cb8f0;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.4), 0 12px 28px rgba(0,0,0,.45);
+}
+</style>
+
+<link rel="stylesheet" href="assets/article.css">
+<script src="assets/article.js" defer></script>
+</head>
+
+<body>
+
+<div class="controls" role="group" aria-label="Article controls">
+  <button type="button" class="ctrl" data-action="expand-all">Expand all</button>
+  <button type="button" class="ctrl" data-action="collapse-all">Collapse all</button>
+  <button type="button" class="ctrl" data-action="toggle-slides" aria-pressed="false">Slides</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+</div>
+
+<div class="doc">
+
+  <header class="doc-header">
+    <p class="eyebrow">MICROSOFT FOUNDRY</p>
+    <h1>Hosted agent identity, isolation, and scaling</h1>
+    <p class="subtitle">Four identifiers decide which micro-VM a request lands on, which user it counts as, and which conversation it continues. This explains what each one does, what a middle tier should send in three different deployment shapes, and what a live agent actually did under load.</p>
+    <p class="meta"><time datetime="2026-08-03">3 August 2026</time> &middot; measured against <code>foundry-showcase-main</code> v31, Sweden Central</p>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-label">Contents</p>
+    <ol>
+      <li><a href="#ch-model">The model</a></li>
+      <li><a href="#ch-identifiers">The four identifiers</a></li>
+      <li><a href="#ch-recipes">Three middle-tier recipes</a></li>
+      <li><a href="#ch-state">Where state lives</a></li>
+      <li><a href="#ch-measured">Measured behaviour</a></li>
+      <li><a href="#ch-choosing">Choosing a shape</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-model">
+      <h2 class="chapter-label">The model</h2>
+
+      <article class="card card--lead" id="card-what-a-session-is" data-open>
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="true">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A hosted agent session is a micro-VM you address by name</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The platform runs one instance of your container per <code>agent_session_id</code>. Send the same string twice and both requests land on the same running instance: same processes, same memory, same disk. Send a different string and you get a different instance, isolated from the first at the virtual machine boundary.</p>
+          <p>You invent that string. The platform does not hand you a session ID to store; your middle tier chooses one on every call. A session appears the first time you name it and is deprovisioned after 15 minutes with no traffic.</p>
+          <p>Every question about isolation, concurrency and cost reduces to one decision: which strings does the middle tier choose?</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show how the session ID travels on each protocol</button>
+            <div class="reveal-body">
+              <p>Container protocol 2.0.0, through the Responses API, carries it in the request body:</p>
+              <div class="code">
+                <p class="code-label">middle tier, Responses</p>
+                <pre><code>response = responses_client.create(
+    input=user_message,
+    extra_body={"agent_session_id": session_id},
+    extra_headers={"x-ms-user-identity": user_id},
+)</code></pre>
+              </div>
+              <p>Container protocol 1.0.0, through the Invocations endpoint, carries it as a query parameter. This is the only binding the Invocations path honours, which the load lab in this repository relies on:</p>
+              <div class="code">
+                <p class="code-label">middle tier, Invocations</p>
+                <pre><code>POST .../endpoint/protocols/invocations?api-version=v1&amp;agent_session_id=pool-0</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-routing-key">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Only <code>agent_session_id</code> decides which micro-VM serves a request</span>
+              <span class="card-sub">The user identity headers have no effect on placement.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>This is the point where mental models usually go wrong. <code>x-ms-user-identity</code> looks like a routing key because it identifies a person, and people map to replicas in most systems. It does not route anything here.</p>
+          <table>
+            <thead><tr><th>Identifier</th><th>Effect on placement</th><th>Effect on isolation</th></tr></thead>
+            <tbody>
+              <tr><td><code>agent_session_id</code></td><td>Selects the micro-VM. This is the load-balancing knob.</td><td>Separate VM, separate RAM, separate disk.</td></tr>
+              <tr><td><code>x-ms-user-identity</code></td><td>None.</td><td>Partitions conversation state inside whichever VM the session ID chose.</td></tr>
+              <tr><td><code>previous_response_id</code></td><td>None.</td><td>Selects one conversation belonging to that user.</td></tr>
+            </tbody>
+          </table>
+          <aside class="callout callout--rule">
+            <p class="callout-label">Rule</p>
+            <p>The session ID is a capacity decision. The user identity is a security decision. Change the session ID to spread load; never change the user identity for the same reason.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-permission-gate">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The platform checks who may claim a user, not which user is claimed</span>
+              <span class="card-sub">The header value is an opaque string. The gate is on the caller's role.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Sending <code>x-ms-user-identity</code> requires the data action <code>Microsoft.CognitiveServices/accounts/AIServices/agents/endpoints/UserIdentityImpersonation/action</code>. No built-in role grants it, including Foundry Owner. Without it the call fails with <code>403</code>.</p>
+          <p>Once the caller holds that permission, the value itself is not validated against a directory. Microsoft's own multiplexing sample hardcodes two plain labels:</p>
+          <div class="code">
+            <p class="code-label">foundry-samples &middot; invoke_previous_response_isolation.py</p>
+            <pre><code>user_a="alice",
+user_b="bob",
+...
+"extra_headers": {"x-ms-user-identity": user_id},</code></pre>
+          </div>
+          <p>So an arbitrary GUID would work. The trust boundary is the calling service, proven by role assignment; the platform then treats whatever that service asserts as the truth and re-emits it to your container.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the 403 and the custom role that fixes it</button>
+            <div class="reveal-body">
+              <p>Sending the header from an account holding Owner at management-group scope still fails, which confirms the permission is genuinely separate from ownership:</p>
+              <div class="code">
+                <p class="code-label">response</p>
+                <pre><code>403 forbidden
+Caller is not authorized to delegate to another user
+via the x-ms-user-identity header.</code></pre>
+              </div>
+              <div class="code">
+                <p class="code-label">custom-impersonation-role.json</p>
+                <pre><code>{
+  "Name": "Foundry Agent User Identity Impersonation",
+  "IsCustom": true,
+  "Actions": [],
+  "DataActions": [
+    "Microsoft.CognitiveServices/accounts/AIServices/agents/endpoints/UserIdentityImpersonation/action"
+  ],
+  "AssignableScopes": ["/subscriptions/.../providers/Microsoft.CognitiveServices/accounts/&lt;account&gt;"]
+}</code></pre>
+              </div>
+              <p>Assign it to the middle tier's managed identity at project or agent scope.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-identifiers">
+      <h2 class="chapter-label">The four identifiers</h2>
+
+      <article class="card" id="card-hierarchy">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Four identifiers answer four separate questions</span>
+              <span class="card-sub">Agent, session, user, conversation &mdash; strictly nested.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <figure class="figure">
+            <a class="zoom" href="assets/identity-hierarchy.svg">
+              <img src="assets/identity-hierarchy.svg" alt="One hosted agent contains three sessions named pool-0, pool-1 and pool-2. Each session owns its RAM and disk. Inside pool-0 sit two users, alice and bob; each user owns conversation chains." width="1500" height="620">
+            </a>
+            <figcaption>One deployed agent serves many sessions; one session serves many users; one user owns many conversations.</figcaption>
+          </figure>
+          <table>
+            <thead><tr><th>Level</th><th>Identifier</th><th>Question it answers</th><th>Who chooses the value</th></tr></thead>
+            <tbody>
+              <tr><td>Agent</td><td><code>azure.yaml</code> name and version</td><td>Which code and which model?</td><td>You, at deploy time</td></tr>
+              <tr><td>Session</td><td><code>agent_session_id</code></td><td>Which micro-VM?</td><td>Your middle tier, per request</td></tr>
+              <tr><td>User</td><td><code>x-ms-user-identity</code> in, <code>x-agent-user-id</code> out</td><td>Whose data is this?</td><td>Your middle tier, from a validated token</td></tr>
+              <tr><td>Conversation</td><td><code>previous_response_id</code></td><td>Which thread continues?</td><td>The platform mints it; you store and replay it</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card" id="card-session-id">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A session name is a lease on a machine, not a record you look up</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Naming a session that does not exist creates it. Naming one that exists routes to it. Naming one whose compute was deprovisioned after idling resumes it with the disk intact.</p>
+          <p>That makes the session name a pure function of your routing policy: <code>user-&lt;oid&gt;</code> for per-user isolation, <code>shared</code> for full multiplexing, <code>pool-7</code> for bucketing. The middle tier can recompute it rather than persist it, as long as the function is deterministic.</p>
+          <p>Sessions can also be listed, inspected and stopped through a REST collection under the agent endpoint, or with <code>azd ai agent sessions</code>.</p>
+          <aside class="callout callout--warning">
+            <p class="callout-label">Warning</p>
+            <p>The accepted character set is undocumented and stricter than it looks. <code>sess_abc123</code>, GUIDs and <code>lab-run1-user3</code> are accepted; <code>probe-a</code> and <code>probea</code> both returned <code>400 invalid_session_id</code> in testing on 3 August 2026. Validate your naming function against the live endpoint before relying on it.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-user-id">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Two headers carry one user because the container has to be able to trust it</span>
+              <span class="card-sub">You set the inbound one; the platform sets the one your code reads.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th></th><th><code>x-ms-user-identity</code></th><th><code>x-agent-user-id</code></th></tr></thead>
+            <tbody>
+              <tr><th>Direction</th><td>middle tier to platform</td><td>platform to container</td></tr>
+              <tr><th>Who asserts it</th><td>the caller</td><td>the platform</td></tr>
+              <tr><th>Gate</th><td>the impersonation data action</td><td>you cannot set it at all</td></tr>
+              <tr><th>Meaning</th><td>a request: treat this call as Bob's</td><td>the resolved answer, safe to key data on</td></tr>
+            </tbody>
+          </table>
+          <p>If the container read a header the caller could set, any caller could read any user's data. Splitting the two lets the platform validate, resolve, then inject &mdash; so <code>get_request_context().user_id</code> is always platform-asserted.</p>
+          <p>With no delegation the platform derives the value from the caller's Entra token. Probing the showcase agent returned an <code>x-agent-user-id</code> exactly equal to the signed-in account's Entra object ID, so one caller then means one user regardless of how many people sit behind your front end.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show what the SDK says about scope and forwarding</button>
+            <div class="reveal-body">
+              <p>The header constants in <code>azure-ai-agentserver-core</code> define the contract more precisely than any documentation page:</p>
+              <div class="code">
+                <p class="code-label">azure/ai/agentserver/core/_platform_headers.py</p>
+                <pre><code>USER_ID: str = "x-agent-user-id"
+"""The platform-injected global, cross-agent partition key for
+per-user state. The same user yields the same value regardless of
+which agent they interact with. Use it as the primary partition key
+for per-user data (profiles, preferences, OAuth tokens, memory)."""</code></pre>
+              </div>
+              <p>Protocol 2.0.0 adds <code>x-agent-foundry-call-id</code>, an opaque per-request token the container must forward verbatim on outbound calls to Foundry services such as Storage, the Toolbox MCP proxy, and A2A. The user ID is deliberately not forwarded: first-party services do not trust it. The call ID is the capability; the user ID is only a partition key.</p>
+              <aside class="callout callout--note">
+                <p class="callout-label">Note</p>
+                <p>Whether a delegated <code>x-agent-user-id</code> is the literal string you sent or a canonicalised form of it is untested here, because the 403 blocked the experiment. It is stable per user either way, which is all a partition key needs.</p>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-conversation">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">A conversation is a chain named by its own last response</span>
+              <span class="card-sub">There is no conversation ID parameter to invent.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Each call returns a response with an <code>id</code>. Passing that <code>id</code> as <code>previous_response_id</code> on the next call continues the thread. Store the latest ID per thread in your own database; that is the whole mechanism. The agent server SDK has no conversation object.</p>
+          <p>The platform ties every chain to the user who created it. If Bob sends Alice's <code>previous_response_id</code> while sitting in the same session, the call fails. Inside the container, <code>context.get_history()</code> returns only what the current request's user is authorised to see.</p>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>This is the one piece of multi-user isolation you get for free in a shared session, and it is the piece people worry about most. Everything else your container touches is your problem.</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-recipes">
+      <h2 class="chapter-label">Three middle-tier recipes</h2>
+
+      <article class="card" id="card-recipe-isolated">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Per-user micro-VM: derive the session name from the user's subject claim</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <div class="code">
+            <p class="code-label">middle tier</p>
+            <pre><code>oid = validated_token["oid"]              # stable, immutable
+
+session_id = f"user{oid.replace('-', '')}"
+user_id    = oid</code></pre>
+          </div>
+          <p>Use the subject claim your identity provider guarantees is immutable: <code>oid</code> for Microsoft Entra, <code>sub</code> for anything else. Never use email or user principal name; a rename would orphan the user's history and disk.</p>
+          <p>Every user gets a private machine with a private filesystem, isolated at the VM boundary. Nothing in your container code has to be concurrency-safe across users, because no two users share a process.</p>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>Correct when the sandbox does real work on the user's behalf: running code, holding a workspace, processing untrusted content. Expensive when it only relays prompts to a model.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-recipe-shared">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Full multiplexing: pin the session name to a constant</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <div class="code">
+            <p class="code-label">middle tier</p>
+            <pre><code>session_id = "shared"                     # one micro-VM for everyone
+user_id    = validated_token["oid"]       # still per user</code></pre>
+          </div>
+          <p>One container instance serves the entire population. Conversation history stays private per user because the platform partitions it. Everything the container writes itself &mdash; files, module variables, caches &mdash; is shared unless you key it by user.</p>
+          <p>This shape needs container protocol 2.0.0. On 1.0.0 a session is bound to a single caller identity, and concurrent users on one session interfere with each other.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-recipe-pool">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Bucketing: map users to a bounded pool of session names</span>
+              <span class="card-sub">The middle ground. One agent, many sessions, a cap you choose.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>There is no HTTP scaler and no platform concurrency setting. The pool lives entirely in your middle tier, which is why it can implement exactly the policy you want.</p>
+          <div class="code">
+            <p class="code-label">middle tier, sticky fill</p>
+            <pre><code>def session_for(user_id: str) -&gt; str:
+    if user_id in assigned:
+        return assigned[user_id]                    # returning user is sticky
+    slot = next((s for s, n in counts.items() if n &lt; max_users_per_session), None)
+    if slot is None:
+        slot = f"pool-{len(counts)}"                # grow only when all are full
+        counts[slot] = 0
+    assigned[user_id] = slot
+    counts[slot] += 1
+    return slot</code></pre>
+          </div>
+          <p>Sticky fill keeps a user's turns on one machine and opens a new session only when every existing one is at capacity. Hash-based assignment is stateless but reshuffles everyone when the pool resizes. Round-robin spreads load but scatters a user's turns.</p>
+          <p>Two caps do different jobs and should not be conflated. A limit on concurrent in-flight requests per session protects latency. A limit on users per session bounds the blast radius of a container-side bug. Neither is a platform feature; both are variables in your code.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>Because users read and type between turns, concurrent requests are a small fraction of the user count. Size the pool against measured peak concurrency, not against registered users.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-always-send-user">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Send the user identity even when the session is already per-user</span>
+              <span class="card-sub">Otherwise every user shares one memory partition.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>It is tempting to skip delegation when each user already has a private session. Conversation history would still be private, because the session is private.</p>
+          <p>Foundry memory is not. The SDK describes <code>x-agent-user-id</code> as a global, cross-agent partition key, and without delegation it resolves to the middle tier's own managed identity for every request. All one thousand users would then read and write a single memory partition.</p>
+          <aside class="callout callout--rule">
+            <p class="callout-label">Rule</p>
+            <p>Session name and user identity are independent settings. Choose the session name for capacity and isolation; always set the user identity to the real end user.</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-state">
+      <h2 class="chapter-label">Where state lives</h2>
+
+      <article class="card" id="card-state-map">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Four stores, three different keys, one of them yours</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>Store</th><th>Keyed by</th><th>Survives</th><th>Partitioned for you</th></tr></thead>
+            <tbody>
+              <tr><td>Process memory in the container</td><td>session</td><td>until idle deprovision</td><td>no</td></tr>
+              <tr><td><code>$HOME</code> and <code>/files</code></td><td>session</td><td>idle deprovision, up to 30 days</td><td>no</td></tr>
+              <tr><td>Conversation history</td><td>session and user</td><td>platform-managed</td><td>yes</td></tr>
+              <tr><td>Foundry memory</td><td>user, across sessions and agents</td><td>platform-managed</td><td>yes</td></tr>
+            </tbody>
+          </table>
+          <p>The two rows keyed by session are the ones that surprise people. They are per machine, not per person.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-disk">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The disk belongs to the session, so a shared session means a shared disk</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Two users on different session names get different filesystems, automatically and unconditionally. Two users on the same session name get one filesystem, and the platform does nothing to divide it. Building the drawers is your job:</p>
+          <div class="code">
+            <p class="code-label">container</p>
+            <pre><code>ctx  = get_request_context()
+path = Path.home() / ctx.user_id / "MEMORY.md"</code></pre>
+          </div>
+          <p>The disk outlives idle deprovision. Stopping a session and calling it again returned a new instance ID with a resume counter incremented and the marker file intact, and a resume cost 13.67 s at the median against 42.74 s cold. Sessions expire on a rolling 30-day window measured from last access.</p>
+          <aside class="callout callout--warning">
+            <p class="callout-label">Warning</p>
+            <p>Thirty idle days deletes the session and its disk. Treat <code>$HOME</code> as a warm working cache and write anything that must survive to Blob storage or a database.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-memory">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Memory and history follow the user; the machine follows the session name</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Move a user to a different session and their Foundry memory comes with them, because it is keyed on the user and scoped across agents. Their conversation history does not: history is scoped to the session as well as the user, so a user reassigned to a new bucket starts a fresh thread there.</p>
+          <p>That asymmetry decides pool design. Sticky assignment matters when threads must survive; if every turn carries its own <code>previous_response_id</code> from your database, reassignment is cheap.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>The memory half is documented: the agent server SDK calls <code>x-agent-user-id</code> a global, cross-agent partition key. The history half is inferred from the session-scoped storage model and was not tested here. Replaying a <code>previous_response_id</code> from a different session would settle it.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-your-state">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Module-level variables leak between users, and RAM leaks more quietly than files</span>
+              <span class="card-sub">The failure that never appears until the day you multiplex.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>One session is one Linux process running one Python interpreter with one module namespace. Ten concurrent requests are ten coroutines sharing it. Anything defined at module level is created once at container start and shared by everyone.</p>
+          <p>The most common instance in LangGraph is a constant thread key:</p>
+          <div class="code">
+            <p class="code-label">wrong</p>
+            <pre><code>graph = builder.compile(checkpointer=InMemorySaver())   # module level
+
+async def handler(request, context, _):
+    return await graph.ainvoke(
+        {"messages": [...]},
+        config={"configurable": {"thread_id": "chat"}},  # same for everyone
+    )</code></pre>
+          </div>
+          <p>Alice and Bob land in one shared conversation. No file is involved; the state is a dictionary in memory. Microsoft Agent Framework has the same shape when a thread is created once at module level and reused by every request.</p>
+          <div class="code">
+            <p class="code-label">right</p>
+            <pre><code>ctx = get_request_context()
+config = {"configurable": {"thread_id": f"{ctx.user_id}:{conversation_id}"}}</code></pre>
+          </div>
+          <p>Per-invocation framework state is safe: LangGraph state passed through <code>ainvoke</code>, a Microsoft Agent Framework run, a local variable. What is unsafe is anything you attach at module scope &mdash; a checkpointer with a constant key, a client built with the first caller's token, a global registry reconfigured per request.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show why one session per user hides this, and the fix list</button>
+            <div class="reveal-body">
+              <p>The race needs two things: shared state and an <code>await</code>. Between any two awaits another request runs.</p>
+              <div class="code">
+                <p class="code-label">the race</p>
+                <pre><code>_current_profile = None
+
+async def handle(req):
+    global _current_profile
+    _current_profile = load_profile(req.user_id)
+    answer = await model.chat(...)        # control yields here
+    return f"{_current_profile}: {answer}"</code></pre>
+              </div>
+              <p>Alice sets the global, yields, Bob overwrites it, Alice resumes and reads Bob's profile. With one session per user the process only ever serves one person, so a constant key is accidentally correct and the bug stays latent for the entire life of the project.</p>
+              <ul class="arrow-list">
+                <li>Keep module scope to immutable configuration and clients that carry no user identity.</li>
+                <li>Hold per-request state in locals, or in a <code>contextvars.ContextVar</code>, which is per-task and survives awaits &mdash; this is how the SDK implements <code>get_request_context()</code>.</li>
+                <li>Include the user ID in every cache key, checkpointer key and file path.</li>
+                <li>Guard read-modify-write on any shared file with an <code>asyncio.Lock</code>.</li>
+                <li>Test with two users interleaved; a single-user test cannot detect any of this.</li>
+              </ul>
+              <p>This repository's own <code>memory_store.py</code> shows the correct shape and the remaining gap: a module-level singleton backed by one sandbox-wide JSON file, whose contents are keyed <code>{"users": {user_id: ...}}</code> so the data model is multiplex-safe, but whose writes are unlocked read-modify-write and whose <code>MEMORY_DEFAULT_USER_ID</code> fallback would collapse users together if the real user ID were not threaded through.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-measured">
+      <h2 class="chapter-label">Measured behaviour</h2>
+
+      <article class="card" id="card-concurrency">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">One 0.5-vCPU sandbox served 24 concurrent turns without a failure</span>
+              <span class="card-sub">The platform does not serialise requests to a shared session.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>Scenario</th><th>Sandboxes</th><th>Peak in flight</th><th>p50</th><th>p95</th><th>Failures</th></tr></thead>
+            <tbody>
+              <tr><td>12 users, one shared session</td><td>1</td><td>12</td><td>14.41 s</td><td>14.69 s</td><td>0</td></tr>
+              <tr><td>12 users, one session each</td><td>12</td><td>1</td><td>13.66 s</td><td>15.43 s</td><td>0</td></tr>
+              <tr><td>12 users, pooled 4 per session</td><td>3</td><td>4</td><td>12.29 s</td><td>12.73 s</td><td>0</td></tr>
+              <tr><td>24 users, one shared session</td><td>1</td><td>24</td><td>11.43 s</td><td>13.46 s</td><td>0</td></tr>
+            </tbody>
+          </table>
+          <p>For a turn that spends its time waiting on a model, the sandbox is nearly idle. Model throughput limits bind first: the 24-user run absorbed 17 retries against request-rate throttling while sandbox CPU never became the constraint.</p>
+          <aside class="callout callout--source">
+            <p class="callout-label">Source</p>
+            <p>Measured 3 August 2026 with <code>scripts/session_scaling_lab.py</code> against <code>foundry-showcase-main</code> version 31, 0.5 vCPU and 1 GiB per session, model <code>gpt-5.4-mini</code>, Sweden Central. In-flight counts come from a counter inside the container, not inferred from the client.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-cost">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Isolation cost twelve times more than sharing for the same work</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Counting sandbox-minutes for a 12-user burst, including the 15-minute idle window each session holds before deprovisioning:</p>
+          <table>
+            <thead><tr><th>Shape</th><th>Sandbox-minutes</th></tr></thead>
+            <tbody>
+              <tr><td>One shared session</td><td>15.3</td></tr>
+              <tr><td>Pooled, 4 users per session</td><td>45.8</td></tr>
+              <tr><td>One session per user</td><td>183.3</td></tr>
+            </tbody>
+          </table>
+          <p>The idle window dominates. Twelve sessions each holding 15 minutes after a 15-second burst is almost entirely wasted capacity, and it scales linearly with user count.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-stop">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Stopping sessions removes most of the cost gap without losing the disk</span>
+              <span class="card-sub">This changes the isolate-versus-pool trade more than pooling does.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>A session can be stopped explicitly instead of waiting out the idle timeout. Doing so at the end of a burst took the same workload from 31.4 to 1.4 sandbox-minutes.</p>
+          <p>Re-running the same session names afterwards produced new instance IDs, a resume counter of 1, and the marker file still present. Isolation therefore does not have to mean paying for idle time.</p>
+          <div class="code">
+            <p class="code-label">PowerShell</p>
+            <pre><code>az rest --resource https://ai.azure.com --method post `
+  --url "$base/agents/$agent/endpoint/sessions/$sessionId/stop?api-version=v1"</code></pre>
+          </div>
+          <aside class="callout callout--verdict">
+            <p class="callout-label">Verdict</p>
+            <p>If your middle tier knows when a user's work finishes, per-user isolation plus explicit stop beats pooling: near-identical cost, with a real VM boundary between users.</p>
+          </aside>
+        </div>
+      </article>
+
+      <article class="card" id="card-limits">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Subnet addresses cap concurrent sessions before cost does</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <table>
+            <thead><tr><th>Limit</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr><td>Concurrent sessions</td><td>Roughly one per usable address in the delegated subnet. A /26 gives about 50, the documented maximum. Support can raise the ratio to one address per ten sessions.</td></tr>
+              <tr><td>Regional capacity</td><td><code>429 regional_session_quota_exceeded</code>; deleting your own sessions does not help.</td></tr>
+              <tr><td>Idle timeout</td><td>15 minutes, compute only. The disk survives.</td></tr>
+              <tr><td>Session lifetime</td><td>30 days, rolling from last access.</td></tr>
+              <tr><td>Agents and versions</td><td>About 200 agents per instance; 100 active and 1,000 total versions per agent.</td></tr>
+            </tbody>
+          </table>
+          <p>A thousand concurrent users on one session each is not a budget problem before it is an address-space problem. That constraint alone forces either pooling or aggressive stopping.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- ================================================================ -->
+    <section class="chapter" id="ch-choosing">
+      <h2 class="chapter-label">Choosing a shape</h2>
+
+      <article class="card" id="card-decision">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Isolate when the sandbox does work; multiplex when it only calls the model</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>The deciding question is not user count. It is whether the container touches anything on the user's behalf.</p>
+          <div class="summary-grid">
+            <div class="summary-item">
+              <span class="summary-label">Isolate</span>
+              The container executes code, holds a workspace, or handles untrusted content, so a VM boundary is doing real security work.
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Multiplex</span>
+              The container assembles a prompt, calls remote tools, and reads a database, so the only state that matters is already partitioned.
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">Pool</span>
+              You want a blast-radius cap without paying per user, and you can carry a user-to-session map in the middle tier.
+            </div>
+          </div>
+          <p>An agent built on remote tools alone multiplexes safely once its own state is keyed by user. A harness with local tools that writes files, runs shells, or clones repositories should get a machine per user.</p>
+        </div>
+      </article>
+
+      <article class="card" id="card-aca">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">For stateless multiplexed chat, Container Apps with an HTTP scaler fits better</span>
+              <span class="card-sub">The hosted-agent advantages concentrate where multiplexing is wrong.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>If the answer is one shared session for a thousand users, you are describing interchangeable stateless replicas. Azure Container Apps expresses that declaratively with concurrent-request scaling and replica bounds, and no routing code in your middle tier.</p>
+          <p>What hosted agents add is per-session durable compute: a named machine with a private filesystem that scales to zero and resumes with its state. Immutable versions, instant rollback, version-scoped evaluation targets, a sessions API and a per-agent Entra identity come with it. Registering an external agent gives a Container Apps deployment Foundry tracing and trace-based evaluation, but external agents are versionless, so lifecycle management does not carry over.</p>
+          <aside class="callout callout--note">
+            <p class="callout-label">Note</p>
+            <p>Hosted agents appear to run on Azure Container Apps Sandboxes rather than dynamic sessions: probes report a host name of <code>adc-sandbox</code>, and the tier S shape of 0.5 core, 1 GB and 20 GB disk matches this agent's configuration exactly. This is inference from observed behaviour on 3 August 2026, not documented.</p>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+  </main>
+
+  <p class="takeaway">The session name is a capacity decision and the user identity is a security decision; almost every mistake in this area comes from letting one of them do the other's job.</p>
+
+  <footer class="doc-footer">
+    <p>Measurements from <code>foundry-showcase</code> in this repository, agent version 31, Sweden Central, 3 August 2026. Protocol details read from <code>azure-ai-agentserver-core</code> as installed, and from Microsoft Learn documentation for hosted agent session multiplexing, per-user isolation, and permissions.</p>
+  </footer>
+
+</div>
+
+</body>
+</html>

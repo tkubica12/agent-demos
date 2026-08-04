@@ -21,14 +21,20 @@ from azure.ai.projects.models import (
 )
 from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
+from openai import APIConnectionError
 
 
 OFFLINE_EVAL_NAME = "foundry-showcase-monitoring-quality"
 SCHEDULED_EVAL_NAME = "foundry-showcase-scheduled-quality"
 CONTINUOUS_EVAL_NAME = "foundry-showcase-continuous-quality"
 SCHEDULE_ID = "foundry-showcase-daily-evaluation"
-RULE_ID = "foundry-showcase-continuous-live"
-SUPERSEDED_RULE_IDS = ("foundry-showcase-continuous-evaluation", RULE_ID)
+HOSTED_RULE_ID = "foundry-showcase-continuous-live"
+PROMPT_RULE_ID = "foundry-showcase-continuous-prompt"
+SUPERSEDED_RULE_IDS = (
+    "foundry-showcase-continuous-evaluation",
+    HOSTED_RULE_ID,
+    PROMPT_RULE_ID,
+)
 TERMINAL_RUN_STATES = {"canceled", "completed", "failed"}
 TERMINAL_SCHEDULE_STATES = {
     str(ScheduleProvisioningStatus.FAILED).lower(),
@@ -270,6 +276,19 @@ def scheduled_run_payload(name: str) -> dict[str, Any]:
     }
 
 
+def poll_run(openai_client: Any, eval_id: str, run_id: str) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            return openai_client.evals.runs.retrieve(run_id=run_id, eval_id=eval_id)
+        except APIConnectionError as exc:
+            last_error = exc
+            time.sleep(5 * (attempt + 1))
+    raise RuntimeError(
+        f"Could not reach the evaluation service while polling run {run_id}."
+    ) from last_error
+
+
 def wait_for_run(
     openai_client: Any,
     eval_id: str,
@@ -280,7 +299,7 @@ def wait_for_run(
 ) -> Any:
     deadline = time.monotonic() + timeout_seconds
     while True:
-        run = openai_client.evals.runs.retrieve(run_id=run_id, eval_id=eval_id)
+        run = poll_run(openai_client, eval_id, run_id)
         if str(run.status).lower() in TERMINAL_RUN_STATES:
             if str(run.status).lower() != "completed" and not allow_failed:
                 raise RuntimeError(f"Evaluation run ended with status {run.status}.")
@@ -335,16 +354,18 @@ def configure_schedule(
 
 def configure_continuous_rule(
     project_client: AIProjectClient,
+    rule_id: str,
+    display_name: str,
     eval_id: str,
     agent_name: str,
 ) -> Any:
     return project_client.evaluation_rules.create_or_update(
-        id=RULE_ID,
+        id=rule_id,
         evaluation_rule=EvaluationRule(
-            id=RULE_ID,
-            display_name="Foundry Showcase continuous quality evaluation",
+            id=rule_id,
+            display_name=display_name,
             description=(
-                "Evaluates a bounded sample of completed Hosted Agent responses for "
+                "Evaluates a bounded sample of completed agent responses for "
                 "task adherence, coherence, and violence."
             ),
             action=ContinuousEvaluationRuleAction(
@@ -377,12 +398,13 @@ def delete_failed_continuous_runs(openai_client: Any, eval_id: str) -> None:
             openai_client.evals.runs.delete(run.id, eval_id=eval_id)
 
 
-def invoke_agent(
+def invoke_hosted_agent(
     client: httpx.Client,
     credential: DefaultAzureCredential,
     project_endpoint: str,
     agent_name: str,
     api_version: str,
+    prompt: str,
 ) -> dict[str, Any]:
     token = credential.get_token("https://ai.azure.com/.default").token
     response = client.post(
@@ -393,10 +415,7 @@ def invoke_agent(
         headers={"Authorization": f"Bearer {token}"},
         json={
             "store": True,
-            "input": (
-                "Explain in two sentences why a support case update requires explicit "
-                "human confirmation."
-            )
+            "input": prompt,
         },
     )
     response.raise_for_status()
@@ -406,20 +425,54 @@ def invoke_agent(
     return payload
 
 
+def invoke_prompt_agent(
+    openai_client: Any,
+    agent_name: str,
+    agent_version: str,
+    prompt: str,
+) -> Any:
+    return openai_client.responses.create(
+        input=prompt,
+        store=True,
+        extra_body={
+            "agent_reference": {
+                "type": "agent_reference",
+                "name": agent_name,
+                "version": agent_version,
+            }
+        },
+    )
+
+
+def run_error_message(run: Any) -> str:
+    error = getattr(run, "error", None)
+    return str(getattr(error, "message", "") or "") if error else ""
+
+
+def run_rule_id(run: Any) -> str:
+    return str((run.properties or {}).get("evaluation_rule_id", ""))
+
+
 def wait_for_continuous_run(
     openai_client: Any,
     eval_id: str,
     earliest_created_at: int,
     poll_seconds: int,
     timeout_seconds: int,
-) -> Any:
+) -> Any | None:
     deadline = time.monotonic() + timeout_seconds
     while True:
-        runs = openai_client.evals.runs.list(
-            eval_id=eval_id,
-            order="desc",
-            limit=10,
-        ).data
+        try:
+            runs = openai_client.evals.runs.list(
+                eval_id=eval_id,
+                order="desc",
+                limit=10,
+            ).data
+        except APIConnectionError:
+            time.sleep(poll_seconds)
+            if time.monotonic() >= deadline:
+                raise
+            continue
         candidates = [
             run
             for run in runs
@@ -427,16 +480,9 @@ def wait_for_continuous_run(
             and str(run.status).lower() in TERMINAL_RUN_STATES
         ]
         if candidates:
-            return wait_for_run(
-                openai_client,
-                eval_id,
-                candidates[0].id,
-                poll_seconds,
-                timeout_seconds,
-                allow_failed=True,
-            )
+            return candidates[0]
         if time.monotonic() >= deadline:
-            raise TimeoutError("Continuous evaluation did not create a run in time.")
+            return None
         time.sleep(poll_seconds)
 
 
@@ -444,13 +490,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-endpoint", required=True)
     parser.add_argument("--agent-name", default="foundry-showcase-main")
-    parser.add_argument("--agent-version", default="28")
+    parser.add_argument("--agent-version", default="33")
+    parser.add_argument("--prompt-agent-name", default="foundry-showcase-knowledge-expert")
+    parser.add_argument("--prompt-agent-version", default="2")
     parser.add_argument("--model", default="gpt-5.4-mini")
     parser.add_argument("--schedule-hour", type=int, default=7)
     parser.add_argument("--api-version", default="2025-11-15-preview")
     parser.add_argument("--poll-seconds", type=int, default=10)
     parser.add_argument("--timeout-seconds", type=int, default=1200)
     parser.add_argument("--rule-settle-seconds", type=int, default=30)
+    parser.add_argument("--rule-activation-seconds", type=int, default=600)
     parser.add_argument("--skip-continuous-wait", action="store_true")
     args = parser.parse_args()
     if not 0 <= args.schedule_hour <= 23:
@@ -505,28 +554,72 @@ def main() -> None:
 
             continuous_eval = create_continuous_eval(openai_client, args.model)
             delete_failed_continuous_runs(openai_client, continuous_eval.id)
-            rule = configure_continuous_rule(
+            hosted_rule = configure_continuous_rule(
                 project_client,
+                HOSTED_RULE_ID,
+                "Foundry Showcase continuous quality (hosted agent)",
                 continuous_eval.id,
                 args.agent_name,
             )
+            prompt_rule = configure_continuous_rule(
+                project_client,
+                PROMPT_RULE_ID,
+                "Foundry Showcase continuous quality (prompt agent)",
+                continuous_eval.id,
+                args.prompt_agent_name,
+            )
+            time.sleep(args.rule_activation_seconds)
+
             invoked_at = int(datetime.now(UTC).timestamp())
-            response = invoke_agent(
+            hosted_response = invoke_hosted_agent(
                 http_client,
                 credential,
                 args.project_endpoint,
                 args.agent_name,
                 args.api_version,
+                "Explain in two sentences why a support case update requires explicit "
+                "human confirmation.",
             )
-            continuous_run = None
+            prompt_response = invoke_prompt_agent(
+                openai_client,
+                args.prompt_agent_name,
+                args.prompt_agent_version,
+                "What does the support policy say about confirming a case update?",
+            )
+
+            continuous_runs: list[Any] = []
             if not args.skip_continuous_wait:
-                continuous_run = wait_for_continuous_run(
-                    openai_client,
-                    continuous_eval.id,
-                    invoked_at,
-                    args.poll_seconds,
-                    args.timeout_seconds,
-                )
+                deadline = time.monotonic() + args.timeout_seconds
+                while time.monotonic() < deadline and len(continuous_runs) < 2:
+                    found = wait_for_continuous_run(
+                        openai_client,
+                        continuous_eval.id,
+                        invoked_at,
+                        args.poll_seconds,
+                        max(int(deadline - time.monotonic()), 1),
+                    )
+                    if found is None:
+                        break
+                    continuous_runs = [
+                        item
+                        for item in openai_client.evals.runs.list(
+                            eval_id=continuous_eval.id, order="desc", limit=10
+                        ).data
+                        if item.created_at >= invoked_at
+                        and str(item.status).lower() in TERMINAL_RUN_STATES
+                    ]
+                    if len(continuous_runs) < 2:
+                        time.sleep(args.poll_seconds)
+
+            completed = [
+                run for run in continuous_runs if str(run.status).lower() == "completed"
+            ]
+            session_blocked = [
+                run
+                for run in continuous_runs
+                if run_rule_id(run) == HOSTED_RULE_ID
+                and str(run.status).lower() == "failed"
+            ]
 
             result = {
                 "offlineEvaluation": json_value(offline_eval),
@@ -535,26 +628,24 @@ def main() -> None:
                 "scheduledValidationRun": json_value(scheduled_validation),
                 "schedule": json_value(schedule),
                 "continuousEvaluation": json_value(continuous_eval),
-                "continuousRule": json_value(rule),
-                "triggerResponseId": response.get("id"),
-                "continuousRun": json_value(continuous_run),
+                "continuousRules": [json_value(hosted_rule), json_value(prompt_rule)],
+                "hostedTriggerResponseId": hosted_response.get("id"),
+                "promptTriggerResponseId": prompt_response.id,
+                "continuousRuns": json_value(continuous_runs),
                 "continuousPreviewBoundary": (
-                    "The evaluation service cannot retrieve the triggering Hosted Agent "
-                    "session when the run fails with session_not_accessible."
-                    if continuous_run is not None
-                    and str(continuous_run.status).lower() == "failed"
+                    "Hosted Agent responses are session scoped, so the evaluation service "
+                    "cannot retrieve them and the continuous run fails with "
+                    "session_not_accessible. Prompt agent responses are project scoped and "
+                    "evaluate normally."
+                    if session_blocked
                     else None
                 ),
             }
             print(json.dumps(result, indent=2, default=str))
-            if (
-                continuous_run is not None
-                and str(continuous_run.status).lower() != "completed"
-            ):
+            if not args.skip_continuous_wait and not completed:
                 raise RuntimeError(
-                    "Continuous evaluation was triggered but the service could not "
-                    f"evaluate the stored response; run {continuous_run.id} ended "
-                    f"with status {continuous_run.status}."
+                    "Continuous evaluation produced no completed run; "
+                    f"observed {[str(run.status) for run in continuous_runs]}."
                 )
     finally:
         credential.close()

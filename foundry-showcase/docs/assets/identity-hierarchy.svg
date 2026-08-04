@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 620" width="1500" height="620" role="img" aria-label="Four nested levels: one hosted agent contains several sessions addressed by agent_session_id, each session contains several users identified by x-agent-user-id, and each user owns conversation chains continued with previous_response_id.">
+  <style>
+    .bg      { fill: #ffffff; }
+    .agent   { fill: #eaf3fb; stroke: #a9d0ef; stroke-width: 2; }
+    .session { fill: #f5f6f8; stroke: #c2c7cf; stroke-width: 2; }
+    .user    { fill: #ffffff; stroke: #c2c7cf; stroke-width: 1.5; }
+    .chip    { fill: #eaecf0; stroke: #c2c7cf; stroke-width: 1; }
+    .spare   { fill: none; stroke: #c2c7cf; stroke-width: 1.5; stroke-dasharray: 6 6; }
+    .wire    { stroke: #c2c7cf; stroke-width: 2; fill: none; }
+    .t       { fill: #14171a; }
+    .tm      { fill: #565c66; }
+    .ta      { fill: #0078d4; }
+    @media (prefers-color-scheme: dark) {
+      .bg      { fill: #0e1013; }
+      .agent   { fill: #142430; stroke: #2c4f6d; }
+      .session { fill: #1b1f26; stroke: #3d4550; }
+      .user    { fill: #15181d; stroke: #3d4550; }
+      .chip    { fill: #232830; stroke: #3d4550; }
+      .spare   { stroke: #3d4550; }
+      .wire    { stroke: #3d4550; }
+      .t       { fill: #eceef1; }
+      .tm      { fill: #a7aeb8; }
+      .ta      { fill: #4aa3e8; }
+    }
+    text { font-family: "Segoe UI", -apple-system, Roboto, Arial, sans-serif; }
+    .mono { font-family: "Cascadia Mono", Consolas, ui-monospace, monospace; }
+    .lvl { font-size: 19px; font-weight: 620; letter-spacing: .06em; }
+    .lvlsub { font-size: 14px; }
+  </style>
+
+  <rect class="bg" width="1500" height="620"/>
+
+  <!-- gutter level labels -->
+  <text class="ta lvl"    x="228" y="58"  text-anchor="end">AGENT</text>
+  <text class="tm lvlsub mono" x="228" y="82"  text-anchor="end">azure.yaml</text>
+
+  <text class="ta lvl"    x="228" y="190" text-anchor="end">SESSION</text>
+  <text class="tm lvlsub mono" x="228" y="214" text-anchor="end">agent_session_id</text>
+
+  <text class="ta lvl"    x="228" y="276" text-anchor="end">USER</text>
+  <text class="tm lvlsub mono" x="228" y="300" text-anchor="end">x-agent-user-id</text>
+
+  <text class="ta lvl"    x="228" y="338" text-anchor="end">CONVERSATION</text>
+  <text class="tm lvlsub mono" x="228" y="362" text-anchor="end">previous_response_id</text>
+
+  <!-- agent -->
+  <rect class="agent" x="250" y="30" width="1210" height="72" rx="10"/>
+  <text class="t"  x="855" y="61" text-anchor="middle" font-size="21" font-weight="620">foundry-showcase-main</text>
+  <text class="tm" x="855" y="85" text-anchor="middle" font-size="14">one deployment, one version, one container image</text>
+
+  <!-- wires -->
+  <path class="wire" d="M855 102 L855 126 M441 126 L1267 126 M441 126 L441 150 M854 126 L854 150 M1267 126 L1267 150"/>
+
+  <!-- session pool-0 -->
+  <rect class="session" x="250" y="150" width="383" height="420" rx="10"/>
+  <text class="t"  x="441" y="188" text-anchor="middle" font-size="20" font-weight="620">pool-0</text>
+  <text class="tm mono" x="441" y="214" text-anchor="middle" font-size="14">RAM + $HOME + /files</text>
+
+  <rect class="user" x="268" y="240" width="347" height="140" rx="8"/>
+  <text class="t"  x="441" y="274" text-anchor="middle" font-size="19" font-weight="620">alice</text>
+  <text class="tm mono" x="441" y="300" text-anchor="middle" font-size="13">memory + history</text>
+  <rect class="chip" x="282" y="318" width="155" height="38" rx="6"/>
+  <text class="tm" x="359" y="343" text-anchor="middle" font-size="14">chain 1</text>
+  <rect class="chip" x="452" y="318" width="155" height="38" rx="6"/>
+  <text class="tm" x="529" y="343" text-anchor="middle" font-size="14">chain 2</text>
+
+  <rect class="user" x="268" y="400" width="347" height="140" rx="8"/>
+  <text class="t"  x="441" y="434" text-anchor="middle" font-size="19" font-weight="620">bob</text>
+  <text class="tm mono" x="441" y="460" text-anchor="middle" font-size="13">memory + history</text>
+  <rect class="chip" x="282" y="478" width="155" height="38" rx="6"/>
+  <text class="tm" x="359" y="503" text-anchor="middle" font-size="14">chain 1</text>
+
+  <!-- session pool-1 -->
+  <rect class="session" x="663" y="150" width="383" height="420" rx="10"/>
+  <text class="t"  x="854" y="188" text-anchor="middle" font-size="20" font-weight="620">pool-1</text>
+  <text class="tm mono" x="854" y="214" text-anchor="middle" font-size="14">RAM + $HOME + /files</text>
+
+  <rect class="user" x="681" y="240" width="347" height="140" rx="8"/>
+  <text class="t"  x="854" y="274" text-anchor="middle" font-size="19" font-weight="620">carol</text>
+  <text class="tm mono" x="854" y="300" text-anchor="middle" font-size="13">memory + history</text>
+  <rect class="chip" x="695" y="318" width="155" height="38" rx="6"/>
+  <text class="tm" x="772" y="343" text-anchor="middle" font-size="14">chain 1</text>
+
+  <rect class="spare" x="681" y="400" width="347" height="140" rx="8"/>
+  <text class="tm" x="854" y="477" text-anchor="middle" font-size="15">spare capacity</text>
+
+  <!-- session pool-2 -->
+  <rect class="session" x="1076" y="150" width="383" height="420" rx="10"/>
+  <text class="t"  x="1267" y="188" text-anchor="middle" font-size="20" font-weight="620">pool-2</text>
+  <text class="tm mono" x="1267" y="214" text-anchor="middle" font-size="14">RAM + $HOME + /files</text>
+
+  <rect class="user" x="1094" y="240" width="347" height="140" rx="8"/>
+  <text class="t"  x="1267" y="274" text-anchor="middle" font-size="19" font-weight="620">dave</text>
+  <text class="tm mono" x="1267" y="300" text-anchor="middle" font-size="13">memory + history</text>
+  <rect class="chip" x="1108" y="318" width="155" height="38" rx="6"/>
+  <text class="tm" x="1185" y="343" text-anchor="middle" font-size="14">chain 1</text>
+
+  <rect class="spare" x="1094" y="400" width="347" height="140" rx="8"/>
+  <text class="tm" x="1267" y="477" text-anchor="middle" font-size="15">spare capacity</text>
+</svg>

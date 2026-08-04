@@ -13,6 +13,8 @@ from typing import Any
 from agent_framework import (
     Agent,
     AgentSession,
+    AggregatingSkillsSource,
+    FileSkillsSource,
     MCPSkillsSource,
     Message,
     Skill,
@@ -42,6 +44,7 @@ from invoice_workflow import (
     InvoiceProcessingWorkflowService,
 )
 from memory_store import store
+from runtime_probe import INSTANCE_ID, probe
 
 
 DEFAULT_MODEL_DEPLOYMENT = "gpt-5.4-mini"
@@ -247,10 +250,11 @@ def create_runtime() -> tuple[
     )
     instructions = optimization_config.compose_instructions()
     logger.info(
-        "Optimization config source=%s model=%s prompt_len=%d",
+        "Optimization config source=%s model=%s prompt_len=%d skills_dir=%s",
         optimization_config.source,
         model,
         len(instructions),
+        optimization_config.skills_dir,
     )
     credential = create_credential()
     client = ApprovalContinuationFoundryChatClient(
@@ -278,8 +282,12 @@ def create_runtime() -> tuple[
             "case-read___propose_case_update",
         },
     }
+    skills_sources: list[SkillsSource] = [TrustedToolboxSkillsSource(toolbox)]
+    optimizer_skills_dir = optimization_config.skills_dir
+    if optimizer_skills_dir and any(Path(optimizer_skills_dir).iterdir()):
+        skills_sources.append(FileSkillsSource(skill_paths=optimizer_skills_dir))
     skills_provider = SkillsProvider(
-        TrustedToolboxSkillsSource(toolbox),
+        AggregatingSkillsSource(skills_sources),
         source_id="foundry-toolbox-skills",
         disable_load_skill_approval=True,
         disable_read_skill_resource_approval=True,
@@ -298,7 +306,19 @@ def create_runtime() -> tuple[
         name="policy-delegation",
     )
     policy_service = PolicyA2AService(policy_toolbox)
-    tools = [memory_tool.as_dict(), toolbox, policy_toolbox]
+    knowledge_toolbox_name = os.getenv(
+        "KNOWLEDGE_TOOLBOX_NAME",
+        "foundry-showcase-knowledge-tools",
+    )
+    knowledge_toolbox = FoundryToolbox(
+        credential,
+        url=(
+            f"{required_env('FOUNDRY_PROJECT_ENDPOINT').rstrip('/')}/toolboxes/"
+            f"{knowledge_toolbox_name}/mcp?api-version=v1"
+        ),
+        name="knowledge-delegation",
+    )
+    tools = [memory_tool.as_dict(), toolbox, policy_toolbox, knowledge_toolbox]
     log_event(
         "memory.foundry_tool_configured",
         memory_store_name=memory_store_name,
@@ -315,6 +335,11 @@ def create_runtime() -> tuple[
         "a2a.policy_helper_configured",
         policy_toolbox_name=policy_toolbox_name,
         policy_toolbox_endpoint=policy_toolbox.url,
+    )
+    log_event(
+        "a2a.knowledge_expert_configured",
+        knowledge_toolbox_name=knowledge_toolbox_name,
+        knowledge_toolbox_endpoint=knowledge_toolbox.url,
     )
 
     agent = Agent(
@@ -546,7 +571,19 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             ):
                 log_event("request.received", correlation_id=correlation_id)
 
-            return await self._handle_legacy_invocation(agent, request, data, correlation_id)
+            with probe.track():
+                if data.get("action") == "runtime_probe":
+                    return JSONResponse(
+                        {
+                            "action": "runtime_probe",
+                            "sandbox": probe.snapshot(
+                                headers=request.headers,
+                                session_hint=request.query_params.get("agent_session_id"),
+                            ),
+                            "correlationId": correlation_id,
+                        }
+                    )
+                return await self._handle_legacy_invocation(agent, request, data, correlation_id)
 
         for route in invocations.routes:
             if getattr(route, "path", "").startswith("/invocations"):
@@ -673,7 +710,17 @@ class ResponsesAndInvocationsHost(ResponsesHostServer):
             )
         with span("skill.use", correlation_id, skill_count=0):
             pass
-        return JSONResponse({"response": response.text, "correlationId": correlation_id})
+        return JSONResponse(
+            {
+                "response": response.text,
+                "correlationId": correlation_id,
+                "sandbox": {
+                    "instanceId": INSTANCE_ID,
+                    "requestsServed": probe.requests_served,
+                    "maxInFlight": probe.max_in_flight,
+                },
+            }
+        )
 
     async def _handle_workflow_action(
         self,
@@ -857,9 +904,12 @@ if __name__ == "__main__":
         runtime_invoice_workflow,
         runtime_policy_delegate,
     ) = create_runtime()
-    ResponsesAndInvocationsHost(
-        runtime_agent,
-        runtime_workflow,
-        runtime_invoice_workflow,
-        runtime_policy_delegate,
-    ).run()
+    if os.getenv("RESPONSES_ONLY", "").lower() in {"1", "true", "yes"}:
+        ResponsesHostServer(runtime_agent).run()
+    else:
+        ResponsesAndInvocationsHost(
+            runtime_agent,
+            runtime_workflow,
+            runtime_invoice_workflow,
+            runtime_policy_delegate,
+        ).run()

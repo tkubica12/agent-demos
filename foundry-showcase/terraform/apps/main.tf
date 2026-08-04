@@ -88,11 +88,11 @@ resource "azapi_resource" "case_mcp" {
               },
               {
                 name  = "MCP_ALLOWED_CLIENT_IDS"
-                value = data.terraform_remote_state.platform.outputs.hosted_agent_client_id
+                value = data.terraform_remote_state.platform.outputs.hosted_agent_client_ids
               },
               {
                 name  = "MCP_ALLOWED_OBJECT_IDS"
-                value = data.terraform_remote_state.platform.outputs.hosted_agent_principal_id
+                value = data.terraform_remote_state.platform.outputs.hosted_agent_principal_ids
               }
             ]
             resources = {

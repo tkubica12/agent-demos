@@ -15,8 +15,11 @@ This is not another gradual tutorial and it is not a smaller version of `autopil
 
 All implementation compatible with the repository's secretless architecture is deployed and live-validated:
 
-- active Hosted Agent `foundry-showcase-main`, only retained version 28;
+- active Hosted Agent `foundry-showcase-main`, only retained version 33;
 - active LangGraph Hosted Agent `foundry-showcase-policy-helper`, version 2;
+- active Prompt Agent `foundry-showcase-knowledge-expert`, version 2, reached from the primary agent over A2A through Toolbox `foundry-showcase-knowledge-tools`;
+- registered External Agent `foundry-showcase-external-triage`, version 1, running in its own Container App and visible in the project agent list;
+- Responses-only Hosted Agent `foundry-showcase-optimize`, version 2, as the Agent Optimizer target;
 - Responses `2.0.0` and Invocations `1.0.0`;
 - Foundry Toolbox `foundry-showcase-support`, default version 3;
 - published skills `support-style`, `escalation-policy`, and `profile-update-policy`, version 1;
@@ -52,13 +55,16 @@ All implementation compatible with the repository's secretless architecture is d
 - sequential `process_invoice` workflow alongside the durable human-in-the-loop case workflow;
 - portal-visible local red-team run `7627b190-4823-44f6-b265-2cb33da7836f` with six genuine version-27 conversations and 33.33% ASR.
 - successful immediate and scheduled quality evaluations, provisioned daily schedule, continuous rule, and Azure Monitor Task Adherence score alert;
-- successful Qwen3-32B Global Standard SFT job `ftjob-d6e97df9e4cd4766ba81e754c848b635`, producing retained model `qwen3-32b.ft-d6e97df9e4cd4766ba81e754c848b635-foundry-showcase` without a persistent hosting deployment.
+- successful Qwen3-32B Global Standard SFT job `ftjob-d6e97df9e4cd4766ba81e754c848b635`, producing retained model `qwen3-32b.ft-d6e97df9e4cd4766ba81e754c848b635-foundry-showcase` without a persistent hosting deployment;
+- optimizer run `opt_0205d8caeaf54401ac82714d3621701e` on `foundry-showcase-optimize`, exploring both system prompt and skills across four candidates: baseline `0.591`, best `candidate_2` `0.637`;
+- continuous evaluation sampling proven end to end for Prompt Agents invoked through the project Responses API;
+- presenter's guide `demo/demo-guide.html` with a reproducible portal screenshot pipeline in `demo/capture`.
 
 The current Agent Framework/OpenAI client drops approval responses on service-managed continuation turns. `ApprovalContinuationFoundryChatClient` restores only the current response while continuing to suppress replayed approval history. The override is unit-tested and should be removed when the upstream package includes the fix.
 
 Hosted Toolbox token acquisition uses the Hosted Agent version's instance identity, not its Agent Identity Blueprint. Toolbox approval mappings use the composite names exposed by Foundry, such as `case-write___apply_case_update`.
 
-Tenant-admin approval remains the Phase 4 dependency before Agent 365 registry, Agent User, and Teams interaction can be validated. The trace-derived dataset curator still reports no traces despite corrected RBAC and queryable content-rich telemetry. Continuous evaluation triggers, but its worker receives `session_not_accessible` while retrieving the stored response. Work IQ is not added because its supported Foundry connection requires delegated admin consent and a stored OAuth client secret, while application-only authentication is unsupported. Harm-category requests also retain the upstream `'ContentFiltered' is not a valid ContentFilterCodes` defect. These are recorded as product or security boundaries rather than hidden behind simulated behavior.
+Tenant-admin approval remains the Phase 4 dependency before Agent 365 registry, Agent User, and Teams interaction can be validated. The trace-derived dataset curator still reports no traces despite corrected RBAC and queryable content-rich telemetry. Continuous evaluation works for Prompt Agents invoked through the project Responses API, and fails with `session_not_accessible` for Hosted Agents called through their own endpoint, because those produce session-scoped response ids the evaluation service cannot read back. Work IQ is not added because its supported Foundry connection requires delegated admin consent and a stored OAuth client secret, while application-only authentication is unsupported. Harm-category requests also retain the upstream `'ContentFiltered' is not a valid ContentFilterCodes` defect. These are recorded as product or security boundaries rather than hidden behind simulated behavior.
 
 ## Demo story
 
@@ -164,9 +170,11 @@ The primary MAF agent calls it through a Foundry A2A project connection and reta
 | Capability | Demonstration |
 | --- | --- |
 | Hosted Agents | Separate MAF and LangGraph containers with immutable versions and managed endpoints. |
+| Prompt Agents | `foundry-showcase-knowledge-expert`, a portal-defined agent with no container, grounded on the Foundry IQ knowledge base. |
+| External Agents | `foundry-showcase-external-triage`, self-hosted in Container Apps and registered into the project so it appears with the managed agents. |
 | Responses | Main conversational protocol and platform bridge to Microsoft 365. |
 | Invocations | Structured AG-UI and scheduled-operation payloads. |
-| A2A | Main MAF agent delegates policy analysis to the LangGraph helper. |
+| A2A | Main MAF agent delegates policy analysis to the LangGraph helper, and documented-answer questions to the `foundry-showcase-knowledge-expert` Prompt Agent. |
 | Agent identity | Per-agent Entra identities with least-privilege access. |
 | Foundry Memory | Per-user profile, durable preferences, and summarized case context. |
 | Stored Completions | Twelve real retained Responses completions visible in the Data tab. |
@@ -182,7 +190,7 @@ The primary MAF agent calls it through a Foundry A2A project connection and reta
 | Observability | Showcase-owned Application Insights and Log Analytics, end-to-end traces, and an evaluation-score alert with email action group. |
 | Evaluations | Golden datasets, generated suites, successful immediate and scheduled runs, a daily schedule, continuous rule, and explicit preview failure evidence. |
 | Fine-tuning | One-epoch Qwen3-32B Global Standard SFT over a small support-policy style dataset, retained without a paid hosting deployment. |
-| Optimization | Foundry Agent Optimizer reviewed an instruction candidate; its regression was rejected and the baseline was promoted. |
+| Optimization | Agent Optimizer rejected an instruction candidate on the main agent and retained the baseline; on `foundry-showcase-optimize` it explored prompts and skills across four candidates and beat the baseline, `0.591` to `0.637`. |
 | Red teaming | Cloud taxonomy run plus a portal-visible local scan with six genuine Hosted Agent conversations and inspectable ASR findings. |
 | Work IQ | Delegated access works for Tomas, but Foundry integration is blocked by the documented client-secret requirement and secretless repository policy. |
 | Versioning | Baseline, candidate, canary, and promoted Hosted Agent versions. |

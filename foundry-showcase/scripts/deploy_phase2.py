@@ -18,6 +18,7 @@ PLATFORM_DIR = SHOWCASE_ROOT / "terraform" / "platform"
 APPS_DIR = SHOWCASE_ROOT / "terraform" / "apps"
 CASE_MCP_DIR = SHOWCASE_ROOT / "case-mcp"
 MAIN_AGENT_DIR = SHOWCASE_ROOT / "main-agent"
+CASE_TOOL_AGENTS = ("foundry-showcase-main", "foundry-showcase-optimize")
 
 
 def run(
@@ -52,7 +53,7 @@ def run_json(command: list[str], *, cwd: Path = SHOWCASE_ROOT) -> Any:
 
 def terraform_apply(
     directory: Path,
-    variables: dict[str, str],
+    variables: dict[str, Any],
     auto_approve: bool,
 ) -> None:
     run(["terraform", "init", "-input=false", "-no-color"], cwd=directory)
@@ -60,7 +61,8 @@ def terraform_apply(
     if auto_approve:
         command.append("-auto-approve")
     for name, value in variables.items():
-        command.extend(["-var", f"{name}={value}"])
+        rendered = json.dumps(value) if isinstance(value, (list, dict)) else value
+        command.extend(["-var", f"{name}={rendered}"])
     run(command, cwd=directory)
 
 
@@ -83,9 +85,9 @@ def wait_for_health(url: str, attempts: int = 30) -> None:
         time.sleep(10)
 
 
-def hosted_agent_identity(project_endpoint: str) -> dict[str, str]:
+def hosted_agent_identity(project_endpoint: str, agent_name: str) -> dict[str, str]:
     url = (
-        f"{project_endpoint.rstrip('/')}/agents/foundry-showcase-main"
+        f"{project_endpoint.rstrip('/')}/agents/{agent_name}"
         "?api-version=2025-11-15-preview"
     )
     payload = run_json(
@@ -102,7 +104,9 @@ def hosted_agent_identity(project_endpoint: str) -> dict[str, str]:
     )
     latest = payload["versions"]["latest"]
     if latest["status"] != "active":
-        raise RuntimeError(f"Hosted agent latest version is {latest['status']}, not active.")
+        raise RuntimeError(
+            f"Hosted agent {agent_name} latest version is {latest['status']}, not active."
+        )
     instance_identity = latest["instance_identity"]
     return {
         "client_id": instance_identity["client_id"],
@@ -130,7 +134,9 @@ def main() -> None:
     account = run_json(["az", "account", "show"])
     subscription_id = account["id"]
     tenant_id = account["tenantId"]
-    identity = hosted_agent_identity(args.project_endpoint)
+    identities = [
+        hosted_agent_identity(args.project_endpoint, name) for name in CASE_TOOL_AGENTS
+    ]
     common_vars = {
         "subscription_id": subscription_id,
         "tenant_id": tenant_id,
@@ -141,8 +147,8 @@ def main() -> None:
             **common_vars,
             "location": args.location,
             "apps_location": args.apps_location,
-            "hosted_agent_client_id": identity["client_id"],
-            "hosted_agent_principal_id": identity["principal_id"],
+            "hosted_agent_client_ids": [item["client_id"] for item in identities],
+            "hosted_agent_principal_ids": [item["principal_id"] for item in identities],
         },
         args.auto_approve,
     )

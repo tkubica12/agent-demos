@@ -1,0 +1,44 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "case-read___search_cases",
+      "description": "Search support cases."
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "case-read___get_case",
+      "description": "Get a case."
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "case-read___propose_case_update",
+      "description": "Propose an update."
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "case-write___apply_case_update",
+      "description": "Apply an update."
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "foundry-showcase-policy-a2a___SendMessage",
+      "description": "Ask the policy helper."
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "foundry-showcase-knowledge-a2a___SendMessage",
+      "description": "Ask the knowledge expert."
+    }
+  }
+]

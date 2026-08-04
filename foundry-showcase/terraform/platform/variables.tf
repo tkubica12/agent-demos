@@ -20,12 +20,12 @@ variable "apps_location" {
   default     = "northeurope"
 }
 
-variable "hosted_agent_principal_id" {
-  type        = string
-  description = "Object ID of the active foundry-showcase-main Hosted Agent instance identity."
+variable "hosted_agent_principal_ids" {
+  type        = list(string)
+  description = "Object IDs of the active showcase Hosted Agent instance identities."
 }
 
-variable "hosted_agent_client_id" {
-  type        = string
-  description = "Client ID of the active foundry-showcase-main Hosted Agent instance identity."
+variable "hosted_agent_client_ids" {
+  type        = list(string)
+  description = "Client IDs of the active showcase Hosted Agent instance identities."
 }
