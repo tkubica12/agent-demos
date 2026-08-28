@@ -1,0 +1,433 @@
+version = 1
+revision = 1
+requires-python = "==3.13.*"
+
+[[package]]
+name = "acme"
+version = "5.7.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "josepy" },
+    { name = "pyopenssl" },
+    { name = "pyrfc3339" },
+    { name = "requests" },
+]
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/acme/5.7/acme-5.7.0.tar.gz", hash = "sha256:4be4fe6cf3809c3988d75fa1213ce8e784d9d5d8380cac63c2dca555e105653d" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/acme/5.7/acme-5.7.0-py3-none-any.whl", hash = "sha256:a736f88e975f0ebe8c6fcabd3db164d1071b4f9e1a56d1319a9f6997e0a64a0a" },
+]
+
+[[package]]
+name = "azure-common"
+version = "1.1.28"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/azure-common/1.1.28/azure-common-1.1.28.zip", hash = "sha256:4ac0cd3214e36b6a1b6a442686722a5d8cc449603aa833f3f0f40bda836704a3" }
+wheels = [
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/azure-common/1.1.28/azure_common-1.1.28-py2.py3-none-any.whl", hash = "sha256:5c12d3dcf4ec20599ca6b0d3e09e86e146353d443e7fcc050c9a19c1f9df20ad" },
+]
+
+[[package]]
+name = "azure-core"
+version = "1.41.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "requests" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/azure-core/1.41/azure_core-1.41.0.tar.gz", hash = "sha256:f46ff5dfcd230f25cf1c19e8a34b8dc08a337b2503e268bb600a16c00db8ad5a" }
+wheels = [
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/azure-core/1.41/azure_core-1.41.0-py3-none-any.whl", hash = "sha256:522b4011e8180b1a3dcd2024396a4e7fe9ac37fb8597db47163d230b5efe892d" },
+]
+
+[[package]]
+name = "azure-identity"
+version = "1.24.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "cryptography" },
+    { name = "msal" },
+    { name = "msal-extensions" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/azure-identity/1.24/azure_identity-1.24.0.tar.gz", hash = "sha256:6c3a40b2a70af831e920b89e6421e8dcd4af78a0cb38b9642d86c67643d4930c" }
+wheels = [
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/azure-identity/1.24/azure_identity-1.24.0-py3-none-any.whl", hash = "sha256:9e04997cde0ab02ed66422c74748548e620b7b29361c72ce622acab0267ff7c4" },
+]
+
+[[package]]
+name = "azure-keyvault-certificates"
+version = "4.10.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/azure-keyvault-certificates/4.10/azure_keyvault_certificates-4.10.0.tar.gz", hash = "sha256:004ff47a73152f9f40f678e5a07719b753a3ca86f0460bfeaaf6a23304872e05" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/azure-keyvault-certificates/4.10/azure_keyvault_certificates-4.10.0-py3-none-any.whl", hash = "sha256:fa76cbc329274cb5f4ab61b0ed7d209d44377df4b4d6be2fd01e741c2fbb83a9" },
+]
+
+[[package]]
+name = "azure-mgmt-core"
+version = "1.6.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "azure-core" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/azure-mgmt-core/1.6/azure_mgmt_core-1.6.0.tar.gz", hash = "sha256:b26232af857b021e61d813d9f4ae530465255cb10b3dde945ad3743f7a58e79c" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/azure-mgmt-core/1.6/azure_mgmt_core-1.6.0-py3-none-any.whl", hash = "sha256:0460d11e85c408b71c727ee1981f74432bc641bb25dfcf1bb4e90a49e776dbc4" },
+]
+
+[[package]]
+name = "azure-mgmt-dns"
+version = "8.2.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "azure-common" },
+    { name = "azure-mgmt-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/azure-mgmt-dns/8.2/azure_mgmt_dns-8.2.0.tar.gz", hash = "sha256:627b9ea3df0bf78a895acadc5148dec84c2898063bfaabfff8b14baa983b596e" }
+wheels = [
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/azure-mgmt-dns/8.2/azure_mgmt_dns-8.2.0-py3-none-any.whl", hash = "sha256:76695ca547f758a2954c8f7db9ffde0bacd2d9105ccf0dbb0ec81c014f64c37c" },
+]
+
+[[package]]
+name = "certbot"
+version = "4.2.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "acme" },
+    { name = "configargparse" },
+    { name = "configobj" },
+    { name = "cryptography" },
+    { name = "distro" },
+    { name = "josepy" },
+    { name = "parsedatetime" },
+    { name = "pyrfc3339" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/certbot/4.2/certbot-4.2.0.tar.gz", hash = "sha256:fb1e56ca8a072bec49ac0c7b5390a29cbf68c2c05f712259a9b3491de041c27b" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/certbot/4.2/certbot-4.2.0-py3-none-any.whl", hash = "sha256:8fcca0c1a06df9ce39e89b7d13c70506e1372823e8b5993633d21adb77581950" },
+]
+
+[[package]]
+name = "certifi"
+version = "2026.7.22"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/certifi/2026.7.22/certifi-2026.7.22.tar.gz", hash = "sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/certifi/2026.7.22/certifi-2026.7.22-py3-none-any.whl", hash = "sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775" },
+]
+
+[[package]]
+name = "cffi"
+version = "2.1.1"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
+]
+sdist = { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be" }
+wheels = [
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-ios_13_0_arm64_iphoneos.whl", hash = "sha256:b5bdfd1c873d4e093aabc0ca84c4ca6dbc4f752afb5c86f146d9742580c9da2e" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:31348097ff5bbe827ccc41795d4dd099d9f0625e7def00ee653c137a490c2a6c" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-macosx_10_15_x86_64.whl", hash = "sha256:9d2055050ea716bd38b7f7f1579c275386646b4894c155a3e2f3cd62ed41b7c6" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:19ee6127ee34de7d83ce3d371ebc5ed91addbdcc39f9ab15ce4eb35a4e534971" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-manylinux1_i686.manylinux2014_i686.manylinux_2_17_i686.manylinux_2_5_i686.whl", hash = "sha256:6a8dddef476fab96d066d578fc88526767b836ab5ab21754e1d5bf3879c31c7c" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f16c709686a78c727bbbf059f92b0bf41c6fc60deec706d2dc19f529175a6125" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-manylinux2014_ppc64le.manylinux_2_17_ppc64le.whl", hash = "sha256:fcd22650c908d7b7da162bbfaab594a1227a15d1643a98c68b122ac642fa2264" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-manylinux2014_s390x.manylinux_2_17_s390x.whl", hash = "sha256:aa9511c62d14da7aacc9b4bf51f3f697a621e83b2d6919008243c3aad168eea3" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:a2d7755bef5a12ed488f4ef1f1b69ee9191d7396083b755a5d2295f6edb4768b" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:e0bcb7e0f677f543555d2adff3bf19c05f66cdb4796e5ff602442ab2fe3c4ef7" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-win32.whl", hash = "sha256:334644fbac4eff73d985a17a91226df55d0f394160c4cfb880e084c8f7161cac" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-win_amd64.whl", hash = "sha256:1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cffi/2.1.1/cffi-2.1.1-cp313-cp313-win_arm64.whl", hash = "sha256:63bbfd5ded17c4840ac07cd8f1c21ba9d9708141f840b324f422f41b207e3973" },
+]
+
+[[package]]
+name = "charset-normalizer"
+version = "3.5.1"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1.tar.gz", hash = "sha256:6117b84ea48435e5356dc737f5121485c30920ba43375fa7b434fd753df0eac3" }
+wheels = [
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-android_24_arm64_v8a.whl", hash = "sha256:4f298bdadb8f0b9e5672877f647d1be9373ef5320c9e2f049795e26cad28b6a9" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-android_24_x86_64.whl", hash = "sha256:88ca277405c2d3b71c4e1c2ee0e7966e807bcba86a69d11e19ba199d18ae4491" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-ios_13_0_arm64_iphoneos.whl", hash = "sha256:9362dd90aa7dab48c0054a21187791ccf05473f7dba5d92b8033ae62164675e7" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-ios_13_0_arm64_iphonesimulator.whl", hash = "sha256:977cdbd483a9cff38179bea4fd754289a6f2195c7abd414aba85410b3e66cc5e" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:e90251c0c7bdd54a100a0dce3c07b7e637278c93af29dbf78ebb89a58c4bac7d" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:94d78ecec2605a8d0398b0f365d5f12a63248438516f5dac536a5eff7337df4a" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-manylinux2014_armv7l.manylinux_2_17_armv7l.manylinux_2_31_armv7l.whl", hash = "sha256:d59b75732e9b6f27388e10c14b0259cc5f2e48c78627d185e6a177b58ad3cffe" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-manylinux2014_ppc64le.manylinux_2_17_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:0d929fc574b4d6fd9e7c0f5c2ede8716a41911923aa7fa5fce38e0818aa4a1ac" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-manylinux2014_s390x.manylinux_2_17_s390x.manylinux_2_28_s390x.whl", hash = "sha256:394fea06235c8543390050ed5f529187074b029fb027213f6c46ac11ab5d950e" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:62b55f6722735a6c472f88361cde6640608773d9443cebdbb51abf436a1fcdd3" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-manylinux_2_31_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:fa48b1b63d639f9483e0633e092f5851e2348c352f1f9bb6c8182f87884ef876" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:c71fb0d56c920c269cd3e2e3fe7c610e3f1fdb21a6ce60efa6430ff63676cea6" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-musllinux_1_2_armv7l.whl", hash = "sha256:485a0d363cafefcd2538a73c7c838daa2035f09b2c9f9b5e3133f80c6aeb84c2" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-musllinux_1_2_ppc64le.whl", hash = "sha256:5c0ea61a470e070686aa30892fed79e297d2c8d0ab46b8bcdf027d38c51da591" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-musllinux_1_2_riscv64.whl", hash = "sha256:90b7481fb62fbe172c558bc6fd1c4c98d82004a54a7551f20e11ac9bf0b8708c" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-musllinux_1_2_s390x.whl", hash = "sha256:35fe081843b35aad20ffeccec3eeffbe637b15d14f3fb22cc1b59cd8ec17e93c" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:fd0350afdc3aabd5576f60ea109228bd5538139713c7b094c5cd27c73a98bc6f" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-pyemscripten_2025_0_wasm32.whl", hash = "sha256:9d9a0dc7cbe9bec24c3f767c9122c41fe5a1bc43f47cd099d00d393e09769de4" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-win32.whl", hash = "sha256:d63600d620ad0064c3a748b950ac5ea38a80190e5498532efefa4b7b3f1da1f3" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-win_amd64.whl", hash = "sha256:aea996a6aba25260827c9ea511d1addfde2da9eb686ac961838509086188b7e6" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp313-cp313-win_arm64.whl", hash = "sha256:fd0a274c0e5f9a21565cd9d3dd749b61f96b7aa1e20a93aa1ba4029518f2e5c0" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:41876ee62a3dddf48ff1121ad8f0798032aa03f2fd35f21f34a4cab14f18d8d2" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:a6dac12ff6b846103483683f60c5f8fee205121adc58ffd87e90a90a3af69e99" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cee5dd7c6fb5dd52a0fe2a740f9bc6e3593f5f8b1788bde49de02086f30182b2" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-manylinux2014_armv7l.manylinux_2_17_armv7l.manylinux_2_31_armv7l.whl", hash = "sha256:343fb4f2821043bd87095f7b08a1a181febc8e36ac64212143bbfd0a0e1bc235" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-manylinux2014_ppc64le.manylinux_2_17_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:ae4a097991662cd4fff0ddc74e0fe7874f82e00042fa0ea00855645ed0c79598" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-manylinux2014_s390x.manylinux_2_17_s390x.manylinux_2_28_s390x.whl", hash = "sha256:4b599739b93b2cbeded49645ae3c8d1405c29ddfbceac1545c87a3f9580a9e96" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-manylinux_2_31_riscv64.manylinux_2_39_riscv64.whl", hash = "sha256:b39b69b347e5e47a3b5b8cfc005c68c1ba347474e3960236c4944a8ecd174962" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:a2028475ba855475b8b4d3cfeb4994269c967aea8b9892dfba907f4263a863a3" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:36047af20e17097c3bb9476c2b7655f2f7aa51322c0ba58c07695bedf755a950" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-musllinux_1_2_ppc64le.whl", hash = "sha256:4c4fb141a727957c93edfe5c32a26ceb6b5f6461d67146e2d39f51e16170bea8" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-musllinux_1_2_riscv64.whl", hash = "sha256:2f293479cce755c75f1697e87c409b7ae4c555c7dfecb6e988ad13abba943031" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-musllinux_1_2_s390x.whl", hash = "sha256:3588e376b3ea2eea84976f67273d679f229e24c66dce7b82ae45aef04ff6e072" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e199fb99720074809a7720f1c0b4d919eea8b87e88713e0f8f602f7bef543d9d" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-win32.whl", hash = "sha256:dd732602a7009217f658d5863d12d79d373a4de0eebc111094bcdd3bb8e0a6cc" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-win_amd64.whl", hash = "sha256:70055ff39b97c99e7ae40ea3e393fb62aa2e44dbd9b29f8d14f42fb0025c3959" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-cp37-abi3-win_arm64.whl", hash = "sha256:87e4f41d375c0b9be2fb5251aee4b8a689169e134535aed81bf085c3b647451e" },
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/charset-normalizer/3.5.1/charset_normalizer-3.5.1-py3-none-any.whl", hash = "sha256:6df0ec430f9a831772c23ca5a224cba36517a58a84bb32c32bb59a9fa67c47f6" },
+]
+
+[[package]]
+name = "configargparse"
+version = "1.7.5"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/configargparse/1.7.5/configargparse-1.7.5.tar.gz", hash = "sha256:e3f9a7bb6be34d66b2e3c4a2f58e3045f8dfae47b0dc039f87bcfaa0f193fb0f" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/configargparse/1.7.5/configargparse-1.7.5-py3-none-any.whl", hash = "sha256:1e63fdffedf94da9cd435fc13a1cd24777e76879dd2343912c1f871d4ac8c592" },
+]
+
+[[package]]
+name = "configobj"
+version = "5.0.9"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/configobj/5.0.9/configobj-5.0.9.tar.gz", hash = "sha256:03c881bbf23aa07bccf1b837005975993c4ab4427ba57f959afdd9d1a2386848" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/configobj/5.0.9/configobj-5.0.9-py2.py3-none-any.whl", hash = "sha256:1ba10c5b6ee16229c79a05047aeda2b55eb4e80d7c7d8ecf17ec1ca600c79882" },
+]
+
+[[package]]
+name = "cryptography"
+version = "50.0.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
+]
+sdist = { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0.tar.gz", hash = "sha256:eeac2acb5a20ed25e0ad6d1df9891a520b78b404266b6d11778f25d5d691a6c9" }
+wheels = [
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:031e2d5dd4bb9caa3ca9c82e5a197fd8ae680232cee62603d1a813f3f07e3d03" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:fd9192b7b70c573d7f214eb1ae35e00d359f6f5e4b27c7e21e30de1fc6204645" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:06a32a980526a6ab9a4b9bf8f7385800791e2bb960903cb6b530e4817509a3b7" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:a1b30560f2acc95aa8b2e06e716a13dbfc97314747b80d9707e307f77b40d6b3" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_28_ppc64le.whl", hash = "sha256:8d89f3976b10b4ce31118de72329025f70d2c6ead14a8217c5514dd2c6d5a78f" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b42a28c1844fd9de8f3f7d540e36b66f3a9c83fceac7170ebc7a6a19edd9dcae" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_31_armv7l.whl", hash = "sha256:900131fafd8aead39ac7dd3a7e833be754c17a95cfd91221636949fe4eb0aa8a" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:07949c449a1abcf60d1ee6e88956d89404c7df3c8258f46589e912988e551987" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_34_ppc64le.whl", hash = "sha256:f89831ef99dd7dd169ab06d63a831adb9e20a87aac6d380266bbda5823349169" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:82148ec5bddac30b51a5b3c1945075f896fa022cb93f8e4a01e9f6ee95292c5f" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:1489e263a8048bb8b6a8bac662eb2d402ea5d2b7b4699b72f385f1e2772db105" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:7cec5b856506da6defb290f30c9ee687d5f5e8cb0bd3f6459dde43b0b4fa40ef" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp311-abi3-win_amd64.whl", hash = "sha256:bd1c592e4d5974f0d08d4888e432157adba757c66da0246918e43677fafa2d30" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:ccdc4a71a4dabae05de219404f9f4abc38e3b58422177ff93d0da05967dafa07" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:910e1d2668e7de9648f2bcee30e180db2a6b15c30f887d7c4c93ddf96e3992e3" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a91296cb61e8df6f86d0c19cc4068228da256bf59bf86049fbd821084565327f" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e722f16708d854fe924790e051061f6704a472c3bac347b6fd88033ea8dd0dc5" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_28_ppc64le.whl", hash = "sha256:d764dcf130c428ef66786f866dd750f53182bc608813489915e9fc106bb0c82f" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:105110f43a471dbd0060b9c9516cb8a6a79233631a04cc2ba16f28323ac6e025" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_31_armv7l.whl", hash = "sha256:828743d939e9629bc267b8e2d08d8bb67cd4319c771a33d4b18b22dd8fb7440a" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:2a8183b489dc1f7f80f135780fadc1108f14b31b8a40411c7a5b17425f65f28b" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_34_ppc64le.whl", hash = "sha256:6e7d61120573a7f2cd94cc095f9e81f6967c61ccdf194285aa143ecec8e0b708" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:37fdb0d0111f1e2ff07139dfb79f1b49531f8e213c46f1163dd7642979b58c47" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:c87f62a3d3b9888ed0fdde100ec06aa61ca9cd44bad9057d1dff9a516b5f5bb9" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:65c2c3add92b45fd0709db8594536aea39c2a67af0e27ffcf049c498501140b7" },
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/cryptography/50/cryptography-50.0.0-cp39-abi3-win_amd64.whl", hash = "sha256:d24fead1d4d076e1bfb006dcec392074a3cd8d7b4fc8a595aa64073b2b7a96ba" },
+]
+
+[[package]]
+name = "distro"
+version = "1.9.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/distro/1.9/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/distro/1.9/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2" },
+]
+
+[[package]]
+name = "idna"
+version = "3.19"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/idna/3.19/idna-3.19.tar.gz", hash = "sha256:5e0811a4383b21dc5838069f801c4fb62113b7447663d2530d2bd6e77b49bf15" }
+wheels = [
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/idna/3.19/idna-3.19-py3-none-any.whl", hash = "sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4" },
+]
+
+[[package]]
+name = "isodate"
+version = "0.7.2"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/isodate/0.7.2/isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/isodate/0.7.2/isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15" },
+]
+
+[[package]]
+name = "josepy"
+version = "2.2.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/josepy/2.2/josepy-2.2.0.tar.gz", hash = "sha256:74c033151337c854f83efe5305a291686cef723b4b970c43cfe7270cf4a677a9" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/josepy/2.2/josepy-2.2.0-py3-none-any.whl", hash = "sha256:63e9dd116d4078778c25ca88f880cc5d95f1cab0099bebe3a34c2e299f65d10b" },
+]
+
+[[package]]
+name = "msal"
+version = "1.38.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests" },
+]
+sdist = { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/msal/1.38/msal-1.38.0.tar.gz", hash = "sha256:4f10ff1257bacfd1781f22e85bd2b8d43ad1b490f3b6aafd7906671cadedd464" }
+wheels = [
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/msal/1.38/msal-1.38.0-py3-none-any.whl", hash = "sha256:765b9b98b6aa380ee8b8f1c75636e08863edaf0a953498955bd668650dde5d49" },
+]
+
+[[package]]
+name = "msal-extensions"
+version = "1.3.1"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "msal" },
+]
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/msal-extensions/1.3.1/msal_extensions-1.3.1.tar.gz", hash = "sha256:c5b0fd10f65ef62b5f1d62f4251d51cbcaf003fcedae8c91b040a488614be1a4" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/msal-extensions/1.3.1/msal_extensions-1.3.1-py3-none-any.whl", hash = "sha256:96d3de4d034504e969ac5e85bae8106c8373b5c6568e4c8fa7af2eca9dbe6bca" },
+]
+
+[[package]]
+name = "parsedatetime"
+version = "2.6"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/parsedatetime/2.6/parsedatetime-2.6.tar.gz", hash = "sha256:4cb368fbb18a0b7231f4d76119165451c8d2e35951455dfee97c62a87b04d455" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/parsedatetime/2.6/parsedatetime-2.6-py3-none-any.whl", hash = "sha256:cb96edd7016872f58479e35879294258c71437195760746faffedb692aef000b" },
+]
+
+[[package]]
+name = "private-bot-proxy-certificate-runner"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "azure-identity" },
+    { name = "azure-keyvault-certificates" },
+    { name = "azure-mgmt-dns" },
+    { name = "certbot" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "azure-identity", specifier = "==1.24.0" },
+    { name = "azure-keyvault-certificates", specifier = "==4.10.0" },
+    { name = "azure-mgmt-dns", specifier = "==8.2.0" },
+    { name = "certbot", specifier = "==4.2.0" },
+]
+
+[[package]]
+name = "pycparser"
+version = "3.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pycparser/3/pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pycparser/3/pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992" },
+]
+
+[[package]]
+name = "pyjwt"
+version = "2.13.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/pyjwt/2.13/pyjwt-2.13.0.tar.gz", hash = "sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423" }
+wheels = [
+    { url = "https://ms-feed-2.pkgs.visualstudio.com/f5581750-f66a-4ee8-b9cc-8269930bd7c4/_packaging/637e612b-d5d4-45c1-8a31-e0deb2a5a828/pypi/download/pyjwt/2.13/pyjwt-2.13.0-py3-none-any.whl", hash = "sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728" },
+]
+
+[package.optional-dependencies]
+crypto = [
+    { name = "cryptography" },
+]
+
+[[package]]
+name = "pyopenssl"
+version = "26.4.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pyopenssl/26.4/pyopenssl-26.4.0.tar.gz", hash = "sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pyopenssl/26.4/pyopenssl-26.4.0-py3-none-any.whl", hash = "sha256:f0eb0cb2d581d3ad2b9c489468485e7f2ab6727d08401bcf9d824c3caddf3c1c" },
+]
+
+[[package]]
+name = "pyrfc3339"
+version = "2.1.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/pyrfc3339/2.1/pyrfc3339-2.1.0.tar.gz", hash = "sha256:c569a9714faf115cdb20b51e830e798c1f4de8dabb07f6ff25d221b5d09d8d7f" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/pyrfc3339/2.1/pyrfc3339-2.1.0-py3-none-any.whl", hash = "sha256:560f3f972e339f579513fe1396974352fd575ef27caff160a38b312252fcddf3" },
+]
+
+[[package]]
+name = "pywin32"
+version = "312"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+wheels = [
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pywin32/312/pywin32-312-cp313-cp313-win32.whl", hash = "sha256:7a27df850933d16a8eabfbaeb73d52b273e2da667f80d70b01a89d1f6828d02c" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pywin32/312/pywin32-312-cp313-cp313-win_amd64.whl", hash = "sha256:c53e878d15a1c44788082bfe712a905433473aa38f86375b7cf8b45e3acbaaf9" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/pywin32/312/pywin32-312-cp313-cp313-win_arm64.whl", hash = "sha256:59aba5d5940842075343a5ddc6b11f1cdf0d1567fe745290359dfbcc7c2eb831" },
+]
+
+[[package]]
+name = "requests"
+version = "2.34.2"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+dependencies = [
+    { name = "certifi" },
+    { name = "charset-normalizer" },
+    { name = "idna" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/requests/2.34.2/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed" }
+wheels = [
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/requests/2.34.2/requests-2.34.2-py3-none-any.whl", hash = "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0" },
+]
+
+[[package]]
+name = "typing-extensions"
+version = "4.16.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/typing-extensions/4.16/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5" }
+wheels = [
+    { url = "https://ms-feed-17.pkgs.visualstudio.com/02a0e93b-9e7a-46f6-8851-5a56920f8f7e/_packaging/2aa351dc-4441-4d20-a430-25f505f2a55a/pypi/download/typing-extensions/4.16/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8" },
+]
+
+[[package]]
+name = "urllib3"
+version = "2.7.0"
+source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple/" }
+sdist = { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/urllib3/2.7/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c" }
+wheels = [
+    { url = "https://ms-feed-12.pkgs.visualstudio.com/80ca31fc-64d9-45fa-acb1-85ac9c6202b2/_packaging/00cb4235-4c66-4418-be20-d052995979fb/pypi/download/urllib3/2.7/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897" },
+]

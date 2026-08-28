@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Private Bot Proxy experiment evidence",
+  "type": "object",
+  "required": ["generatedAt", "control", "botPrivateEndpoint", "pnaOff", "restoredControl"],
+  "properties": {
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "control": {"$ref": "#/$defs/phase"},
+    "botPrivateEndpoint": {"$ref": "#/$defs/phase"},
+    "pnaOff": {"$ref": "#/$defs/phase"},
+    "restoredControl": {"$ref": "#/$defs/phase"}
+  },
+  "$defs": {
+    "phase": {
+      "type": "object",
+      "required": [
+        "correlation",
+        "teamsReply",
+        "gatewayBackend",
+        "workloadReceived",
+        "backendPool",
+        "httpStatus",
+        "botPublicNetworkAccess",
+        "backendHealth",
+        "backendTlsValidated",
+        "frontendTlsProtocol"
+      ],
+      "properties": {
+        "correlation": {"type": "string"},
+        "teamsReply": {"type": "boolean"},
+        "gatewayBackend": {"type": ["string", "null"]},
+        "workloadReceived": {"type": "boolean"},
+        "backendPool": {"type": "string"},
+        "httpStatus": {"type": "integer"},
+        "botPublicNetworkAccess": {"enum": ["Enabled", "Disabled"]},
+        "backendHealth": {"const": "Healthy"},
+        "backendTlsValidated": {"const": true},
+        "frontendTlsProtocol": {"type": "string", "minLength": 1},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}

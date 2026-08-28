@@ -1,0 +1,55 @@
+{
+  "generatedAt": "0000-00-00T00:00:00Z",
+  "control": {
+    "correlation": "CONTROL-00000000-0000-0000-0000-000000000000",
+    "teamsReply": false,
+    "gatewayBackend": null,
+    "workloadReceived": false,
+    "backendPool": "aca-control",
+    "httpStatus": 202,
+    "botPublicNetworkAccess": "Enabled",
+    "backendHealth": "Healthy",
+    "backendTlsValidated": true,
+    "frontendTlsProtocol": "TLSv1.2",
+    "notes": "Populate by running scripts/run-experiment.ps1."
+  },
+  "botPrivateEndpoint": {
+    "correlation": "BOT-PE-00000000-0000-0000-0000-000000000000",
+    "teamsReply": false,
+    "gatewayBackend": null,
+    "workloadReceived": false,
+    "backendPool": "bot-pe-experiment",
+    "httpStatus": 404,
+    "botPublicNetworkAccess": "Enabled",
+    "backendHealth": "Healthy",
+    "backendTlsValidated": true,
+    "frontendTlsProtocol": "TLSv1.2",
+    "notes": "All three success conditions are required."
+  },
+  "pnaOff": {
+    "correlation": "PNA-OFF-00000000-0000-0000-0000-000000000000",
+    "teamsReply": false,
+    "gatewayBackend": null,
+    "workloadReceived": false,
+    "backendPool": "bot-pe-experiment",
+    "httpStatus": 404,
+    "botPublicNetworkAccess": "Disabled",
+    "backendHealth": "Healthy",
+    "backendTlsValidated": true,
+    "frontendTlsProtocol": "TLSv1.2",
+    "notes": "Bot public network access is disabled only inside the runner's guarded restoration block."
+  },
+  "restoredControl": {
+    "correlation": "RESTORE-00000000-0000-0000-0000-000000000000",
+    "teamsReply": false,
+    "gatewayBackend": null,
+    "workloadReceived": false,
+    "backendPool": "aca-control",
+    "httpStatus": 202,
+    "botPublicNetworkAccess": "Enabled",
+    "backendHealth": "Healthy",
+    "backendTlsValidated": true,
+    "frontendTlsProtocol": "TLSv1.2",
+    "notes": "The script always restores the ACA backend."
+  }
+}

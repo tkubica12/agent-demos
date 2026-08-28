@@ -1,0 +1,14 @@
+.artifacts/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.env
+*.pfx
+*.pem
+*.key
+teams-package/*.zip
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/

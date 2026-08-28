@@ -1,0 +1,15 @@
+.artifacts
+.git
+.pytest_cache
+.ruff_cache
+.terraform
+.venv
+**/__pycache__
+certificate-runner
+evidence
+infra
+scripts
+teams-package
+tests
+*.tfstate
+*.tfvars
