@@ -15,6 +15,7 @@
     "generalizedLearning",
     "rationale",
     "evidence",
+    "agentProposedScenarios",
     "confidence",
     "sourceStage",
     "artifact",
@@ -24,7 +25,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "2.0"
+      "const": "3.0"
     },
     "recordId": {
       "type": "string",
@@ -47,8 +48,7 @@
     "action": {
       "enum": [
         "create",
-        "patch",
-        "delete"
+        "patch"
       ]
     },
     "title": {
@@ -93,6 +93,44 @@
         }
       }
     },
+    "agentProposedScenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenarioId", "input", "setupAssumptions", "expectedObservableOutcomes", "acceptanceCriteria", "scope"
+        ],
+        "properties": {
+          "scenarioId": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "input": {
+            "type": "string", "pattern": "\\S", "maxLength": 4000
+          },
+          "scope": {
+            "type": "string", "pattern": "\\S", "maxLength": 1000
+          },
+          "setupAssumptions": {"$ref": "#/$defs/scenarioStatements"},
+          "expectedObservableOutcomes": {"$ref": "#/$defs/scenarioStatements"},
+          "acceptanceCriteria": {
+            "type": "array", "minItems": 1, "maxItems": 20,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["observable", "operator", "value"],
+              "properties": {
+                "observable": {"const": "response.text"},
+                "operator": {"enum": ["contains", "not_contains", "equals"]},
+                "value": {"type": "string", "pattern": "\\S", "maxLength": 1000}
+              }
+            }
+          }
+        }
+      }
+    },
     "confidence": {
       "type": "number",
       "minimum": 0,
@@ -126,15 +164,16 @@
           ]
         },
         "afterHash": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string",
+          "minLength": 1
         },
         "changedFiles": {
           "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
           "items": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^skills/(role|candidates)/[a-z0-9][a-z0-9-]{0,62}/SKILL\\.md$"
           }
         }
       }
@@ -192,6 +231,12 @@
           "maxItems": 0
         }
       }
+    }
+  },
+  "$defs": {
+    "scenarioStatements": {
+      "type": "array", "minItems": 1, "maxItems": 10,
+      "items": {"type": "string", "pattern": "\\S", "maxLength": 1000}
     }
   }
 }

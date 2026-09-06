@@ -62,3 +62,9 @@ Before implementing an approved change, record a rollback checkpoint containing:
 - the exact command or procedure required to restore that version.
 
 Confirm the rollback path is available before proceeding so a failed or withdrawn change can be recovered reliably.
+
+## Validate reusable learning
+
+For a generalized correction to this Role Skill, return the bridge-requested provenance together with privacy-safe `agentProposedScenarios`. Each scenario declares `scenarioId`, `input`, `setupAssumptions`, `expectedObservableOutcomes`, `acceptanceCriteria`, and `scope`. Criteria inspect only `response.text` with literal, case-sensitive `contains`, `not_contains`, or `equals` assertions; never include executable code or private examples.
+
+The runtime records provenance 3.0 and preserves cumulative per-artifact provenance arrays in Learning Packets 2.0. Proposed scenarios are not evidence of measured improvement: compare real Hermes baseline and candidate behavior, including independently authored regression or holdout cases. Follow `dream-reflection` for the complete scenario contract and explicit Dreaming.
