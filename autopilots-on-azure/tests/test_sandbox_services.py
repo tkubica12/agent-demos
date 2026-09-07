@@ -31,8 +31,7 @@ class SandboxServicesTests(unittest.TestCase):
 
     def config(self):
         values = dict.fromkeys([
-            "runtime_disk_source_image", "openclaw_gateway_token", "openclaw_bridge_device_token",
-            "openclaw_bridge_device_private_key_pem", "previous_api_server_key",
+            "runtime_disk_source_image", "previous_api_server_key",
             "agent365_agent_user_principal_name", "worker_assignment_scope",
         ], "")
         values.update({
@@ -138,7 +137,7 @@ class SandboxServicesTests(unittest.TestCase):
         with patch("scripts.sandbox_runtime.get_config", side_effect=lambda name, fallback="": values.get(name, fallback)):
             config = config_from_environment(
                 subscription_id="sub", resource_group="rg", sandbox_group="group", region="region",
-                runtime_kind="hermes", api_server_key="runtime-test-key",
+                api_server_key="runtime-test-key",
             )
         self.assertEqual(config.image_name, "registry/runtime@sha256:123")
         self.assertEqual(config.disk_image_id, "runtime-disk")

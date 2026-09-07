@@ -1,7 +1,7 @@
 [project]
 name = "autopilots-on-azure"
 version = "0.1.0"
-description = "Runtime-neutral autopilot hosting on Azure Container Apps Sandboxes."
+description = "Hermes digital workers on Azure Container Apps Sandboxes."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -21,7 +21,6 @@ dependencies = [
     "opentelemetry-sdk>=1.30.0",
     "PyJWT[crypto]==2.13.0",
     "uvicorn[standard]>=0.34.3",
-    "websockets==14.1",
 ]
 
 [tool.uv]

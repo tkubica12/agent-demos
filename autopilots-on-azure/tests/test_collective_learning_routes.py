@@ -64,10 +64,6 @@ class CollectiveLearningRouteTests(unittest.TestCase):
                 conflict = await client.post("/internal/collective-learning/reject", json=body,
                                              headers={"X-Autopilot-Key": "operator-key"})
                 self.assertEqual(conflict.status_code, 409)
-                adapter.runtime_kind = "openclaw"
-                unsupported = await client.get("/internal/collective-learning/pending",
-                                               headers={"X-Autopilot-Key": "operator-key"})
-                self.assertEqual(unsupported.status_code, 409)
 
         with patch.dict(os.environ, {"API_SERVER_KEY": "operator-key"}), patch.object(bridge_app, "runtime_adapter", return_value=adapter):
             asyncio.run(run())

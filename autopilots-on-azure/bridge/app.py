@@ -67,7 +67,7 @@ from bridge.generated_app_cards import (
     generated_apps_card,
 )
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
-from bridge.runtime.factory import create_runtime_adapter, runtime_kind_from_env
+from bridge.runtime.hermes import HermesRuntimeAdapter
 from bridge.proactive_delivery import (
     delivery_reference_metadata,
     send_proactive_activity,
@@ -343,15 +343,15 @@ def teams_session_key(activity: Activity) -> str:
 
 
 def should_observe_unmentioned_messages() -> bool:
-    return env_optional("AUTOPILOT_TEAMS_OBSERVE_UNMENTIONED", "OPENCLAW_TEAMS_OBSERVE_UNMENTIONED", default="true").lower() in {"1", "true", "yes"}
+    return env_optional("AUTOPILOT_TEAMS_OBSERVE_UNMENTIONED", default="true").lower() in {"1", "true", "yes"}
 
 
 def should_add_processing_reaction() -> bool:
-    return env_optional("AUTOPILOT_TEAMS_ADD_REACTIONS", "OPENCLAW_TEAMS_ADD_REACTIONS", default="true").lower() in {"1", "true", "yes"}
+    return env_optional("AUTOPILOT_TEAMS_ADD_REACTIONS", default="true").lower() in {"1", "true", "yes"}
 
 
 def should_quote_group_responses() -> bool:
-    return env_optional("AUTOPILOT_TEAMS_QUOTED_REPLIES", "OPENCLAW_TEAMS_QUOTED_REPLIES", default="true").lower() in {"1", "true", "yes"}
+    return env_optional("AUTOPILOT_TEAMS_QUOTED_REPLIES", default="true").lower() in {"1", "true", "yes"}
 
 
 def should_add_status_reaction(activity: Activity) -> bool:
@@ -391,13 +391,7 @@ def split_teams_response_instructions(response: str) -> tuple[str, str | None]:
 
 
 def runtime_display_name() -> str:
-    configured = env_optional("AUTOPILOT_TEAMS_NAME", "OPENCLAW_TEAMS_NAME")
-    if configured:
-        return configured
-    return {
-        "hermes": "Hermes",
-        "openclaw": "OpenClaw",
-    }.get(runtime_kind_from_env(), "Autopilot")
+    return env_optional("AUTOPILOT_TEAMS_NAME", default="Hermes")
 
 
 def env_int(name: str, default: int) -> int:
@@ -499,7 +493,7 @@ def message_mentions_bot_name(activity: Activity, message: str | None = None) ->
     if not text:
         return False
     aliases = {
-        runtime_kind_from_env(),
+        "hermes",
         runtime_display_name().lower(),
         str(field_value(activity, "recipient", "name") or "").lower(),
     }
@@ -615,7 +609,7 @@ def truncate_text(value: str, limit: int) -> str:
 
 
 def teams_memory(session_key: str) -> deque[dict[str, Any]]:
-    max_events = env_int("OPENCLAW_TEAMS_MEMORY_MAX_EVENTS", 30)
+    max_events = env_int("AUTOPILOT_TEAMS_MEMORY_MAX_EVENTS", 30)
     memory = _teams_memory.get(session_key)
     if memory is None or memory.maxlen != max_events:
         memory = deque(list(memory or [])[-max_events:], maxlen=max_events)
@@ -626,19 +620,19 @@ def teams_memory(session_key: str) -> deque[dict[str, Any]]:
 def remember_teams_event(session_key: str, event: dict[str, Any]) -> None:
     stored = dict(event)
     if isinstance(stored.get("text"), str):
-        stored["text"] = truncate_text(stored["text"], env_int("OPENCLAW_TEAMS_MEMORY_EVENT_CHARS", 1200))
+        stored["text"] = truncate_text(stored["text"], env_int("AUTOPILOT_TEAMS_MEMORY_EVENT_CHARS", 1200))
     stored.setdefault("ts", time.time())
     teams_memory(session_key).append(stored)
 
 
 def context_window_size(signal_type: str, response_contract: str) -> int:
     if response_contract == "must_answer":
-        return env_int("OPENCLAW_TEAMS_CONTEXT_MUST_ANSWER_EVENTS", 18)
+        return env_int("AUTOPILOT_TEAMS_CONTEXT_MUST_ANSWER_EVENTS", 18)
     if signal_type == "reaction_to_message":
-        return env_int("OPENCLAW_TEAMS_CONTEXT_REACTION_EVENTS", 6)
+        return env_int("AUTOPILOT_TEAMS_CONTEXT_REACTION_EVENTS", 6)
     if signal_type == "reply_in_thread_without_bot_mention":
-        return env_int("OPENCLAW_TEAMS_CONTEXT_REPLY_EVENTS", 12)
-    return env_int("OPENCLAW_TEAMS_CONTEXT_WEAK_SIGNAL_EVENTS", 8)
+        return env_int("AUTOPILOT_TEAMS_CONTEXT_REPLY_EVENTS", 12)
+    return env_int("AUTOPILOT_TEAMS_CONTEXT_WEAK_SIGNAL_EVENTS", 8)
 
 
 def render_memory_event(event: dict[str, Any]) -> str:
@@ -689,7 +683,7 @@ def format_teams_context(
 
     rendered_events = [render_memory_event(event) for event in by_key.values()]
     participant_names = sorted({str(event.get("sender")) for event in memory if event.get("sender")})
-    max_chars = env_int("OPENCLAW_TEAMS_CONTEXT_MAX_CHARS", 12000)
+    max_chars = env_int("AUTOPILOT_TEAMS_CONTEXT_MAX_CHARS", 12000)
     context = (
         "Bridge-observed context window:\n"
         f"- Memory policy: bounded local window, reply/reaction anchor if known, latest {runtime_display_name()} answer if known, max {max_chars} chars.\n"
@@ -787,8 +781,8 @@ def format_teams_event_prompt(
 
 
 @cache
-def runtime_adapter():
-    return create_runtime_adapter()
+def runtime_adapter() -> HermesRuntimeAdapter:
+    return HermesRuntimeAdapter()
 
 
 @app.get("/health")
@@ -893,7 +887,7 @@ async def teams_diagnostics(request: Request, call_next):
 
 @app.get("/diag/teams")
 def teams_diag() -> JSONResponse:
-    if os.getenv("OPENCLAW_BRIDGE_DEBUG", "").lower() not in {"1", "true", "yes"}:
+    if os.getenv("AUTOPILOT_BRIDGE_DEBUG", "").lower() not in {"1", "true", "yes"}:
         raise HTTPException(status_code=404, detail="Not found.")
     return JSONResponse(
         {
@@ -928,7 +922,7 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
             detail["sandboxId"] = sandbox_id
         if gateway_url:
             detail["gatewayUrl"] = gateway_url
-        if os.getenv("OPENCLAW_BRIDGE_DEBUG", "").lower() in {"1", "true", "yes"}:
+        if os.getenv("AUTOPILOT_BRIDGE_DEBUG", "").lower() in {"1", "true", "yes"}:
             detail["type"] = exc.__class__.__name__
         raise HTTPException(status_code=500, detail=detail) from exc
 
@@ -944,8 +938,6 @@ def require_operator_key(request: Request) -> None:
 async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResponse:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Dream runs are supported only by the Hermes runtime.")
     worker_id = os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
     session_id = f"dream:{worker_id}:{uuid.uuid4().hex}"
     try:
@@ -987,8 +979,6 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
 async def prepare_collective_learning(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
     try:
         return await adapter.prepare_collective_learning()
     except Exception as exc:
@@ -999,8 +989,6 @@ async def prepare_collective_learning(http_request: Request) -> dict[str, Any]:
 async def pending_collective_learning(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
     return await adapter.pending_collective_learning()
 
 
@@ -1008,8 +996,6 @@ async def pending_collective_learning(http_request: Request) -> dict[str, Any]:
 async def prepare_refresh_rejection(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
     return await adapter.prepare_refresh_rejection()
 
 
@@ -1020,8 +1006,6 @@ async def reject_and_refresh(
 ) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
     try:
         return await adapter.reject_and_refresh(
             disposition_digest=request.disposition_digest, rejected_by=request.rejected_by, reason=request.reason,
@@ -1037,8 +1021,6 @@ async def approve_collective_learning(
 ) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
     try:
         return await adapter.approve_collective_learning(
             packet_digest=request.packet_digest,
@@ -1052,8 +1034,6 @@ async def approve_collective_learning(
 async def export_collective_learning(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
     try:
         return await adapter.export_collective_learning()
     except Exception as exc:
@@ -1088,8 +1068,6 @@ async def user_scheduling_status(http_request: Request) -> dict[str, Any]:
 async def ensure_runtime_status(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise HTTPException(status_code=409, detail="Runtime ensure is supported only by Hermes.")
     return await adapter.ensure_runtime()
 
 
@@ -1309,10 +1287,6 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
     message_type = str(payload.get("type") or "")
     if message_type == "document.publish.retry":
         adapter = runtime_adapter()
-        if adapter.runtime_kind != "hermes":
-            raise RuntimeError(
-                "Document retries are supported only by Hermes."
-            )
         operation_id = str(payload.get("operationId") or "")
         result = await adapter.process_document_background(
             operation_id
@@ -1375,8 +1349,6 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if message_type == "system.dream":
         adapter = runtime_adapter()
-        if adapter.runtime_kind != "hermes":
-            raise RuntimeError("Scheduled Dreaming is supported only by Hermes.")
         job_id = str(payload.get("jobId") or "")
         revision = str(payload.get("revision") or "")
         occurrence_id = str(
@@ -1467,8 +1439,6 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
     if message_type != "hermes.cron.fire":
         raise ValueError(f"Unsupported scheduled message type: {message_type!r}.")
     adapter = runtime_adapter()
-    if adapter.runtime_kind != "hermes":
-        raise RuntimeError("User scheduling is supported only by Hermes.")
     result = await adapter.fire_cron_job(
         job_id=str(payload.get("jobId") or ""),
         revision=str(payload.get("revision") or ""),
@@ -2370,12 +2340,6 @@ async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
         return
 
     has_attachments = has_file_attachments(ctx.activity)
-    if has_attachments and runtime_kind_from_env() != "hermes":
-        await ctx.send_activity(
-            "Document attachments are currently supported only by "
-            "the Hermes runtime."
-        )
-        return
     try:
         attachments = await process_turn_attachments(ctx)
     except AttachmentProcessingError as exc:
@@ -2993,7 +2957,7 @@ async def run_agent_runtime_for_teams(
 async def send_stream_progress_updates(ctx: TurnContext, conversation_id: str, done: asyncio.Event) -> None:
     try:
         record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": f"Waking {runtime_display_name()} Sandbox..."})
-        await asyncio.wait_for(done.wait(), timeout=int(env_optional("AUTOPILOT_TEAMS_PROGRESS_DELAY_SECONDS", "OPENCLAW_TEAMS_PROGRESS_DELAY_SECONDS", default="10")))
+        await asyncio.wait_for(done.wait(), timeout=int(env_optional("AUTOPILOT_TEAMS_PROGRESS_DELAY_SECONDS", default="10")))
     except asyncio.TimeoutError:
         record_teams_diag({"event": "streamInformativeSkipped", "conversationId": conversation_id, "message": f"{runtime_display_name()} is still working..."})
     except asyncio.CancelledError:

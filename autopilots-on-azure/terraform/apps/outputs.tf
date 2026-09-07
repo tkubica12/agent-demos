@@ -75,19 +75,19 @@ output "collective_learning_approval_public_key" {
   value = var.collective_learning_approval_public_key
 }
 output "user_scheduling_enabled" {
-  value = var.agent_runtime == "hermes" && var.user_scheduling_enabled
+  value = var.user_scheduling_enabled
 }
 output "scheduler_servicebus_queue_name" {
   value = local.scheduler_transport_enabled ? azurerm_servicebus_queue.worker_schedule[0].name : ""
 }
 output "servicebus_dream_enabled" {
-  value = var.agent_runtime == "hermes" && var.servicebus_dream_enabled
+  value = var.servicebus_dream_enabled
 }
 output "servicebus_dream_cron_expression" {
   value = var.servicebus_dream_cron_expression
 }
 output "scheduled_learning_enabled" {
-  value = var.agent_runtime == "hermes" && var.scheduled_learning_enabled
+  value = var.scheduled_learning_enabled
 }
 output "scheduled_learning_interval_seconds" {
   value = var.scheduled_learning_interval_seconds

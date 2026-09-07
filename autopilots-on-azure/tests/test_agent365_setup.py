@@ -106,7 +106,7 @@ class Agent365SetupTests(unittest.TestCase):
 
     def test_endpoint_owner_preflight_blocks_before_local_config_or_cli_changes(self):
         with (
-            patch("sys.argv", ["setup_agent365", "--runtime", "hermes", "--tenant-id", "tenant",
+            patch("sys.argv", ["setup_agent365", "--state-name", "hermes", "--tenant-id", "tenant",
                                "--messaging-endpoint", "https://native.example", "--update-endpoint"]),
             patch.object(agent365.Path, "mkdir"),
             patch.object(agent365, "endpoint_update_config", return_value={"tenantId": "tenant"}),
@@ -124,7 +124,7 @@ class Agent365SetupTests(unittest.TestCase):
         for update in (False, True):
             with self.subTest(update=update):
                 events = []
-                argv = ["setup_agent365", "--runtime", "hermes", "--tenant-id", "tenant",
+                argv = ["setup_agent365", "--state-name", "hermes", "--tenant-id", "tenant",
                         "--messaging-endpoint", "https://native.example"]
                 if update:
                     argv.append("--update-endpoint")
@@ -165,7 +165,7 @@ class Agent365SetupTests(unittest.TestCase):
 
     def test_dry_run_cannot_accidentally_execute_endpoint_update(self):
         with (
-            patch("sys.argv", ["setup_agent365", "--runtime", "hermes", "--dry-run", "--update-endpoint"]),
+            patch("sys.argv", ["setup_agent365", "--state-name", "hermes", "--dry-run", "--update-endpoint"]),
             patch.object(agent365, "maybe_run") as run,
             patch("sys.stderr"),
         ):
@@ -219,27 +219,27 @@ class Agent365SetupTests(unittest.TestCase):
 
     def test_config_payload_marks_external_hosting(self):
         payload = agent365_config_payload(
-            autopilot_name="openclaw",
-            runtime_kind="openclaw",
-            agent_name="OpenClaw",
+            autopilot_name="hermes",
+            runtime_kind="hermes",
+            agent_name="Hermes",
             tenant_id="tenant-1",
             messaging_endpoint="https://bridge.example/api/messages",
             ai_teammate=True,
             manager_email="manager@example.com",
-            agent_user_principal_name="openclaw@example.com",
+            agent_user_principal_name="hermes@example.com",
         )
 
-        self.assertEqual(payload["agentName"], "OpenClaw")
-        self.assertEqual(payload["autopilotName"], "openclaw")
-        self.assertEqual(payload["agentRuntime"], "openclaw")
-        self.assertEqual(payload["agentIdentityDisplayName"], "OpenClaw Agent")
-        self.assertEqual(payload["agentBlueprintDisplayName"], "OpenClaw Blueprint")
+        self.assertEqual(payload["agentName"], "Hermes")
+        self.assertEqual(payload["autopilotName"], "hermes")
+        self.assertEqual(payload["agentRuntime"], "hermes")
+        self.assertEqual(payload["agentIdentityDisplayName"], "Hermes Agent")
+        self.assertEqual(payload["agentBlueprintDisplayName"], "Hermes Blueprint")
         self.assertEqual(payload["messagingEndpoint"], "https://bridge.example/api/messages")
         self.assertFalse(payload["needDeployment"])
         self.assertEqual(payload["deploymentProjectPath"], ".")
         self.assertTrue(payload["aiteammate"])
         self.assertEqual(payload["managerEmail"], "manager@example.com")
-        self.assertEqual(payload["agentUserPrincipalName"], "openclaw@example.com")
+        self.assertEqual(payload["agentUserPrincipalName"], "hermes@example.com")
 
     def test_generated_metadata_excludes_secrets(self):
         generated = {
@@ -255,29 +255,29 @@ class Agent365SetupTests(unittest.TestCase):
 
     def test_merge_config_preserves_existing_optional_values(self):
         merged = merge_config(
-            {"managerEmail": "manager@example.com", "agentUserPrincipalName": "openclaw@example.com"},
-            {"agentName": "OpenClaw", "messagingEndpoint": "https://bridge.example/api/messages"},
+            {"managerEmail": "manager@example.com", "agentUserPrincipalName": "hermes@example.com"},
+            {"agentName": "Hermes", "messagingEndpoint": "https://bridge.example/api/messages"},
         )
 
         self.assertEqual(merged["managerEmail"], "manager@example.com")
-        self.assertEqual(merged["agentUserPrincipalName"], "openclaw@example.com")
-        self.assertEqual(merged["agentName"], "OpenClaw")
+        self.assertEqual(merged["agentUserPrincipalName"], "hermes@example.com")
+        self.assertEqual(merged["agentName"], "Hermes")
 
     def test_metadata_includes_portal_links_and_endpoint(self):
         metadata = build_metadata(
             {
-                "agentName": "OpenClaw",
-                "autopilotName": "openclaw",
-                "agentRuntime": "openclaw",
+                "agentName": "Hermes",
+                "autopilotName": "hermes",
+                "agentRuntime": "hermes",
                 "tenantId": "tenant-1",
                 "messagingEndpoint": "https://from-config/api/messages",
             },
             {"agentBlueprintId": "blueprint-1", "messagingEndpoint": "https://from-generated/api/messages"},
         )
 
-        self.assertEqual(metadata["agentName"], "OpenClaw")
-        self.assertEqual(metadata["autopilotName"], "openclaw")
-        self.assertEqual(metadata["agentRuntime"], "openclaw")
+        self.assertEqual(metadata["agentName"], "Hermes")
+        self.assertEqual(metadata["autopilotName"], "hermes")
+        self.assertEqual(metadata["agentRuntime"], "hermes")
         self.assertEqual(metadata["tenantId"], "tenant-1")
         self.assertEqual(metadata["messagingEndpoint"], "https://from-generated/api/messages")
         self.assertEqual(
@@ -289,13 +289,13 @@ class Agent365SetupTests(unittest.TestCase):
         endpoint = "https://bridge.example/api/messages"
 
         self.assertEqual(
-            setup_command(agent_name="OpenClaw", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=True, authmode="obo"),
+            setup_command(agent_name="Hermes", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=True, authmode="obo"),
             [
                 "a365",
                 "setup",
                 "all",
                 "--agent-name",
-                "OpenClaw",
+                "Hermes",
                 "--tenant-id",
                 "tenant-1",
                 "--aiteammate",
@@ -305,13 +305,13 @@ class Agent365SetupTests(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            setup_command(agent_name="OpenClaw", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=False, authmode="both"),
+            setup_command(agent_name="Hermes", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=False, authmode="both"),
             [
                 "a365",
                 "setup",
                 "all",
                 "--agent-name",
-                "OpenClaw",
+                "Hermes",
                 "--tenant-id",
                 "tenant-1",
                 "--m365",
@@ -322,16 +322,16 @@ class Agent365SetupTests(unittest.TestCase):
             ],
         )
         self.assertEqual(update_endpoint_command(endpoint), ["a365", "setup", "blueprint", "--update-endpoint", endpoint])
-        self.assertEqual(publish_command(agent_name="OpenClaw", ai_teammate=True), ["a365", "publish", "--agent-name", "OpenClaw", "--aiteammate"])
+        self.assertEqual(publish_command(agent_name="Hermes", ai_teammate=True), ["a365", "publish", "--agent-name", "Hermes", "--aiteammate"])
         self.assertEqual(
-            publish_command(agent_name="OpenClaw", ai_teammate=False),
-            ["a365", "publish", "--agent-name", "OpenClaw", "--use-blueprint"],
+            publish_command(agent_name="Hermes", ai_teammate=False),
+            ["a365", "publish", "--agent-name", "Hermes", "--use-blueprint"],
         )
 
     def test_setup_command_supports_safe_execution_flags(self):
         self.assertEqual(
             setup_command(
-                agent_name="OpenClaw",
+                agent_name="Hermes",
                 tenant_id="tenant-1",
                 messaging_endpoint="https://bridge.example/api/messages",
                 ai_teammate=False,
@@ -370,7 +370,7 @@ class Agent365SetupTests(unittest.TestCase):
 
             self.assertEqual(
                 resolve_messaging_endpoint(
-                    runtime_kind="openclaw",
+                    runtime_kind="hermes",
                     explicit_endpoint="https://explicit.example/api/messages",
                     outputs_file=str(outputs_path),
                 ),
@@ -416,7 +416,7 @@ class Agent365SetupTests(unittest.TestCase):
             manifest_dir.mkdir()
             (manifest_dir / "manifest.json").write_text(
                 (
-                    '{"id":"blueprint-1","name":{"short":"OpenClaw Blueprint","full":"OpenClaw Blueprint"},'
+                    '{"id":"blueprint-1","name":{"short":"Hermes Blueprint","full":"Hermes Blueprint"},'
                     '"description":{"short":"x","full":"y"},"developer":{},"version":"1.2.3"}'
                 ),
                 encoding="utf-8",
@@ -424,12 +424,12 @@ class Agent365SetupTests(unittest.TestCase):
             (manifest_dir / "color.png").write_bytes(b"color")
             (manifest_dir / "outline.png").write_bytes(b"outline")
 
-            package_path = customize_manifest(Path(temp_dir), default_branding("openclaw"))
+            package_path = customize_manifest(Path(temp_dir), default_branding())
 
             self.assertTrue(package_path.exists())
             manifest = (manifest_dir / "manifest.json").read_text(encoding="utf-8")
-            self.assertIn('"short": "OpenClaw Autopilot"', manifest)
-            self.assertIn('"full": "OpenClaw Autopilot on Azure"', manifest)
+            self.assertIn('"short": "Hermes Autopilot"', manifest)
+            self.assertIn('"full": "Hermes Autopilot on Azure"', manifest)
             self.assertIn('"version": "1.2.4"', manifest)
             with ZipFile(package_path) as archive:
                 self.assertIn("manifest.json", archive.namelist())

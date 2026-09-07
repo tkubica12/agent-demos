@@ -81,23 +81,6 @@ class RoleReleaseInstall:
 
 
 def role_release_settings_from_environment() -> RoleReleaseSettings | None:
-    legacy = [
-        name
-        for name in (
-            "HERMES_BLUEPRINT_NAME",
-            "HERMES_BLUEPRINT_SOURCE",
-            "HERMES_BLUEPRINT_PATH",
-            "HERMES_BLUEPRINT_VERSION",
-            "HERMES_BLUEPRINT_COMMIT",
-            "HERMES_ASSIGNEE_SCOPE",
-        )
-        if os.getenv(name, "").strip()
-    ]
-    if legacy:
-        raise ValueError(
-            "Legacy Hermes blueprint environment is not accepted by Role Release 3. "
-            f"Configure the HERMES_ROLE_* and WORKER_* settings explicitly; found: {', '.join(legacy)}."
-        )
     source = os.getenv("HERMES_ROLE_BLUEPRINT_SOURCE", "").strip()
     if not source:
         partial = [
@@ -528,13 +511,6 @@ def install_or_refresh_role_release(
     profile_home = hermes_home / "profiles" / settings.role_blueprint
     _recover_refresh_transaction(profile_home)
     manifest_path = worker_manifest_path(profile_home)
-    legacy_manifest = profile_home / "local" / "autopilots-instance.json"
-    if legacy_manifest.exists() and not manifest_path.exists():
-        raise RuntimeError(
-            "Legacy Worker profile migration is required before installing Role Release 3. "
-            "Convert private-cache.md to a Private Playbook, convert hot-learning to Candidate Improvements, "
-            "and remove legacy distribution-owned skill paths."
-        )
     installed = _read_json(manifest_path)
     if profile_home.is_dir() and _matches_installed(settings, installed):
         return RoleReleaseInstall(profile_home=profile_home, manifest=installed, changed=False)

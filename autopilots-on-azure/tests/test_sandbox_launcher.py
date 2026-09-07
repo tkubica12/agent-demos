@@ -1,3 +1,4 @@
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -7,11 +8,23 @@ from scripts.sandbox_runtime import (
     create_agent_sandbox,
     ensure_agent_sandbox,
     ensure_sandbox_runtime_process,
+    get_config,
     recycle_failed_agent_sandbox,
 )
 
 
 class SandboxLauncherTests(unittest.TestCase):
+    def test_configuration_uses_environment_or_explicit_default(self):
+        with (
+            patch.dict(os.environ, {"CONFIGURED": "value", "EMPTY": ""}, clear=True),
+            patch("scripts.sandbox_runtime.run_text") as run,
+        ):
+            self.assertEqual(get_config("CONFIGURED", "default"), "value")
+            self.assertEqual(get_config("EMPTY", "default"), "default")
+            self.assertEqual(get_config("MISSING", "default"), "default")
+            self.assertEqual(get_config("MISSING"), "")
+        run.assert_not_called()
+
     def test_runtime_process_uses_current_entrypoint_fields(self):
         class Client:
             _group_path = "/groups/test"
@@ -50,7 +63,6 @@ class SandboxLauncherTests(unittest.TestCase):
             client,
             config=config,
             disk_id="disk-1",
-            token="",
         )
 
         self.assertEqual(
@@ -99,7 +111,7 @@ class SandboxLauncherTests(unittest.TestCase):
         self.assertIn("/tmp/autopilot-runtime.pid", sandbox.command)
         self.assertIn("/tmp/autopilot-runtime.log", sandbox.command)
         self.assertIn(
-            "http://127.0.0.1:18789/health",
+            "http://127.0.0.1:8642/health",
             sandbox.command,
         )
         self.assertIn(

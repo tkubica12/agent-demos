@@ -37,7 +37,7 @@ from collective_learning import (  # noqa: E402
 from learning import (  # noqa: E402
     LearningRecordError,
     abort_learning_turn,
-    assert_legacy_state_migrated,
+    validate_learning_journal,
     begin_learning_turn,
     build_learning_status,
     initialize_governed_state,
@@ -1055,21 +1055,17 @@ class HermesRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(LearningRecordError, "collides across namespaces"):
                 validate_skill_namespaces(profile)
 
-    def test_legacy_private_cache_and_hot_learning_must_be_migrated(self):
+    def test_learning_journal_rejects_invalid_records(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             profile = Path(temp_dir)
-            cache = profile / "local" / "private-cache.md"
-            cache.parent.mkdir(parents=True)
-            cache.write_text("Customer-specific fact.\n", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "Private Playbook"):
-                assert_legacy_state_migrated(profile)
-
-            cache.unlink()
-            hot = profile / "skills" / "hot-learning" / "SKILL.md"
-            hot.parent.mkdir(parents=True)
-            hot.write_text("# Legacy\n", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "Candidate Improvements"):
-                assert_legacy_state_migrated(profile)
+            journal = profile / "learning" / "records.jsonl"
+            journal.parent.mkdir(parents=True)
+            for content, error in (("invalid", "invalid JSON"), ("[]", "schemaVersion"),
+                                   ('{"schemaVersion":"unknown"}', "schemaVersion")):
+                with self.subTest(content=content):
+                    journal.write_text(content, encoding="utf-8")
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        validate_learning_journal(profile)
 
     def test_wrapper_routes_gateway_to_separate_internal_port(self):
         previous = {
@@ -1124,53 +1120,6 @@ class HermesRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(settings)
         self.assertEqual(settings.role_release, "3.0.0")
         self.assertEqual(settings.worker_id, "hermes1")
-
-    def test_a9_environment_is_rejected_explicitly(self):
-        previous = {
-            name: os.environ.get(name)
-            for name in (
-                "HERMES_BLUEPRINT_SOURCE",
-                "HERMES_ROLE_BLUEPRINT_SOURCE",
-            )
-        }
-        os.environ["HERMES_BLUEPRINT_SOURCE"] = "https://example.com/legacy.git"
-        os.environ.pop("HERMES_ROLE_BLUEPRINT_SOURCE", None)
-        try:
-            with self.assertRaisesRegex(ValueError, "Legacy Hermes blueprint environment"):
-                role_release_settings_from_environment()
-        finally:
-            for name, value in previous.items():
-                if value is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
-
-    def test_a9_worker_manifest_blocks_role_release_install_before_mutation(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            repo = root / "source"
-            home = root / "hermes"
-            profile = home / "profiles" / "junior-project-manager"
-            legacy_manifest = profile / "local" / "autopilots-instance.json"
-            legacy_manifest.parent.mkdir(parents=True)
-            legacy_manifest.write_text('{"blueprintVersion":"2.3.0"}', encoding="utf-8")
-            legacy_skill = profile / "skills" / "junior-project-manager" / "SKILL.md"
-            legacy_skill.parent.mkdir(parents=True)
-            legacy_skill.write_text("# Legacy role skill\n", encoding="utf-8")
-            repo.mkdir()
-            self._git(repo, "init")
-            self._git(repo, "config", "user.email", "test@example.com")
-            self._git(repo, "config", "user.name", "Hermes Test")
-            commit = self._commit_role_release(repo, "3.0.0", "release-3")
-
-            with self.assertRaisesRegex(RuntimeError, "Legacy Worker profile migration"):
-                install_or_refresh_role_release(
-                    home,
-                    self._settings(repo, "3.0.0", commit),
-                )
-            legacy_content = legacy_skill.read_text(encoding="utf-8")
-
-        self.assertEqual(legacy_content, "# Legacy role skill\n")
 
 
 if __name__ == "__main__":

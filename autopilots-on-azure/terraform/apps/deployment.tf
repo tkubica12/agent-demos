@@ -3,7 +3,7 @@ output "deployment_config" {
   value = {
     agent_runtime                            = var.agent_runtime
     autopilot_name                           = var.autopilot_name
-    runtime_image                            = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
+    runtime_image                            = var.runtime_image
     runtime_disk_source_image                = var.runtime_disk_source_image
     runtime_disk_image_name                  = local.runtime_disk_image_name
     runtime_data_volume_name                 = local.runtime_data_volume_name
@@ -17,9 +17,6 @@ output "deployment_config" {
     public_shipments_mcp_api_audience        = var.public_shipments_mcp_api_audience
     api_server_key                           = var.api_server_key
     previous_api_server_key                  = var.previous_api_server_key
-    openclaw_gateway_token                   = var.openclaw_gateway_token
-    openclaw_bridge_device_token             = var.openclaw_bridge_device_token
-    openclaw_bridge_device_private_key_pem   = var.openclaw_bridge_device_private_key_pem
     agent365_client_id                       = var.agent365_client_id
     agent365_tenant_id                       = var.agent365_tenant_id
     agent365_agent_identity_client_id        = var.agent365_agent_identity_client_id
@@ -34,14 +31,14 @@ output "deployment_config" {
     worker_assignment_scope                  = var.worker_assignment_scope
     collective_learning_approval_private_key = var.collective_learning_approval_private_key
     collective_learning_approval_public_key  = var.collective_learning_approval_public_key
-    user_scheduling_enabled                  = var.agent_runtime == "hermes" && var.user_scheduling_enabled
+    user_scheduling_enabled                  = var.user_scheduling_enabled
     document_retry_enabled                   = local.document_retry_active
     user_scheduling_max_concurrent_calls     = var.user_scheduling_max_concurrent_calls
     user_scheduling_max_delivery_count       = var.user_scheduling_max_delivery_count
     user_scheduling_lock_renewal_seconds     = var.user_scheduling_lock_renewal_seconds
-    servicebus_dream_enabled                 = var.agent_runtime == "hermes" && var.servicebus_dream_enabled
+    servicebus_dream_enabled                 = var.servicebus_dream_enabled
     servicebus_dream_cron_expression         = var.servicebus_dream_cron_expression
-    scheduled_learning_enabled               = var.agent_runtime == "hermes" && var.scheduled_learning_enabled
+    scheduled_learning_enabled               = var.scheduled_learning_enabled
     scheduled_learning_initial_delay_seconds = var.scheduled_learning_initial_delay_seconds
     scheduled_learning_interval_seconds      = var.scheduled_learning_interval_seconds
     scheduled_learning_focus                 = var.scheduled_learning_focus

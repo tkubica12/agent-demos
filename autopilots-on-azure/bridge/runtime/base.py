@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 
 StreamDeltaHandler = Callable[[str], Awaitable[None]]
@@ -65,42 +65,3 @@ class DreamRequest:
 class DreamResponse:
     agent: AgentResponse
     learning_status: dict[str, Any]
-
-
-class AgentRuntimeAdapter(Protocol):
-    @property
-    def runtime_kind(self) -> str:
-        ...
-
-    async def invoke(self, request: AgentRequest) -> AgentResponse:
-        ...
-
-    async def dream(
-        self, request: DreamRequest, *, operation: dict[str, Any] | None = None
-    ) -> DreamResponse:
-        ...
-
-    async def prepare_collective_learning(self) -> dict[str, Any]:
-        ...
-
-    async def approve_collective_learning(
-        self,
-        *,
-        packet_digest: str,
-        approved_by: str,
-    ) -> dict[str, Any]:
-        ...
-
-    async def export_collective_learning(self) -> dict[str, Any]:
-        ...
-
-    async def pending_collective_learning(self) -> dict[str, Any]:
-        ...
-
-    async def prepare_refresh_rejection(self) -> dict[str, Any]:
-        ...
-
-    async def reject_and_refresh(
-        self, *, disposition_digest: str, rejected_by: str, reason: str
-    ) -> dict[str, Any]:
-        ...

@@ -173,7 +173,7 @@ class IdentitySetupTests(unittest.TestCase):
                 patch.object(identity, "TOOLING_MANIFEST", manifest),
                 patch.object(identity, "agent365_workspace", return_value=workspace),
             ):
-                self.assertTrue(identity.workiq_permissions_configured("openclaw"))
+                self.assertTrue(identity.workiq_permissions_configured("hermes"))
 
     def test_catalog_detection_recovers_approved_byo_registration(self) -> None:
         output = """

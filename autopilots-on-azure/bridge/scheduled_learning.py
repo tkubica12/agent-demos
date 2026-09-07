@@ -214,8 +214,6 @@ class ScheduledLearningCoordinator:
         self, operation: dict[str, Any] | None, session_id: str, completed: dict[str, Any]
     ) -> dict[str, Any]:
         adapter = self._adapter_factory()
-        if adapter.runtime_kind != "hermes":
-            raise RuntimeError("Scheduled learning is supported only by Hermes.")
         identity = {
             "job_id": operation["jobId"],
             "revision": operation["revision"],

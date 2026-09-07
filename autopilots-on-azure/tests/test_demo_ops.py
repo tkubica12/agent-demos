@@ -16,7 +16,6 @@ from scripts.demo_ops import (
     invoke_body,
     missing_expected_markers,
     role_assignment_command,
-    runtime_list,
     runtime_sandbox_selector,
     sandbox_group_url,
     sandbox_matches,
@@ -26,8 +25,12 @@ from scripts.demo_ops import (
 
 
 class DemoOpsTests(unittest.TestCase):
-    def test_runtime_list_expands_both_in_stable_order(self):
-        self.assertEqual(runtime_list("both"), ["openclaw", "hermes"])
+    def test_no_argument_operator_path_checks_hermes(self):
+        with patch("sys.argv", ["demo_ops"]), patch.object(ops, "run_status", return_value=0) as status:
+            with self.assertRaises(SystemExit) as result:
+                ops.main()
+        self.assertEqual(result.exception.code, 0)
+        self.assertEqual(status.call_args.args[0].state_name, "hermes")
 
     def test_invoke_body_uses_runtime_default_prompt(self):
         body = invoke_body("hermes")
@@ -35,10 +38,10 @@ class DemoOpsTests(unittest.TestCase):
         self.assertTrue(body["conversationId"].startswith("hermes-operator-smoke-"))
         self.assertEqual(body["message"], "Reply with exactly: Hermes bridge OK")
 
-    def test_missing_expected_markers_detects_failed_openclaw_smoke(self):
-        missing = missing_expected_markers("openclaw", {"response": "core_banking only"})
+    def test_missing_expected_markers_detects_failed_hermes_smoke(self):
+        missing = missing_expected_markers("hermes", {"response": "wrong answer"})
 
-        self.assertIn("card_payments", missing)
+        self.assertEqual(missing, ["Hermes bridge OK"])
 
     def outputs(self):
         return {

@@ -14,11 +14,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 import bridge.app as bridge_app
-import bridge.runtime.factory as runtime_factory
 import bridge.runtime.hermes as hermes_runtime
-import bridge.runtime.openclaw as openclaw_runtime
 import scripts.sandbox_runtime as sandbox_runtime
-from bridge.gateway_client import OpenClawGatewayError
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.hermes import (
     HermesRuntimeAdapter,
@@ -30,13 +27,11 @@ from bridge.runtime.hermes import (
     quarantine_recovery_instructions,
     session_reset_command,
 )
-from bridge.runtime.openclaw import OpenClawRuntimeAdapter
 from scripts.sandbox_runtime import (
     AgentSandboxConfig,
     config_from_environment,
     ensure_agent_sandbox,
     hermes_sandbox_config,
-    openclaw_sandbox_config,
     require_worker_refresh_ready,
     runtime_labels,
 )
@@ -53,8 +48,7 @@ def sandbox_config() -> AgentSandboxConfig:
         region="swedencentral",
         foundry_openai_base_url="https://foundry.example/openai/v1",
         model_deployment="gpt-test",
-        image_name="registry.example/openclaw-runtime@sha256:test",
-        gateway_token="gateway-token",
+        image_name="registry.example/hermes-runtime@sha256:test",
     )
 
 
@@ -217,141 +211,20 @@ class RuntimeAdapterTests(unittest.TestCase):
             "snapshot-1",
         )
 
-    def test_bridge_app_does_not_import_openclaw_protocol_or_sandbox_lifecycle(self):
+    def test_bridge_app_does_not_import_sandbox_lifecycle(self):
         source = inspect.getsource(bridge_app)
 
-        self.assertNotIn("bridge.gateway_client", source)
-        self.assertNotIn("OpenClawGatewayClient", source)
-        self.assertNotIn("ensure_gateway_sandbox", source)
-        self.assertNotIn("GatewaySandboxConfig", source)
+        self.assertNotIn("ensure_agent_sandbox", source)
+        self.assertNotIn("AgentSandboxConfig", source)
 
-    def test_runtime_factory_defaults_to_openclaw(self):
-        previous = os.environ.pop("AGENT_RUNTIME", None)
+    def test_bridge_caches_hermes_adapter(self):
+        bridge_app.runtime_adapter.cache_clear()
         try:
-            adapter = runtime_factory.create_runtime_adapter()
+            adapter = bridge_app.runtime_adapter()
+            self.assertIsInstance(adapter, HermesRuntimeAdapter)
+            self.assertIs(bridge_app.runtime_adapter(), adapter)
         finally:
-            if previous is not None:
-                os.environ["AGENT_RUNTIME"] = previous
-
-        self.assertEqual(adapter.runtime_kind, "openclaw")
-
-    def test_runtime_factory_creates_hermes_adapter(self):
-        previous = os.environ.get("AGENT_RUNTIME")
-        os.environ["AGENT_RUNTIME"] = "hermes"
-        try:
-            adapter = runtime_factory.create_runtime_adapter()
-        finally:
-            if previous is None:
-                os.environ.pop("AGENT_RUNTIME", None)
-            else:
-                os.environ["AGENT_RUNTIME"] = previous
-
-        self.assertEqual(adapter.runtime_kind, "hermes")
-
-    def test_runtime_factory_rejects_unknown_runtime(self):
-        previous = os.environ.get("AGENT_RUNTIME")
-        os.environ["AGENT_RUNTIME"] = "bogus"
-        try:
-            with self.assertRaisesRegex(ValueError, "Unsupported AGENT_RUNTIME 'bogus'"):
-                runtime_factory.create_runtime_adapter()
-        finally:
-            if previous is None:
-                os.environ.pop("AGENT_RUNTIME", None)
-            else:
-                os.environ["AGENT_RUNTIME"] = previous
-
-    def test_openclaw_adapter_invokes_gateway_with_runtime_request(self):
-        calls = {}
-
-        def ensure_sandbox(config, *, credential):
-            calls["config"] = config
-            calls["credential"] = credential
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                gateway_url="https://gateway.example",
-                reused_existing_sandbox=True,
-                data_volume="openclaw-data",
-            )
-
-        class Gateway:
-            def __init__(self, **kwargs):
-                calls["gateway_kwargs"] = kwargs
-
-            async def invoke_agent(self, **kwargs):
-                calls["invoke_kwargs"] = kwargs
-                return "hello from OpenClaw"
-
-        previous_gateway = openclaw_runtime.OpenClawGatewayClient
-        openclaw_runtime.OpenClawGatewayClient = Gateway
-        try:
-            adapter = OpenClawRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
-            )
-            response = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="hello",
-                        conversation_id="session-1",
-                        user_id="user-1",
-                        source="invoke",
-                        must_answer=True,
-                    )
-                )
-            )
-        finally:
-            openclaw_runtime.OpenClawGatewayClient = previous_gateway
-
-        self.assertEqual(response.text, "hello from OpenClaw")
-        self.assertEqual(response.raw["sandboxId"], "sandbox-1")
-        self.assertEqual(calls["credential"], "credential-1")
-        self.assertEqual(calls["gateway_kwargs"]["url"], "wss://gateway.example/")
-        self.assertEqual(calls["gateway_kwargs"]["token"], "gateway-token")
-        self.assertEqual(calls["invoke_kwargs"]["message"], "hello")
-        self.assertEqual(calls["invoke_kwargs"]["session_key"], "session-1")
-
-    def test_openclaw_adapter_attaches_sandbox_details_to_pairing_errors(self):
-        class Gateway:
-            def __init__(self, **kwargs):
-                pass
-
-            async def invoke_agent(self, **kwargs):
-                raise OpenClawGatewayError("pairing required: device is not approved yet")
-
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                gateway_url="https://gateway.example",
-                reused_existing_sandbox=True,
-                data_volume="openclaw-data",
-            )
-
-        previous_gateway = openclaw_runtime.OpenClawGatewayClient
-        openclaw_runtime.OpenClawGatewayClient = Gateway
-        try:
-            adapter = OpenClawRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
-            )
-            with self.assertRaises(OpenClawGatewayError) as raised:
-                asyncio.run(
-                    adapter.invoke(
-                        AgentRequest(
-                            prompt="hello",
-                            conversation_id="session-1",
-                            user_id="user-1",
-                            source="invoke",
-                            must_answer=True,
-                        )
-                    )
-                )
-        finally:
-            openclaw_runtime.OpenClawGatewayClient = previous_gateway
-
-        self.assertEqual(raised.exception.sandbox_id, "sandbox-1")
-        self.assertEqual(raised.exception.gateway_url, "https://gateway.example")
+            bridge_app.runtime_adapter.cache_clear()
 
     def test_hermes_adapter_prefers_stateful_session_chat(self):
         calls: list[dict] = []
@@ -1490,31 +1363,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         abort = next(call for call in calls if call["url"].endswith("/internal/learning/abort"))
         self.assertEqual(abort["json"], {"token": "lt-test-1"})
 
-    def test_openclaw_sandbox_config_preserves_gateway_defaults(self):
-        config = openclaw_sandbox_config(
-            image_name="registry.example/openclaw-runtime@sha256:test",
-            gateway_token="token-1",
-            foundry_openai_base_url="https://foundry.example/openai/v1",
-            model_deployment="gpt-test",
-            private_incidents_mcp_url="https://mcp.example/mcp",
-            private_incidents_mcp_scope="api://private/.default",
-            agent365_tenant_id="tenant-1",
-            agent365_blueprint_client_id="blueprint-1",
-            agent365_agent_identity_client_id="agent-1",
-        )
-
-        self.assertEqual(config.runtime_kind, "openclaw")
-        self.assertEqual(config.port, 18789)
-        self.assertEqual(config.command, ("python3",))
-        self.assertEqual(config.args, ("-m", "openclaw_gateway.start_gateway"))
-        self.assertEqual(config.data_mount_path, "/data")
-        self.assertEqual(config.environment["OPENCLAW_GATEWAY_TOKEN"], "token-1")
-        self.assertEqual(config.environment["PRIVATE_INCIDENTS_MCP_URL"], "http://127.0.0.1:18081/servers/private-incidents")
-        self.assertIn("https://mcp.example/mcp", config.environment["AGENT_MCP_SERVERS_JSON"])
-        self.assertNotIn("runtime", runtime_labels(config))
-        self.assertNotIn("autopilot", runtime_labels(config))
-        self.assertEqual(runtime_labels(config)["kind"], "openclaw")
-
     def test_hermes_sandbox_config_can_be_built_without_starting_runtime(self):
         config = hermes_sandbox_config(
             image_name="registry.example/hermes-runtime@sha256:test",
@@ -1553,7 +1401,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.environment["HERMES_HOME"], "/data/hermes")
         self.assertEqual(config.environment["FOUNDRY_OPENAI_BASE_URL"], "https://foundry.example/openai/v1")
         self.assertEqual(config.environment["HERMES_MODEL"], "gpt-test")
-        self.assertEqual(config.environment["OPENCLAW_MODEL_ID"], "gpt-test")
         self.assertEqual(config.environment["HERMES_ROLE_BLUEPRINT"], "junior-project-manager")
         self.assertEqual(config.environment["HERMES_ROLE_RELEASE"], "3.0.0")
         self.assertEqual(config.environment["HERMES_ROLE_RELEASE_COMMIT"], "a" * 40)
@@ -1579,44 +1426,37 @@ class RuntimeAdapterTests(unittest.TestCase):
             "AGENT_RUNTIME_IMAGE": image,
             "DISK_SOURCE_IMAGE": "obsolete-conversion-source",
         }, clear=True):
-            for runtime_kind in ("hermes", "openclaw"):
-                with self.subTest(runtime_kind=runtime_kind):
-                    config = config_from_environment(
-                        runtime_kind=runtime_kind,
-                        subscription_id="sub-1",
-                        resource_group="rg-1",
-                        sandbox_group="sandbox-group-1",
-                        region="swedencentral",
-                        foundry_openai_base_url="https://foundry.example/openai/v1",
-                        gateway_token="token-1",
-                        api_server_key="api-key-1",
-                    )
-                    self.assertEqual(config.disk_image_id, "ready-disk-1")
-                    self.assertEqual(config.managed_identity_client_id, "runtime-client")
-                    self.assertEqual(config.image_name, image)
-                    self.assertEqual(config.runtime_image_reference, image)
+            config = config_from_environment(
+                subscription_id="sub-1",
+                resource_group="rg-1",
+                sandbox_group="sandbox-group-1",
+                region="swedencentral",
+                foundry_openai_base_url="https://foundry.example/openai/v1",
+                api_server_key="api-key-1",
+            )
+            self.assertEqual(config.disk_image_id, "ready-disk-1")
+            self.assertEqual(config.managed_identity_client_id, "runtime-client")
+            self.assertEqual(config.image_name, image)
+            self.assertEqual(config.runtime_image_reference, image)
 
     def test_missing_predeployed_disk_fails_before_any_sandbox_lifecycle_action(self):
-        for config_factory in (hermes_sandbox_config, openclaw_sandbox_config):
-            with self.subTest(runtime=config_factory.__name__):
-                config = config_factory(
-                    subscription_id="sub-1",
-                    resource_group="rg-1",
-                    sandbox_group="sandbox-group-1",
-                    region="swedencentral",
-                    image_name="registry.example/runtime@sha256:" + "a" * 64,
-                )
-                with patch.object(sandbox_runtime, "create_sandbox_group_client") as create_client:
-                    with self.assertRaisesRegex(ValueError, "AGENT_RUNTIME_DISK_IMAGE_ID is required"):
-                        ensure_agent_sandbox(config, wait_for_ready_seconds=0)
-                create_client.assert_not_called()
+        config = hermes_sandbox_config(
+            subscription_id="sub-1",
+            resource_group="rg-1",
+            sandbox_group="sandbox-group-1",
+            region="swedencentral",
+            image_name="registry.example/runtime@sha256:" + "a" * 64,
+        )
+        with patch.object(sandbox_runtime, "create_sandbox_group_client") as create_client:
+            with self.assertRaisesRegex(ValueError, "AGENT_RUNTIME_DISK_IMAGE_ID is required"):
+                ensure_agent_sandbox(config, wait_for_ready_seconds=0)
+        create_client.assert_not_called()
 
     def test_hermes_environment_config_uses_runtime_volume_env(self):
         previous = os.environ.get("AGENT_RUNTIME_DATA_VOLUME_NAME")
         os.environ["AGENT_RUNTIME_DATA_VOLUME_NAME"] = "hermes-env-data"
         try:
             config = config_from_environment(
-                runtime_kind="hermes",
                 subscription_id="sub-1",
                 resource_group="rg-1",
                 sandbox_group="sandbox-group-1",
@@ -1633,15 +1473,14 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.data_volume_name, "hermes-env-data")
 
     def test_existing_sandbox_reuse_uses_predeployed_disk_without_conversion(self):
-        config = openclaw_sandbox_config(
+        config = hermes_sandbox_config(
             subscription_id="sub-1",
             resource_group="rg-1",
             sandbox_group="sandbox-group-1",
             region="swedencentral",
             image_name="",
             disk_image_id="ready-disk-1",
-            data_volume_name="openclaw-data",
-            gateway_token="token-1",
+            data_volume_name="hermes-data",
         )
 
         class SandboxClient:
@@ -1649,7 +1488,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                 self.timeout = timeout
 
             def get(self):
-                return SimpleNamespace(ports=[SimpleNamespace(port=18789, url="https://gateway.example")])
+                return SimpleNamespace(ports=[SimpleNamespace(port=8642, url="https://gateway.example")])
 
             def exec(self, command):
                 return SimpleNamespace(exit_code=0, stdout="", stderr="")
@@ -1660,19 +1499,19 @@ class RuntimeAdapterTests(unittest.TestCase):
             def _dp_get(self, path):
                 return [
                     {
-                        "id": "legacy-sandbox",
-                        "labels": {"app": "openclaw-on-azure"},
-                        "volumes": [{"volumeName": "openclaw-data"}],
+                        "id": "other-sandbox",
+                        "labels": {"app": "other-project"},
+                        "volumes": [{"volumeName": "hermes-data"}],
                     },
                     {
                         "id": "sandbox-1",
                         "labels": {
                             "app": "autopilots-on-azure",
-                            "kind": "openclaw",
+                            "kind": "hermes",
                             "identityArchitecture": "agent-federation-v1",
                             "runtimeImage": config.disk_image_name,
                         },
-                        "volumes": [{"volumeName": "openclaw-data"}],
+                        "volumes": [{"volumeName": "hermes-data"}],
                     },
                 ]
 
@@ -1696,7 +1535,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             sandbox_runtime.create_sandbox_group_client = previous_factory
 
         self.assertEqual(result.sandbox_id, "sandbox-1")
-        self.assertEqual(result.gateway_url, "https://gateway.example")
+        self.assertEqual(result.endpoint_url, "https://gateway.example")
         self.assertTrue(result.reused_existing_sandbox)
 
     def test_worker_refresh_preflight_retries_transient_gateway_failure(self):

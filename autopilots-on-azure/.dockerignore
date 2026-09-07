@@ -12,8 +12,6 @@
 !public-shipments-mcp/
 !public-shipments-mcp/**
 !runtimes/
-!runtimes/openclaw/
-!runtimes/openclaw/**
 !runtimes/hermes/
 !runtimes/hermes/**
 **/.venv/

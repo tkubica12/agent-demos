@@ -18,33 +18,12 @@ from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_pa
 from scripts.tf_helpers import resolve_executable
 
 
-RUNTIMES = ("openclaw", "hermes")
-SMOKE_PROMPTS = {
-    "openclaw": "List services from private incidents MCP",
-    "hermes": "Reply with exactly: Hermes bridge OK",
-}
-EXPECTED_MARKERS = {
-    "openclaw": [
-        "core_banking",
-        "card_payments",
-        "digital_onboarding",
-        "fraud_detection",
-        "wealth_portfolio",
-    ],
-    "hermes": ["Hermes bridge OK"],
-}
+SMOKE_PROMPT = "Reply with exactly: Hermes bridge OK"
+EXPECTED_MARKERS = ["Hermes bridge OK"]
 SANDBOX_RESOURCE = "https://dynamicsessions.io"
 SANDBOX_DATA_OWNER_ROLE = "Container Apps SandboxGroup Data Owner"
 SANDBOX_ROLES = ("runtime", "gateway", "private-mcp", "public-mcp", "generated-apps")
 SANDBOX_API_VERSION = "2026-02-01-preview"
-
-
-def runtime_list(value: str) -> list[str]:
-    if value == "both":
-        return list(RUNTIMES)
-    if value not in RUNTIMES:
-        raise ValueError(f"Unsupported runtime '{value}'.")
-    return [value]
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -98,7 +77,7 @@ def bridge_url(outputs: dict[str, Any]) -> str:
 def invoke_body(runtime: str, *, conversation_id: str = "", message: str = "") -> dict[str, str]:
     return {
         "conversationId": conversation_id or f"{runtime}-operator-smoke-{uuid.uuid4().hex}",
-        "message": message or SMOKE_PROMPTS[runtime],
+        "message": message or SMOKE_PROMPT,
     }
 
 
@@ -112,7 +91,7 @@ def response_text(payload: Any) -> str:
 
 def missing_expected_markers(runtime: str, payload: Any) -> list[str]:
     text = response_text(payload).lower()
-    return [marker for marker in EXPECTED_MARKERS[runtime] if marker.lower() not in text]
+    return [marker for marker in EXPECTED_MARKERS if marker.lower() not in text]
 
 
 def sandbox_group_url(outputs: dict[str, Any], role: str = "runtime") -> str:
@@ -311,7 +290,7 @@ def invoke_check(runtime: str, *, message: str = "", timeout: int = 120, state_n
         "runtime": runtime,
         "check": "invoke",
         "url": f"{url}/invoke",
-        "expectedMarkers": EXPECTED_MARKERS[runtime] if not message else [],
+        "expectedMarkers": EXPECTED_MARKERS if not message else [],
         "missingExpectedMarkers": missing,
         **result,
         "ok": bool(result.get("ok")) and not missing,
@@ -395,23 +374,23 @@ def print_json(payload: Any) -> None:
 
 
 def run_status(args: argparse.Namespace) -> int:
-    results: list[dict[str, Any]] = []
-    for runtime in runtime_list(args.runtime):
-        results.append(sandbox_status_check(runtime, timeout=args.timeout, state_name=args.state_name))
-        results.append(health_check(runtime, timeout=args.timeout, state_name=args.state_name))
-        if args.invoke:
-            results.append(invoke_check(runtime, timeout=args.timeout, state_name=args.state_name))
-        if args.diag:
-            results.append(diag_check(runtime, timeout=args.timeout, state_name=args.state_name))
+    results = [
+        sandbox_status_check("hermes", timeout=args.timeout, state_name=args.state_name),
+        health_check("hermes", timeout=args.timeout, state_name=args.state_name),
+    ]
+    if args.invoke:
+        results.append(invoke_check("hermes", timeout=args.timeout, state_name=args.state_name))
+    if args.diag:
+        results.append(diag_check("hermes", timeout=args.timeout, state_name=args.state_name))
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
 
 
 def run_smoke(args: argparse.Namespace) -> int:
-    results = []
-    for runtime in runtime_list(args.runtime):
-        results.append(sandbox_status_check(runtime, timeout=args.timeout, state_name=args.state_name))
-        results.append(invoke_check(runtime, message=args.message, timeout=args.timeout, state_name=args.state_name))
+    results = [
+        sandbox_status_check("hermes", timeout=args.timeout, state_name=args.state_name),
+        invoke_check("hermes", message=args.message, timeout=args.timeout, state_name=args.state_name),
+    ]
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
 
@@ -438,19 +417,17 @@ def run_scheduled_learning(args: argparse.Namespace) -> int:
 
 
 def run_activate(args: argparse.Namespace) -> int:
-    outputs_path = runtime_outputs_path(args.runtime, args.state_name)
+    outputs_path = runtime_outputs_path("hermes", args.state_name)
     outputs = load_json(outputs_path) if outputs_path.exists() else {}
     workspace = args.workspace or outputs.get("terraform_workspace")
     if not workspace:
-        if args.state_name:
-            raise ValueError("A named Worker without captured outputs requires an explicit --workspace.")
-        workspace = terraform_workspace_name(args.runtime)
-    activate_runtime_tfvars(args.runtime, args.state_name)
+        workspace = terraform_workspace_name(args.state_name or "hermes")
+    activate_runtime_tfvars("hermes", args.state_name)
     print_json(
         {
-            "runtime": args.runtime,
+            "runtime": "hermes",
             "terraformWorkspace": workspace,
-            "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime, args.state_name)),
+            "runtimeTfvarsFile": str(runtime_app_tfvars_path("hermes", args.state_name)),
             "activeTfvarsFiles": [
                 "terraform\\apps\\generated.app.auto.tfvars.json",
                 "terraform\\apps\\generated.runtime.auto.tfvars.json",
@@ -468,7 +445,7 @@ def run_logs(args: argparse.Namespace) -> int:
     try:
         if args.tail < 1:
             raise ValueError("--tail must be positive.")
-        outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
+        outputs = load_json(runtime_outputs_path("hermes", args.state_name))
         role = "gateway" if args.app == "bridge" else args.app
         if role == "runtime" and not args.path:
             raise ValueError("Runtime logs require --path to an existing log file inside its Sandbox.")
@@ -506,12 +483,12 @@ def run_logs(args: argparse.Namespace) -> int:
 
 
 def run_reset_sandbox(args: argparse.Namespace) -> int:
-    outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
+    outputs = load_json(runtime_outputs_path("hermes", args.state_name))
     base_url = sandbox_group_url(outputs)
-    selector = runtime_sandbox_selector(args.runtime, outputs)
+    selector = runtime_sandbox_selector("hermes", outputs)
     listed = az_rest_json(f"{base_url}/sandboxes", timeout=args.timeout)
     if not listed.get("ok"):
-        print_json({"runtime": args.runtime, "found": False, "error": "sandboxListFailed", **listed})
+        print_json({"runtime": "hermes", "found": False, "error": "sandboxListFailed", **listed})
         return 1
 
     body = listed.get("body")
@@ -523,7 +500,7 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
     if not sandbox:
         print_json(
             {
-                "runtime": args.runtime,
+                "runtime": "hermes",
                 "found": False,
                 "message": "No matching sandbox found. The next bridge invoke will create one if the runtime is configured.",
             }
@@ -532,7 +509,7 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
 
     sandbox_id = str(sandbox["id"])
     summary = {
-        "runtime": args.runtime,
+        "runtime": "hermes",
         "found": True,
         "sandboxId": sandbox_id,
         "state": sandbox.get("state"),
@@ -552,13 +529,13 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
     ) as group:
         group.get_sandbox_client(sandbox_id).begin_delete(polling_timeout=args.timeout).result()
     summary["deleted"] = True
-    summary["next"] = f"Run `uv run python -m scripts.demo_ops smoke --runtime {args.runtime}` to create a fresh sandbox."
+    summary["next"] = f"Run `uv run python -m scripts.demo_ops smoke --state-name {args.state_name or 'hermes'}` to create a fresh sandbox."
     print_json(summary)
     return 0
 
 
 def run_grant_sandbox_access(args: argparse.Namespace) -> int:
-    outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
+    outputs = load_json(runtime_outputs_path("hermes", args.state_name))
     scope = str(outputs["sandbox_groups"][args.role]["id"])
     assignee_object_id = args.assignee_object_id or signed_in_user_id()
     command = role_assignment_command(scope, assignee_object_id)
@@ -585,26 +562,24 @@ def run_grant_sandbox_access(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Operator helper for side-by-side Autopilots demos.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(description="Operator helper for Hermes Workers. Defaults to status.")
+    subparsers = parser.add_subparsers(dest="command")
 
     status = subparsers.add_parser("status", help="Check bridge health, optionally /invoke and Teams diagnostics.")
-    status.add_argument("--runtime", choices=[*RUNTIMES, "both"], default="both")
-    status.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
-    status.add_argument("--invoke", action="store_true", help="Also run the runtime-specific direct /invoke smoke prompt.")
+    status.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
+    status.add_argument("--invoke", action="store_true", help="Also run the Hermes direct /invoke smoke prompt.")
     status.add_argument("--diag", action="store_true", help="Also read /diag/teams when bridge debug is enabled.")
     status.add_argument("--timeout", type=int, default=120)
     status.set_defaults(func=run_status)
 
     smoke = subparsers.add_parser("smoke", help="Run direct /invoke smoke prompts.")
-    smoke.add_argument("--runtime", choices=[*RUNTIMES, "both"], default="both")
-    smoke.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    smoke.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     smoke.add_argument("--message", default="", help="Override the default runtime smoke prompt. Expected-marker checks are skipped.")
     smoke.add_argument("--timeout", type=int, default=120)
     smoke.set_defaults(func=run_smoke)
 
     dream = subparsers.add_parser("dream", help="Run a secured local Hermes reflection and return its redacted learning packet.")
-    dream.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    dream.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     dream.add_argument("--focus", default="", help="Optional reflection focus. Defaults to recent meaningful work.")
     dream.add_argument("--max-records", type=int, choices=range(1, 11), default=5)
     dream.add_argument("--timeout", type=int, default=900)
@@ -614,7 +589,7 @@ def main() -> None:
         "scheduled-run",
         help="Run the configured Hermes Dreaming and packet-preparation cycle now.",
     )
-    scheduled_run.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    scheduled_run.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     scheduled_run.add_argument("--timeout", type=int, default=900)
     scheduled_run.set_defaults(func=run_scheduled_learning)
 
@@ -622,19 +597,17 @@ def main() -> None:
         "scheduled-status",
         help="Read sanitized Hermes scheduled-learning status.",
     )
-    scheduled_status.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    scheduled_status.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     scheduled_status.add_argument("--timeout", type=int, default=120)
     scheduled_status.set_defaults(func=run_scheduled_learning)
 
-    activate = subparsers.add_parser("activate", help="Make one runtime's tfvars active for Terraform operations.")
-    activate.add_argument("--runtime", choices=RUNTIMES, required=True)
-    activate.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    activate = subparsers.add_parser("activate", help="Make one Worker's tfvars active for Terraform operations.")
+    activate.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     activate.add_argument("--workspace", default="", help="Override the captured Worker Terraform workspace.")
     activate.set_defaults(func=run_activate)
 
     logs = subparsers.add_parser("logs", help="Read real service log files through the Sandbox data plane.")
-    logs.add_argument("--runtime", choices=RUNTIMES, required=True)
-    logs.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    logs.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     logs.add_argument("--app", choices=["bridge", *SANDBOX_ROLES[:-1]], default="gateway")
     logs.add_argument("--path", default="", help="Existing log file in the Sandbox; services default to /app/.sandbox-service.log.")
     logs.add_argument("--tail", type=int, default=80)
@@ -643,21 +616,21 @@ def main() -> None:
     logs.set_defaults(func=run_logs)
 
     reset = subparsers.add_parser("reset-sandbox", help="Delete one runtime sandbox while keeping its data volume.")
-    reset.add_argument("--runtime", choices=RUNTIMES, required=True)
-    reset.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    reset.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     reset.add_argument("--execute", action="store_true", help="Actually delete the sandbox. Omitted means dry-run.")
     reset.add_argument("--timeout", type=int, default=300)
     reset.set_defaults(func=run_reset_sandbox)
 
     grant = subparsers.add_parser("grant-sandbox-access", help="Grant SandboxGroup Data Owner to an operator user.")
-    grant.add_argument("--runtime", choices=RUNTIMES, required=True)
-    grant.add_argument("--state-name", default="")
+    grant.add_argument("--state-name", default="hermes")
     grant.add_argument("--role", choices=SANDBOX_ROLES, default="runtime")
     grant.add_argument("--assignee-object-id", default="", help="User object id. Defaults to the current az signed-in user.")
     grant.add_argument("--execute", action="store_true", help="Actually create the role assignment. Omitted means dry-run.")
     grant.set_defaults(func=run_grant_sandbox_access)
 
     args = parser.parse_args()
+    if args.command is None:
+        args = parser.parse_args(["status"])
     raise SystemExit(args.func(args))
 
 

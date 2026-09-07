@@ -23,7 +23,7 @@ class BuildImagesTests(unittest.TestCase):
 
     def test_wrong_runtime_is_rejected_before_any_state_is_changed(self):
         with tempfile.TemporaryDirectory() as directory:
-            paths = [Path(directory) / f"{runtime}.json" for runtime in ("hermes", "openclaw")]
+            paths = [Path(directory) / f"{runtime}.json" for runtime in ("hermes", "invalid")]
             for path in paths:
                 path.write_text(json.dumps({"agent_runtime": path.stem}), encoding="utf-8")
             with self.assertRaises(ValueError):

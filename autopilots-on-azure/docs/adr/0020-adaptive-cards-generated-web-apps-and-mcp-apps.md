@@ -1,105 +1,35 @@
-# ADR 0020: Separate Adaptive Cards, generated web apps, and MCP Apps
-
-- Status: Accepted
-- Date: 2026-07-28
-
-## September 2026 modernization note
-
-Hermes is pinned to 0.19.0. The earlier 0.18 UI assessment below is not proof that the new client supports MCP Apps; that feature remains deferred until the native client/host contract is verified. All service compute now uses ACA Sandboxes. Each Worker has its own generated-app Group and user-assigned identity, separate from runtime, gateway, and MCP Groups. Express is accepted as the managed-environment boundary for private MCP ingress, not as a replacement generated-app workload.
-
-Generated-app Entra-authenticated participant ports remain distinct from gateway/MCP native anonymous transport with application authentication. The gateway identity manages generated-app lifecycle. Existing July UI validation must be repeated after the new application deployment.
-
-## Context
-
-Hermes needs interactions richer than text. Three technologies address different problems:
-
-- Teams Adaptive Cards are JSON message attachments rendered natively by Teams.
-- MCP Apps are sandboxed HTML and JavaScript widgets delivered by remote MCP servers through `ui://` resources.
-- A generated web application is a complete shared artifact with its own URL, identity boundary, runtime, and lifecycle.
-
-These surfaces are not interchangeable.
-
-Teams sends an Adaptive Card as an Activity attachment with content type `application/vnd.microsoft.card.adaptive`. The bridge must create and validate the attachment, handle `adaptiveCard/action` invokes, return the required `Action.Execute` response, update stale cards, and preserve a text fallback. No separate web host is required.
-
-MCP Apps is a stable MCP extension identified by `io.modelcontextprotocol/ui`. A tool declares `_meta.ui.resourceUri`; the host reads self-contained HTML from the MCP server with `resources/read` on a `ui://` URI and renders it in a sandboxed iframe. Microsoft 365 Copilot supports this for declarative agents with remote MCP plugins. VS Code GitHub Copilot also supports it.
-
-The earlier Hermes 0.18 assessment found no UI-extension negotiation, preservation of MCP Apps metadata for a host, `ui://` resource rendering, or widget host. Hermes 0.19.0 requires a new compatibility check rather than inheriting that verdict automatically. Agent 365 AI teammates packaged with `agenticUserTemplates` are Teams teammate identities, not selectable Microsoft 365 Copilot declarative agents. Creating a parallel declarative agent would demonstrate the MCP server but would not make the widget part of the Hermes AI teammate experience.
-
-Rich generated applications are broader than either chat surface. Hermes can write a complete web app, but serving it from the Worker process would mix user workloads with agent state and lifecycle. The accepted generated-app host is ACA Sandbox, with isolated execution, authenticated ports, principal allowlists, egress policy, auto-suspend, and native lifecycle operations. Express now serves a different purpose: the linked private-MCP ingress environment, not generated-app compute. The earlier direct-Express limitations must not be generalized to that accepted use.
-
-## Options considered
-
-### Let Hermes author arbitrary Adaptive Card JSON
-
-Rejected. Schema validation alone does not prevent Hermes from inventing action verbs, callback data, operation identifiers, URLs, or oversized and inaccessible layouts. Prompt injection could convert untrusted content into consequential action payloads.
-
-### Use reviewed cards only
-
-Too restrictive for informational layouts. It is safe for actions but unnecessarily limits status summaries, facts, tables, and visual explanations.
-
-### Typed action templates plus a constrained display DSL
-
-Selected for A16. Reviewed templates own consequential behavior. A bounded display-only DSL gives Hermes control over safe content and presentation without exposing raw card structure or executable action data.
-
-### Use MCP Apps as the universal UI
-
-Deferred. MCP Apps is the strongest inline rich-UI surface for compliant hosts, but neither the current Hermes MCP client nor the Agent User Teams conversation renders it. A parallel declarative agent would create a second product identity and conversation rather than improving Hermes.
-
-### Generate and host complete applications in the Hermes Worker
-
-Rejected. The Worker Sandbox owns agent compute and private state, not arbitrary user-facing web processes. App failures, dependencies, ingress, and lifetime must not affect the Worker.
-
-### Deploy generated applications to ACA Express
-
-Deferred as the preferred future fast path. Express is operationally attractive, but its current preview lacks the required enterprise identity and networking features.
-
-### Deploy generated applications to child ACA Sandboxes
-
-Selected for A17. Microsoft publishes an MIT `aca-sandboxes` skill with web-app, coding-agent, authenticated-port, egress, secret, snapshot, and lifecycle workflows. A child sandbox preserves Hermes's ability to create and improve code while isolating the served application.
+# ADR 0020: Separate chat cards from generated applications
 
 ## Decision
 
-1. A16 covers governed Teams Adaptive Cards only.
-2. Consequential cards use reviewed typed templates. Hermes may provide bounded text, labels, choices, facts, and locale; it never provides action verbs, operation IDs, tokens, recipient bindings, callback URLs, or raw action data.
-3. Informational cards use a constrained display-only DSL compiled and schema-validated by reviewed code. Arbitrary model-authored Adaptive Card JSON is not delivered.
-4. The bridge is the Teams host adapter. It owns card attachment creation, Activity Protocol delivery, `Action.Execute` and fallback handling, update/replace behavior, action authentication, idempotency, and text fallback.
-5. A small Hermes skill may teach when to use each interaction and how to populate the typed contract. Skills do not implement rendering or action security.
-6. Direct reply and proactive delivery are separate capabilities. A16 live-validated direct card rendering, replacement, and Hermes continuation. Proactive delivery previously stripped card attachments, so that path retains suggested-action/text fallback until independently proven.
-7. A17 covers Hermes-generated web applications.
-8. Hermes creates and iterates source in its private workspace. A governed deployment wrapper creates a child sandbox, transfers the reviewed artifact, runs tests, starts the app, and exposes an Entra-authenticated port to explicit participant email addresses supported by the current Sandbox SDK.
-9. Generated applications run in a dedicated per-Worker Sandbox Group with its own user-assigned identity. The gateway identity receives Sandbox Group Data Owner on that group for lifecycle management. Deny-default egress, quotas, owner labels, five-minute auto-suspend, native 24-hour post-suspension retention by default, explicit 1/6/24/72-hour renewal, and deterministic deletion are mandatory.
-10. Generated-app ports use `activationMode: OnDemand`. The Sandbox ADC proxy performs Entra authentication, resumes idle compute, and forwards the request. The URL is the native Sandbox URL; the bridge manages lifecycle but never hosts or proxies application traffic.
-11. Ephemeral generated apps remain distinct from maintained applications. Promotion requires source review and deployment to standard ACA with Easy Auth, managed identity, durable observability, and operations.
-12. Do not create an A18 MCP Apps milestone. Keep MCP Apps as a strategic watch item.
-13. Re-evaluate MCP Apps when the Hermes/Agent User client path:
-    - negotiates `io.modelcontextprotocol/ui`;
-    - preserves tool `_meta.ui.resourceUri` and structured fallback;
-    - reads `ui://` resources;
-    - renders sandboxed widgets in the Hermes conversation;
-    - forwards authenticated widget tool calls without a parallel declarative agent.
-14. Re-evaluate ACA Express when Entra authentication, managed identity, secrets, required regions, networking, and lifecycle controls satisfy the A17 contract.
+Use native Teams cards for bounded interactions and child Sandboxes for full generated web applications.
 
-## Consequences
+| Surface | Contract |
+| --- | --- |
+| Consequential card | Reviewed typed actions; model supplies bounded visible content, never operation IDs/tokens/callback payloads. |
+| Informational card | Display-only DSL compiled and validated by reviewed code. |
+| Generated app | Hermes writes/tests source; governed deployment creates a child Sandbox with native Entra participant access. |
+| MCP Apps | No additional host or parallel declarative-agent identity is implemented. |
 
-- Simple interactions stay native to Teams and require no hosting.
-- Consequential actions remain deterministic and auditable.
-- Hermes retains meaningful flexibility through a display DSL and through full generated application code.
-- Rich applications can use any suitable web framework without weakening the Worker runtime boundary.
-- The generated-app path introduces explicit Azure resource, quota, sharing, and cleanup responsibilities.
-- MCP Apps research is preserved without creating a second Hermes identity or a milestone that cannot be validated through the current client.
-- The same semantic interaction may eventually gain more host adapters, but Teams cards and generated web apps remain distinct delivery products.
-- Live A17 validation proved that the native Sandbox URL can require Entra authentication and use `activationMode: OnDemand`; the bridge does not need to host a wake endpoint or proxy application traffic.
-- Generated-app inventory and lifecycle actions are scoped to the authenticated requesting user. Reviewed Adaptive Card actions call the bridge directly to update ACA lifecycle policy or delete the Sandbox; a short-lived bridge replay cache handles normal Activity retries while the native operations remain idempotent across bridge restarts. They do not require Worker wake, model interpretation, or Service Bus.
-- The current Agent 365 host acknowledges generated-app actions but does not render the returned replacement card or an action-context reply. Cards therefore identify themselves as snapshots; users request the live inventory again after an action. The bridge does not add a relay, scheduler, or custom delivery workaround for this noncritical host limitation.
+The gateway owns Teams rendering, authenticated action handling, idempotency, and text fallback. A card selection supplies only its visible label to the continuation.
+
+Generated apps have their own per-Worker Group/identity, deny-default egress, explicit participants, artifact/app quotas, five-minute idle suspension, and native retention. The ADC proxy authenticates users, wakes OnDemand compute, and serves traffic directly. Gateway ownership covers deployment/inventory/lifecycle only.
+
+Owner-bound retention/delete actions call native lifecycle APIs without model execution, Worker wake, or Service Bus. Inventory is scoped to the requesting user. Updates retain logical app identity; failure retains the previous working deployment.
+
+## Alternatives and rationale
+
+| Alternative | Reason not selected |
+| --- | --- |
+| Arbitrary Adaptive Card JSON | Schema validity does not make consequential action data safe. |
+| Reviewed fixed layouts only | Unnecessarily restricts harmless informational presentation. |
+| Serve generated apps from the Hermes process | Mixes arbitrary user code, private agent state, availability, and lifetime. |
+| Use one UI technology for every host | Teams cards, MCP Apps widgets, and shared web apps have different identity and runtime contracts. |
+
+Applications intended for continued operation require reviewed source and a maintained deployment, not indefinite demo-Sandbox retention. Current rendering/client limitations are in [SPEC.md](../../SPEC.md).
 
 ## References
 
-- [Adaptive Cards in Teams](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
-- [Universal Actions for Adaptive Cards](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/universal-actions-for-adaptive-cards/overview)
-- [MCP Apps specification](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx)
-- [MCP apps in Microsoft 365 Copilot](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/plugin-mcp-apps)
-- [Cowork MCP Apps host contract](https://learn.microsoft.com/en-us/microsoft-365/copilot/cowork/mcp-apps-support)
-- [Microsoft MCP interactive UI samples](https://github.com/microsoft/mcp-interactiveUI-samples)
-- [Azure Container Apps Sandboxes skill](https://github.com/microsoft/azure-container-apps/tree/main/plugin/skills/aca-sandboxes)
-- [Azure Container Apps Express overview](https://learn.microsoft.com/en-us/azure/container-apps/express-overview)
-- [ADR 0019](0019-durable-document-publish-and-interactive-choice.md)
+- [Teams cards](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
+- [Universal Actions](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/universal-actions-for-adaptive-cards/overview)
+- [ACA Sandboxes](https://github.com/microsoft/azure-container-apps/tree/main/plugin/skills/aca-sandboxes)

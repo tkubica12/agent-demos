@@ -58,7 +58,7 @@ from collective_learning import (
     worker_refresh_readiness,
 )
 from learning import (
-    assert_legacy_state_migrated,
+    validate_learning_journal,
     abort_learning_turn,
     begin_learning_turn,
     build_learning_status,
@@ -191,7 +191,7 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
-            "default": os.getenv("HERMES_MODEL", os.getenv("OPENCLAW_MODEL_ID", "gpt-5-6-terra")),
+            "default": os.getenv("HERMES_MODEL", "gpt-5-6-terra"),
         },
         "memory": {"nudge_interval": 0},
         "skills": {"creation_nudge_interval": 0},
@@ -302,7 +302,7 @@ def configure_model_environment() -> None:
         os.environ.pop("OPENAI_API_KEY", None)
         os.environ.pop("AZURE_FOUNDRY_API_KEY", None)
         os.environ["HERMES_MODEL_PROVIDER"] = "azure-foundry"
-        model = os.getenv("HERMES_MODEL") or os.getenv("OPENCLAW_MODEL_ID") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-5-6-terra"
+        model = os.getenv("HERMES_MODEL") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-5-6-terra"
         os.environ.setdefault("HERMES_MODEL", model)
         os.environ.setdefault("HERMES_INFERENCE_MODEL", model)
 
@@ -1054,7 +1054,7 @@ def main() -> None:
     os.environ["HERMES_HOME"] = str(profile_home)
     (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
     if role_release:
-        assert_legacy_state_migrated(profile_home)
+        validate_learning_journal(profile_home)
         ensure_learning_state(profile_home)
         initialize_governed_state(profile_home)
         validate_skill_namespaces(profile_home)

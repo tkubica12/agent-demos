@@ -96,7 +96,6 @@ def gateway_environment(config: dict, platform: dict, infrastructure: dict, endp
         if key.startswith(("hermes_role_", "scheduled_learning_", "servicebus_dream_", "collective_learning_"))
     }
     environment.update({
-        "AGENT_RUNTIME": config["agent_runtime"],
         "AUTOPILOT_NAME": config["autopilot_name"],
         "WORKER_ID": config["autopilot_name"],
         "WORKER_ASSIGNMENT_SCOPE": config["worker_assignment_scope"],
@@ -112,14 +111,7 @@ def gateway_environment(config: dict, platform: dict, infrastructure: dict, endp
         "AGENT_RUNTIME_DISK_IMAGE_ID": endpoints["runtime_disk_image_id"],
         "AGENT_RUNTIME_DISK_IMAGE_NAME": config["runtime_disk_image_name"],
         "AGENT_RUNTIME_DATA_VOLUME_NAME": config["runtime_data_volume_name"],
-        "OPENCLAW_IMAGE": config["runtime_image"],
-        "OPENCLAW_DISK_IMAGE_NAME": config["runtime_disk_image_name"],
-        "OPENCLAW_DATA_VOLUME_NAME": config["runtime_data_volume_name"],
-        "OPENCLAW_GATEWAY_TOKEN": config["openclaw_gateway_token"],
-        "OPENCLAW_BRIDGE_DEVICE_TOKEN": config["openclaw_bridge_device_token"],
-        "OPENCLAW_BRIDGE_DEVICE_PRIVATE_KEY_PEM": config["openclaw_bridge_device_private_key_pem"],
         "API_SERVER_KEY": config["api_server_key"],
-        "HERMES_API_SERVER_KEY": config["api_server_key"],
         "PREVIOUS_API_SERVER_KEY": config["previous_api_server_key"],
         "HERMES_BRIDGE_TIMEOUT_SECONDS": "900",
         "FOUNDRY_OPENAI_BASE_URL": platform["foundry_openai_base_url"],
@@ -130,7 +122,7 @@ def gateway_environment(config: dict, platform: dict, infrastructure: dict, endp
         "OTEL_TRACES_SAMPLER_ARG": "1.0",
         "OTEL_SERVICE_VERSION": config["bridge_image"].split("@")[-1],
         "OTEL_CONTAINER_IMAGE": config["bridge_image"],
-        "OPENCLAW_MODEL_ID": platform["model_deployment_name"],
+        "HERMES_MODEL": platform["model_deployment_name"],
         "GENERATED_APPS_SANDBOX_GROUP": groups["generated-apps"]["name"],
         "GENERATED_APPS_REGION": infrastructure["sandbox_location"],
         "PRIVATE_INCIDENTS_MCP_URL": endpoints["private_mcp_url"],

@@ -1,146 +1,135 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-from scripts.provision_agent365_instance import (
-    agent_registration_payload,
-    catalog_app_summary,
-    graph_app_role_ids,
-    graph_oauth_scope_ids,
-    missing_license_payload,
-    package_summary,
-    parse_csv,
-    registration_summary,
-    state_file,
-    teams_app_filter,
-)
+import scripts.provision_agent365_instance as provision
 
 
 class ProvisionAgent365InstanceTests(unittest.TestCase):
-    def test_graph_app_role_ids_selects_application_roles(self):
-        roles = {
-            "appRoles": [
-                {"value": "AgentRegistration.ReadWrite.All", "id": "role-1", "allowedMemberTypes": ["Application"]},
-                {"value": "AgentRegistration.ReadWrite.All", "id": "delegated", "allowedMemberTypes": ["User"]},
-            ]
-        }
-
-        self.assertEqual(
-            graph_app_role_ids(roles, ["AgentRegistration.ReadWrite.All"]),
-            {"AgentRegistration.ReadWrite.All": "role-1"},
-        )
-
-    def test_graph_app_role_ids_fails_for_missing_role(self):
-        with self.assertRaises(KeyError):
-            graph_app_role_ids({"appRoles": []}, ["AgentRegistration.ReadWrite.All"])
-
-    def test_graph_oauth_scope_ids_selects_enabled_delegated_scope(self):
-        scopes = {
-            "oauth2PermissionScopes": [
-                {"value": "AppCatalog.ReadWrite.All", "id": "scope-1", "isEnabled": True},
-                {"value": "Disabled.Scope", "id": "scope-2", "isEnabled": False},
-            ]
-        }
-
-        self.assertEqual(
-            graph_oauth_scope_ids(scopes, ["AppCatalog.ReadWrite.All"]),
-            {"AppCatalog.ReadWrite.All": "scope-1"},
-        )
-
-    def test_graph_oauth_scope_ids_fails_for_disabled_scope(self):
-        with self.assertRaises(KeyError):
-            graph_oauth_scope_ids(
-                {"oauth2PermissionScopes": [{"value": "AppCatalog.ReadWrite.All", "id": "scope-1", "isEnabled": False}]},
-                ["AppCatalog.ReadWrite.All"],
-            )
-
     def test_missing_license_payload_only_adds_missing_skus(self):
-        user = {"assignedLicenses": [{"skuId": "sku-already"}]}
+        user = {"assignedLicenses": [{"skuId": "SKU-ALREADY"}]}
         skus = {"AGENT_365": "sku-already", "Microsoft_365_Copilot": "sku-new"}
-
         self.assertEqual(
-            missing_license_payload(user, skus, ["AGENT_365", "Microsoft_365_Copilot"]),
+            provision.missing_license_payload(user, skus, list(skus)),
             [{"skuId": "sku-new", "disabledPlans": []}],
         )
 
     def test_missing_license_payload_fails_when_tenant_lacks_sku(self):
         with self.assertRaises(KeyError):
-            missing_license_payload({"assignedLicenses": []}, {}, ["AGENT_365"])
+            provision.missing_license_payload({"assignedLicenses": []}, {}, ["AGENT_365"])
 
-    def test_agent_registration_payload_contains_required_graph_fields(self):
-        payload = agent_registration_payload(
-            display_name="hermes1",
-            description="Hermes Autopilot",
-            owner_id_value="owner-1",
-            agent_upn="hermes1@example.com",
-            agent_identity_id="identity-1",
-            blueprint_id="blueprint-1",
+    def test_state_file_uses_named_worker_workspace(self):
+        self.assertEqual(
+            provision.state_file("hermes2", "project-manager"),
+            Path.cwd() / ".local" / "hermes2" / "agent365" / "instance.project-manager.json",
         )
-
-        self.assertEqual(payload["displayName"], "hermes1")
-        self.assertEqual(payload["createdBy"], "owner-1")
-        self.assertEqual(payload["ownerIds"], ["owner-1"])
-        self.assertEqual(payload["sourceAgentId"], "hermes1@example.com")
-        self.assertEqual(payload["agentIdentityId"], "identity-1")
-        self.assertEqual(payload["agentIdentityBlueprintId"], "blueprint-1")
-        self.assertEqual(payload["agentCard"]["provider"]["organization"], "Autopilots on Azure")
-        self.assertEqual(payload["agentCard"]["skills"][0]["id"], "chat")
-        self.assertTrue(payload["sourceCreatedDateTime"].endswith("Z"))
-
-    def test_state_file_uses_runtime_workspace(self):
-        self.assertTrue(str(state_file("hermes", "hermes1")).endswith(".local\\hermes\\agent365\\instance.hermes1.json"))
 
     def test_parse_csv_strips_empty_values(self):
-        self.assertEqual(parse_csv("A, B,,C "), ["A", "B", "C"])
+        self.assertEqual(provision.parse_csv("A, B,,C "), ["A", "B", "C"])
 
-    def test_teams_app_filter_escapes_quotes(self):
-        self.assertEqual(teams_app_filter("Tom's Agent"), "displayName eq 'Tom''s Agent'")
-
-    def test_catalog_app_summary_uses_latest_definition(self):
-        summary = catalog_app_summary(
-            {
-                "id": "teams-app-1",
-                "displayName": "Hermes Autopilot",
-                "externalId": "external-1",
-                "distributionMethod": "organization",
-                "appDefinitions": [{"id": "definition-1", "publishingState": "rejected", "version": "1.0.0"}],
-            }
+    def test_agent_identity_reuses_recorded_identity(self):
+        graph = Mock()
+        graph.request.return_value = {"id": "identity-id", "appId": "identity-app-id"}
+        actual = provision.ensure_agent_identity(
+            graph, state={"agentIdentityId": "identity-id"}, display_name="Worker",
+            blueprint_id="blueprint", sponsor_user_id="sponsor",
+        )
+        self.assertEqual(actual["appId"], "identity-app-id")
+        graph.request.assert_called_once_with(
+            "GET", "/servicePrincipals/identity-id?$select=id,appId,displayName",
         )
 
-        self.assertEqual(summary["id"], "teams-app-1")
-        self.assertEqual(summary["displayName"], "Hermes Autopilot")
-        self.assertEqual(summary["publishingState"], "rejected")
-        self.assertEqual(summary["teamsAppDefinitionId"], "definition-1")
-
-    def test_registration_summary_keeps_deletion_fields(self):
-        summary = registration_summary(
-            {
-                "id": "registration-1",
-                "displayName": "Hermes Autopilot",
-                "agentIdentityId": "identity-1",
-                "agentIdentityBlueprintId": "blueprint-1",
-                "sourceAgentId": "source-1",
-                "originatingStore": "store-1",
-            }
+    def test_new_identity_and_user_keep_real_parent_and_sponsor(self):
+        graph = Mock()
+        graph.request.side_effect = [{"id": "identity-id"}, {"id": "user-id"}]
+        provision.ensure_agent_identity(
+            graph, state={}, display_name="Worker", blueprint_id="blueprint", sponsor_user_id="sponsor",
         )
-
-        self.assertEqual(summary["id"], "registration-1")
-        self.assertEqual(summary["displayName"], "Hermes Autopilot")
-        self.assertEqual(summary["agentIdentityBlueprintId"], "blueprint-1")
-
-    def test_package_summary_keeps_block_fields(self):
-        summary = package_summary(
-            {
-                "id": "package-1",
-                "displayName": "hermes-foundry-a365dev",
-                "isBlocked": True,
-                "supportedHosts": ["Copilot"],
-                "manifestId": "manifest-1",
-            }
+        provision.ensure_agent_user(
+            graph, state={}, display_name="Worker", mail_nickname="worker",
+            user_principal_name="worker@example.com", agent_identity_id="identity-id",
         )
+        identity_call, user_call = graph.request.call_args_list
+        self.assertEqual(identity_call.args, ("POST", "/servicePrincipals/microsoft.graph.agentIdentity"))
+        self.assertEqual(identity_call.kwargs["body"]["agentIdentityBlueprintId"], "blueprint")
+        self.assertEqual(identity_call.kwargs["body"]["sponsors@odata.bind"],
+                         ["https://graph.microsoft.com/v1.0/users/sponsor"])
+        self.assertEqual(user_call.args, ("POST", "/users/microsoft.graph.agentUser"))
+        self.assertEqual(user_call.kwargs["body"]["identityParentId"], "identity-id")
+        self.assertNotIn("passwordProfile", user_call.kwargs["body"])
 
-        self.assertEqual(summary["id"], "package-1")
-        self.assertEqual(summary["displayName"], "hermes-foundry-a365dev")
-        self.assertTrue(summary["isBlocked"])
-        self.assertEqual(summary["supportedHosts"], ["Copilot"])
+    def test_agent_user_reuses_recorded_user(self):
+        graph = Mock()
+        graph.request.return_value = {"id": "user-id", "userPrincipalName": "worker@example.com"}
+        actual = provision.ensure_agent_user(
+            graph, state={"agentUserId": "user-id"}, display_name="Worker", mail_nickname="worker",
+            user_principal_name="worker@example.com", agent_identity_id="identity-id",
+        )
+        self.assertEqual(actual["id"], "user-id")
+        self.assertEqual(graph.request.call_args.args[0], "GET")
+        self.assertTrue(graph.request.call_args.args[1].startswith("/users/user-id?"))
+
+    def test_graph_dry_run_never_sends_write_requests(self):
+        with patch.object(provision.urllib.request, "urlopen") as send:
+            result = provision.GraphClient("test-token", dry_run=True).request(
+                "POST", "/servicePrincipals/microsoft.graph.agentIdentity", body={"displayName": "Worker"},
+            )
+        self.assertEqual(result, {})
+        send.assert_not_called()
+
+    def test_provision_dry_run_never_saves_fake_instance_ids(self):
+        for state, identity in (({}, {}), ({"agentIdentityId": "existing"}, {"id": "existing"})):
+            with self.subTest(state=state):
+                args = SimpleNamespace(
+                    state_file="", state_name="hermes2", mail_nickname="worker",
+                    dry_run=True, owner_id="sponsor", owner_upn="", agent_blueprint_id="blueprint",
+                    identity_display_name="", display_name="Worker", agent_upn="worker@example.com",
+                )
+                with (
+                    patch.object(provision, "load_state", return_value=dict(state)),
+                    patch.object(provision.GraphClient, "from_az_cli"),
+                    patch.object(provision, "ensure_agent_identity", return_value=identity),
+                    patch.object(provision, "ensure_agent_user", return_value={}) as user,
+                    patch.object(provision, "save_state") as save,
+                    patch.object(provision, "update_usage_location") as location,
+                ):
+                    provision.provision_command(args)
+                save.assert_not_called()
+                location.assert_not_called()
+                self.assertEqual(user.call_count, int(bool(identity)))
+
+    def test_cleanup_deletes_only_recorded_instance_objects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "instance.json"
+            path.write_text(json.dumps({
+                "agentIdentityId": "identity-id", "agentUserId": "user-id",
+                "agentBlueprintId": "shared-blueprint",
+            }), encoding="utf-8")
+            graph = Mock()
+            args = SimpleNamespace(state_file=str(path), dry_run=False, remove_state=True)
+            with patch.object(provision.GraphClient, "from_az_cli", return_value=graph):
+                provision.cleanup_command(args)
+            self.assertEqual([call.args[:2] for call in graph.request.call_args_list], [
+                ("DELETE", "/users/user-id"), ("DELETE", "/servicePrincipals/identity-id"),
+            ])
+            self.assertFalse(path.exists())
+
+    def test_cleanup_dry_run_preserves_instance_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "instance.json"
+            path.write_text('{"agentIdentityId":"identity-id"}', encoding="utf-8")
+            args = SimpleNamespace(state_file=str(path), dry_run=True, remove_state=True)
+            with (
+                patch.object(provision.GraphClient, "from_az_cli",
+                             return_value=provision.GraphClient("test-token", dry_run=True)),
+                patch.object(provision.urllib.request, "urlopen") as send,
+            ):
+                provision.cleanup_command(args)
+            self.assertTrue(path.exists())
+            send.assert_not_called()
 
 
 if __name__ == "__main__":

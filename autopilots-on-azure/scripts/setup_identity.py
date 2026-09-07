@@ -569,8 +569,7 @@ def configure_worker_federation(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure Agent Identity, Agent User, and MCP permissions.")
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], required=True)
-    parser.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
     parser.add_argument("--mail-nickname", default="")
     parser.add_argument("--state-file", default="")
     parser.add_argument("--apps-outputs-file", default="", help="Captured apps outputs for this Worker, including Sandbox identities.")
@@ -583,8 +582,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    runtime = args.runtime
-    state_name = args.state_name or runtime
+    runtime = "hermes"
+    state_name = args.state_name
     instance_path = resolve_instance_state_file(
         runtime,
         state_name,

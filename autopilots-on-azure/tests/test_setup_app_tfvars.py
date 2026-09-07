@@ -10,7 +10,6 @@ from scripts.setup_app_tfvars import (
     default_data_volume_name,
     existing_app_tfvars,
     load_or_create_collective_approval_identity,
-    reusable_data_volume_name,
     runtime_app_tfvars_path,
     runtime_outputs_path,
     runtime_workspace,
@@ -45,8 +44,9 @@ class SetupAppTfvarsTests(unittest.TestCase):
 
     def test_changed_image_never_silently_reuses_old_disk_source(self):
         for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
-            kwargs = dict(runtime="openclaw", autopilot_name="worker", data_volume_name="worker-data",
-                          device={"privateKeyPem": "private-key"})
+            kwargs = dict(runtime="hermes", autopilot_name="worker", data_volume_name="worker-data",
+                          role_blueprint="jpm", role_blueprint_source="https://example.com/roles.git",
+                          role_release="3.0.0", role_release_commit="a" * 40)
             previous = {f"{prefix}_image": "registry/image@sha256:old",
                         f"{prefix}_disk_source_image": "registry/image:old"}
             with self.subTest(prefix=prefix), self.assertRaisesRegex(ValueError, "stale disk source"):
@@ -56,18 +56,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
                 f"{prefix}_disk_source_image": "registry/image:new",
             })
             self.assertEqual(updated[f"{prefix}_disk_source_image"], "registry/image:new")
-
-    def test_obsolete_keda_values_are_removed_without_changing_schedule(self):
-        tfvars = build_tfvars(
-            runtime="openclaw", autopilot_name="worker", data_volume_name="worker-data",
-            device={"privateKeyPem": "private-key"},
-            previous={"user_scheduling_keda_polling_seconds": 15,
-                      "user_scheduling_scale_down_seconds": 900,
-                      "servicebus_dream_cron_expression": "15 3 * * *"},
-        )
-        self.assertNotIn("user_scheduling_keda_polling_seconds", tfvars)
-        self.assertNotIn("user_scheduling_scale_down_seconds", tfvars)
-        self.assertEqual(tfvars["servicebus_dream_cron_expression"], "15 3 * * *")
 
     def test_collective_learning_approval_identity_is_stable(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -79,26 +67,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(len(first["privateKey"]), 44)
         self.assertEqual(len(first["publicKey"]), 44)
 
-    def test_openclaw_tfvars_include_pairing_values(self):
-        tfvars = build_tfvars(
-            runtime="openclaw",
-            autopilot_name="openclaw",
-            data_volume_name="openclaw-kind-data",
-            previous={},
-            device={"privateKeyPem": "private-key", "deviceId": "device-1"},
-            gateway_token="gateway-token",
-            approved_device_token="device-token",
-        )
-
-        self.assertEqual(tfvars["agent_runtime"], "openclaw")
-        self.assertEqual(tfvars["autopilot_name"], "openclaw")
-        self.assertEqual(tfvars["runtime_data_volume_name"], "openclaw-kind-data")
-        self.assertEqual(tfvars["openclaw_gateway_token"], "gateway-token")
-        self.assertEqual(tfvars["openclaw_bridge_device_private_key_pem"], "private-key")
-        self.assertEqual(tfvars["openclaw_bridge_device_token"], "device-token")
-        self.assertNotIn("api_server_key", tfvars)
-
-    def test_hermes_tfvars_include_api_server_key_without_openclaw_pairing(self):
+    def test_hermes_tfvars_include_api_server_key_and_pinned_role_release(self):
         tfvars = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
@@ -142,8 +111,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertTrue(tfvars["scheduled_learning_prepare_packet"])
         self.assertFalse(tfvars["servicebus_dream_enabled"])
         self.assertEqual(tfvars["servicebus_dream_cron_expression"], "0 2 * * *")
-        self.assertNotIn("openclaw_gateway_token", tfvars)
-        self.assertNotIn("openclaw_bridge_device_private_key_pem", tfvars)
 
     def test_scheduled_learning_values_override_and_then_persist(self):
         configured = build_tfvars(
@@ -197,7 +164,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
             data_volume_name="hermes-data",
             previous={
                 "agent365_client_id": "previous-client",
-                "agent365_client_secret": "previous-secret",
                 "agent365_tenant_id": "previous-tenant",
             },
             api_server_key="api-key",
@@ -210,44 +176,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["agent365_client_id"], "previous-client")
         self.assertNotIn("agent365_client_secret", tfvars)
         self.assertEqual(tfvars["agent365_tenant_id"], "previous-tenant")
-
-    def test_hermes_tfvars_remove_pre_a10_blueprint_keys(self):
-        tfvars = build_tfvars(
-            runtime="hermes",
-            autopilot_name="hermes",
-            data_volume_name="hermes-data",
-            previous={
-                "hermes_blueprint_name": "legacy",
-                "hermes_blueprint_source": "legacy",
-                "hermes_blueprint_version": "2.3.0",
-                "hermes_blueprint_commit": "a" * 40,
-                "hermes_assignee_scope": "legacy",
-            },
-            api_server_key="api-key",
-            role_blueprint="junior-project-manager",
-            role_blueprint_source="https://github.com/example/agent-demos.git",
-            role_release="3.0.0",
-            role_release_commit="b" * 40,
-            assignment_scope="team-alpha",
-        )
-
-        self.assertFalse(any(key.startswith("hermes_blueprint_") for key in tfvars))
-        self.assertNotIn("hermes_assignee_scope", tfvars)
-
-    def test_a9_tfvars_require_explicit_role_release_migration(self):
-        with self.assertRaisesRegex(ValueError, "require explicit"):
-            build_tfvars(
-                runtime="hermes",
-                autopilot_name="hermes",
-                data_volume_name="hermes-data",
-                previous={
-                    "hermes_blueprint_name": "junior-project-manager",
-                    "hermes_blueprint_source": "https://example.com/roles.git",
-                    "hermes_blueprint_version": "2.3.0",
-                    "hermes_blueprint_commit": "a" * 40,
-                },
-                api_server_key="api-key",
-            )
 
     def test_api_server_key_rotation_preserves_previous_key_for_refresh_preflight(self):
         tfvars = build_tfvars(
@@ -302,10 +230,9 @@ class SetupAppTfvarsTests(unittest.TestCase):
             )
 
     def test_runtime_defaults_keep_side_by_side_state_distinct(self):
-        self.assertEqual(default_data_volume_name("openclaw"), "openclaw-kind-data")
         self.assertEqual(default_data_volume_name("hermes"), "hermes-data")
         self.assertEqual(default_data_volume_name("hermes", "jpm-team-alpha"), "hermes-jpm-team-alpha-data")
-        self.assertEqual(runtime_workspace("openclaw"), Path.cwd() / ".local" / "openclaw" / "apps")
+        self.assertEqual(default_data_volume_name("hermes", "hermes2"), "hermes-hermes2-data")
         self.assertEqual(runtime_workspace("hermes"), Path.cwd() / ".local" / "hermes" / "apps")
         self.assertEqual(runtime_app_tfvars_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "generated.app.auto.tfvars.json")
         self.assertEqual(runtime_outputs_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "terraform-outputs.json")
@@ -314,13 +241,13 @@ class SetupAppTfvarsTests(unittest.TestCase):
             Path.cwd() / ".local" / "hermes2" / "apps" / "generated.app.auto.tfvars.json",
         )
 
-    def test_hermes_existing_tfvars_ignore_active_openclaw_values(self):
+    def test_named_worker_tfvars_ignore_active_worker_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             apps_dir = root / "terraform" / "apps"
             apps_dir.mkdir(parents=True)
             (apps_dir / "generated.runtime.auto.tfvars.json").write_text(
-                '{"agent_runtime":"openclaw","runtime_data_volume_name":"openclaw-kind-data"}',
+                '{"agent_runtime":"hermes","runtime_data_volume_name":"other-worker-data"}',
                 encoding="utf-8",
             )
             hermes_dir = root / ".local" / "hermes" / "apps"
@@ -329,11 +256,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
             with patch.object(setup_app_tfvars, "REPO_ROOT", root), patch.object(setup_app_tfvars, "APPS_DIR", apps_dir):
                 self.assertEqual(existing_app_tfvars("hermes"), {})
                 self.assertEqual(existing_app_tfvars("hermes", "hermes2"), {})
-
-    def test_runtime_does_not_reuse_other_runtime_default_volume(self):
-        self.assertEqual(reusable_data_volume_name("hermes", "openclaw-kind-data"), "")
-        self.assertEqual(reusable_data_volume_name("openclaw", "hermes-data"), "")
-        self.assertEqual(reusable_data_volume_name("hermes", "hermes-custom-data"), "hermes-custom-data")
 
 
 if __name__ == "__main__":

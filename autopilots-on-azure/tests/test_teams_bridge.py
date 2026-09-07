@@ -63,8 +63,6 @@ from bridge.runtime.base import (
     AgentResponse,
     DreamResponse,
 )
-from scripts.sandbox_runtime import existing_gateway_sandbox
-from scripts.sandbox_runtime import private_incidents_mcp_server_config
 
 
 def ns(**values):
@@ -687,14 +685,14 @@ class TeamsBridgeTests(unittest.TestCase):
 
     def test_groupchat_prompt_strips_bot_mention(self):
         activity = ns(
-            text="<at>OpenClaw</at> list services",
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            text="<at>Hermes</at> list services",
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="groupchat", id="group-1"),
             entities=[
                 ns(
                     type="mention",
-                    text="<at>OpenClaw</at>",
-                    mentioned=ns(id="bot-1", name="OpenClaw"),
+                    text="<at>Hermes</at>",
+                    mentioned=ns(id="bot-1", name="Hermes"),
                 )
             ],
         )
@@ -729,7 +727,7 @@ class TeamsBridgeTests(unittest.TestCase):
             id="message-1",
             text="We should discuss the quarterly planning notes tomorrow.",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="groupchat", id="group-1"),
             entities=[],
         )
@@ -743,14 +741,14 @@ class TeamsBridgeTests(unittest.TestCase):
         self.assertTrue(response_should_be_suppressed(" NO_RESPONSE "))
         self.assertFalse(response_should_be_suppressed("I should jump in."))
 
-    def test_context_window_includes_recent_events_and_openclaw_answer(self):
+    def test_context_window_includes_recent_events_and_hermes_answer(self):
         session_key = "teams:groupchat:group-1"
         activity = ns(
             id="message-2",
             reply_to_id="message-1",
             text="Can it also check incidents?",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="groupchat", id="group-1"),
             entities=[],
         )
@@ -758,7 +756,7 @@ class TeamsBridgeTests(unittest.TestCase):
             id="message-1",
             text="Initial question",
             from_=ns(name="Diego"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="groupchat", id="group-1"),
             entities=[],
         )
@@ -772,7 +770,7 @@ class TeamsBridgeTests(unittest.TestCase):
                 response_contract=teams_response_contract(root, teams_signal_type(root)),
             ),
         )
-        remember_teams_event(session_key, agent_memory_record("Previous OpenClaw answer"))
+        remember_teams_event(session_key, agent_memory_record("Previous Hermes answer"))
 
         context = format_teams_context(
             session_key,
@@ -783,20 +781,20 @@ class TeamsBridgeTests(unittest.TestCase):
 
         self.assertIn("Bridge-observed context window", context)
         self.assertIn("Initial question", context)
-        self.assertIn("Previous OpenClaw answer", context)
+        self.assertIn("Previous Hermes answer", context)
 
     def test_prompt_contains_context_block(self):
         activity = ns(
             id="message-1",
-            text="<at>OpenClaw</at> help",
+            text="<at>Hermes</at> help",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="groupchat", id="group-1"),
             entities=[
                 ns(
                     type="mention",
-                    text="<at>OpenClaw</at>",
-                    mentioned=ns(id="bot-1", name="OpenClaw"),
+                    text="<at>Hermes</at>",
+                    mentioned=ns(id="bot-1", name="Hermes"),
                 )
             ],
         )
@@ -846,15 +844,15 @@ class TeamsBridgeTests(unittest.TestCase):
     def test_event_prompt_marks_mention_as_must_answer(self):
         activity = ns(
             id="message-1",
-            text="<at>OpenClaw</at> help",
+            text="<at>Hermes</at> help",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="groupchat", id="group-1"),
             entities=[
                 ns(
                     type="mention",
-                    text="<at>OpenClaw</at>",
-                    mentioned=ns(id="bot-1", name="OpenClaw"),
+                    text="<at>Hermes</at>",
+                    mentioned=ns(id="bot-1", name="Hermes"),
                 )
             ],
         )
@@ -870,7 +868,7 @@ class TeamsBridgeTests(unittest.TestCase):
             reply_to_id="message-1",
             text="Thanks, but can it also check incidents?",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="channel", id="conversation-1"),
             entities=[],
         )
@@ -880,12 +878,12 @@ class TeamsBridgeTests(unittest.TestCase):
         self.assertIn("Signal type: reply_in_thread_without_bot_mention", prompt)
         self.assertIn("Response contract: observe_then_maybe_answer", prompt)
 
-    def test_plain_text_openclaw_name_is_must_answer(self):
+    def test_plain_text_hermes_name_is_must_answer(self):
         activity = ns(
             id="message-1",
-            text="Možná by mohl OpenClaw říct ahoj, i když ho netaguji, ne?",
+            text="Možná by mohl Hermes říct ahoj, i když ho netaguji, ne?",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="channel", id="conversation-1"),
             entities=[],
         )
@@ -901,7 +899,7 @@ class TeamsBridgeTests(unittest.TestCase):
             id="message-1",
             text="Navrhuji spustit produkční migraci databáze během špičky bez rollback plánu.",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="channel", id="conversation-1"),
             entities=[],
         )
@@ -920,7 +918,7 @@ class TeamsBridgeTests(unittest.TestCase):
         remember_teams_event(session_key, agent_memory_record("Ahoj, slyším tě."))
 
         self.assertTrue(should_acknowledge_with_reaction("díky!", "reply_in_thread_without_bot_mention", session_key))
-        self.assertFalse(should_acknowledge_with_reaction("díky OpenClaw", "textual_bot_name_mention", session_key))
+        self.assertFalse(should_acknowledge_with_reaction("díky Hermes", "textual_bot_name_mention", session_key))
         self.assertFalse(should_acknowledge_with_reaction("díky!", "reply_in_thread_without_bot_mention", "teams:channel:other"))
 
     def test_agent_can_request_teams_reaction_control_line(self):
@@ -956,7 +954,7 @@ class TeamsBridgeTests(unittest.TestCase):
             id="message-1",
             text="Navrhuji spustit produkční migraci databáze během špičky bez rollback plánu.",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="channel", id="conversation-1"),
             entities=[],
         )
@@ -966,12 +964,12 @@ class TeamsBridgeTests(unittest.TestCase):
         self.assertIn("TEAMS_REACTION: <name>", prompt)
         self.assertIn("surprised=risky or alarming proposal", prompt)
 
-    def test_channel_thread_reply_after_openclaw_answer_is_must_answer(self):
+    def test_channel_thread_reply_after_hermes_answer_is_must_answer(self):
         activity = ns(
             id="reply-message",
             text="dobře, co umíš?",
             from_=ns(name="Adele"),
-            recipient=ns(id="bot-1", name="OpenClaw"),
+            recipient=ns(id="bot-1", name="Hermes"),
             conversation=ns(conversation_type="channel", id="conversation-1;messageid=root-message"),
             entities=[],
         )
@@ -1041,31 +1039,6 @@ class TeamsBridgeTests(unittest.TestCase):
         )
         self.assertFalse(should_add_status_reaction(ns(id="message-1", conversation=ns(conversation_type="personal"), recipient=ns(is_targeted=False))))
         self.assertFalse(should_add_status_reaction(ns(id="message-1", conversation=ns(conversation_type="channel"), recipient=ns(is_targeted=True))))
-
-    def test_existing_gateway_sandbox_reuses_attached_volume_after_image_rebuild(self):
-        test_case = self
-
-        class Client:
-            _group_path = "/groups/test"
-
-            def _dp_get(self, path):
-                test_case.assertEqual(path, "/groups/test/sandboxes")
-                return [
-                    {
-                        "id": "sandbox-1",
-                        "labels": {"app": "openclaw-on-azure"},
-                        "sourcesRef": {"diskImage": {"id": "old-disk"}},
-                        "volumes": [{"volumeName": "openclaw-data"}],
-                    }
-                ]
-
-        self.assertEqual(existing_gateway_sandbox(Client(), "openclaw-data")["id"], "sandbox-1")
-
-    def test_private_incidents_mcp_config_uses_local_identity_adapter(self):
-        config = private_incidents_mcp_server_config(url="http://127.0.0.1:18081/servers/private-incidents")
-
-        self.assertEqual(config["url"], "http://127.0.0.1:18081/servers/private-incidents")
-        self.assertNotIn("headers", config)
 
 
 if __name__ == "__main__":

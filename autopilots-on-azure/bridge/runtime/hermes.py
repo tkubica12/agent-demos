@@ -92,8 +92,7 @@ def _env_optional(*names: str, default: str = "") -> str:
 
 
 def hermes_sandbox_config_from_env() -> AgentSandboxConfig:
-    _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
-    return config_from_environment(runtime_kind="hermes", api_server_key=_env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY"))
+    return config_from_environment(api_server_key=_env_required("API_SERVER_KEY"))
 
 
 def _clean_header_part(value: str, *, default: str) -> str:
@@ -102,7 +101,7 @@ def _clean_header_part(value: str, *, default: str) -> str:
 
 
 def _hermes_session_key(request: AgentRequest) -> str:
-    worker = _env_optional("WORKER_ID", "AUTOPILOT_NAME", "AGENT_RUNTIME", default="worker")
+    worker = _env_optional("WORKER_ID", "AUTOPILOT_NAME", default="hermes")
     parts = [
         _clean_header_part(worker, default="worker"),
         _clean_header_part(request.source, default="source"),
@@ -383,10 +382,6 @@ class HermesRuntimeAdapter:
         self._ensure_sandbox = ensure_sandbox
         self._client_factory = client_factory
 
-    @property
-    def runtime_kind(self) -> str:
-        return "hermes"
-
     async def invoke(self, request: AgentRequest) -> AgentResponse:
         if session_reset_command(request.prompt):
             if request.source != "teams_personal":
@@ -439,10 +434,7 @@ class HermesRuntimeAdapter:
                 f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
             )
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required(
-            "API_SERVER_KEY",
-            "HERMES_API_SERVER_KEY",
-        )
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         transcript_id = (
             f"{_hermes_transcript_id(request)}:new:{uuid.uuid4().hex[:12]}"
@@ -477,7 +469,7 @@ class HermesRuntimeAdapter:
             raise RuntimeError(f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port.")
 
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         cron_jobs_before: dict[str, str] = {}
         delivery_reference = request.metadata.get("deliveryReference")
@@ -724,7 +716,7 @@ class HermesRuntimeAdapter:
         base_url = str(agent_response.raw.get("gatewayUrl") or "").rstrip("/")
         if not base_url:
             raise RuntimeError("Hermes dream run did not return a gateway URL.")
-        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        api_key = _env_required("API_SERVER_KEY")
         async with self._client_factory(timeout=30) as client:
             response = await client.get(
                 f"{base_url}/internal/learning/status",
@@ -848,7 +840,7 @@ class HermesRuntimeAdapter:
                     f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
                 )
             base_url = sandbox.endpoint_url.rstrip("/")
-            api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+            api_key = _env_required("API_SERVER_KEY")
             await self._wait_for_health(base_url, api_key)
             result = await self._cron_request(
                 base_url,
@@ -878,7 +870,7 @@ class HermesRuntimeAdapter:
                 f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
             )
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         return {
             "sandboxId": sandbox.sandbox_id,
@@ -929,10 +921,7 @@ class HermesRuntimeAdapter:
                 f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
             )
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required(
-            "API_SERVER_KEY",
-            "HERMES_API_SERVER_KEY",
-        )
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         return await self._cron_request(
             base_url,
@@ -1049,10 +1038,7 @@ class HermesRuntimeAdapter:
                     f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
                 )
             base_url = sandbox.endpoint_url.rstrip("/")
-            api_key = _env_required(
-                "API_SERVER_KEY",
-                "HERMES_API_SERVER_KEY",
-            )
+            api_key = _env_required("API_SERVER_KEY")
             await self._wait_for_health(base_url, api_key)
             result = await self._cron_request(
                 base_url,
@@ -1090,7 +1076,7 @@ class HermesRuntimeAdapter:
                 f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
             )
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         return await self._cron_request(
             base_url,
@@ -1183,7 +1169,7 @@ class HermesRuntimeAdapter:
                 f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
             )
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         return await self._cron_request(
             base_url,
@@ -1242,7 +1228,7 @@ class HermesRuntimeAdapter:
         if not sandbox.endpoint_url:
             raise RuntimeError(f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port.")
         base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY", "HERMES_API_SERVER_KEY")
+        api_key = _env_required("API_SERVER_KEY")
         await self._wait_for_health(base_url, api_key)
         async with self._client_factory(timeout=60) as client:
             response = await client.request(
@@ -1507,7 +1493,6 @@ class HermesRuntimeAdapter:
                     "id": transcript_id,
                     "model": _env_optional(
                         "HERMES_MODEL",
-                        "OPENCLAW_MODEL_ID",
                         default="gpt-5-6-terra",
                     ),
                 },

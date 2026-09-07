@@ -109,10 +109,7 @@ async def generated_apps_bridge_request(
     payload: dict | None = None,
 ) -> dict:
     base_url = os.getenv("AUTOPILOT_BRIDGE_URL", "").strip().rstrip("/")
-    api_key = os.getenv(
-        "API_SERVER_KEY",
-        os.getenv("HERMES_API_SERVER_KEY", ""),
-    ).strip()
+    api_key = os.getenv("API_SERVER_KEY", "").strip()
     if not base_url or not api_key:
         raise RuntimeError(
             "Generated app deployment bridge is not configured."

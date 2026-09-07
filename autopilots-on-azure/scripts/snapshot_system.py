@@ -4,9 +4,7 @@ import argparse
 import json
 import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -83,40 +81,6 @@ def graph_url(path: str, *, beta: bool = False) -> str:
     return f"{GRAPH_BASE}/{version}{path}"
 
 
-def app_only_graph_get(path: str, auth_file: Path, *, beta: bool = False) -> Any:
-    if not auth_file.exists():
-        return {"skipped": f"{auth_file} does not exist."}
-    auth = load_json(auth_file)
-    form = urllib.parse.urlencode(
-        {
-            "client_id": auth["clientId"],
-            "client_secret": auth["clientSecret"],
-            "grant_type": "client_credentials",
-            "scope": f"{GRAPH_BASE}/.default",
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        f"https://login.microsoftonline.com/{auth['tenantId']}/oauth2/v2.0/token",
-        data=form,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            token = json.loads(response.read().decode("utf-8"))["access_token"]
-    except Exception as exc:
-        return {"error": exc.__class__.__name__, "message": str(exc)}
-
-    url = graph_url(path, beta=beta)
-    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        return {"status": exc.code, "body": exc.read().decode("utf-8", errors="replace")}
-    return json.loads(raw) if raw.strip() else {}
-
-
 def read_local_json(path: Path) -> Any:
     if not path.exists():
         return {"missing": str(path)}
@@ -137,17 +101,6 @@ def capture_local_state(root: Path, runtimes: list[str], state_name: str = "") -
             write_json(runtime_dir / name, read_local_json(workspace / name))
         for instance_path in sorted(workspace.glob("instance.*.json")):
             write_json(runtime_dir / instance_path.name, read_local_json(instance_path))
-
-    for name in (
-        "agent365-registration-app.json",
-        "agent365-package-cleanup.json",
-        "agent365-catalog-cleanup.json",
-        "agent365-registration-cleanup.json",
-    ):
-        path = REPO_ROOT / ".local" / name
-        if path.exists():
-            write_json(root / "local" / name, read_local_json(path))
-
 
 def capture_azure(root: Path, runtimes: list[str], state_name: str = "") -> None:
     azure_dir = root / "azure"
@@ -217,12 +170,6 @@ def capture_graph_runtime(root: Path, runtime: str, state_name: str = "") -> Non
                 state_dir / "agent-user.json",
                 az_rest(graph_url(f"/users/{state['agentUserId']}?$select=id,displayName,userPrincipalName,mail,usageLocation,accountEnabled,assignedLicenses,identityParentId,createdDateTime")),
             )
-        if state.get("agentRegistrationId"):
-            auth_file = REPO_ROOT / ".local" / "agent365-registration-app.json"
-            write_json(
-                state_dir / "agent-registration.json",
-                app_only_graph_get(f"/copilot/agentRegistrations/{state['agentRegistrationId']}", auth_file, beta=True),
-            )
 
 
 def capture_graph(root: Path, runtimes: list[str], state_name: str = "") -> None:
@@ -250,16 +197,13 @@ def capture_summary(root: Path, runtimes: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Capture a redacted diagnostic snapshot of Autopilots Azure/Graph/Agent 365 state.")
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], action="append", help="Runtime to capture. Repeatable. Defaults to both.")
-    parser.add_argument("--state-name", default="", help="Named Worker to capture; requires exactly one --runtime.")
+    parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
     parser.add_argument("--output-dir", default="", help="Snapshot output directory. Defaults to .local/snapshots/<utc timestamp>.")
     parser.add_argument("--skip-azure", action="store_true")
     parser.add_argument("--skip-graph", action="store_true")
     args = parser.parse_args()
 
-    runtimes = args.runtime or ["openclaw", "hermes"]
-    if args.state_name and len(runtimes) != 1:
-        parser.error("--state-name requires exactly one --runtime.")
+    runtimes = ["hermes"]
     root = Path(args.output_dir) if args.output_dir else SNAPSHOT_ROOT / now_stamp()
     capture_summary(root, runtimes)
     capture_local_state(root, runtimes, args.state_name)

@@ -37,39 +37,20 @@ class Agent365Branding:
     developer_name: str = "Autopilots on Azure demo"
 
 
-def default_branding(runtime_kind: str, autopilot_name: str = "") -> Agent365Branding:
-    runtime_kind = runtime_kind.strip().lower()
-    if runtime_kind == "hermes":
-        autopilot_name = autopilot_name or "hermes"
-        return Agent365Branding(
-            autopilot_name=autopilot_name,
-            runtime_kind=runtime_kind,
-            agent_name="Hermes Autopilot",
-            manifest_short_name="Hermes Autopilot",
-            manifest_full_name="Hermes Autopilot on Azure",
-            description_short="Chat with the Hermes autopilot running in ACA Sandboxes.",
-            description_full=(
-                "Autopilots on Azure exposes Hermes Agent through a governed Agent 365 identity. "
-                "It receives Microsoft 365 messages through the bridge /api/messages endpoint, wakes or reuses "
-                "the ACA Sandbox Hermes runtime, and returns Hermes responses."
-            ),
-        )
-    if runtime_kind == "openclaw":
-        autopilot_name = autopilot_name or "openclaw"
-        return Agent365Branding(
-            autopilot_name=autopilot_name,
-            runtime_kind=runtime_kind,
-            agent_name="OpenClaw Autopilot",
-            manifest_short_name="OpenClaw Autopilot",
-            manifest_full_name="OpenClaw Autopilot on Azure",
-            description_short="Chat with the OpenClaw autopilot running in ACA Sandboxes.",
-            description_full=(
-                "Autopilots on Azure exposes the OpenClaw Gateway through a governed Agent 365 identity. "
-                "It receives Microsoft 365 messages through the bridge /api/messages endpoint, wakes or reuses "
-                "the ACA Sandbox Gateway, and returns OpenClaw responses."
-            ),
-        )
-    raise ValueError(f"Unsupported runtime kind '{runtime_kind}'.")
+def default_branding(autopilot_name: str = "hermes") -> Agent365Branding:
+    return Agent365Branding(
+        autopilot_name=autopilot_name,
+        runtime_kind="hermes",
+        agent_name="Hermes Autopilot",
+        manifest_short_name="Hermes Autopilot",
+        manifest_full_name="Hermes Autopilot on Azure",
+        description_short="Chat with the Hermes autopilot running in ACA Sandboxes.",
+        description_full=(
+            "Autopilots on Azure exposes Hermes Agent through a governed Agent 365 identity. "
+            "It receives Microsoft 365 messages through the bridge /api/messages endpoint, wakes or reuses "
+            "the ACA Sandbox Hermes runtime, and returns Hermes responses."
+        ),
+    )
 
 
 def metadata_file_name(autopilot_name: str) -> str:
@@ -405,7 +386,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prepare and optionally run Agent 365 registration for an Autopilots on Azure bridge endpoint."
     )
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
+    parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
     parser.add_argument("--autopilot-name", default="")
     parser.add_argument("--agent-name", default="")
     parser.add_argument("--manifest-short-name", default="")
@@ -421,7 +402,7 @@ def main() -> None:
     parser.add_argument(
         "--runtime-outputs-file",
         default="",
-        help="Terraform output JSON captured by scripts.deploy_apps_runtime. Defaults to .local/<runtime>/apps/terraform-outputs.json.",
+        help="Terraform output JSON captured by scripts.deploy_apps_runtime. Defaults to .local/<state-name>/apps/terraform-outputs.json.",
     )
     parser.add_argument("--manager-email", default="", help="Optional manager email for AI teammate setup.")
     parser.add_argument("--agent-user-principal-name", default="", help="Optional desired AI teammate user principal name.")
@@ -452,10 +433,10 @@ def main() -> None:
     if args.dry_run and (args.update_endpoint or args.publish):
         parser.error("--dry-run applies only to setup; omit --update-endpoint and --publish to preview their commands.")
 
-    branding_defaults = default_branding(args.runtime, args.autopilot_name)
+    branding_defaults = default_branding(args.autopilot_name or args.state_name)
     branding = Agent365Branding(
         autopilot_name=branding_defaults.autopilot_name,
-        runtime_kind=args.runtime,
+        runtime_kind="hermes",
         agent_name=args.agent_name or branding_defaults.agent_name,
         manifest_short_name=args.manifest_short_name or branding_defaults.manifest_short_name,
         manifest_full_name=args.manifest_full_name or branding_defaults.manifest_full_name,
@@ -463,7 +444,7 @@ def main() -> None:
         description_full=args.description_full or branding_defaults.description_full,
         developer_name=branding_defaults.developer_name,
     )
-    workspace = agent365_workspace(branding.autopilot_name)
+    workspace = agent365_workspace(args.state_name)
     workspace.mkdir(parents=True, exist_ok=True)
 
     tenant_id = args.tenant_id or current_tenant_id()
@@ -471,7 +452,7 @@ def main() -> None:
         runtime_kind=branding.runtime_kind,
         explicit_endpoint=args.messaging_endpoint,
         outputs_file=args.runtime_outputs_file,
-        state_name=branding.autopilot_name,
+        state_name=args.state_name,
     )
     ai_teammate = not args.blueprint_agent
     config = agent365_config_payload(

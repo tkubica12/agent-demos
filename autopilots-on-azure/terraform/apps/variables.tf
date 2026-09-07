@@ -1,11 +1,16 @@
 variable "autopilot_name" {
   type    = string
-  default = "openclaw"
+  default = "hermes"
 }
 
 variable "agent_runtime" {
   type    = string
-  default = "openclaw"
+  default = "hermes"
+
+  validation {
+    condition     = var.agent_runtime == "hermes"
+    error_message = "This project hosts Hermes Workers only."
+  }
 }
 
 variable "hermes_role_blueprint" {
@@ -182,17 +187,7 @@ variable "runtime_disk_source_image" {
 
 variable "runtime_disk_image_name" {
   type    = string
-  default = "openclaw-gateway-image-with-private-mcp"
-}
-
-variable "openclaw_image" {
-  type    = string
-  default = ""
-}
-
-variable "openclaw_disk_image_name" {
-  type    = string
-  default = ""
+  default = "hermes-api-server-image"
 }
 
 variable "bridge_image" {
@@ -220,24 +215,6 @@ variable "public_shipments_mcp_image" {
 variable "public_shipments_mcp_disk_source_image" {
   type    = string
   default = ""
-}
-
-variable "openclaw_gateway_token" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "openclaw_bridge_device_private_key_pem" {
-  type      = string
-  default   = ""
-  sensitive = true
-}
-
-variable "openclaw_bridge_device_token" {
-  type      = string
-  default   = ""
-  sensitive = true
 }
 
 variable "api_server_key" {
@@ -374,10 +351,5 @@ variable "workiq_copilot_mcp_scope" {
 
 variable "runtime_data_volume_name" {
   type    = string
-  default = "openclaw-data"
-}
-
-variable "openclaw_data_volume_name" {
-  type    = string
-  default = ""
+  default = "hermes-data"
 }

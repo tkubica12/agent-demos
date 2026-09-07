@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import shlex
 import shutil
 import subprocess
@@ -24,7 +23,6 @@ from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 
 
-OPENCLAW_GATEWAY_PORT = 18789
 HERMES_API_PORT = 8642
 WORKER_REFRESH_PREFLIGHT_TIMEOUT_SECONDS = 300
 WORKER_REFRESH_RETRY_SECONDS = 3
@@ -52,11 +50,11 @@ class AgentSandboxConfig:
     sandbox_group: str
     region: str
     image_name: str
-    runtime_kind: str = "openclaw"
-    port: int = OPENCLAW_GATEWAY_PORT
+    runtime_kind: str = "hermes"
+    port: int = HERMES_API_PORT
     health_path: str = "/health"
-    command: tuple[str, ...] = ("python3",)
-    args: tuple[str, ...] = ("-m", "openclaw_gateway.start_gateway")
+    command: tuple[str, ...] = ("/app/.venv/bin/python",)
+    args: tuple[str, ...] = ("/app/start_hermes.py",)
     data_mount_path: str = "/data"
     environment: dict[str, str] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)
@@ -81,15 +79,14 @@ class AgentSandboxConfig:
     managed_identity_client_id: str = ""
     runtime_image_reference: str = ""
     disk_image_id: str = ""
-    disk_image_name: str = "openclaw-gateway-image-with-private-mcp"
-    data_volume_name: str = "openclaw-data"
+    disk_image_name: str = "hermes-api-server-image"
+    data_volume_name: str = "hermes-data"
     data_volume_size: str = "20Gi"
     cpu: str = "2000m"
     memory: str = "2048Mi"
     root_disk_size: str = "20Gi"
-    gateway_token: str = ""
-    runtime_home: str = "/data/home"
-    runtime_workspace: str = "/data/workspace"
+    runtime_home: str = "/data/hermes"
+    runtime_workspace: str = "/data/hermes/workspace"
     role_blueprint: str = ""
     role_blueprint_source: str = ""
     role_blueprint_path: str = ""
@@ -106,7 +103,6 @@ class AgentSandboxConfig:
 class AgentSandboxResult:
     sandbox_id: str
     endpoint_url: str | None
-    gateway_token: str | None
     reused_existing_sandbox: bool
     runtime_kind: str
     port: int
@@ -117,25 +113,8 @@ class AgentSandboxResult:
     private_incidents_mcp_url: str | None
     private_incidents_mcp_server: str | None
 
-    @property
-    def gateway_url(self) -> str | None:
-        return self.endpoint_url
-
-    @property
-    def openclaw_home(self) -> str:
-        return self.runtime_home
-
-    @property
-    def openclaw_workspace(self) -> str:
-        return self.runtime_workspace
-
-
-GatewaySandboxConfig = AgentSandboxConfig
-GatewaySandboxResult = AgentSandboxResult
-
-
 def run_text(command: list[str]) -> str:
-    result = subprocess.run([resolve_executable(command[0]), *command[1:]], check=True, capture_output=True, text=True)
+    result = subprocess.run([resolve_executable(command[0]), *command[1:]], check=True, capture_output=True, text=True, env=os.environ.copy())
     return result.stdout.strip()
 
 
@@ -155,13 +134,7 @@ def resolve_executable(name: str) -> str:
 
 
 def get_config(name: str, fallback: str = "") -> str:
-    value = os.getenv(name)
-    if value:
-        return value
-    try:
-        return run_text(["azd", "env", "get-value", name])
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return fallback
+    return os.getenv(name) or fallback
 
 
 def existing_named(items, name: str):
@@ -216,7 +189,7 @@ def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig
     for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
         labels = sandbox.get("labels", {})
         volumes = sandbox.get("volumes", [])
-        if labels.get("app") not in {"autopilots-on-azure", "openclaw-on-azure"}:
+        if labels.get("app") != "autopilots-on-azure":
             continue
         if labels.get("kind") != config.runtime_kind:
             continue
@@ -248,8 +221,6 @@ def require_worker_refresh_ready(
     config: AgentSandboxConfig,
     sandbox: dict[str, Any],
 ) -> None:
-    if config.runtime_kind != "hermes":
-        return
     labels = sandbox.get("labels") or {}
     if labels.get("roleReleaseCommit") == config.role_release_commit:
         return
@@ -312,27 +283,6 @@ def require_worker_refresh_ready(
         ) from last_error
     if not isinstance(payload, dict) or payload.get("ready") is not True:
         raise RuntimeError("Current Worker did not approve Worker Refresh.")
-
-
-def existing_gateway_sandbox(client: SandboxGroupClient, data_volume_name: str) -> dict | None:
-    for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
-        labels = sandbox.get("labels", {})
-        volumes = sandbox.get("volumes", [])
-        if labels.get("app") not in {"autopilots-on-azure", "openclaw-on-azure"}:
-            continue
-        if any(volume.get("volumeName") == data_volume_name for volume in volumes):
-            return sandbox
-    return None
-
-
-def private_incidents_mcp_server_config(*, url: str = PRIVATE_MCP_LOCAL_URL) -> dict[str, Any]:
-    return {
-        "url": url,
-        "transport": "streamable-http",
-        "connectTimeout": 5,
-        "timeout": 60,
-        "supportsParallelToolCalls": True,
-    }
 
 
 def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
@@ -414,22 +364,6 @@ def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
     return {key: value for key, value in environment.items() if value}
 
 
-def openclaw_runtime_environment(*, token: str, foundry_openai_base_url: str, model_deployment: str) -> dict[str, str]:
-    return {
-        "PERSISTENCE_BACKEND": "file",
-        "OPENCLAW_DATA_DIR": "/data",
-        "OPENCLAW_HOME_DIR": "/data/home",
-        "OPENCLAW_WORKSPACE_DIR": "/data/workspace",
-        "OPENCLAW_GATEWAY_TOKEN": token,
-        "FOUNDRY_OPENAI_BASE_URL": foundry_openai_base_url,
-        "OPENCLAW_MODEL_ID": model_deployment,
-        "OPENCLAW_MODEL_PROVIDER_ID": "foundry",
-        "OPENCLAW_MODEL_API": "openai-completions",
-        "OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH": "true",
-        "OPENCLAW_CONTROL_UI_ALLOW_HOST_HEADER_ORIGIN_FALLBACK": "true",
-    }
-
-
 def runtime_telemetry_environment(config: AgentSandboxConfig) -> dict[str, str]:
     environment = {
         key: value
@@ -498,70 +432,9 @@ def hermes_runtime_environment(
         environment["HERMES_MODEL_PROVIDER"] = "azure-foundry"
         environment["HERMES_MODEL"] = model_deployment or "gpt-5-6-terra"
         environment["HERMES_INFERENCE_MODEL"] = model_deployment or "gpt-5-6-terra"
-        environment["OPENCLAW_MODEL_ID"] = model_deployment or "gpt-5-6-terra"
     if api_server_key:
         environment["API_SERVER_KEY"] = api_server_key
     return {key: value for key, value in environment.items() if value}
-
-
-def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
-    token = overrides.get("gateway_token") or ""
-    foundry_openai_base_url = overrides.get("foundry_openai_base_url") or ""
-    model_deployment = overrides.get("model_deployment") or "gpt-5-6-terra"
-    private_incidents_mcp_url = overrides.get("private_incidents_mcp_url") or ""
-    environment = openclaw_runtime_environment(
-        token=token,
-        foundry_openai_base_url=foundry_openai_base_url,
-        model_deployment=model_deployment,
-    )
-    config = AgentSandboxConfig(
-        subscription_id=overrides.get("subscription_id") or "",
-        resource_group=overrides.get("resource_group") or "",
-        sandbox_group=overrides.get("sandbox_group") or "",
-        region=overrides.get("region") or "",
-        image_name=overrides.get("image_name") or "",
-        runtime_kind="openclaw",
-        port=OPENCLAW_GATEWAY_PORT,
-        health_path="/health",
-        command=("python3",),
-        args=("-m", "openclaw_gateway.start_gateway"),
-        data_mount_path="/data",
-        environment=environment,
-        labels=overrides.get("labels") or {},
-        foundry_openai_base_url=foundry_openai_base_url,
-        model_deployment=model_deployment,
-        customer_vnet_connection_name=overrides.get("customer_vnet_connection_name") or "",
-        private_incidents_mcp_url=private_incidents_mcp_url,
-        private_incidents_mcp_scope=overrides.get("private_incidents_mcp_scope") or "",
-        public_shipments_mcp_url=overrides.get("public_shipments_mcp_url") or "",
-        public_shipments_mcp_scope=overrides.get("public_shipments_mcp_scope") or "",
-        workiq_mail_mcp_url=overrides.get("workiq_mail_mcp_url") or "",
-        workiq_mail_mcp_scope=overrides.get("workiq_mail_mcp_scope") or "",
-        workiq_word_mcp_url=overrides.get("workiq_word_mcp_url") or "",
-        workiq_word_mcp_scope=overrides.get("workiq_word_mcp_scope") or "",
-        additional_agent_user_mcp_servers=(
-            overrides.get("additional_agent_user_mcp_servers") or {}
-        ),
-        agent365_tenant_id=overrides.get("agent365_tenant_id") or "",
-        agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
-        agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
-        agent365_agent_user_id=overrides.get("agent365_agent_user_id") or "",
-        runtime_image_reference=overrides.get("runtime_image_reference") or "",
-        managed_identity_client_id=overrides.get("managed_identity_client_id") or os.getenv("AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID", ""),
-        disk_image_id=overrides.get("disk_image_id") or "",
-        disk_image_name=overrides.get("disk_image_name") or "openclaw-gateway-image-with-private-mcp",
-        data_volume_name=overrides.get("data_volume_name") or "openclaw-data",
-        data_volume_size=overrides.get("data_volume_size") or "20Gi",
-        cpu=overrides.get("cpu") or "2000m",
-        memory=overrides.get("memory") or "2048Mi",
-        root_disk_size=overrides.get("root_disk_size") or "20Gi",
-        gateway_token=token,
-        runtime_home="/data/home",
-        runtime_workspace="/data/workspace",
-    )
-    environment.update(agent_mcp_environment(config))
-    environment.update(runtime_telemetry_environment(config))
-    return config
 
 
 def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
@@ -655,15 +528,12 @@ def create_agent_sandbox(
     *,
     config: AgentSandboxConfig,
     disk_id: str,
-    token: str,
 ):
     environment = dict(config.environment)
     environment.setdefault("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
     environment.setdefault("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
     if config.managed_identity_client_id:
         environment["AZURE_CLIENT_ID"] = config.managed_identity_client_id
-    if config.gateway_token:
-        environment.setdefault("OPENCLAW_GATEWAY_TOKEN", token)
 
     body = {
         "sourcesRef": {
@@ -737,46 +607,7 @@ def ensure_sandbox_runtime_process(
         )
 
 
-def create_gateway_sandbox(client: SandboxGroupClient, **kwargs):
-    config = AgentSandboxConfig(
-        subscription_id="",
-        resource_group="",
-        sandbox_group="",
-        region="",
-        image_name="",
-        foundry_openai_base_url=kwargs.get("foundry_openai_base_url", ""),
-        model_deployment=kwargs.get("model_deployment", ""),
-        customer_vnet_connection_name=kwargs.get("customer_vnet_connection_name", ""),
-        private_incidents_mcp_url=kwargs.get("private_incidents_mcp_url", ""),
-        private_incidents_mcp_scope=kwargs.get("private_incidents_mcp_scope", ""),
-        public_shipments_mcp_url=kwargs.get("public_shipments_mcp_url", ""),
-        public_shipments_mcp_scope=kwargs.get("public_shipments_mcp_scope", ""),
-        workiq_mail_mcp_url=kwargs.get("workiq_mail_mcp_url", ""),
-        workiq_mail_mcp_scope=kwargs.get("workiq_mail_mcp_scope", ""),
-        workiq_word_mcp_url=kwargs.get("workiq_word_mcp_url", ""),
-        workiq_word_mcp_scope=kwargs.get("workiq_word_mcp_scope", ""),
-        additional_agent_user_mcp_servers=(
-            kwargs.get("additional_agent_user_mcp_servers") or {}
-        ),
-        agent365_tenant_id=kwargs.get("agent365_tenant_id", ""),
-        agent365_blueprint_client_id=kwargs.get("agent365_blueprint_client_id", ""),
-        agent365_agent_identity_client_id=kwargs.get("agent365_agent_identity_client_id", ""),
-        agent365_agent_user_id=kwargs.get("agent365_agent_user_id", ""),
-        data_volume_name=kwargs.get("data_volume_name", "openclaw-data"),
-        cpu=kwargs.get("cpu", "2000m"),
-        memory=kwargs.get("memory", "2048Mi"),
-        root_disk_size=kwargs.get("root_disk_size", "20Gi"),
-        gateway_token=kwargs.get("token", ""),
-        environment=openclaw_runtime_environment(
-            token=kwargs.get("token", ""),
-            foundry_openai_base_url=kwargs.get("foundry_openai_base_url", ""),
-            model_deployment=kwargs.get("model_deployment", ""),
-        ),
-    )
-    return create_agent_sandbox(client, config=config, disk_id=kwargs["disk_id"], token=kwargs.get("token", ""))
-
-
-def create_sandbox_group_client(config: GatewaySandboxConfig, credential: TokenCredential | None = None) -> SandboxGroupClient:
+def create_sandbox_group_client(config: AgentSandboxConfig, credential: TokenCredential | None = None) -> SandboxGroupClient:
     return SandboxGroupClient(
         endpoint_for_region(config.region),
         credential or DefaultAzureCredential(),
@@ -792,14 +623,12 @@ def ensure_agent_sandbox(
     credential: TokenCredential | None = None,
     wait_for_ready_seconds: int = 20,
 ) -> AgentSandboxResult:
-    token = config.gateway_token or secrets.token_urlsafe(32)
-
     if not config.resource_group:
-        raise ValueError("AZURE_RESOURCE_GROUP was not found. Run azd up first or set it explicitly.")
+        raise ValueError("AZURE_RESOURCE_GROUP is required. Use the gateway deployment settings or pass --resource-group.")
     if not config.sandbox_group:
-        raise ValueError("AZURE_SANDBOX_GROUP was not found. Run azd up first or set it explicitly.")
+        raise ValueError("AZURE_SANDBOX_GROUP is required. Use the gateway deployment settings or pass --sandbox-group.")
     if not config.region:
-        raise ValueError("AZURE_REGION was not found. Run azd up first or set it explicitly.")
+        raise ValueError("AZURE_REGION is required. Use the gateway deployment settings or pass --region.")
     if not config.disk_image_id:
         raise ValueError("AGENT_RUNTIME_DISK_IMAGE_ID is required. Deploy the Sandbox disk images before starting the runtime.")
     client = create_sandbox_group_client(config, credential)
@@ -831,7 +660,6 @@ def ensure_agent_sandbox(
             client,
             config=config,
             disk_id=config.disk_image_id,
-            token=token,
         )
 
     ensure_sandbox_runtime_process(sandbox_client, config)
@@ -849,7 +677,6 @@ def ensure_agent_sandbox(
     return AgentSandboxResult(
         sandbox_id=sandbox_id,
         endpoint_url=endpoint_url,
-        gateway_token=None if reused_existing_sandbox else token,
         reused_existing_sandbox=reused_existing_sandbox,
         runtime_kind=config.runtime_kind,
         port=config.port,
@@ -862,13 +689,8 @@ def ensure_agent_sandbox(
     )
 
 
-def ensure_gateway_sandbox(config: GatewaySandboxConfig, *, credential: TokenCredential | None = None, wait_for_gateway_seconds: int = 20) -> GatewaySandboxResult:
-    return ensure_agent_sandbox(config, credential=credential, wait_for_ready_seconds=wait_for_gateway_seconds)
-
-
 def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
     subscription_id = overrides.get("subscription_id") or get_config("AZURE_SUBSCRIPTION_ID") or run_text(["az", "account", "show", "--query", "id", "-o", "tsv"])
-    runtime_kind = (overrides.get("runtime_kind") or get_config("AGENT_RUNTIME", "openclaw")).strip().lower()
     common = {
         "subscription_id": subscription_id,
         "resource_group": overrides.get("resource_group") or get_config("AZURE_RESOURCE_GROUP"),
@@ -927,48 +749,33 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "disk_image_id": overrides.get("disk_image_id") or get_config("AGENT_RUNTIME_DISK_IMAGE_ID"),
         "disk_image_name": overrides.get("disk_image_name") or get_config("AGENT_RUNTIME_DISK_IMAGE_NAME"),
         "data_volume_name": overrides.get("data_volume_name") or get_config("AGENT_RUNTIME_DATA_VOLUME_NAME"),
-        "data_volume_size": overrides.get("data_volume_size") or get_config("AGENT_RUNTIME_DATA_VOLUME_SIZE", get_config("OPENCLAW_DATA_VOLUME_SIZE", "20Gi")),
-        "cpu": overrides.get("cpu") or get_config("AGENT_RUNTIME_SANDBOX_CPU", get_config("OPENCLAW_SANDBOX_CPU", "2000m")),
-        "memory": overrides.get("memory") or get_config("AGENT_RUNTIME_SANDBOX_MEMORY", get_config("OPENCLAW_SANDBOX_MEMORY", "2048Mi")),
-        "root_disk_size": overrides.get("root_disk_size") or get_config("AGENT_RUNTIME_SANDBOX_ROOT_DISK_SIZE", get_config("OPENCLAW_SANDBOX_ROOT_DISK_SIZE", "20Gi")),
+        "data_volume_size": overrides.get("data_volume_size") or get_config("AGENT_RUNTIME_DATA_VOLUME_SIZE", "20Gi"),
+        "cpu": overrides.get("cpu") or get_config("AGENT_RUNTIME_SANDBOX_CPU", "2000m"),
+        "memory": overrides.get("memory") or get_config("AGENT_RUNTIME_SANDBOX_MEMORY", "2048Mi"),
+        "root_disk_size": overrides.get("root_disk_size") or get_config("AGENT_RUNTIME_SANDBOX_ROOT_DISK_SIZE", "20Gi"),
     }
-    if runtime_kind == "hermes":
-        common["disk_image_name"] = overrides.get("disk_image_name") or common["disk_image_name"] or "hermes-api-server-image"
-        common["data_volume_name"] = overrides.get("data_volume_name") or common["data_volume_name"] or "hermes-data"
-        return hermes_sandbox_config(
-            **common,
-            foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
-            model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-6-terra"),
-            api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
-            role_blueprint=overrides.get("role_blueprint") or get_config("HERMES_ROLE_BLUEPRINT"),
-            role_blueprint_source=overrides.get("role_blueprint_source") or get_config("HERMES_ROLE_BLUEPRINT_SOURCE"),
-            role_blueprint_path=overrides.get("role_blueprint_path") or get_config("HERMES_ROLE_BLUEPRINT_PATH"),
-            role_release=overrides.get("role_release") or get_config("HERMES_ROLE_RELEASE"),
-            role_release_commit=overrides.get("role_release_commit") or get_config("HERMES_ROLE_RELEASE_COMMIT"),
-            worker_id=overrides.get("worker_id") or get_config("WORKER_ID", get_config("AUTOPILOT_NAME")),
-            assignment_scope=overrides.get("assignment_scope") or get_config("WORKER_ASSIGNMENT_SCOPE"),
-            collective_learning_approval_public_key=(
-                overrides.get("collective_learning_approval_public_key")
-                or get_config("COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY")
-            ),
-            previous_api_server_key=(
-                overrides.get("previous_api_server_key")
-                or get_config("PREVIOUS_API_SERVER_KEY")
-            ),
-            runtime_config_revision=(
-                overrides.get("runtime_config_revision")
-                or get_config("RUNTIME_CONFIG_REVISION")
-            ),
-        )
-    if runtime_kind != "openclaw":
-        raise ValueError(f"Unsupported AGENT_RUNTIME '{runtime_kind}'.")
-    common["image_name"] = common["image_name"] or get_config("OPENCLAW_IMAGE")
-    common["disk_image_id"] = common["disk_image_id"] or get_config("OPENCLAW_DISK_IMAGE_ID")
-    common["disk_image_name"] = common["disk_image_name"] or "openclaw-gateway-image-with-private-mcp"
-    common["data_volume_name"] = common["data_volume_name"] or "openclaw-data"
-    return openclaw_sandbox_config(
+    return hermes_sandbox_config(
         **common,
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
-        model_deployment=overrides.get("model_deployment") or get_config("OPENCLAW_MODEL_ID", "gpt-5-6-terra"),
-        gateway_token=overrides.get("gateway_token") or get_config("OPENCLAW_GATEWAY_TOKEN"),
+        model_deployment=overrides.get("model_deployment") or get_config("HERMES_MODEL", "gpt-5-6-terra"),
+        api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
+        role_blueprint=overrides.get("role_blueprint") or get_config("HERMES_ROLE_BLUEPRINT"),
+        role_blueprint_source=overrides.get("role_blueprint_source") or get_config("HERMES_ROLE_BLUEPRINT_SOURCE"),
+        role_blueprint_path=overrides.get("role_blueprint_path") or get_config("HERMES_ROLE_BLUEPRINT_PATH"),
+        role_release=overrides.get("role_release") or get_config("HERMES_ROLE_RELEASE"),
+        role_release_commit=overrides.get("role_release_commit") or get_config("HERMES_ROLE_RELEASE_COMMIT"),
+        worker_id=overrides.get("worker_id") or get_config("WORKER_ID", get_config("AUTOPILOT_NAME")),
+        assignment_scope=overrides.get("assignment_scope") or get_config("WORKER_ASSIGNMENT_SCOPE"),
+        collective_learning_approval_public_key=(
+            overrides.get("collective_learning_approval_public_key")
+            or get_config("COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY")
+        ),
+        previous_api_server_key=(
+            overrides.get("previous_api_server_key")
+            or get_config("PREVIOUS_API_SERVER_KEY")
+        ),
+        runtime_config_revision=(
+            overrides.get("runtime_config_revision")
+            or get_config("RUNTIME_CONFIG_REVISION")
+        ),
     )

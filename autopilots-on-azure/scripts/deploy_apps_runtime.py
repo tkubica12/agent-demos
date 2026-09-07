@@ -10,8 +10,8 @@ from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_pa
 from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, run, terraform_output, write_tfvars
 
 
-def terraform_workspace_name(runtime: str) -> str:
-    return f"autopilot-{runtime}"
+def terraform_workspace_name(state_name: str = "hermes") -> str:
+    return f"autopilot-{state_name}"
 
 
 def terraform_current_workspace() -> str:
@@ -29,7 +29,7 @@ def load_runtime_tfvars(runtime: str, state_name: str = "") -> dict[str, Any]:
     path = runtime_app_tfvars_path(runtime, state_name)
     if not path.exists():
         raise FileNotFoundError(
-            f"{path} does not exist. Run `uv run python -m scripts.setup_app_tfvars --runtime {runtime}` first."
+            f"{path} does not exist. Run `uv run python -m scripts.setup_app_tfvars --state-name {state_name or 'hermes'}` first."
         )
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("agent_runtime") != runtime:
@@ -66,11 +66,10 @@ def capture_runtime_outputs(runtime: str, workspace: str, state_name: str = "", 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Deploy or plan one runtime-specific apps stack using a dedicated Terraform workspace."
+        description="Deploy or plan one Hermes Worker using a dedicated Terraform workspace."
     )
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], required=True)
-    parser.add_argument("--state-name", default="", help="Local state directory under .local. Defaults to the runtime name.")
-    parser.add_argument("--workspace", default="", help="Terraform workspace name. Defaults to autopilot-<runtime>.")
+    parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
+    parser.add_argument("--workspace", default="", help="Terraform workspace name. Defaults to autopilot-<state-name>.")
     parser.add_argument("--plan", action="store_true", help="Run terraform plan for this runtime.")
     parser.add_argument("--apply", action="store_true", help="Run terraform apply for this runtime.")
     parser.add_argument("--auto-approve", action="store_true", help="Pass -auto-approve to terraform apply.")
@@ -82,9 +81,9 @@ def main() -> None:
     if args.infrastructure_only and args.deploy_services:
         parser.error("--infrastructure-only and --deploy-services cannot be combined.")
 
-    workspace = args.workspace or terraform_workspace_name(args.runtime)
-    state_name = args.state_name or args.runtime
-    activate_runtime_tfvars(args.runtime, state_name)
+    state_name = args.state_name
+    workspace = args.workspace or terraform_workspace_name(state_name)
+    activate_runtime_tfvars("hermes", state_name)
 
     if not args.skip_init:
         run(["terraform", "init"], cwd=APPS_DIR)
@@ -109,17 +108,17 @@ def main() -> None:
         service_outputs = deploy_sandbox_services(terraform_output(APPS_DIR), terraform_output(PLATFORM_DIR))
         args.capture = True
     if args.capture:
-        capture_runtime_outputs(args.runtime, workspace, state_name, service_outputs=service_outputs)
+        capture_runtime_outputs("hermes", workspace, state_name, service_outputs=service_outputs)
 
     print(
         json.dumps(
             {
-                "runtime": args.runtime,
+                "runtime": "hermes",
                 "stateName": state_name,
                 "terraformWorkspace": workspace,
-                "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime, state_name)),
-                "runtimeOutputsFile": str(runtime_outputs_path(args.runtime, state_name)),
-                "next": f"Run Agent 365 setup for {args.runtime}; it will use the captured endpoint when present.",
+                "runtimeTfvarsFile": str(runtime_app_tfvars_path("hermes", state_name)),
+                "runtimeOutputsFile": str(runtime_outputs_path("hermes", state_name)),
+                "next": f"Run Agent 365 setup with --state-name {state_name}; it will use the captured endpoint when present.",
             },
             indent=2,
         ),

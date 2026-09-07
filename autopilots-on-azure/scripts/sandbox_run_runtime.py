@@ -9,7 +9,6 @@ from scripts.sandbox_runtime import ensure_agent_sandbox, config_from_environmen
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
     parser.add_argument("--dry-run", action="store_true", help="Print the resolved sandbox config without creating or starting a sandbox.")
     parser.add_argument("--subscription-id", default="")
     parser.add_argument("--resource-group", default="")
@@ -21,7 +20,6 @@ def main() -> None:
     parser.add_argument("--disk-image-id", default="", help="Prepared disk image ID; required for startup unless AGENT_RUNTIME_DISK_IMAGE_ID is set.")
     parser.add_argument("--foundry-openai-base-url", default="")
     parser.add_argument("--model-deployment", default="")
-    parser.add_argument("--gateway-token", default="")
     parser.add_argument("--disk-image-name", default="")
     parser.add_argument("--data-volume-name", default="")
     parser.add_argument("--data-volume-size", default="20Gi")
@@ -49,14 +47,12 @@ def main() -> None:
         resource_group=args.resource_group,
         sandbox_group=args.sandbox_group,
         region=args.region,
-        runtime_kind=args.runtime,
         image_name=args.image,
         runtime_image_reference=args.runtime_image_reference,
         managed_identity_client_id=args.managed_identity_client_id,
         disk_image_id=args.disk_image_id,
         foundry_openai_base_url=args.foundry_openai_base_url,
         model_deployment=args.model_deployment,
-        gateway_token=args.gateway_token,
         disk_image_name=args.disk_image_name,
         data_volume_name=args.data_volume_name,
         data_volume_size=args.data_volume_size,

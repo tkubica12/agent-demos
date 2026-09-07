@@ -21,16 +21,13 @@ locals {
   }
   roles = toset(["runtime", "gateway", "private-mcp", "public-mcp", "generated-apps"])
   document_retry_active = (
-    var.agent_runtime == "hermes" && var.document_retry_enabled && var.agent365_client_id != ""
+    var.document_retry_enabled && var.agent365_client_id != ""
   )
   scheduler_transport_enabled = (
-    var.agent_runtime == "hermes" && (var.user_scheduling_enabled || local.document_retry_active)
+    var.user_scheduling_enabled || local.document_retry_active
   )
-  runtime_data_volume_name = var.openclaw_data_volume_name == "" ? var.runtime_data_volume_name : var.openclaw_data_volume_name
-  runtime_disk_image_name = (
-    var.runtime_disk_image_name != "openclaw-gateway-image-with-private-mcp" || var.openclaw_disk_image_name == ""
-    ? var.runtime_disk_image_name : var.openclaw_disk_image_name
-  )
+  runtime_data_volume_name   = var.runtime_data_volume_name
+  runtime_disk_image_name    = var.runtime_disk_image_name
   sandbox_data_owner_role_id = "c24cf47c-5077-412d-a19c-45202126392c"
 }
 
@@ -58,7 +55,7 @@ resource "azapi_resource" "sandbox_group" {
   schema_validation_enabled = false
   lifecycle {
     precondition {
-      condition     = !var.servicebus_dream_enabled || (var.agent_runtime == "hermes" && var.user_scheduling_enabled)
+      condition     = !var.servicebus_dream_enabled || var.user_scheduling_enabled
       error_message = "Queue-driven Dreaming requires Hermes user scheduling and its Service Bus queue."
     }
     precondition {
@@ -151,7 +148,7 @@ resource "azurerm_role_assignment" "gateway_schedule" {
 }
 
 resource "azurerm_role_assignment" "agent_identity_schedule_sender" {
-  count                = var.agent_runtime == "hermes" && var.user_scheduling_enabled && var.agent365_agent_identity_object_id != "" ? 1 : 0
+  count                = var.user_scheduling_enabled && var.agent365_agent_identity_object_id != "" ? 1 : 0
   scope                = azurerm_servicebus_queue.worker_schedule[0].id
   role_definition_name = "Azure Service Bus Data Sender"
   principal_id         = var.agent365_agent_identity_object_id

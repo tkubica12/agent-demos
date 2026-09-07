@@ -11,7 +11,8 @@ from typing import Any
 
 from scripts.provision_agent365_instance import GraphClient
 from scripts.setup_agent365 import agent365_workspace, load_json, write_json
-from scripts.tf_helpers import APPS_DIR, REPO_ROOT, resolve_executable, terraform_output
+from scripts.setup_app_tfvars import runtime_outputs_path
+from scripts.tf_helpers import REPO_ROOT, resolve_executable
 
 
 PUBLIC_API_STATE = REPO_ROOT / ".local" / "public-shipments-mcp-api.json"
@@ -57,14 +58,8 @@ def catalog_server_available(server_name: str) -> bool:
     ) is not None
 
 
-def runtime_outputs(runtime: str) -> dict[str, Any]:
-    outputs = terraform_output(APPS_DIR)
-    if outputs.get("agent_runtime") != runtime:
-        raise RuntimeError(
-            f"Terraform apps workspace contains {outputs.get('agent_runtime')!r}; "
-            f"select autopilot-{runtime} before registration."
-        )
-    return outputs
+def runtime_outputs(state_name: str) -> dict[str, Any]:
+    return load_json(runtime_outputs_path("hermes", state_name))
 
 
 def ensure_service_principal(graph: GraphClient, app_id: str) -> dict[str, Any]:
@@ -206,14 +201,14 @@ def grant_backing_app_permissions(graph: GraphClient, server_name: str) -> dict[
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Register the public shipments server as an Agent 365 BYO MCP server.")
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], required=True)
+    parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--repair-consent", action="store_true")
     parser.add_argument("--mark-approved", action="store_true")
     args = parser.parse_args()
 
-    registration_path = registration_state_path(args.runtime)
+    registration_path = registration_state_path(args.state_name)
     if args.mark_approved:
         state = load_json(registration_path)
         state["status"] = "Approved"
@@ -239,7 +234,7 @@ def main() -> None:
         print(json.dumps(state, indent=2))
         return
 
-    outputs = runtime_outputs(args.runtime)
+    outputs = runtime_outputs(args.state_name)
     public_api = load_json(PUBLIC_API_STATE)
     delegated_scope = f"{public_api['audience']}/{public_api['delegatedScope']}"
     if not args.dry_run:
@@ -253,7 +248,8 @@ def main() -> None:
                 )
             consent = grant_backing_app_permissions(graph, "ext_Shipments")
             state = {
-                "runtime": args.runtime,
+                "runtime": "hermes",
+                "stateName": args.state_name,
                 "serverName": "ext_Shipments",
                 "serverUrl": outputs["public_shipments_mcp_url"],
                 "authType": "EntraOAuth",
@@ -266,7 +262,7 @@ def main() -> None:
             write_json(registration_path, state)
             print(json.dumps(state, indent=2))
             return
-    request_path = agent365_workspace(args.runtime) / "byo.public-shipments.request.json"
+    request_path = agent365_workspace(args.state_name) / "byo.public-shipments.request.json"
     write_json(
         request_path,
         {
@@ -318,7 +314,8 @@ def main() -> None:
     consent = grant_backing_app_permissions(GraphClient.from_az_cli(), "ext_Shipments")
 
     state = {
-        "runtime": args.runtime,
+        "runtime": "hermes",
+        "stateName": args.state_name,
         "serverName": "ext_Shipments",
         "serverUrl": outputs["public_shipments_mcp_url"],
         "authType": "EntraOAuth",

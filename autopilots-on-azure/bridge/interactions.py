@@ -272,7 +272,6 @@ def _cipher(secret: str | None = None) -> Fernet:
     value = (
         secret
         or os.getenv("API_SERVER_KEY", "")
-        or os.getenv("HERMES_API_SERVER_KEY", "")
     )
     if not value:
         raise RuntimeError(

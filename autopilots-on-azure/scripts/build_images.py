@@ -64,7 +64,6 @@ def write_worker_images(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build Autopilots on Azure images in ACR and write apps generated image tfvars.")
     parser.add_argument("--tag", default="")
-    parser.add_argument("--runtime", choices=["openclaw", "hermes"], default="openclaw")
     parser.add_argument(
         "--state-name",
         action="append",
@@ -78,8 +77,8 @@ def main() -> None:
     login_server = platform["acr_login_server"]
     tag = args.tag or f"dev-{int(time.time())}-{git_sha()}"
 
-    runtime_repository = f"{args.runtime}-runtime"
-    runtime_dockerfile = f"runtimes/{args.runtime}/Dockerfile"
+    runtime_repository = "hermes-runtime"
+    runtime_dockerfile = "runtimes/hermes/Dockerfile"
     images = {
         "runtime_image": (
             runtime_repository,
@@ -103,8 +102,8 @@ def main() -> None:
         ),
     }
 
-    states = list(dict.fromkeys(args.state_name or [args.runtime]))
-    runtime_paths = [runtime_app_tfvars_path(args.runtime, state) for state in states]
+    states = list(dict.fromkeys(args.state_name or ["hermes"]))
+    runtime_paths = [runtime_app_tfvars_path("hermes", state) for state in states]
     for path in runtime_paths:
         if not path.exists():
             raise FileNotFoundError(f"{path} does not exist. Run scripts.setup_app_tfvars first.")
@@ -116,10 +115,10 @@ def main() -> None:
             f"{login_server}/{repository}:{tag}"
         )
         if var_name == "runtime_image":
-            built_images["runtime_disk_image_name"] = f"{args.runtime}-runtime-{digest.removeprefix('sha256:')[:12]}"
+            built_images["runtime_disk_image_name"] = f"hermes-runtime-{digest.removeprefix('sha256:')[:12]}"
 
-    write_worker_images(runtime_paths, built_images, runtime=args.runtime)
-    print(json.dumps({"tag": tag, "runtime": args.runtime, "states": states, **built_images}, indent=2))
+    write_worker_images(runtime_paths, built_images, runtime="hermes")
+    print(json.dumps({"tag": tag, "runtime": "hermes", "states": states, **built_images}, indent=2))
 
 
 if __name__ == "__main__":

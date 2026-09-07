@@ -9,14 +9,15 @@ from scripts.deploy_apps_runtime import load_runtime_tfvars, terraform_workspace
 
 
 class DeployAppsRuntimeTests(unittest.TestCase):
-    def test_workspace_name_is_runtime_scoped(self):
-        self.assertEqual(terraform_workspace_name("openclaw"), "autopilot-openclaw")
+    def test_workspace_name_is_worker_scoped(self):
+        self.assertEqual(terraform_workspace_name(), "autopilot-hermes")
         self.assertEqual(terraform_workspace_name("hermes"), "autopilot-hermes")
+        self.assertEqual(terraform_workspace_name("hermes2"), "autopilot-hermes2")
 
     def test_load_runtime_tfvars_rejects_wrong_runtime(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "generated.app.auto.tfvars.json"
-            path.write_text(json.dumps({"agent_runtime": "openclaw"}), encoding="utf-8")
+            path.write_text(json.dumps({"agent_runtime": "invalid"}), encoding="utf-8")
 
             with patch.object(deploy_apps_runtime, "runtime_app_tfvars_path", return_value=path):
                 with self.assertRaises(ValueError):

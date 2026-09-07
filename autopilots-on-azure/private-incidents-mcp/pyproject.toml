@@ -1,7 +1,7 @@
 [project]
 name = "private-incidents-mcp"
 version = "0.1.0"
-description = "Mock private FSI incidents MCP server for OpenClaw VNet demos."
+description = "Mock private FSI incidents MCP server for Hermes VNet demos."
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastmcp",

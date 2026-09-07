@@ -122,19 +122,7 @@ def ensure_learning_state(profile_home: Path) -> Path:
     return path
 
 
-def assert_legacy_state_migrated(profile_home: Path) -> None:
-    private_cache = profile_home / "local" / "private-cache.md"
-    if private_cache.exists() and private_cache.read_text(encoding="utf-8").strip():
-        raise RuntimeError(
-            "Legacy local/private-cache.md must be converted to a Private Playbook before Role Release 3.0."
-        )
-    if private_cache.exists():
-        private_cache.unlink()
-    hot_learning = profile_home / "skills" / "hot-learning"
-    if hot_learning.exists():
-        raise RuntimeError(
-            "Legacy skills/hot-learning must be converted to Candidate Improvements before Role Release 3.0."
-        )
+def validate_learning_journal(profile_home: Path) -> None:
     path = provenance_file(profile_home)
     if not path.exists():
         return
@@ -144,11 +132,9 @@ def assert_legacy_state_migrated(profile_home: Path) -> None:
         try:
             payload = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("Legacy learning journal contains invalid JSON.") from exc
-        if payload.get("schemaVersion") != SCHEMA_VERSION:
-            raise RuntimeError(
-                "Legacy learning/records.jsonl must be archived or migrated before Role Release 3.0."
-            )
+            raise RuntimeError("Learning journal contains invalid JSON.") from exc
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != SCHEMA_VERSION:
+            raise RuntimeError(f"Learning journal requires schemaVersion {SCHEMA_VERSION}.")
 
 
 def _require_string(record: dict[str, Any], key: str, *, maximum: int) -> str:
