@@ -14,7 +14,7 @@ dependencies = [
     "cryptography>=43.0.0",
     "fastapi>=0.115.13",
     "httpx==0.28.1",
-    "mcp>=1.23.0,<2",
+    "mcp>=1.23.0,<3",
     "microsoft-agents-a365-notifications==1.0.0",
     "microsoft-agents-authentication-msal>=1.1.0",
     "microsoft-agents-hosting-fastapi>=1.1.0",
