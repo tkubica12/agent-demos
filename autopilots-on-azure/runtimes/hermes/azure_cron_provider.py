@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 import time
-import uuid
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -15,12 +15,48 @@ import httpx
 from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from opentelemetry.trace import SpanKind
 
+from bridge.telemetry import operation_span, trace_headers
 from cron.scheduler_provider import CronScheduler
 
 
 TOKEN_EXCHANGE_SCOPE = "api://AzureADTokenExchange/.default"
 CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+_OUTPUT_CAPTURE: ContextVar[tuple[str, Callable[[Path, str], None]] | None] = ContextVar(
+    "cron_output_capture", default=None
+)
+_NATIVE_EXECUTION_ID: ContextVar[str] = ContextVar("native_cron_execution_id", default="")
+_OUTPUT_HOOK_LOCK = threading.Lock()
+
+
+def _install_output_capture() -> None:
+    from cron import scheduler
+
+    with _OUTPUT_HOOK_LOCK:
+        original = scheduler.save_job_output
+        if getattr(original, "_autopilot_output_capture", False):
+            return
+
+        def save_output(job_id, output, *args, **kwargs):
+            path = original(job_id, output, *args, **kwargs)
+            capture = _OUTPUT_CAPTURE.get()
+            if capture is not None and str(job_id) == capture[0]:
+                capture[1](Path(path), _NATIVE_EXECUTION_ID.get())
+            return path
+
+        save_output._autopilot_output_capture = True
+        scheduler.save_job_output = save_output
+        original_run = scheduler.run_one_job
+
+        def run_one_job(job, *args, **kwargs):
+            token = _NATIVE_EXECUTION_ID.set(str(job.get("execution_id") or ""))
+            try:
+                return original_run(job, *args, **kwargs)
+            finally:
+                _NATIVE_EXECUTION_ID.reset(token)
+
+        scheduler.run_one_job = run_one_job
 
 
 def required_env(name: str) -> str:
@@ -191,8 +227,16 @@ class AzureCronScheduler(CronScheduler):
         *,
         adapters: Any = None,
         loop: Any = None,
+        output_callback: Callable[[Path, str], None] | None = None,
     ) -> bool:
-        ran = super().fire_due(job_id, adapters=adapters, loop=loop)
+        _install_output_capture()
+        token = _OUTPUT_CAPTURE.set(
+            (job_id, output_callback) if output_callback is not None else None
+        )
+        try:
+            ran = super().fire_due(job_id, adapters=adapters, loop=loop)
+        finally:
+            _OUTPUT_CAPTURE.reset(token)
         self.reconcile()
         return ran
 
@@ -259,6 +303,17 @@ class AzureCronScheduler(CronScheduler):
         revision: str,
         binding: dict[str, Any],
     ) -> int:
+        with operation_span(
+            "servicebus.schedule",
+            kind=SpanKind.PRODUCER,
+            operation_id=f"{job['id']}:{revision}",
+            attributes={"messaging.system": "servicebus", "messaging.operation.type": "send"},
+        ):
+            return self._schedule_message(job, revision, binding)
+
+    def _schedule_message(
+        self, job: dict[str, Any], revision: str, binding: dict[str, Any]
+    ) -> int:
         worker_id = required_env("WORKER_ID")
         fire_at = datetime.fromisoformat(str(job["next_run_at"]).replace("Z", "+00:00"))
         message_type = (
@@ -280,6 +335,7 @@ class AzureCronScheduler(CronScheduler):
             message_id=f"{worker_id}:{job['id']}:{revision}",
             content_type="application/json",
             subject=message_type,
+            application_properties=trace_headers(),
         )
         with self._servicebus_client().get_queue_sender(
             required_env("SCHEDULER_SERVICEBUS_QUEUE")
@@ -292,6 +348,19 @@ class AzureCronScheduler(CronScheduler):
         job: dict[str, Any],
         revision: str,
         binding: dict[str, Any],
+        *,
+        occurrence_id: str,
+    ) -> dict[str, str]:
+        with operation_span(
+            "servicebus.send",
+            kind=SpanKind.PRODUCER,
+            operation_id=f"{job['id']}:{occurrence_id}",
+            attributes={"messaging.system": "servicebus", "messaging.operation.type": "send"},
+        ):
+            return self._enqueue_message(job, revision, binding, occurrence_id=occurrence_id)
+
+    def _enqueue_message(
+        self, job: dict[str, Any], revision: str, binding: dict[str, Any], *, occurrence_id: str,
     ) -> dict[str, str]:
         worker_id = required_env("WORKER_ID")
         message_type = (
@@ -299,7 +368,6 @@ class AzureCronScheduler(CronScheduler):
             if binding.get("systemType") == "dream"
             else "hermes.cron.fire"
         )
-        occurrence_id = f"manual-{uuid.uuid4().hex}"
         message_id = f"{worker_id}:{job['id']}:{occurrence_id}"
         message = ServiceBusMessage(
             canonical_json({
@@ -314,6 +382,7 @@ class AzureCronScheduler(CronScheduler):
             message_id=message_id,
             content_type="application/json",
             subject=message_type,
+            application_properties=trace_headers(),
         )
         with self._servicebus_client().get_queue_sender(
             required_env("SCHEDULER_SERVICEBUS_QUEUE")

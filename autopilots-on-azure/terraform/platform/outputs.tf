@@ -50,36 +50,25 @@ output "private_mcp_default_domain" {
   value = azapi_resource.private_mcp_env.output.properties.defaultDomain
 }
 
-output "bridge_env_name" {
-  value = azapi_resource.bridge_env.name
+output "sandbox_subnet_id" {
+  value = azurerm_subnet.sandbox.id
 }
 
-output "bridge_env_id" {
-  value = azapi_resource.bridge_env.id
+output "private_ingress_ready" {
+  value = azurerm_private_endpoint.private_mcp.id
+  depends_on = [
+    azurerm_private_dns_zone_virtual_network_link.sandbox,
+    azurerm_virtual_network_peering.sandbox_to_private_mcp,
+    azurerm_virtual_network_peering.private_mcp_to_sandbox,
+  ]
 }
 
-output "sandbox_group_name" {
-  value = azapi_resource.sandbox_group.name
+output "foundry_id" {
+  value = azapi_resource.foundry.id
 }
 
-output "sandbox_group_id" {
-  value = azapi_resource.sandbox_group.id
-}
-
-output "sandbox_group_principal_id" {
-  value = azapi_resource.sandbox_group.output.identity.principalId
-}
-
-output "generated_apps_sandbox_group_name" {
-  value = azapi_resource.generated_apps_sandbox_group.name
-}
-
-output "generated_apps_sandbox_group_id" {
-  value = azapi_resource.generated_apps_sandbox_group.id
-}
-
-output "sandbox_vnet_connection_name" {
-  value = azapi_resource.sandbox_vnet_connection.name
+output "foundry_project_id" {
+  value = azapi_resource.foundry_project.id
 }
 
 output "foundry_name" {

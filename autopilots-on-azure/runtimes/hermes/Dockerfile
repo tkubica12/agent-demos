@@ -24,6 +24,7 @@ RUN dotnet publish -c Release -r linux-x64 --self-contained true \
     -p:PublishSingleFile=true -p:PublishTrimmed=false -o /out
 
 FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm
+COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
@@ -33,16 +34,16 @@ RUN apt-get update \
         pandoc libreoffice-writer libreoffice-calc libreoffice-impress \
         poppler-utils qpdf \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install --global docx pptxgenjs
+COPY runtimes/hermes/package.json runtimes/hermes/package-lock.json ./
+RUN npm ci --ignore-scripts
 
-COPY runtimes/hermes/requirements.txt .
-RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt
+COPY runtimes/hermes/pyproject.toml runtimes/hermes/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project --python python3 --no-managed-python
 
 COPY runtimes/hermes/start_hermes.py .
 COPY runtimes/hermes/blueprint.py .
 COPY runtimes/hermes/learning.py .
 COPY runtimes/hermes/collective_learning.py .
-COPY runtimes/hermes/foundry_token_proxy.py .
 COPY runtimes/hermes/azure_cron_provider.py .
 COPY runtimes/hermes/cron_runtime.py .
 COPY runtimes/hermes/plugins ./runtime_plugins
@@ -52,6 +53,7 @@ COPY --from=minimax-skills /source/skills/minimax-xlsx ./runtime_skills/minimax-
 COPY --from=minimax-skills /source/skills/pptx-generator ./runtime_skills/pptx-generator
 COPY --from=minimax-skills /source/skills/minimax-pdf ./runtime_skills/minimax-pdf
 COPY autopilots_identity ./autopilots_identity
+COPY bridge/__init__.py bridge/telemetry.py bridge/telemetry_http.py bridge/hermes_telemetry.py ./bridge/
 COPY --from=office-helper /out/office-collaboration /usr/local/bin/office-collaboration
 COPY --from=minimax-docx /out/MiniMaxAIDocx.Cli /usr/local/bin/minimax-docx
 
@@ -61,9 +63,12 @@ ENV API_SERVER_PORT=8642
 ENV HERMES_HOME=/data/hermes
 ENV HERMES_BUNDLED_SKILLS=/app/runtime_skills
 ENV PYTHONPATH=/app
+ENV PATH="/app/.venv/bin:${PATH}"
+ENV NODE_PATH=/app/node_modules
+ENV UV_PYTHON_DOWNLOADS=never
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8642
 
 EXPOSE 8642
 
-CMD ["python3", "start_hermes.py"]
+CMD ["uv", "run", "--no-sync", "python", "start_hermes.py"]

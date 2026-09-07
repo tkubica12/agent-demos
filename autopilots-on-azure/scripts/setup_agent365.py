@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, output, run, terraform_output
+from scripts.tf_helpers import REPO_ROOT, output, run
 
 
 GENERATED_CONFIG = "a365.generated.config.json"
@@ -78,12 +80,6 @@ def current_tenant_id() -> str:
     return output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"])
 
 
-def bridge_messaging_endpoint() -> str:
-    apps = terraform_output(APPS_DIR)
-    bridge_url = str(apps["bridge_url"]).rstrip("/")
-    return f"{bridge_url}/api/messages"
-
-
 def runtime_outputs_path(runtime_kind: str) -> Path:
     return REPO_ROOT / ".local" / runtime_kind / "apps" / "terraform-outputs.json"
 
@@ -92,9 +88,58 @@ def normalize_messaging_endpoint(value: str) -> str:
     endpoint = value.strip().rstrip("/")
     if not endpoint:
         raise ValueError("Messaging endpoint cannot be empty.")
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Messaging endpoint must be an absolute HTTPS URL without credentials, query, or fragment.")
     if endpoint.endswith("/api/messages"):
         return endpoint
     return f"{endpoint}/api/messages"
+
+
+def endpoint_update_config(
+    workspace: Path, *, tenant_id: str, messaging_endpoint: str,
+) -> dict[str, Any]:
+    config = load_json(workspace / "a365.config.json")
+    generated = load_json(workspace / GENERATED_CONFIG)
+    if not generated.get("agentBlueprintId"):
+        raise ValueError("Endpoint updates require an existing Agent 365 blueprint.")
+    if config.get("tenantId") != tenant_id:
+        raise ValueError("Endpoint update tenant differs from the existing Agent 365 configuration.")
+    return {**config, "messagingEndpoint": normalize_messaging_endpoint(messaging_endpoint)}
+
+
+def require_endpoint_update_owner(workspace: Path) -> None:
+    from scripts.provision_agent365_instance import GraphClient, GraphError
+    from scripts.setup_identity import blueprint_application_object_id
+
+    blueprint_client_id = str(load_json(workspace / GENERATED_CONFIG)["agentBlueprintId"])
+    try:
+        graph = GraphClient.from_az_cli()
+        user = graph.request("GET", "/me?$select=id,userPrincipalName")
+        user_id = str(user.get("id") or "")
+        if not user_id:
+            raise ValueError("Microsoft Graph did not identify a signed-in user.")
+        blueprint_object_id = blueprint_application_object_id(graph, blueprint_client_id)
+        path = f"/applications/{blueprint_object_id}/microsoft.graph.agentIdentityBlueprint/owners?$select=id"
+        while path:
+            owners = graph.request("GET", path)
+            if any(str(owner.get("id") or "").lower() == user_id.lower() for owner in owners["value"]):
+                return
+            path = owners.get("@odata.nextLink")
+    except (GraphError, subprocess.SubprocessError, OSError, ValueError, KeyError) as exc:
+        raise RuntimeError(
+            "Endpoint update blocked: unable to verify direct Agent Blueprint ownership. "
+            "Confirm the Azure CLI session is signed in as an existing blueprint owner "
+            "and can read Microsoft Graph /me and blueprint owners. "
+            "The a365 update was not invoked; no endpoint was changed."
+        ) from exc
+    raise PermissionError(
+        f"Endpoint update blocked: Graph user {user.get('userPrincipalName') or user_id} ({user_id}) "
+        f"is not a direct owner of Agent Blueprint {blueprint_client_id}. "
+        "The a365 CLI can delete the old endpoint before failing to create its replacement. "
+        "Rerun only as an existing blueprint owner in an isolated Azure CLI session; "
+        "keep the deployment-operator session for Terraform. No endpoint was changed."
+    )
 
 
 def messaging_endpoint_from_outputs(path: Path) -> str:
@@ -119,9 +164,12 @@ def resolve_messaging_endpoint(
         if outputs_file
         else runtime_outputs_path(state_name or runtime_kind)
     )
-    if path.exists():
-        return messaging_endpoint_from_outputs(path)
-    return bridge_messaging_endpoint()
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} is missing. Deploy this Worker's Sandbox services first, "
+            "or pass its real --messaging-endpoint explicitly."
+        )
+    return messaging_endpoint_from_outputs(path)
 
 
 def agent365_workspace(autopilot_name: str) -> Path:
@@ -399,6 +447,10 @@ def main() -> None:
     )
     parser.add_argument("--capture", action="store_true", help="Write non-secret Agent 365 identifiers from generated config.")
     args = parser.parse_args()
+    if args.update_endpoint and args.run_setup:
+        parser.error("Update the existing endpoint separately from --run-setup.")
+    if args.dry_run and (args.update_endpoint or args.publish):
+        parser.error("--dry-run applies only to setup; omit --update-endpoint and --publish to preview their commands.")
 
     branding_defaults = default_branding(args.runtime, args.autopilot_name)
     branding = Agent365Branding(
@@ -433,7 +485,10 @@ def main() -> None:
         agent_user_principal_name=args.agent_user_principal_name,
     )
     config_path = workspace / "a365.config.json"
-    if config_path.exists():
+    if args.update_endpoint:
+        config = endpoint_update_config(workspace, tenant_id=tenant_id, messaging_endpoint=messaging_endpoint)
+        require_endpoint_update_owner(workspace)
+    elif config_path.exists():
         config = merge_config(load_json(config_path), config)
     write_json(config_path, config)
 

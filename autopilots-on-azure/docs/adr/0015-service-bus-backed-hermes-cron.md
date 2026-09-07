@@ -1,8 +1,10 @@
-# ADR 0015: Use Service Bus to wake per-Worker bridges for Hermes schedules
+# ADR 0015: Dispatch Hermes schedules through continuously running gateways
 
 ## Status
 
 Accepted.
+
+Updated 2026-09-06 21:46 CEST: Hermes 2 user scheduling produced a delivered receipt, verified SHA, and DLQ `0`, with gateway Running/auto-suspend `false` and runtime already Running—not wake proof. Its ad-hoc Dream completed at phase `prepared`, `success=true`, `recordCount=0`, `packet=null`; production cron unchanged, scheduled count `1`, DLQ `0`. This is no-change execution, not learning improvement or crash-recovery proof. Separately, deployed application resume preserved runtime ID `65db4109-ee34-4b52-a296-31d5499a8f3e` and Data Disk in 28.5 s including model work. Direct SDK resume took 1.3 s with a different scope. Automatic eight-hour idle behavior remains unverified; no KEDA/full-system scale-to-zero or exactly-once claim follows.
 
 ## Context
 
@@ -34,9 +36,9 @@ A11 currently uses one scheduled ACA Job to call the bridge for platform-owned D
 
 ## Decision
 
-Use one Service Bus queue per Worker and configure that Worker's bridge Container App with a managed-identity `azure-servicebus` KEDA scaler.
+Use one Service Bus queue per Worker and a managed-identity receiver in that Worker's non-suspending gateway Sandbox.
 
-The bridge becomes the queue consumer as well as the HTTP/S messaging adapter. It remains one isolated, single-replica control plane per Worker.
+The gateway is the queue consumer and HTTP/S messaging adapter. It remains one isolated control-plane process per Worker. Only the Worker runtime is OnDemand.
 
 Hermes native cron remains canonical. Implement an `azure` `CronScheduler` plugin through Hermes' supported plugin interface; do not fork Hermes or create a second schedule database.
 
@@ -66,7 +68,7 @@ It never contains the private prompt, skills, delivery content, credentials, or 
 
 ```text
 scheduled message becomes active
-  -> KEDA scales bridge from zero
+  -> running gateway receives the due message
   -> bridge PeekLocks message and renews lock
   -> bridge validates Worker, type, revision, and due time
   -> bridge wakes or reuses Sandbox
@@ -77,7 +79,7 @@ scheduled message becomes active
   -> runtime marks the delivery receipt
   -> provider reconciles the next occurrence
   -> bridge completes Service Bus message
-  -> bridge scales to zero
+  -> gateway continues receiving; runtime may suspend independently
 ```
 
 Service Bus does not provide recurring scheduled messages. The provider schedules one future occurrence. Hermes computes the next occurrence; the provider re-arms it after the current fire path records the outcome.
@@ -85,7 +87,7 @@ Service Bus does not provide recurring scheduled messages. The provider schedule
 ### Correctness
 
 - Use PeekLock, automatic lock renewal, bounded concurrency, and explicit complete/abandon/dead-letter operations.
-- Set `maxReplicas = 1` per Worker.
+- Keep one active gateway consumer and one writer per Worker profile.
 - Use deterministic Service Bus message IDs plus Service Bus duplicate detection where available.
 - Treat Service Bus as at-least-once transport. Hermes `fire_claim`, execution ledger, and schedule revision are the correctness boundary.
 - Hermes execution is at-most-once for one schedule revision. Teams proactive delivery is at-least-once: a process failure after Teams accepts the activity but before the durable receipt is marked can repeat the visible message because Teams and Service Bus do not share a transaction.
@@ -96,11 +98,14 @@ Service Bus does not provide recurring scheduled messages. The provider schedule
 - Complete the queue message only after execution and next-occurrence reconciliation are durable.
 - For bound Teams schedules, complete the queue message only after proactive send and durable delivery acknowledgement. A delivery failure abandons the message without rerunning the Hermes job.
 - Monitor and expose dead-letter queue depth; never auto-discard DLQ messages.
+- Persist phase checkpoints and enforce fencing. A completed Dream response can be reconciled/replayed without repeating the model/tools.
+- Stop on an ambiguous `dream_started` interruption instead of assuming it is safe to rerun.
+- Give operator run-now a distinct occurrence identity; it cannot consume or advance the production occurrence.
 
 ### Identity
 
 - Hermes Azure provider schedules messages as the Worker Agent Identity with Azure Service Bus Data Sender.
-- The bridge user-assigned identity receives messages with Azure Service Bus Data Receiver and is used by the KEDA scaler.
+- The gateway's distinct user-assigned identity receives messages with Azure Service Bus Data Receiver; there is no Sandbox KEDA scaler.
 - No Service Bus connection string, SAS key, bridge API key, or application secret is stored in the Worker schedule.
 
 ### Hosted safety boundary
@@ -140,14 +145,14 @@ The A11 scheduled ACA Job was removed after the Service Bus path proved:
 - Bridge code gains queue receive, lock-renewal, settlement, and DLQ responsibilities.
 - The separate A11 scheduled Job and dedicated auth/client surface are removed.
 - No fixed polling wakes idle Workers.
-- Cost follows actual due occurrences; trigger latency is approximately the KEDA polling interval.
+- Runtime compute follows due work, but the gateway incurs an explicit always-running cost. Queue receive, not a KEDA polling interval, determines dispatch latency.
 - Service Bus and bridge failure modes require explicit observability and operator replay.
 - User schedules survive Worker Refresh because Hermes state remains on the Data Disk.
 - Queue state is transport metadata, not the source of truth.
 
 ## Rejected alternatives
 
-- **Always-on Worker compute:** rejected because it defeats the expensive Sandbox scale-to-zero boundary. One lightweight bridge replica is now accepted for Agent 365 ingress because standard ACA cold start can miss the Activity Protocol deadline; ADR 0001 defines the Express migration gates.
+- **Always-on Worker compute:** rejected because it defeats the expensive runtime suspend boundary. The lightweight gateway stays running for both Agent 365 detached work and queue receive under ADR 0001.
 - **Fixed polling:** wastes executions and adds interval-sized latency.
 - **Per-task ACA Jobs:** turns schedule data into ARM-resource churn and complicates update/cancel.
 - **Logic Apps:** adds another workflow engine and billed polling without replacing Hermes schedule state.

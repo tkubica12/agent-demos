@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
-from scripts.tf_helpers import APPS_DIR, run, terraform_output, write_tfvars
+from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, run, terraform_output, write_tfvars
 
 
 def terraform_workspace_name(runtime: str) -> str:
@@ -44,11 +44,20 @@ def activate_runtime_tfvars(runtime: str, state_name: str = "") -> dict[str, Any
     return tfvars
 
 
-def capture_runtime_outputs(runtime: str, workspace: str, state_name: str = "") -> Path:
+def capture_runtime_outputs(runtime: str, workspace: str, state_name: str = "", *, service_outputs: dict | None = None) -> Path:
     outputs = terraform_output(APPS_DIR)
+    outputs.pop("deployment_config", None)
+    output_path = runtime_outputs_path(runtime, state_name)
+    if service_outputs is not None:
+        outputs.update(service_outputs)
+    elif output_path.exists():
+        previous = json.loads(output_path.read_text(encoding="utf-8"))
+        if previous.get("sandbox_groups") == outputs.get("sandbox_groups"):
+            for key, value in previous.items():
+                if key.endswith(("_url", "_fqdn", "_sandbox_id")) or key in {"sandbox_services", "runtime_disk_image_id"}:
+                    outputs[key] = value
     outputs["terraform_workspace"] = workspace
     outputs["captured_agent_runtime"] = runtime
-    output_path = runtime_outputs_path(runtime, state_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(outputs, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {output_path}", flush=True)
@@ -66,8 +75,12 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Run terraform apply for this runtime.")
     parser.add_argument("--auto-approve", action="store_true", help="Pass -auto-approve to terraform apply.")
     parser.add_argument("--capture", action="store_true", help="Capture terraform outputs for this runtime.")
+    parser.add_argument("--deploy-services", action="store_true", help="Deploy Sandbox services after the apps infrastructure exists.")
+    parser.add_argument("--infrastructure-only", action="store_true", help="Apply only ARM resources, allowing blueprint federation trust setup before Sandbox deployment.")
     parser.add_argument("--skip-init", action="store_true", help="Do not run terraform init before selecting the workspace.")
     args = parser.parse_args()
+    if args.infrastructure_only and args.deploy_services:
+        parser.error("--infrastructure-only and --deploy-services cannot be combined.")
 
     workspace = args.workspace or terraform_workspace_name(args.runtime)
     state_name = args.state_name or args.runtime
@@ -88,8 +101,15 @@ def main() -> None:
             command.append("-auto-approve")
         run(command, cwd=APPS_DIR)
         args.capture = True
+        args.deploy_services = not args.infrastructure_only
+    service_outputs = None
+    if args.deploy_services:
+        from scripts.sandbox_services import deploy_sandbox_services
+
+        service_outputs = deploy_sandbox_services(terraform_output(APPS_DIR), terraform_output(PLATFORM_DIR))
+        args.capture = True
     if args.capture:
-        capture_runtime_outputs(args.runtime, workspace, state_name)
+        capture_runtime_outputs(args.runtime, workspace, state_name, service_outputs=service_outputs)
 
     print(
         json.dumps(

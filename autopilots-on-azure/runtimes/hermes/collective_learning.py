@@ -5,14 +5,16 @@ import base64
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from blueprint import governed_state_hash, worker_refresh_requires_export
+from blueprint import governed_state_hash, worker_refresh_requires_export, _require_export_receipt
 from learning import (
+    LearningRecordError,
     PRIVATE_EXCLUSIONS,
     _artifact_files,
     _artifact_hash,
@@ -23,10 +25,12 @@ from learning import (
     stored_learning_records,
     utc_now,
     worker_manifest_path,
+    validate_governed_artifact,
+    _write_json_atomic,
 )
 
 
-LEARNING_PACKET_VERSION = "1.0"
+LEARNING_PACKET_VERSION = "2.0"
 
 
 class CollectiveLearningError(ValueError):
@@ -100,6 +104,11 @@ def _governed_artifacts(profile_home: Path, manifest: dict[str, Any]) -> dict[st
         raise CollectiveLearningError("Worker manifest roleSkillBaseline must be an object.")
     baseline_paths = set(str(path) for path in baseline)
     current_paths = set(current)
+    for path in baseline_paths | current_paths:
+        if path.startswith(("skills/role/", "skills/candidates/")) and not re.fullmatch(
+            r"skills/(?:role|candidates)/[a-z0-9][a-z0-9-]{0,62}/SKILL\.md", path,
+        ):
+            raise CollectiveLearningError("Governed export supports only a single SKILL.md per artifact.")
     role_roots = _artifact_roots(baseline_paths | current_paths, "role")
     candidate_roots = _artifact_roots(current_paths, "candidates")
     artifacts: dict[str, dict[str, Any]] = {}
@@ -134,18 +143,20 @@ def _matching_provenance(
     *,
     artifact_path: str,
     after_hash: str | None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     matches = [
         record
         for record in records
         if record["artifact"]["path"] == artifact_path
-        and record["artifact"]["afterHash"] == after_hash
     ]
-    if not matches:
+    if not matches or matches[-1]["artifact"]["afterHash"] != after_hash:
         raise CollectiveLearningError(
             f"{artifact_path} has no provenance matching its current artifact hash."
         )
-    return matches[-1]
+    for previous, current in zip(matches, matches[1:]):
+        if previous["artifact"]["afterHash"] != current["artifact"]["beforeHash"]:
+            raise CollectiveLearningError(f"{artifact_path} provenance history is not a continuous change chain.")
+    return matches
 
 
 def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
@@ -153,10 +164,22 @@ def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
     records, rejected = stored_learning_records(profile_home)
     if rejected:
         raise CollectiveLearningError("Stored provenance contains invalid records; repair it before export.")
+    for record in records:
+        if (
+            record["worker"]["workerId"] != manifest["workerId"]
+            or record["roleRelease"]["commit"] != manifest["roleReleaseCommit"]
+        ):
+            raise CollectiveLearningError("Provenance must belong to this Worker and current Role Release.")
+    if len({record["recordId"] for record in records}) != len(records):
+        raise CollectiveLearningError("Provenance record IDs must be unique.")
     artifacts = _governed_artifacts(profile_home, manifest)
     improvements: list[dict[str, Any]] = []
     for artifact_path, artifact in sorted(artifacts.items()):
         text_files = _skill_content_for_dlp(artifact["files"])
+        try:
+            validate_governed_artifact(artifact_path, text_files)
+        except LearningRecordError as exc:
+            raise CollectiveLearningError(str(exc)) from exc
         findings = _redaction_findings(text_files, f"artifact.{artifact_path}")
         if findings:
             raise CollectiveLearningError(
@@ -172,6 +195,10 @@ def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
                 "classification": artifact["classification"],
                 "artifactPath": artifact_path,
                 "files": text_files,
+                "baselineFileHashes": {
+                    path: value for path, value in manifest["roleSkillBaseline"].items()
+                    if path.startswith(f"{artifact_path}/")
+                },
                 "provenance": provenance,
             }
         )
@@ -191,16 +218,28 @@ def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
         },
         "governedStateHash": governed_state_hash(profile_home),
         "improvements": improvements,
+        "evaluation": {
+            "agentProposedScenarios": "included_in_provenance",
+            "executionStatus": "not_run",
+            "independentHoldout": "not_supplied",
+        },
         "privacy": {
             "status": "ready_for_human_approval",
             "excludedPaths": PRIVATE_EXCLUSIONS,
         },
     }
-    digest = _packet_digest(packet)
     exports = profile_home / "learning" / "exports"
     exports.mkdir(parents=True, exist_ok=True)
     pending_path = exports / f"{manifest['roleReleaseCommit']}.pending.json"
-    pending_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if pending_path.is_file():
+        previous = json.loads(pending_path.read_text(encoding="utf-8"))
+        if isinstance(previous, dict) and (
+            {key: value for key, value in previous.items() if key != "createdAt"}
+            == {key: value for key, value in packet.items() if key != "createdAt"}
+        ):
+            packet = previous
+    digest = _packet_digest(packet)
+    _write_json_atomic(pending_path, packet)
     return {
         "roleRelease": packet["roleRelease"],
         "worker": packet["worker"],
@@ -209,8 +248,12 @@ def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
             {
                 "classification": improvement["classification"],
                 "artifactPath": improvement["artifactPath"],
-                "action": improvement["provenance"]["action"],
-                "title": improvement["provenance"]["title"],
+                "action": improvement["provenance"][-1]["action"],
+                "title": improvement["provenance"][-1]["title"],
+                "recordCount": len(improvement["provenance"]),
+                "agentProposedScenarioCount": sum(
+                    len(record["agentProposedScenarios"]) for record in improvement["provenance"]
+                ),
             }
             for improvement in improvements
         ],
@@ -236,6 +279,9 @@ def attest_learning_packet(
     exports = profile_home / "learning" / "exports"
     pending_path = exports / f"{manifest['roleReleaseCommit']}.pending.json"
     if not pending_path.is_file():
+        approved = exports / f"{manifest['roleReleaseCommit']}.approved.json"
+        if approved.is_file() and json.loads(approved.read_text(encoding="utf-8")) == receipt:
+            return approved_learning_packet(profile_home)["receipt"]
         raise CollectiveLearningError("Prepare the Learning Packet before approval.")
     packet = json.loads(pending_path.read_text(encoding="utf-8"))
     actual_digest = _packet_digest(packet)
@@ -267,9 +313,10 @@ def attest_learning_packet(
         raise CollectiveLearningError("Learning Packet receipt does not match this Worker or Role Release.")
     _verify_receipt_signature(receipt)
     packet_path = exports / f"{manifest['roleReleaseCommit']}.packet.json"
-    packet_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json_atomic(packet_path, packet)
     receipt_path = exports / f"{manifest['roleReleaseCommit']}.approved.json"
-    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_json_atomic(receipt_path, receipt)
+    (exports / f"{manifest['roleReleaseCommit']}.rejected.json").unlink(missing_ok=True)
     pending_path.unlink()
     return receipt
 
@@ -291,6 +338,86 @@ def approved_learning_packet(profile_home: Path) -> dict[str, Any]:
     return {"packet": packet, "receipt": receipt}
 
 
+def prepare_refresh_rejection(profile_home: Path) -> dict[str, Any]:
+    """Prepare a local discard disposition even when artifacts cannot pass export checks."""
+    manifest = _load_worker_manifest(profile_home)
+    descriptor = {
+        "dispositionVersion": "1.0",
+        "disposition": "reject_and_refresh",
+        "createdAt": utc_now(),
+        "workerId": manifest["workerId"],
+        "roleReleaseCommit": manifest["roleReleaseCommit"],
+        "governedStateHash": governed_state_hash(profile_home),
+    }
+    exports = profile_home / "learning" / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    pending = exports / f"{manifest['roleReleaseCommit']}.rejection.pending.json"
+    if pending.is_file():
+        previous = json.loads(pending.read_text(encoding="utf-8"))
+        if isinstance(previous, dict) and (
+            {key: value for key, value in previous.items() if key != "createdAt"}
+            == {key: value for key, value in descriptor.items() if key != "createdAt"}
+        ):
+            descriptor = previous
+    _write_json_atomic(pending, descriptor)
+    return {"disposition": descriptor, "dispositionDigest": _packet_digest(descriptor)}
+
+
+def attest_refresh_rejection(profile_home: Path, *, receipt: dict[str, Any]) -> dict[str, Any]:
+    manifest = _load_worker_manifest(profile_home)
+    exports = profile_home / "learning" / "exports"
+    pending = exports / f"{manifest['roleReleaseCommit']}.rejection.pending.json"
+    if not pending.is_file():
+        stored = exports / f"{manifest['roleReleaseCommit']}.rejected.json"
+        if stored.is_file():
+            audit = json.loads(stored.read_text(encoding="utf-8"))
+            if isinstance(audit, dict) and audit.get("receipt") == receipt:
+                if receipt.get("governedStateHash") != governed_state_hash(profile_home):
+                    raise CollectiveLearningError("Governed skills changed after the rejection.")
+                _verify_receipt_signature(receipt)
+                return receipt
+        raise CollectiveLearningError("Prepare the reject-and-refresh disposition first.")
+    descriptor = json.loads(pending.read_text(encoding="utf-8"))
+    if set(receipt) != {
+        "disposition", "rejectedAt", "rejectedBy", "reason", "workerId",
+        "roleReleaseCommit", "governedStateHash", "dispositionDigest", "signature",
+    }:
+        raise CollectiveLearningError("Reject-and-refresh receipt fields are invalid.")
+    if (
+        receipt["disposition"] != "reject_and_refresh"
+        or receipt["dispositionDigest"] != _packet_digest(descriptor)
+        or receipt["workerId"] != manifest["workerId"]
+        or receipt["roleReleaseCommit"] != manifest["roleReleaseCommit"]
+        or receipt["governedStateHash"] != descriptor["governedStateHash"]
+        or descriptor["governedStateHash"] != governed_state_hash(profile_home)
+    ):
+        raise CollectiveLearningError("Reject-and-refresh digest or governed state does not match.")
+    if not all(isinstance(receipt[key], str) and receipt[key].strip()
+               for key in ("rejectedAt", "rejectedBy", "reason")):
+        raise CollectiveLearningError("Rejection requires rejectedAt, rejectedBy, and a reason.")
+    _verify_receipt_signature(receipt)
+    audit = {"disposition": descriptor, "receipt": receipt}
+    audit_dir = profile_home / "learning" / "dispositions"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(audit_dir / f"{receipt['dispositionDigest']}.json", audit)
+    _write_json_atomic(exports / f"{manifest['roleReleaseCommit']}.rejected.json", audit)
+    for suffix in ("approved.json", "packet.json", "pending.json"):
+        (exports / f"{manifest['roleReleaseCommit']}.{suffix}").unlink(missing_ok=True)
+    pending.unlink()
+    return receipt
+
+
+def pending_refresh_rejection(profile_home: Path) -> dict[str, Any]:
+    manifest = _load_worker_manifest(profile_home)
+    path = profile_home / "learning" / "exports" / f"{manifest['roleReleaseCommit']}.rejection.pending.json"
+    if not path.is_file():
+        raise CollectiveLearningError("Prepare the reject-and-refresh disposition first.")
+    descriptor = json.loads(path.read_text(encoding="utf-8"))
+    if descriptor.get("governedStateHash") != governed_state_hash(profile_home):
+        raise CollectiveLearningError("Governed skills changed; prepare the rejection again.")
+    return {"disposition": descriptor, "dispositionDigest": _packet_digest(descriptor)}
+
+
 def worker_refresh_readiness(profile_home: Path) -> dict[str, Any]:
     manifest = _load_worker_manifest(profile_home)
     if not worker_refresh_requires_export(profile_home, manifest):
@@ -299,7 +426,7 @@ def worker_refresh_readiness(profile_home: Path) -> dict[str, Any]:
             "exportRequired": False,
             "roleReleaseCommit": manifest["roleReleaseCommit"],
         }
-    approved_learning_packet(profile_home)
+    _require_export_receipt(profile_home, manifest)
     return {
         "ready": True,
         "exportRequired": True,
@@ -312,6 +439,11 @@ def main() -> None:
     parser.add_argument("--profile-home", required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("prepare")
+    subparsers.add_parser("inspect")
+    subparsers.add_parser("inspect-rejection")
+    subparsers.add_parser("prepare-rejection")
+    reject = subparsers.add_parser("reject")
+    reject.add_argument("--receipt", required=True)
     attest = subparsers.add_parser("attest")
     attest.add_argument("--receipt", required=True)
     subparsers.add_parser("export")
@@ -319,6 +451,14 @@ def main() -> None:
     profile_home = Path(args.profile_home)
     if args.command == "prepare":
         result = prepare_learning_packet(profile_home)
+    elif args.command == "inspect":
+        result = pending_learning_packet(profile_home)
+    elif args.command == "prepare-rejection":
+        result = prepare_refresh_rejection(profile_home)
+    elif args.command == "inspect-rejection":
+        result = pending_refresh_rejection(profile_home)
+    elif args.command == "reject":
+        result = attest_refresh_rejection(profile_home, receipt=json.loads(args.receipt))
     elif args.command == "attest":
         receipt = json.loads(args.receipt)
         if not isinstance(receipt, dict):

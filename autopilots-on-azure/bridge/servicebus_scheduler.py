@@ -17,6 +17,9 @@ from azure.servicebus import (
     ServiceBusReceivedMessage,
 )
 from azure.servicebus.exceptions import ServiceBusError
+from opentelemetry.trace import SpanKind
+
+from bridge.telemetry import operation_span, trace_headers
 
 
 ScheduleHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -32,6 +35,20 @@ def message_body(message: ServiceBusReceivedMessage) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Scheduled message body must be one JSON object.")
     return payload
+
+
+def message_trace_headers(message: ServiceBusReceivedMessage) -> dict[str, str]:
+    carrier: dict[str, str] = {}
+    for key, value in (getattr(message, "application_properties", None) or {}).items():
+        if isinstance(key, bytes):
+            key = key.decode("ascii", errors="ignore")
+        if key not in {"traceparent", "tracestate"}:
+            continue
+        if isinstance(value, bytes):
+            value = value.decode("ascii", errors="ignore")
+        if isinstance(value, str):
+            carrier[key] = value
+    return carrier
 
 
 class ServiceBusScheduleSender:
@@ -54,6 +71,19 @@ class ServiceBusScheduleSender:
         operation_id: str,
         attempt: int,
         due_at_unix: float,
+    ) -> dict[str, Any]:
+        with operation_span(
+            "servicebus.schedule",
+            kind=SpanKind.PRODUCER,
+            operation_id=operation_id,
+            attributes={"messaging.system": "servicebus", "messaging.operation.type": "send"},
+        ):
+            return self._schedule_document_retry(
+                operation_id=operation_id, attempt=attempt, due_at_unix=due_at_unix,
+            )
+
+    def _schedule_document_retry(
+        self, *, operation_id: str, attempt: int, due_at_unix: float
     ) -> dict[str, Any]:
         worker_id = os.environ["WORKER_ID"]
         body = {
@@ -79,6 +109,7 @@ class ServiceBusScheduleSender:
             message_id=message_id,
             content_type="application/json",
             subject="document.publish.retry",
+            application_properties=trace_headers(),
         )
         due_at = datetime.fromtimestamp(due_at_unix, UTC)
         with self._client_factory(
@@ -129,6 +160,7 @@ class ServiceBusScheduleConsumer:
             "enabled": (
                 bool_env("USER_SCHEDULING_ENABLED")
                 or bool_env("DOCUMENT_RETRY_ENABLED")
+                or bool_env("SERVICEBUS_DREAM_ENABLED")
             ),
             "running": False,
             "completed": 0,
@@ -216,7 +248,7 @@ class ServiceBusScheduleConsumer:
             if loop is None:
                 raise RuntimeError("Service Bus consumer has no event loop.")
             future = asyncio.run_coroutine_threadsafe(
-                self._handler(payload),
+                self._invoke_handler(payload, message_trace_headers(message)),
                 loop,
             )
             result = future.result(
@@ -259,6 +291,21 @@ class ServiceBusScheduleConsumer:
             else:
                 receiver.abandon_message(message)
                 self._status["abandoned"] += 1
+
+    async def _invoke_handler(
+        self, payload: dict[str, Any], carrier: dict[str, str]
+    ) -> dict[str, Any]:
+        operation_id = str(payload.get("operationId") or (
+            f"{payload['jobId']}:{payload.get('occurrenceId') or payload['revision']}"
+        ))
+        with operation_span(
+            "servicebus.process",
+            kind=SpanKind.CONSUMER,
+            operation_id=operation_id,
+            carrier=carrier,
+            attributes={"messaging.system": "servicebus", "messaging.operation.type": "process"},
+        ):
+            return await self._handler(payload)
 
     @staticmethod
     def _validate(payload: dict[str, Any]) -> None:

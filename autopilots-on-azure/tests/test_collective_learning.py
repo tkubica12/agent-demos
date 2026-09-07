@@ -21,6 +21,7 @@ from collective_learning import (  # noqa: E402
     prepare_learning_packet,
 )
 from learning import begin_learning_turn, reconcile_learning_turn  # noqa: E402
+from tests import test_hermes_runtime as runtime_tests  # noqa: E402
 
 
 class CollectiveLearningTests(unittest.TestCase):
@@ -111,6 +112,7 @@ class CollectiveLearningTests(unittest.TestCase):
                 }
             ],
             "confidence": 0.93,
+            "agentProposedScenarios": runtime_tests.HermesRuntimeTests._provenance(artifact_path)["agentProposedScenarios"],
             "sourceStage": "dream",
         }
 
@@ -181,6 +183,7 @@ class CollectiveLearningTests(unittest.TestCase):
                 profile,
                 receipt=self._approval_receipt(profile, "operator"),
             )
+            self.assertEqual(attest_learning_packet(profile, receipt=receipt), receipt)
             exported = approved_learning_packet(profile)
             packet = exported["packet"]
             attestation = exported["receipt"]
@@ -190,6 +193,17 @@ class CollectiveLearningTests(unittest.TestCase):
         self.assertEqual(packet["privacy"]["status"], "ready_for_human_approval")
         self.assertEqual(attestation["approvedBy"], "operator")
         self.assertEqual(len(attestation["signature"]), 88)
+
+    def test_repeated_preparation_preserves_pending_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = self._profile(Path(directory))
+            self._create_candidate_with_provenance(profile)
+            first = prepare_learning_packet(profile)
+            second = prepare_learning_packet(profile)
+            self.assertEqual(first["packetDigest"], second["packetDigest"])
+            packet = pending_learning_packet(profile)["packet"]
+            self.assertEqual(packet["packetVersion"], "2.0")
+            self.assertEqual(packet["improvements"][0]["provenance"][0]["schemaVersion"], "3.0")
 
     def test_approved_packet_is_invalidated_by_later_skill_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:

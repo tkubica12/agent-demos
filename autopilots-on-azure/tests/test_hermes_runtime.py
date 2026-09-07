@@ -6,12 +6,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import TracerProvider
+
+from bridge import hermes_telemetry, telemetry
 
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
@@ -43,6 +48,158 @@ from learning import (  # noqa: E402
 
 
 class HermesRuntimeTests(unittest.TestCase):
+    def test_gateway_trace_lease_cleans_success_and_blocks_ambiguous_retries(self):
+        client_class = httpx.AsyncClient
+        provider = TracerProvider()
+        self.addCleanup(provider.shutdown)
+        with patch.object(
+            telemetry.trace, "get_tracer", return_value=provider.get_tracer("test-runtime")
+        ):
+            for outcome in ("success", "server-error", "timeout"):
+                with (
+                    self.subTest(outcome=outcome),
+                    tempfile.TemporaryDirectory() as directory,
+                    patch.dict(os.environ, {}),
+                ):
+                    home = Path(directory)
+                    handoff_directory = hermes_telemetry.install_gateway_telemetry(home)
+                    calls = []
+
+                    def handle(request):
+                        calls.append(request)
+                        handoff = hermes_telemetry._handoff("native-session", "")
+                        self.assertEqual(handoff["traceparent"], request.headers["traceparent"])
+                        self.assertEqual(len(list(handoff_directory.glob("*.lease"))), 1)
+                        if outcome == "timeout":
+                            raise httpx.ReadTimeout("Native executor may still run.", request=request)
+                        return httpx.Response(
+                            200 if outcome == "success" else 503,
+                            json={"output": "done"} if outcome == "success" else {"error": "uncertain"},
+                        )
+
+                    with patch.object(
+                        start_hermes.httpx,
+                        "AsyncClient",
+                        side_effect=lambda **kwargs: client_class(
+                            transport=httpx.MockTransport(handle), **kwargs
+                        ),
+                    ):
+                        client = TestClient(
+                            start_hermes.create_health_app(home, home, None, None),
+                            raise_server_exceptions=False,
+                        )
+                        response = client.post(
+                            "/api/sessions/native-session/chat", json={"input": "hello"}
+                        )
+                        repeated = client.post(
+                            "/api/sessions/native-session/chat", json={"input": "hello"}
+                        )
+
+                    if outcome == "success":
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(repeated.status_code, 200)
+                        self.assertEqual(len(calls), 2)
+                        self.assertEqual(list(handoff_directory.iterdir()), [])
+                    else:
+                        self.assertEqual(response.status_code, 503 if outcome == "server-error" else 500)
+                        if outcome == "server-error":
+                            self.assertEqual(response.json(), {"error": "uncertain"})
+                        self.assertEqual(repeated.status_code, 409)
+                        self.assertIn("already active", repeated.json()["detail"])
+                        self.assertEqual(len(calls), 1)
+                        self.assertEqual(len(list(handoff_directory.glob("*.lease"))), 1)
+
+    def test_gateway_trace_handoff_spans_only_the_awaited_native_session_turn(self):
+        events = []
+        active = False
+
+        @contextmanager
+        def handoff(session_id, *, profile_home):
+            nonlocal active
+            self.assertEqual(profile_home, home)
+            self.assertEqual(session_id, "teams:shared:thread")
+            active = True
+            events.append("enter")
+            try:
+                yield
+            finally:
+                active = False
+                events.append("exit")
+
+        async def handle(request):
+            self.assertEqual(active, request.method == "POST")
+            events.append(request.method)
+            return httpx.Response(200, json={"output": "Done"})
+
+        client_class = httpx.AsyncClient
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(start_hermes, "gateway_trace_context", side_effect=handoff) as context,
+            patch.object(
+                start_hermes.httpx,
+                "AsyncClient",
+                side_effect=lambda **kwargs: client_class(
+                    transport=httpx.MockTransport(handle), **kwargs
+                ),
+            ),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            self.assertEqual(client.get("/api/sessions/teams%3Ashared%3Athread").status_code, 200)
+            response = client.post(
+                "/api/sessions/teams%3Ashared%3Athread/chat",
+                json={"input": "hello", "instructions": "role"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        context.assert_called_once_with("teams:shared:thread", profile_home=home)
+        self.assertEqual(events, ["GET", "enter", "POST", "exit"])
+
+    def test_gateway_proxy_uses_current_runtime_trace_context(self):
+        requests = []
+        fresh_headers = {
+            "traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01",
+            "x-autopilot-otel-session": "3" * 32,
+        }
+
+        def handle(request):
+            requests.append(request)
+            return httpx.Response(200, json={"data": []})
+
+        client_class = httpx.AsyncClient
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(start_hermes, "runtime_trace_headers", return_value=fresh_headers),
+            patch.object(
+                start_hermes.httpx,
+                "AsyncClient",
+                side_effect=lambda **kwargs: client_class(
+                    transport=httpx.MockTransport(handle), **kwargs
+                ),
+            ),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            response = client.get(
+                "/v1/models",
+                headers={
+                    "Authorization": "Bearer api-key",
+                    "traceparent": "00-" + "4" * 32 + "-" + "5" * 16 + "-01",
+                    "tracestate": "stale=value",
+                    "baggage": "private=must-not-forward",
+                    "x-autopilot-otel-operation": "6" * 32,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(requests), 1)
+        outgoing = requests[0]
+        self.assertEqual(outgoing.headers["Authorization"], "Bearer api-key")
+        for name, value in fresh_headers.items():
+            self.assertEqual(outgoing.headers[name], value)
+        for removed in ("tracestate", "baggage", "x-autopilot-otel-operation"):
+            self.assertNotIn(removed, outgoing.headers)
+
     def test_gateway_replaces_stale_persisted_runtime_state(self):
         with (
             tempfile.TemporaryDirectory() as temp_dir,
@@ -149,6 +306,7 @@ class HermesRuntimeTests(unittest.TestCase):
                             "occurrenceId": "manual-1",
                             "success": True,
                             "summary": {"dream": {"recordCount": 1}},
+                            "ownerToken": "claim-owner",
                         },
                     )
         finally:
@@ -190,6 +348,7 @@ class HermesRuntimeTests(unittest.TestCase):
                 "success": True,
                 "error": "",
                 "summary": {"dream": {"recordCount": 1}},
+                "owner_token": "claim-owner",
             },
         )
 
@@ -197,6 +356,7 @@ class HermesRuntimeTests(unittest.TestCase):
         result = subprocess.run(
             ["git", *args],
             cwd=repo,
+            env=os.environ.copy(),
             check=True,
             capture_output=True,
             text=True,
@@ -224,8 +384,7 @@ class HermesRuntimeTests(unittest.TestCase):
                     "distribution_owned:",
                     "  - SOUL.md",
                     "  - config.yaml",
-                    "  - skills/role/junior-project-manager",
-                    "  - skills/role/dream-reflection",
+                    "  - skills/role",
                     "  - distribution.yaml",
                     "",
                 ]
@@ -280,6 +439,18 @@ class HermesRuntimeTests(unittest.TestCase):
                 }
             ],
             "confidence": 0.94,
+            "agentProposedScenarios": [
+                {
+                    "scenarioId": "missing-timezone",
+                    "input": "Confirm a deadline stated as next Friday without a timezone.",
+                    "setupAssumptions": ["No timezone has been confirmed."],
+                    "expectedObservableOutcomes": ["The response requests the timezone."],
+                    "acceptanceCriteria": [
+                        {"observable": "response.text", "operator": "contains", "value": "timezone"}
+                    ],
+                    "scope": "Deadline clarification only.",
+                }
+            ],
             "sourceStage": source_stage,
         }
 
@@ -867,7 +1038,7 @@ class HermesRuntimeTests(unittest.TestCase):
             )
             packet = build_learning_status(profile)
 
-        self.assertEqual(packet["statusVersion"], "2.0")
+        self.assertEqual(packet["statusVersion"], "3.0")
         self.assertEqual(packet["worker"]["workerId"], "worker-1")
         self.assertEqual(packet["roleRelease"]["release"], "3.0.0")
         self.assertEqual(len(packet["records"]), 1)

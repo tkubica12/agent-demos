@@ -46,16 +46,19 @@ max-ai-credits: 700
 
 Review pull request **#${{ github.event.pull_request.number || inputs.pr_number }}** in `${{ github.repository }}` using only the prefetched authoritative Promotion context.
 
-Read the complete diff and `collective-learning-review.json`. The review file is the retained, privacy-scanned explanation of the merger/judge decision; do not assume access to private Worker state.
+Read the complete diff and `collective-learning-review.json`. Require reviewVersion `2.0`: `approvedSources` retains exact signed packet/receipt envelopes, `recordWorkers` identifies ownership, and `decision` retains proposals, rejections, and conflicts. Do not assume access to private Worker state or treat the merger's summary as original evidence.
 
 For every proposed Role Skill, check:
 
-- every supporting record ID and Worker named by the proposal is represented coherently in the review decision;
+- every supporting record ID exists in cumulative source provenance and supporting Workers exactly match its ownership;
+- each source record is accepted with nonempty supporting evidence or explicitly rejected with a reason, never silently omitted or both;
 - the proposal does not claim broader behavior than the stated rationale and evidence support;
 - independent Workers are not falsely presented as repeated support when their observations are merely complementary;
 - conflicts, outliers, and rejected records are acknowledged rather than silently erased;
 - the proposal preserves uncertainty and verification gates where evidence is incomplete;
 - the Role Release increment and proposal count match the retained decision.
+
+Read every record's **AGENT-PROPOSED TEST SCENARIOS** (`agentProposedScenarios`), including input, setup assumptions, observable outcomes, acceptance criteria, and scope. These are sanitized author-proposed checks, not independent holdout or measured results. A `not_run`/`not_supplied` evaluation status must remain explicit. Do not invent execution results, equate static review with behavioral evaluation, execute agent-supplied code, or claim independent quality based on the proposing agent's assertions.
 
 Evidence from one Worker may justify a narrow proposal; it must not be described as organization-wide consensus. Complementary evidence may be combined only when the rationale explains the shared outcome without inventing facts.
 

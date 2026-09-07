@@ -19,7 +19,7 @@ from azure.containerapps.sandbox import (
     SandboxVolume,
     endpoint_for_region,
 )
-from azure.containerapps.sandbox._models import PortAuthConfig, RegistryCredentials
+from azure.containerapps.sandbox._models import PortAuthConfig
 from azure.core.credentials import TokenCredential
 from azure.identity import DefaultAzureCredential
 
@@ -78,9 +78,8 @@ class AgentSandboxConfig:
     agent365_blueprint_client_id: str = ""
     agent365_agent_identity_client_id: str = ""
     agent365_agent_user_id: str = ""
-    registry_username: str = ""
-    registry_password: str = ""
-    acr_name: str = ""
+    managed_identity_client_id: str = ""
+    runtime_image_reference: str = ""
     disk_image_id: str = ""
     disk_image_name: str = "openclaw-gateway-image-with-private-mcp"
     data_volume_name: str = "openclaw-data"
@@ -228,14 +227,14 @@ def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig
     return stale
 
 
-def recycle_stopped_agent_sandbox(
+def recycle_failed_agent_sandbox(
     client: SandboxGroupClient,
     sandbox: dict | None,
 ) -> dict | None:
     if not sandbox:
         return sandbox
     state = str(sandbox.get("state") or "")
-    if state not in {"Stopped", "Failed"}:
+    if state != "Failed":
         return sandbox
     client.begin_delete_sandbox(
         sandbox["id"],
@@ -431,6 +430,19 @@ def openclaw_runtime_environment(*, token: str, foundry_openai_base_url: str, mo
     }
 
 
+def runtime_telemetry_environment(config: AgentSandboxConfig) -> dict[str, str]:
+    environment = {
+        key: value
+        for key in ("APPLICATIONINSIGHTS_CONNECTION_STRING", "FOUNDRY_AGENT_NAME", "OTEL_AGENT_ID",
+                    "FOUNDRY_PROJECT_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG")
+        if (value := os.getenv(key))
+    }
+    image = config.runtime_image_reference or config.image_name
+    environment["OTEL_CONTAINER_IMAGE"] = image
+    environment["OTEL_SERVICE_VERSION"] = image.split("@")[-1]
+    return environment
+
+
 def hermes_runtime_environment(
     *,
     api_server_key: str = "",
@@ -458,6 +470,9 @@ def hermes_runtime_environment(
         "HERMES_HEALTH_WRAPPER": "true",
         "HERMES_GATEWAY_PORT": "9119",
         "HERMES_HOME": "/data/hermes",
+        "PATH": "/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PYTHONPATH": "/app",
+        "NODE_PATH": "/app/node_modules",
         "HERMES_ROLE_BLUEPRINT": role_blueprint,
         "HERMES_ROLE_BLUEPRINT_SOURCE": role_blueprint_source,
         "HERMES_ROLE_BLUEPRINT_PATH": role_blueprint_path,
@@ -531,9 +546,8 @@ def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
         agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
         agent365_agent_user_id=overrides.get("agent365_agent_user_id") or "",
-        registry_username=overrides.get("registry_username") or "",
-        registry_password=overrides.get("registry_password") or "",
-        acr_name=overrides.get("acr_name") or "",
+        runtime_image_reference=overrides.get("runtime_image_reference") or "",
+        managed_identity_client_id=overrides.get("managed_identity_client_id") or os.getenv("AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID", ""),
         disk_image_id=overrides.get("disk_image_id") or "",
         disk_image_name=overrides.get("disk_image_name") or "openclaw-gateway-image-with-private-mcp",
         data_volume_name=overrides.get("data_volume_name") or "openclaw-data",
@@ -546,6 +560,7 @@ def openclaw_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         runtime_workspace="/data/workspace",
     )
     environment.update(agent_mcp_environment(config))
+    environment.update(runtime_telemetry_environment(config))
     return config
 
 
@@ -585,7 +600,7 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         runtime_kind="hermes",
         port=HERMES_API_PORT,
         health_path="/health",
-        command=("python3",),
+        command=("/app/.venv/bin/python",),
         args=("/app/start_hermes.py",),
         data_mount_path="/data",
         environment=environment,
@@ -608,9 +623,8 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
         agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
         agent365_agent_user_id=overrides.get("agent365_agent_user_id") or "",
-        registry_username=overrides.get("registry_username") or "",
-        registry_password=overrides.get("registry_password") or "",
-        acr_name=overrides.get("acr_name") or "",
+        runtime_image_reference=overrides.get("runtime_image_reference") or "",
+        managed_identity_client_id=overrides.get("managed_identity_client_id") or os.getenv("AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID", ""),
         disk_image_id=overrides.get("disk_image_id") or "",
         disk_image_name=overrides.get("disk_image_name") or "hermes-api-server-image",
         data_volume_name=overrides.get("data_volume_name") or "hermes-data",
@@ -632,6 +646,7 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         runtime_config_revision=overrides.get("runtime_config_revision") or "",
     )
     environment.update(agent_mcp_environment(config))
+    environment.update(runtime_telemetry_environment(config))
     return config
 
 
@@ -645,6 +660,8 @@ def create_agent_sandbox(
     environment = dict(config.environment)
     environment.setdefault("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
     environment.setdefault("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
+    if config.managed_identity_client_id:
+        environment["AZURE_CLIENT_ID"] = config.managed_identity_client_id
     if config.gateway_token:
         environment.setdefault("OPENCLAW_GATEWAY_TOKEN", token)
 
@@ -776,8 +793,6 @@ def ensure_agent_sandbox(
     wait_for_ready_seconds: int = 20,
 ) -> AgentSandboxResult:
     token = config.gateway_token or secrets.token_urlsafe(32)
-    registry_username = config.registry_username
-    registry_password = config.registry_password
 
     if not config.resource_group:
         raise ValueError("AZURE_RESOURCE_GROUP was not found. Run azd up first or set it explicitly.")
@@ -785,13 +800,15 @@ def ensure_agent_sandbox(
         raise ValueError("AZURE_SANDBOX_GROUP was not found. Run azd up first or set it explicitly.")
     if not config.region:
         raise ValueError("AZURE_REGION was not found. Run azd up first or set it explicitly.")
+    if not config.disk_image_id:
+        raise ValueError("AGENT_RUNTIME_DISK_IMAGE_ID is required. Deploy the Sandbox disk images before starting the runtime.")
     client = create_sandbox_group_client(config, credential)
 
     for stale in stale_agent_sandboxes(client, config):
         require_worker_refresh_ready(client, config, stale)
         client.begin_delete_sandbox(stale["id"], polling_timeout=600).result()
 
-    existing_sandbox = recycle_stopped_agent_sandbox(
+    existing_sandbox = recycle_failed_agent_sandbox(
         client,
         existing_agent_sandbox(client, config),
     )
@@ -802,28 +819,6 @@ def ensure_agent_sandbox(
         sandbox_client.ensure_running(timeout=600)
         current = client.get_sandbox(sandbox_id)
     else:
-        if config.disk_image_id:
-            disk_id = config.disk_image_id
-        else:
-            if not registry_username or not registry_password:
-                if not config.acr_name:
-                    raise ValueError("ACR_NAME was not found. Run azd up first or pass registry credentials.")
-                registry_username = registry_username or run_text(["az", "acr", "credential", "show", "--name", config.acr_name, "--query", "username", "-o", "tsv"])
-                registry_password = registry_password or run_text(["az", "acr", "credential", "show", "--name", config.acr_name, "--query", "passwords[0].value", "-o", "tsv"])
-            if not config.image_name or not registry_username or not registry_password:
-                raise ValueError("image_name, registry_username, and registry_password are required when disk_image_id is not provided.")
-            image = existing_named(client.list_disk_images(), config.disk_image_name)
-            if image is None:
-                image = client.begin_create_disk_image(
-                    config.image_name,
-                    name=config.disk_image_name,
-                    entrypoint=list(config.command),
-                    cmd=list(config.args),
-                    registry_credentials=RegistryCredentials(registry_username, registry_password),
-                    polling_timeout=900,
-                ).result()
-            disk_id = getattr(image, "id", None) or getattr(image, "name", None) or config.disk_image_name
-
         volume = existing_named(client.list_volumes(), config.data_volume_name)
         if volume is None:
             client.create_volume(
@@ -835,7 +830,7 @@ def ensure_agent_sandbox(
         sandbox_client, current = create_agent_sandbox(
             client,
             config=config,
-            disk_id=disk_id,
+            disk_id=config.disk_image_id,
             token=token,
         )
 
@@ -881,9 +876,9 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         "region": overrides.get("region") or get_config("AZURE_REGION", get_config("AZURE_LOCATION")),
         "image_name": (
             overrides.get("image_name")
-            or get_config("AGENT_RUNTIME_DISK_SOURCE_IMAGE")
             or get_config("AGENT_RUNTIME_IMAGE")
         ),
+        "runtime_image_reference": overrides.get("runtime_image_reference") or overrides.get("image_name") or get_config("AGENT_RUNTIME_IMAGE"),
         "customer_vnet_connection_name": overrides.get("customer_vnet_connection_name") or get_config("SANDBOX_VNET_CONNECTION_NAME"),
         "private_incidents_mcp_url": overrides.get("private_incidents_mcp_url") or get_config("PRIVATE_INCIDENTS_MCP_URL"),
         "private_incidents_mcp_scope": overrides.get("private_incidents_mcp_scope") or get_config("PRIVATE_INCIDENTS_MCP_SCOPE"),
@@ -928,9 +923,7 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
                 "0 2 * * *",
             )
         ),
-        "registry_username": overrides.get("registry_username") or get_config("AGENT_RUNTIME_REGISTRY_USERNAME", get_config("OPENCLAW_REGISTRY_USERNAME")),
-        "registry_password": overrides.get("registry_password") or get_config("AGENT_RUNTIME_REGISTRY_PASSWORD", get_config("OPENCLAW_REGISTRY_PASSWORD")),
-        "acr_name": overrides.get("acr_name") or get_config("ACR_NAME"),
+        "managed_identity_client_id": overrides.get("managed_identity_client_id") or get_config("AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID"),
         "disk_image_id": overrides.get("disk_image_id") or get_config("AGENT_RUNTIME_DISK_IMAGE_ID"),
         "disk_image_name": overrides.get("disk_image_name") or get_config("AGENT_RUNTIME_DISK_IMAGE_NAME"),
         "data_volume_name": overrides.get("data_volume_name") or get_config("AGENT_RUNTIME_DATA_VOLUME_NAME"),

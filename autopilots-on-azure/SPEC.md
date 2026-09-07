@@ -4,6 +4,8 @@
 
 This is the authoritative product and architecture specification for Autopilots on Azure.
 
+**Evidence boundary (2026-09-06 22:33 CEST):** existing deployment, model, MCP, same-ID/Data-Disk resume, schedule, no-change Dream, and bounded evaluation results stand. All 49 reviewed native parents resolve; 105 audited spans contain metadata only. Controlled read-only requests isolate parent rewriting to the Sandbox-origin egress path; TraceId survives, but platform intermediate parents are absent from AppInsights. This is a native-platform waterfall limitation, not proof of every parent edge. Tool execution is not independent VNet-route or MI-authentication proof. Teams public `@` discovery is observed, targeted `/` is not; automatic eight-hour idle behavior and general learning quality remain unproven.
+
 - [PLAN.md](PLAN.md) tracks delivery status, history, and future work.
 - [DEPLOYMENT.md](DEPLOYMENT.md) contains deployment, update, validation, and cleanup procedures.
 - [DEMO.md](DEMO.md) contains classroom and product demonstration scenarios.
@@ -11,6 +13,8 @@ This is the authoritative product and architecture specification for Autopilots 
 - [`docs\runbooks`](docs/runbooks) contains repeatable multi-control-plane procedures.
 
 ## Product intent
+
+**ACR/MCP lifecycle evidence:** unauthenticated public calls return `401`; private external connections reset, not HTTP `403`. The probe is cleaned up; positive runtime-to-private-MCP VNet access remains unproven. Repeated live MCP deployment kept Sandbox IDs without registry login, verified with a fail-if-called guard. All ten workload `AcrPull` assignments were removed and ACR admin is `false`. SDK b4 native MI conversion still returns `401`; the accepted transient Entra `RegistryCredentials` path works for deployment-time conversion only. MCP lifecycle results do not prove runtime/gateway startup or full Worker parity.
 
 Autopilots on Azure hosts durable digital Workers behind Microsoft Agent 365. A Worker:
 
@@ -42,7 +46,7 @@ Hermes is the primary implementation for durable Worker memory, native skills, D
 Microsoft Teams / Agent 365 / operator /invoke
                     |
                     v
-       per-Worker bridge Container App
+       per-Worker gateway Sandbox
        - Microsoft 365 Agents SDK ingress
        - authorization-boundary envelope
        - Sandbox lifecycle and invocation
@@ -51,7 +55,7 @@ Microsoft Teams / Agent 365 / operator /invoke
               ACA Sandbox
        +---------------------------+
        | OpenClaw or Hermes         |
-       | Foundry token adapter      |
+       | native azure-foundry auth  |
        | Agent Identity MCP adapter |
        +---------------------------+
           |          |          |
@@ -67,13 +71,14 @@ Microsoft Teams / Agent 365 / operator /invoke
 
 The platform Terraform state owns:
 
-- the Sweden Central Foundry account, project, and `gpt-5.6-terra` Global Standard deployment;
-- the Sweden Central Sandbox VNet, delegated subnet, Sandbox Group, and managed identity;
-- the North Europe application VNet, internal private-MCP ACA environment, public bridge ACA environment, and Azure Container Registry;
+- the Sweden Central Foundry account, project, and `gpt-5-6-terra` deployment;
+- the Sweden Central Sandbox VNet and delegated subnet;
+- the application VNet, linked Express ACA managed environment for private ingress, Private Endpoint, private DNS, and Azure Container Registry;
 - global VNet peering between the regional VNets;
-- private MCP DNS linked to both VNets.
+- private MCP DNS linked to both VNets;
+- Log Analytics, keyless Application Insights, and the Foundry project monitoring connection.
 
-The split is intentional. Sweden Central remains the runtime and model region. North Europe hosts Container Apps because Azure rejected new Sweden Central managed environments with `ManagedEnvironmentCapacityHeavyUsageError`. Sandbox-to-private-MCP traffic stays private across the peered VNets. [ADR 0013](docs/adr/0013-regional-placement-and-capacity-fallback.md) records the regional selection and fallback order.
+Sweden Central remains the runtime and model region; the application-network/ACR placement remains separate. [ADR 0013](docs/adr/0013-regional-placement-and-capacity-fallback.md) records regional constraints. Express supplies the private ingress environment, not a classic Container App workload. Linking a Sandbox Group to that environment is irreversible: treat an incorrect link as a replacement operation, not a toggle.
 
 ### Worker application layers
 
@@ -87,12 +92,12 @@ Multiple Workers can use the same Git Role Blueprint and Role Release without sh
 
 Each workspace owns:
 
-- one bridge Container App and bridge managed identity;
-- one private incidents MCP Container App;
-- one public shipments MCP Container App;
+- five distinct Sandbox Groups and five user-assigned managed identities: `runtime`, `gateway`, `private-mcp`, `public-mcp`, and `generated-apps`;
+- gateway and MCP service Sandboxes with native HTTPS ingress;
+- a persistent runtime Data Disk and OnDemand Worker lifecycle;
 - Worker-specific settings and image digests.
 
-The current public shipments deployment is repeated per workspace. Moving shared public tools to a separate Terraform state remains a possible future simplification rather than an accepted design.
+The public shipments service is repeated per Worker deliberately. Service-role identities must not collapse into a shared Worker/fleet identity. Infrastructure creation, OCI-to-disk conversion, service creation, and endpoint capture are explicit deployment stages; Terraform does not use `local-exec`.
 
 ## Component responsibilities
 
@@ -103,12 +108,14 @@ The bridge:
 - receives `/invoke` and Agent 365 `/api/messages`;
 - translates activities into a runtime-neutral request contract;
 - adds the authorization boundary: selected identity mode, invoking human, Agent Identity/User identifiers, and conversation privacy boundary;
-- creates, resumes, or reuses the Worker Sandbox;
+- creates, resumes, or reuses the Worker Sandbox; `Stopped` is a resumable state, not by itself a failure requiring deletion;
 - serializes Hermes learning operations per Worker;
 - forwards turns to the runtime port;
 - returns messages and Teams reactions through Microsoft 365 Agents SDK.
 
-Agent 365 Workers keep one lightweight bridge replica ready so Activity Protocol acknowledgement never depends on standard ACA cold start. Agent 365 callbacks may continue after the workload has accepted the HTTP request, so the bounded cooldown protects detached processing. Non-Agent-365 bridges may scale to zero. Worker Sandbox compute remains independently scale-to-zero.
+The gateway Sandbox has auto-suspend disabled. It owns detached work after an Activity Protocol acknowledgement and a continuous Service Bus receiver; an HTTP response is not evidence that this work has finished. Runtime compute remains OnDemand. This is not full-system scale-to-zero, and no KEDA wake is claimed for a Sandbox gateway.
+
+Native gateway ingress allows anonymous transport so Agent 365 SDK authentication can validate the actual activity protocol. MCP services likewise perform Entra authorization in their application. Anonymous ingress is not anonymous tool access. The bridge owns both addition and removal of temporary `eyes`; Hermes chooses semantic reactions, and the bridge executes them. Office behavior policy belongs in runtime skills, not a growing bridge prompt.
 
 The bridge does not:
 
@@ -129,7 +136,7 @@ Both runtimes receive the same categories of configuration:
 - Agent 365 tenant, platform blueprint, Agent Identity, and Agent User identifiers;
 - fixed upstream MCP endpoints and required scopes.
 
-The runtime calls only loopback MCP endpoints. `autopilots_identity.mcp_proxy` acquires and refreshes upstream tokens without changing OpenClaw or Hermes authentication internals.
+The runtime calls loopback MCP endpoints. `autopilots_identity.mcp_proxy` acquires and refreshes upstream tool tokens; it remains necessary and is not a human OBO implementation. Model inference is separate: Hermes 0.19.0 uses its native `azure-foundry` provider and an Entra token callback. The custom `foundry_token_proxy.py` has been removed. Live model/tool parity must pass before describing the upgrade as deployed.
 
 ### Runtime ownership
 
@@ -141,9 +148,9 @@ Hermes additionally owns the local Role Blueprint profile, native memory, progre
 
 ### Workload credential
 
-The Sandbox Group system-assigned managed identity proves where code is executing. ACA Sandboxes expose it through `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`; Azure Identity uses that endpoint.
+Each Worker/service-role Sandbox Group has a distinct user-assigned managed identity. ACA Sandboxes expose credentials through `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`; Azure Identity selects the assigned identity. The runtime, gateway, each MCP service, and generated applications have separate permissions.
 
-The managed identity is not the business authorization principal.
+The managed identity bootstraps Azure infrastructure access and federation; it is not the business authorization principal for MCP or Microsoft 365 work. Native Foundry model inference separately uses the runtime managed identity and its model-resource RBAC.
 
 ### Agent Identity federation
 
@@ -186,11 +193,11 @@ Human OBO is intentionally not implemented yet.
 
 `Microsoft.App/sandboxGroups/vnetConnections` attaches Sandbox network interfaces to the delegated subnet. It provides routing and private DNS only.
 
-The private incidents MCP runs in an internal ACA environment with public network access disabled. The Sandbox calls it through the VNet. Entra authorization remains mandatory.
+The private incidents MCP is a Sandbox in a Group linked to an Express ACA managed environment. The environment's Private Endpoint and private DNS restrict ingress; no classic MCP Container App remains. Runtime VNet routing reaches that private hostname. The native port accepts anonymous transport, while the MCP application still requires the correct Entra audience, Agent Identity, and app role.
 
 ### Public MCP
 
-The shipments MCP is a public HTTPS ACA endpoint with scale-to-zero. It accepts:
+The shipments MCP is a public HTTPS Sandbox service with application-level Entra authorization. It accepts:
 
 - Agent Identity application role `Shipments.Read.All` for direct runtime access;
 - delegated `Shipments.Read` for Agent 365 BYO OAuth.
@@ -257,20 +264,20 @@ Do not describe Candidate Improvements as *public memory*. They remain local unt
 
 ### Hosting
 
-1. Public ingress must terminate at a runtime-specific Azure Container Apps bridge.
+1. Microsoft 365 ingress must terminate at the Worker's dedicated gateway Sandbox, with native HTTPS transport and Agent 365 SDK authentication.
 2. OpenClaw and Hermes must run inside Azure Container Apps Sandboxes, not ACA Dynamic Sessions.
 3. Sandbox runtime state must reside on a persistent Data Disk.
-4. Bridge Container Apps without Agent 365 ingress may scale to zero. An Agent 365 messaging endpoint must keep one ready bridge replica until a faster hosting tier passes ADR 0001's identity, networking, region, TLS, reliability, and measured acknowledgement gates.
-5. An incoming bridge request must wake or reuse the selected Sandbox and await the runtime operation.
+4. Gateway auto-suspend must remain disabled while detached post-ACK work and continuous Service Bus receive depend on that process. Runtime and generated-app lifecycles remain independent; full-system scale-to-zero is not a requirement of this accepted topology.
+5. An incoming gateway request must wake or reuse the runtime Sandbox. Activity Protocol acknowledgement does not end the detached runtime operation or its delivery obligation.
 6. Runtime-specific Terraform workspaces must prevent OpenClaw and Hermes app state from colliding.
-7. The current implementation isolates each Worker behind its own Agent 365 platform blueprint, bridge, Terraform workspace, and Data Disk; this does not duplicate the shared Git Role Blueprint.
+7. Each Worker must have its own Agent 365 platform blueprint, gateway, Terraform workspace, Data Disk, and separate service-role Sandbox Groups/user-assigned identities. This does not duplicate the shared Git Role Blueprint or prove isolation between participants inside a shared group transcript.
 
 ### Microsoft 365 and Agent 365
 
 1. Agent 365 is the only Microsoft 365 packaging and messaging lifecycle.
 2. Agent 365 Agent Users are provisioned digital teammates, not classic installed Teams bots.
 3. The bridge must process Agent 365 Activity Protocol traffic through Microsoft 365 Agents SDK.
-4. Direct messages, explicit mentions, and targeted activities are supported.
+4. Direct messages and explicit mentions are the primary Teams entry points. The September 6 UI recheck found public group `@` discovery but not Hermes `/`; no private content was sent. Targeted activity handling remains conditional on a verified Agent User inbound/outbound contract. This does not establish universal platform incompatibility or a pure UI bug.
 5. Unmentioned Teams channel messages are not assumed to be delivered.
 6. Agent 365 notification workloads must use workload-appropriate response channels rather than being converted into Teams messages.
 7. Teams targeted messaging is a distinct private-user boundary inside a group conversation and must not be treated as a public group turn.
@@ -390,7 +397,7 @@ The canonical manifest path is:
 
 1. A Worker Refresh may only move to a strictly newer semantic Role Release.
 2. The current Worker must remain available when refresh preflight fails.
-3. Local Role Skill changes and Candidate Improvements must have an approved, state-bound Learning Packet before replacement.
+3. Local governed changes require either an approved state-bound Learning Packet or an explicit, signed `reject_and_refresh` disposition before replacement. Rejection authorizes discard and refresh; it is not export approval and must not create a fake approved packet.
 4. Refresh must be transactional and recover the previous profile after an interrupted copy or manifest update.
 5. Role Skills are replaced by the new Role Release.
 6. Previous-release Candidate Improvements and provenance are archived.
@@ -463,20 +470,24 @@ All private stores remain private even when Dreaming uses them as evidence. Drea
 5. Private details must never be written into Role Skills or Candidate Improvements.
 6. A fresh session is the guaranteed activation boundary for changed skill content.
 7. Candidate Improvements are scoped to one Role Release.
+8. Governed artifacts contain only `SKILL.md`; scripts, auxiliary references, executable payloads, and unsupported files cannot enter this Promotion lane. Private Playbooks have a separate private contract.
 
 ### Learning provenance
 
-Every governed Role Skill or Candidate Improvement change must have one schema-v2 provenance record containing:
+Every governed Role Skill or Candidate Improvement change must have a schema-3.0 provenance record containing:
 
 - record identity and timestamp;
 - classification and source stage;
-- exact artifact path and action;
+- exact skill-directory identifier and action;
 - before and after content hashes;
 - changed files;
 - Role Release and Worker identity;
 - generalized learning and rationale;
 - redacted evidence summaries;
-- confidence and privacy result.
+- confidence and privacy result;
+- declarative `agentProposedScenarios` with synthetic input, setup assumptions, and `response.text` criteria.
+
+`artifactPath` identifies the skill directory: `skills/role/<name>` or `skills/candidates/<name>`, not its `SKILL.md` file. `artifact.path` must equal that directory identifier. The runtime requires `artifact.changedFiles` to equal exactly `["<artifactPath>/SKILL.md"]`, and the governed artifact bundle contains only that one file.
 
 The canonical journal is:
 
@@ -485,6 +496,8 @@ The canonical journal is:
 ```
 
 The journal explains *why* behavior changed. The skill tree is the actual Worker behavior.
+
+Packet schema 2.0 retains the cumulative provenance chain from the Role Release baseline to the final artifact. Keeping only the newest matching hash would discard the reasons for earlier edits. Scenarios travel in that signed chain, but remain agent-authored proposals rather than independent proof.
 
 ### Learning transactions
 
@@ -565,7 +578,7 @@ Work History                         |
 
 1. Packets may contain only current Role Skill diffs, Candidate Improvement artifacts, and matching provenance.
 2. Packets must exclude Personal Memory, Private Playbooks, Work History, credentials, logs, caches, and workspace data.
-3. Packet preparation must fail when an artifact lacks matching current-hash provenance.
+3. Packet preparation must fail when an artifact lacks a valid cumulative provenance chain reaching its current hash.
 4. Privacy checks must scan every artifact and every field sent to the merger/judge.
 5. Human approval must bind the exact packet digest, Worker, Role Release commit, and governed-state hash.
 
@@ -575,7 +588,13 @@ Work History                         |
 2. The bridge holds an Ed25519 approval private key.
 3. Workers and central review use trusted public keys only.
 4. Central review must reject unsigned, modified, stale, unapproved, or unknown-Worker packets.
-5. Worker Refresh must verify the same attestation before replacing governed state.
+5. Worker Refresh must verify the matching approval or signed rejection disposition before replacing governed state; only approval permits export.
+
+### Behavioral evaluation
+
+`scripts.evaluate_learning` invokes actual Hermes 0.19.0 for both baseline and candidate in isolated fresh sessions. The profiles must have identical configuration and private state outside the governed skill delta. A supplied approved packet must cover that exact delta. An independently supplied regression or holdout suite is mandatory; agent-proposed cases are reported separately.
+
+The current runner is response-only: literal `response.text` assertions, skill bodies included in the prompt, and no tool, hook, plugin, MCP, or background-learning execution. It does not measure native skill discovery, tool outcomes, repeated-trial variance, or prove independent authorship. Summaries omit raw private responses. The completed local `.artifacts\role-330-evaluation-verified.json` records real Hermes 0.19 / `gpt-5-6-terra` Role 3.2-versus-3.3 results: baseline `3/4`, candidate `4/4`, zero regressions. All four cases are manually/operator-authored independent regression cases, with `independence=operator_declared` and `packetDigest=null`; they are not agent-proposed packet scenarios. This bounded response result is not statistical generalization or evidence of autonomous learning improvement.
 
 ### Merger/judge
 
@@ -627,8 +646,8 @@ Work History                         |
 4. Per-Worker configuration must control enablement, initial delay, interval, focus, maximum records, retry limit, retry backoff, and packet preparation.
 5. Scheduled cycles must serialize through the same Worker learning transaction as foreground work and manual Dreaming.
 6. Status must expose timestamps, counts, current Role Release, last Dream summary, last prepared packet digest, and sanitized failures without private content.
-7. A bridge-owned timer is permitted for classroom demonstrations but requires a non-zero bridge replica.
-8. The production scheduler is the per-Worker Service Bus queue under ADR 0015; a reserved Hermes Platform Dreaming schedule emits `system.dream` messages that directly scale the bridge.
+7. A bridge-owned timer is permitted for classroom demonstrations; the gateway Sandbox is already non-suspending.
+8. The production scheduler is the per-Worker Service Bus queue under ADR 0015; a reserved Hermes Platform Dreaming schedule emits `system.dream` messages consumed by the gateway's continuous receiver.
 9. Queue-driven Dreaming uses the same Worker learning transaction and packet-preparation coordinator as manual Dreaming.
 10. The former ACA scheduled Job and its dedicated authentication surface are removed.
 
@@ -637,7 +656,7 @@ Work History                         |
 1. Hermes native cron jobs and execution ledger are the canonical schedule and history.
 2. User schedule prompts, skills, and delivery content remain on the Worker Data Disk and never enter Service Bus.
 3. An Azure Hermes `CronScheduler` provider schedules only the next occurrence as a minimal Service Bus message.
-4. A due message directly scales the isolated per-Worker bridge through a managed-identity KEDA rule.
+4. The non-suspending gateway receives each due message using managed identity and wakes the OnDemand runtime; no Sandbox KEDA trigger is assumed.
 5. The bridge must use PeekLock, automatic lock renewal, bounded concurrency, and explicit settlement.
 6. Hermes job claims, execution ledger, and schedule revision checks must prevent duplicate execution under at-least-once delivery.
 7. Updates and cancellation must invalidate stale messages even when Service Bus cancellation races with activation.
@@ -645,6 +664,8 @@ Work History                         |
 9. Initial hosted schedules support autonomous Agent Identity/Agent User work, prompt jobs, and reviewed Role Skills; arbitrary scripts and durable human OBO are excluded.
 10. Worker Refresh preserves schedule state, provider reconciliation metadata, and execution history.
 11. Proactive Teams output requires a persisted filtered conversation reference from an existing installed conversation. Hermes execution is at-most-once per revision, while the final Teams send is at-least-once because Teams and Service Bus cannot share one transaction.
+12. Dreaming checkpoints and fencing separate invocation, durable response, reconciliation, packet preparation, and completion. Replay a completed response instead of calling Hermes again. An ambiguous `dream_started` interruption stops for inspection rather than blindly rerunning side effects.
+13. Operator run-now occurrences have a distinct identity and cannot consume or advance the production occurrence. The Teams send-to-receipt crash window remains; neither checkpointing nor Service Bus duplicate detection establishes exactly-once external delivery.
 
 ### Repeatable demonstration cohorts
 
@@ -663,22 +684,58 @@ Work History                         |
 4. Agent 365 BYO gateway execution is observable through Microsoft Defender when invoked from a supported client.
 5. System snapshots must redact Azure, Entra, Agent 365, and local secrets before comparison or retention.
 6. Learning diagnostics expose transaction state, quarantine, reconciliation, provenance, packet validation, and Worker Refresh receipts without revealing private artifact content.
+7. Foundry external-agent registration describes an externally hosted Worker; it creates no Hosted Agent compute. App Insights local-key authentication is disabled. The project connection uses `authType: ProjectManagedIdentity` and exact metadata key `ApplicationInsightsConnectionString`.
+8. Default traces contain metadata, correlation, timings, model/tool identifiers, and available usage, not prompt or tool payloads. SDK, HTTP, model, tool-subprocess, and scheduler trace continuity must be measured live; infrastructure provisioning alone does not prove it.
+9. `bridge.telemetry` exports metadata-only OpenTelemetry through Azure Monitor with Entra CLI/managed-identity authentication. External registration uses `ExternalAgentDefinition(otel_agent_id)`, preview-enabled project access, and a `get()` read-back; it creates no hosted runtime.
+10. The Hermes 0.19.0 native plugin uses supported `llm_execution` and `tool_execution` middleware around the actual callbacks, including streaming model execution. Usage counts are metadata; prompts, tool arguments/results, and raw error payloads must not be exported.
+11. Native gateway `run_in_executor` loses context variables and has no `traceparent` ingress hook. The wrapper therefore lends a short-lived, local metadata-only trace context keyed by a hashed explicit native session. `/api/sessions/{id}/chat` and `/v1/chat/completions` with `X-Hermes-Session-Id` can correlate through this handoff. `/v1/responses` creates its own native session and currently cannot use that mapping; missing handoff must be visible as `autopilots.trace.correlation=missing`, not presented as linked tracing.
+12. An interrupted request retains its handoff lease because the old native executor may still be running. Context expiry ends attribution but does not release that lease for another request. Restart the Hermes runtime wrapper and native gateway before reusing the affected session; restarting only the public bridge does not stop that native executor. Never attribute old work to a new request merely to restore a continuous-looking trace.
+
+Local integration now includes plugin activation at startup, fresh adapter/wrapper headers, native context handoff, HTTP `409` conflicts, and uncertain-`5xx` lease retention. The combined 87 adapter/runtime/bootstrap/native-helper tests passed, including installed Hermes 0.19.0 discovery, an OpenAI SDK callback with offline HTTP transport, and real native `read_file_tool` execution in another process. This proves local wiring/privacy, not live model inference or deployed trace continuity.
+
+The external `autopilots-hermes` registration was created/read back and unchanged on repeat; registration alone is not ingestion proof. Full-day read-only Log Analytics verification now establishes exact smoke, MCP, cron, and ad-hoc Dream attribution. The earlier last-four-hours query excluded the morning MCP invocation; no access or ingestion blocker was found.
+
+MCP trace `9e02cd67edc33364ab97058d1c3af139` contains six successful native model spans and three tool spans: `skill_view`, `mcp__private_incidents__list_services`, and `mcp__public_shipments__list_demo_shipments`. All nine native children share ingested runtime parent `e54a407438d6aca3` with propagated correlation. Hermes 2 user cron trace `04dcef1944ae211549ca1893cdd52309` separately links Service Bus schedule/process, `/cron/fire`, native chat, and ACK.
+
+Ad-hoc Dream trace `7e85aa2783ca35e2779b39197d26aa1b` contains seven successful native model spans and 31 successful tool-execution spans (18 propagated, 13 nested in-process), not 31 proven unique calls or the production cron occurrence. All 38 Dream native parents resolve. Including initial smoke, MCP, and user cron, all 49 reviewed native parents are ingested. The latest 105-span privacy audit found only allowed metadata keys, zero raw identity fields or nonopaque IDs, no Data/Url/Message content, and no AppTraces/AppExceptions rows in scope.
+
+Two real read-only requests isolate the transport-parent limitation. Local `urllib` to the runtime preserved supplied parent `f466c48ce55f3340` in trace `31a14ce5fa8362e199a951e20b09cb36`. Fresh uninstrumented `urllib` inside the gateway Sandbox supplied `6c756943513aba2b`, but the runtime recorded `e27aaa33d331e626` in unchanged trace `584cabe44d94e00671fa98ec16c11d82`; server span `6775da76297a6d45` returned `200` at `18:33:25 UTC` on September 6.
+
+The changed parent is isolated to the Sandbox-origin egress path, not ingress alone or application-exporter span loss. The exact proxy implementation is unidentified. Application execution remains correlated through TraceId and opaque IDs, while platform intermediate parents are absent from AppInsights; the later normal invoke had 10 unresolved wrapper parents. No custom trace headers, fake parent spans, or egress-security bypass were added. Preserve this current native-platform waterfall limitation rather than presenting a complete parent tree. Live MCP attribution and native linkage do not independently establish VNet routing, MI authentication, or all-time privacy. Exact evidence is in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+Operator service deployment must exclude terminal `Failed` gateway/MCP instances from matching-image reuse and replace matching or stale failed instances. Unchanged matching `Stopped` or `Suspended` services remain eligible for same-ID resume; changed configurations may require replacement. Nineteen targeted Sandbox tests cover the operator correction. A real private-MCP redeployment retained its healthy ID and health `200`, which proves reuse rather than live failed-instance recovery. No image or endpoint rollout was needed for this operator-only change.
+
+Existing-Worker modernization preserves the Agent365 blueprint, AgentIdentity, AgentUser, grants, and local state. Infrastructure-only apply precedes identity reconciliation; the next apply must propagate updated identity tfvars into `deployment_config` before service creation. First-time bootstrap remains unresolved: identity setup requires existing Agent365 state, while Agent365 setup requires a real endpoint absent from infrastructure-only output. Placeholder endpoints and copied identities are not supported substitutes.
+
+## Reproducibility and known dependency risk
+
+Hermes is pinned to 0.19.0 with committed Python `uv.lock` and npm lockfiles. Weekly Dependabot updates are reviewed, not deployed automatically. Public PyPI is blocked in this environment; the actual Hermes install and ACR build used `https://packagefeedproxy.microsoft.io/pypi/simple`. Frozen resolution must fail explicitly rather than silently changing source or version.
+
+Both MCP Docker builds now use frozen `uv` locks through that feed. The private MCP image actually built in ACR; targeted local tests passed for private MCP (6) and public MCP (1). These are build/test results, not proof of deployed MCP authorization. SDK 0.1.0b3 `managedIdentityResourceId`, SDK 0.1.0b4, and REST `managedIdentityClientId` conversion attempts returned registry authentication failures. The reviewed upstream issue had no fix as of September 4; that does not establish that every remaining failure is SDK-only.
+
+Historical classic ACA image pulls used MI, but historical Sandbox conversion used the ACR admin username/password through `RegistryCredentials`; the recorded historical `ensure_agent_sandbox` retrieves `passwords[0].value` through `az acr credential show`. On 2026-09-06 the user approved a deployer-held, short-lived Entra-derived registry token for deployment-time conversion only. It remains an explicit bearer credential with the deployer's effective registry permissions, not native MI conversion or the earlier admin-password mechanism.
+
+The deployment helper prepares all four disk images—runtime, gateway, private MCP, and public MCP—before creating service workloads. The gateway receives `AGENT_RUNTIME_DISK_IMAGE_ID` to start/resume runtime from the prepared image. Direct `scripts.sandbox_run_runtime` callers supply `--disk-image-id`; the registry-managed-identity option has been removed.
+
+Runtime/gateway neither acquire/store ACR credentials nor perform image conversion, and workload identities have no ACR role assignments. Deployment requires `Ready` images before workload changes and must not persist tokens in logs, arguments, files, Terraform state, or runtime settings. No renewal daemon, token cache/service, credential broker, or admin-password fallback is permitted. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records the boundary. All four MCP services are now live and healthy; runtime/gateway deployment and authenticated Worker behavior still require verification.
+
+As of 2026-09-06, `npm audit` reports two inherited high-severity findings through `image-size`. The reviewed latest versions are `pptxgenjs` 4.0.1 and `image-size` 2.0.2 with no published fixed version. Do not claim the image is vulnerability-free or force an older major dependency merely to suppress the audit result.
 
 ## Current product constraints
 
 - ACA Sandboxes, Agent 365 AI teammates, reactions, and BYO MCP include preview surfaces.
-- Teams delivers direct messages, explicit mentions, and targeted activities, not every unmentioned channel message.
+- Direct messages and explicit mentions were demonstrated on the prior topology; targeted Agent User inbound remains unverified, and unmentioned channel delivery is not available.
 - Agent 365 BYO MCP requires supported-client connection and OAuth behavior; a raw generic MCP client is insufficient.
 - Human OBO is not implemented.
 - OpenClaw does not yet implement the complete Hermes Role Blueprint and Collective Learning Review lifecycle.
-- Multi-Worker Collective Learning Review is live-validated with two independent Worker packets.
-- Scheduled Dreaming and user schedules share the unified Service Bus/KEDA bridge trigger; the former ACA scheduled Job is removed.
-- Agent 365 Email and Word/Excel/PowerPoint comment notification routing is live-validated on the existing Activity Protocol endpoint.
-- Teams targeted private messaging is deferred until Agent 365 Agent User packages expose a supported targeted-message capability. A separate companion bot package is intentionally out of scope.
+- Prior multi-Worker Promotion and Microsoft 365 notification demonstrations do not prove parity on the new Sandbox workloads.
+- Scheduled Dreaming and user schedules share the per-Worker Service Bus queue and always-running Sandbox gateway receiver; the former ACA scheduled Job is removed.
+- Teams targeted private messaging remains deferred until receive/send support is verified for this Agent User package and SDK. Public `@` discovery but absent `/` discovery is a scoped observation, not universal incompatibility. A companion bot package is out of scope.
 - Interactive UI is split by host contract: governed Adaptive Cards for Teams, and Hermes-generated authenticated web apps in child ACA Sandboxes for rich team experiences. MCP Apps remain deferred until the Hermes/Agent User client path supports the extension directly.
 - Hermes supports bounded Teams DOCX and UTF-8 text attachment ingestion; OpenClaw rejects attachments until it has an equivalent private learning transaction.
 - PDF and image attachment ingestion remain unsupported. A14 supports shared Excel workbook range collaboration and bounded shared PowerPoint text extraction, not direct Teams attachment ingestion for those formats.
 - Work IQ Word is preview and currently lacks arbitrary in-place Word body editing.
+- Group transcript sharing remains unchanged. The stable memory key includes the authenticated user, but the transcript does not gain a per-user split. Full private continuity isolation is an open design boundary under ADR 0017, not a proven consequence of key construction.
 
 ## Non-goals
 

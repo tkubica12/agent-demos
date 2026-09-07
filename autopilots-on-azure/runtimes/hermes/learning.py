@@ -13,9 +13,11 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import yaml
 
-SCHEMA_VERSION = "2.0"
-PACKET_VERSION = "2.0"
+
+SCHEMA_VERSION = "3.0"
+PACKET_VERSION = "3.0"
 ROLE_SKILLS_ROOT = PurePosixPath("skills/role")
 PRIVATE_PLAYBOOKS_ROOT = PurePosixPath("skills/private")
 MEMORIES_ROOT = PurePosixPath("memories")
@@ -650,6 +652,7 @@ def _normalized_provenance(
         "generalizedLearning",
         "rationale",
         "evidence",
+        "agentProposedScenarios",
         "confidence",
         "sourceStage",
     }
@@ -657,7 +660,7 @@ def _normalized_provenance(
     if unexpected:
         raise LearningRecordError(f"Unexpected provenance fields: {', '.join(unexpected)}.")
     classification = candidate.get("classification")
-    if classification not in CLASSIFICATIONS:
+    if not isinstance(classification, str) or classification not in CLASSIFICATIONS:
         raise LearningRecordError("classification must be role_skill_improvement or candidate_improvement.")
     expected_classification = (
         "role_skill_improvement" if _namespace_for_artifact(artifact_path) == "role" else "candidate_improvement"
@@ -670,11 +673,13 @@ def _normalized_provenance(
         raise LearningRecordError(f"artifactPath must be exactly {artifact_path}.")
     if candidate.get("action") != action:
         raise LearningRecordError(f"action must be {action} for {artifact_path}.")
+    if action not in {"create", "patch"}:
+        raise LearningRecordError("Governed artifacts support create or patch of one SKILL.md, not deletion.")
     confidence = candidate.get("confidence")
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
         raise LearningRecordError("confidence must be a number from 0 to 1.")
     source_stage = candidate.get("sourceStage")
-    if source_stage not in SOURCE_STAGES:
+    if not isinstance(source_stage, str) or source_stage not in SOURCE_STAGES:
         raise LearningRecordError(f"sourceStage must be one of: {', '.join(sorted(SOURCE_STAGES))}.")
     normalized = {
         "classification": classification,
@@ -684,6 +689,7 @@ def _normalized_provenance(
         "generalizedLearning": _require_string(candidate, "generalizedLearning", maximum=2000),
         "rationale": _require_string(candidate, "rationale", maximum=1000),
         "evidence": _validate_evidence(candidate.get("evidence")),
+        "agentProposedScenarios": validate_agent_proposed_scenarios(candidate.get("agentProposedScenarios")),
         "confidence": float(confidence),
         "sourceStage": source_stage,
     }
@@ -691,6 +697,85 @@ def _normalized_provenance(
     if findings:
         raise LearningRecordError("Redaction rejected the provenance: " + " ".join(findings))
     return normalized
+
+
+def validate_agent_proposed_scenarios(value: Any) -> list[dict[str, Any]]:
+    """Validate author-supplied declarative tests, never independent holdout evidence."""
+    if not isinstance(value, list) or not 1 <= len(value) <= 10:
+        raise LearningRecordError("agentProposedScenarios must contain 1-10 declarative test cases.")
+    seen: set[str] = set()
+    for scenario in value:
+        if not isinstance(scenario, dict) or set(scenario) != {
+            "scenarioId", "input", "setupAssumptions", "expectedObservableOutcomes",
+            "acceptanceCriteria", "scope",
+        }:
+            raise LearningRecordError("Agent-proposed scenario fields are invalid; commands and code are not supported.")
+        scenario_id = _require_string(scenario, "scenarioId", maximum=63)
+        if (scenario_id != scenario["scenarioId"]
+                or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", scenario_id) or scenario_id in seen):
+            raise LearningRecordError("Scenario IDs must be unique lowercase kebab-case names within a record.")
+        seen.add(scenario_id)
+        _require_string(scenario, "input", maximum=4000)
+        _require_string(scenario, "scope", maximum=1000)
+        for field in ("setupAssumptions", "expectedObservableOutcomes"):
+            items = scenario[field]
+            if not isinstance(items, list) or not 1 <= len(items) <= 10 or not all(
+                isinstance(item, str) and 0 < len(item.strip()) <= 1000 for item in items
+            ):
+                raise LearningRecordError(f"{field} must contain 1-10 nonempty strings.")
+        criteria = scenario["acceptanceCriteria"]
+        if not isinstance(criteria, list) or not 1 <= len(criteria) <= 20:
+            raise LearningRecordError("acceptanceCriteria must contain 1-20 assertions.")
+        for criterion in criteria:
+            if not isinstance(criterion, dict) or set(criterion) != {"observable", "operator", "value"}:
+                raise LearningRecordError("Acceptance criteria must contain only observable, operator, value.")
+            if criterion["observable"] != "response.text" or criterion["operator"] not in (
+                "contains", "not_contains", "equals",
+            ):
+                raise LearningRecordError("Only declarative response.text contains/not_contains/equals assertions are supported.")
+            _require_string(criterion, "value", maximum=1000)
+    findings = _redaction_findings(value, "agentProposedScenarios")
+    if findings:
+        raise LearningRecordError("Scenario privacy scan failed: " + " ".join(findings))
+    return value
+
+
+def evaluate_scenario_response(scenario: dict[str, Any], response_text: str) -> dict[str, Any]:
+    """Score an actual response supplied by a runner; this function invokes no agent."""
+    validate_agent_proposed_scenarios([scenario])
+    if not isinstance(response_text, str):
+        raise LearningRecordError("Scenario response must be text.")
+    assertions = []
+    for criterion in scenario["acceptanceCriteria"]:
+        expected = criterion["value"]
+        passed = {
+            "contains": expected in response_text,
+            "not_contains": expected not in response_text,
+            "equals": expected == response_text,
+        }[criterion["operator"]]
+        assertions.append({"criterion": criterion, "passed": passed})
+    return {"scenarioId": scenario["scenarioId"], "passed": all(item["passed"] for item in assertions),
+            "assertions": assertions, "testSource": "agent_proposed", "independentHoldout": False}
+
+
+def validate_governed_artifact(artifact_path: str, files: dict[str, str]) -> None:
+    if not isinstance(artifact_path, str) or not _ARTIFACT_PATH.fullmatch(artifact_path):
+        raise LearningRecordError("Governed artifact path must identify one lowercase skill name.")
+    if set(files) != {f"{artifact_path}/SKILL.md"}:
+        raise LearningRecordError("Governed artifacts must contain exactly one SKILL.md; bundles and deletion are unsupported.")
+    text = files[f"{artifact_path}/SKILL.md"]
+    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_SNAPSHOT_FILE_BYTES:
+        raise LearningRecordError("SKILL.md must be bounded UTF-8 text.")
+    match = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", text, re.DOTALL)
+    if not match:
+        raise LearningRecordError("SKILL.md must start with YAML frontmatter.")
+    try:
+        metadata = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        raise LearningRecordError("SKILL.md frontmatter is invalid YAML.") from exc
+    if not isinstance(metadata, dict) or metadata.get("name") != artifact_path.rsplit("/", 1)[1]:
+        raise LearningRecordError("SKILL.md frontmatter name must match the skill directory.")
+    _require_string(metadata, "description", maximum=1024)
 
 
 def _change_action(before_files: dict[str, bytes], after_files: dict[str, bytes]) -> str:
@@ -798,6 +883,13 @@ def reconcile_learning_turn(
         candidates_by_artifact[artifact_path] = item
 
     manifest = _load_worker_manifest(profile_home)
+    invalid_governed_files = [
+        path for path in changed_files
+        if (path.startswith("skills/role/") or path.startswith("skills/candidates/"))
+        and not re.fullmatch(r"skills/(?:role|candidates)/[a-z0-9][a-z0-9-]{0,62}/SKILL\.md", path)
+    ]
+    if invalid_governed_files:
+        rejected.append({"reason": "Governed changes support only skills/<namespace>/<name>/SKILL.md."})
     existing_records, invalid_records = _existing_records(profile_home)
     if invalid_records:
         rejected.extend({"reason": f"Stored provenance line {item['line']}: {item['reason']}"} for item in invalid_records)
@@ -813,23 +905,12 @@ def reconcile_learning_turn(
         try:
             normalized = _normalized_provenance(candidate, artifact_path=artifact_path, action=action)
             content = _skill_content_for_dlp(after_files)
+            validate_governed_artifact(artifact_path, content)
             findings = _redaction_findings(content, "artifact")
             if findings:
                 raise LearningRecordError("Redaction rejected the skill artifact: " + " ".join(findings))
             before_hash = _artifact_hash(before_files)
             after_hash = _artifact_hash(after_files)
-            duplicate = next(
-                (
-                    record
-                    for record in existing_records
-                    if record["artifact"]["path"] == artifact_path
-                    and record["artifact"]["afterHash"] == after_hash
-                ),
-                None,
-            )
-            if duplicate:
-                skipped_duplicates.append({"artifactPath": artifact_path, "recordId": duplicate["recordId"]})
-                continue
             record = {
                 "schemaVersion": SCHEMA_VERSION,
                 "recordId": f"lr-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}",
@@ -902,7 +983,7 @@ def reconcile_learning_turn(
         skipped_duplicates = []
         private_playbooks = []
         governed_artifacts = []
-    elif rejected and governed_artifacts:
+    elif rejected and (governed_artifacts or invalid_governed_files):
         _restore_governed_files(profile_home, before)
         records_to_append = []
         skipped_duplicates = []
@@ -946,7 +1027,7 @@ def reconcile_learning_turn(
         "governedArtifactsChanged": governed_artifacts,
         "rolledBack": (
             attachment_private
-            or bool(rejected and governed_artifacts)
+            or bool(rejected and (governed_artifacts or invalid_governed_files))
         ),
         "attachmentPersistenceBlocked": attachment_private,
     }
@@ -964,6 +1045,7 @@ def validate_stored_record(record: dict[str, Any]) -> dict[str, Any]:
         "generalizedLearning",
         "rationale",
         "evidence",
+        "agentProposedScenarios",
         "confidence",
         "sourceStage",
         "artifact",
@@ -972,7 +1054,7 @@ def validate_stored_record(record: dict[str, Any]) -> dict[str, Any]:
         "privacy",
     }
     if set(record) != required:
-        raise LearningRecordError("Stored provenance fields do not match schema version 2.0.")
+        raise LearningRecordError(f"Stored provenance fields do not match schema version {SCHEMA_VERSION}.")
     if record.get("schemaVersion") != SCHEMA_VERSION:
         raise LearningRecordError(f"Unsupported schemaVersion {record.get('schemaVersion')!r}.")
     if not isinstance(record.get("recordId"), str) or not record["recordId"].startswith("lr-"):
@@ -986,6 +1068,16 @@ def validate_stored_record(record: dict[str, Any]) -> dict[str, Any]:
         raise LearningRecordError("artifact metadata is invalid.")
     if artifact.get("path") != record.get("artifactPath"):
         raise LearningRecordError("artifact.path must equal artifactPath.")
+    if not isinstance(record["artifactPath"], str) or not _ARTIFACT_PATH.fullmatch(record["artifactPath"]):
+        raise LearningRecordError("artifactPath is invalid.")
+    for key in ("beforeHash", "afterHash"):
+        value = artifact[key]
+        if value is None and key == "beforeHash" and record["action"] == "create":
+            continue
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise LearningRecordError(f"artifact.{key} must be a SHA-256 hash.")
+    if artifact["changedFiles"] != [f"{record['artifactPath']}/SKILL.md"]:
+        raise LearningRecordError("artifact.changedFiles must identify exactly the governed SKILL.md.")
     role_release = record.get("roleRelease")
     if not isinstance(role_release, dict) or set(role_release) != {"roleBlueprint", "release", "commit"}:
         raise LearningRecordError("roleRelease metadata is invalid.")
@@ -1003,6 +1095,7 @@ def validate_stored_record(record: dict[str, Any]) -> dict[str, Any]:
                 "generalizedLearning",
                 "rationale",
                 "evidence",
+                "agentProposedScenarios",
                 "confidence",
                 "sourceStage",
             )

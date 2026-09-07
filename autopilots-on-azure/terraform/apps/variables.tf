@@ -78,21 +78,6 @@ variable "user_scheduling_lock_renewal_seconds" {
   default = 1800
 }
 
-variable "user_scheduling_keda_polling_seconds" {
-  type    = number
-  default = 15
-}
-
-variable "user_scheduling_scale_down_seconds" {
-  type    = number
-  default = 1200
-
-  validation {
-    condition     = var.user_scheduling_scale_down_seconds >= 960 && var.user_scheduling_scale_down_seconds <= 3600
-    error_message = "user_scheduling_scale_down_seconds must be between 960 and 3600 seconds so detached Activity Protocol turns outlive the 900-second runtime timeout."
-  }
-}
-
 variable "servicebus_dream_enabled" {
   type    = bool
   default = false
@@ -214,12 +199,27 @@ variable "bridge_image" {
   type = string
 }
 
+variable "bridge_disk_source_image" {
+  type    = string
+  default = ""
+}
+
 variable "private_mcp_image" {
   type = string
 }
 
+variable "private_mcp_disk_source_image" {
+  type    = string
+  default = ""
+}
+
 variable "public_shipments_mcp_image" {
   type = string
+}
+
+variable "public_shipments_mcp_disk_source_image" {
+  type    = string
+  default = ""
 }
 
 variable "openclaw_gateway_token" {
@@ -255,12 +255,6 @@ variable "previous_api_server_key" {
 variable "agent365_client_id" {
   type    = string
   default = ""
-}
-
-variable "agent365_client_secret" {
-  type      = string
-  default   = ""
-  sensitive = true
 }
 
 variable "agent365_tenant_id" {

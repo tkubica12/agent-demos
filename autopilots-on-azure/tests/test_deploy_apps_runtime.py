@@ -54,6 +54,34 @@ class DeployAppsRuntimeTests(unittest.TestCase):
                 "hermes",
             )
 
+    def test_capture_omits_deployment_secrets_and_keeps_current_native_urls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "outputs.json"
+            groups = {"gateway": {"id": "current-group"}}
+            path.write_text(json.dumps({"sandbox_groups": groups, "bridge_url": "https://native",
+                                        "runtime_disk_image_id": "runtime-disk"}))
+            with patch.object(deploy_apps_runtime, "runtime_outputs_path", return_value=path), patch.object(
+                deploy_apps_runtime, "terraform_output",
+                return_value={"sandbox_groups": groups, "deployment_config": {"api_server_key": "not-for-output"}},
+            ):
+                deploy_apps_runtime.capture_runtime_outputs("hermes", "autopilot-hermes")
+            captured = json.loads(path.read_text())
+        self.assertEqual(captured["bridge_url"], "https://native")
+        self.assertEqual(captured["runtime_disk_image_id"], "runtime-disk")
+        self.assertNotIn("deployment_config", captured)
+
+    def test_capture_does_not_reuse_url_from_deleted_group(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "outputs.json"
+            path.write_text(json.dumps({"sandbox_groups": {"gateway": {"id": "old"}}, "bridge_url": "https://old"}))
+            with patch.object(deploy_apps_runtime, "runtime_outputs_path", return_value=path), patch.object(
+                deploy_apps_runtime, "terraform_output",
+                return_value={"sandbox_groups": {"gateway": {"id": "new"}}},
+            ):
+                deploy_apps_runtime.capture_runtime_outputs("hermes", "autopilot-hermes")
+            captured = json.loads(path.read_text())
+        self.assertNotIn("bridge_url", captured)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,8 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import scripts.demo_cohort as cohort
 
 from scripts.demo_cohort import (
     matching_sandboxes,
@@ -8,6 +12,29 @@ from scripts.demo_cohort import (
 
 
 class DemoCohortTests(unittest.TestCase):
+    def test_reset_uses_captured_worker_runtime_group_not_platform_shared_group(self):
+        config = {"autopilot_name": "demo-worker", "runtime_data_volume_name": "demo-worker-data",
+                  "hermes_role_release": "3.0.0", "hermes_role_release_commit": "a" * 40}
+        outputs = {"worker_id": "demo-worker", "runtime_data_volume_name": "demo-worker-data",
+                   "terraform_workspace": "demo-worker",
+                   "sandbox_location": "swedencentral", "subscription_id": "subscription",
+                   "resource_group_name": "rg-worker",
+                   "sandbox_groups": {"runtime": {"name": "worker-runtime-group"}}}
+        client = MagicMock()
+        client._dp_get.return_value = {"value": []}
+        args = SimpleNamespace(state_name="demo-worker", workspace="demo-worker",
+                               baseline_release="3.0.0", baseline_commit="a" * 40, execute=False)
+        with (
+            patch.object(cohort, "load_json", side_effect=[config, outputs]),
+            patch.object(cohort, "SandboxGroupClient", return_value=client) as constructor,
+            patch.object(cohort, "DefaultAzureCredential"),
+            patch("builtins.print"),
+        ):
+            cohort.reset(args)
+        self.assertEqual(constructor.call_args.kwargs["sandbox_group"], "worker-runtime-group")
+        self.assertEqual(constructor.call_args.kwargs["subscription_id"], "subscription")
+        client.begin_delete_sandbox.assert_not_called()
+
     def test_reset_requires_every_resource_to_be_demo_owned(self):
         require_demo_owned(
             state_name="demo-hermes-a",

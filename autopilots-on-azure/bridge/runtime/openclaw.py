@@ -100,5 +100,7 @@ class OpenClawRuntimeAdapter:
             },
         )
 
-    async def dream(self, request: DreamRequest) -> DreamResponse:
+    async def dream(
+        self, request: DreamRequest, *, operation: dict[str, Any] | None = None
+    ) -> DreamResponse:
         raise RuntimeError("Dream runs are supported only by the Hermes runtime.")

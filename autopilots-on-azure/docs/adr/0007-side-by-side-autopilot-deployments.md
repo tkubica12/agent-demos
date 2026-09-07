@@ -2,13 +2,13 @@
 
 ## Status
 
-Accepted.
+Accepted. Updated 2026-09-06 for distinct per-Worker/per-role Sandbox Groups and user-assigned identities. Hermes is the primary modernization target; the existing OpenClaw adapter is not being expanded.
 
 ## Context
 
 OpenClaw and Hermes need to be compared and demonstrated independently. They should be able to run in the same Azure platform environment without sharing Agent 365 registration metadata, bridge app identities, runtime secrets, or sandbox state.
 
-Most durable platform infrastructure is common: resource group, ACR, networking, ACA environments, private DNS, Foundry/Azure AI resources, SandboxGroup, RBAC, and private MCP services. The app layer is where runtime selection, branding, bot identity, bridge settings, and runtime image references differ.
+Shared platform infrastructure includes the resource group, ACR, networking, private-ingress Express environment, private DNS, and Foundry model/project. The app layer owns each Worker's separate runtime, gateway, private-MCP, public-MCP, and generated-app Sandbox Groups and user-assigned identities. Tool resource applications can be shared without sharing deployed service identities.
 
 A single bridge that dynamically routes multiple live runtimes would add routing, tenancy, secret, and UX complexity before Hermes parity is proven.
 
@@ -20,16 +20,15 @@ Each autopilot app deployment has its own:
 
 - `autopilot_name`.
 - `agent_runtime`.
-- bridge app name and managed identity.
+- gateway Sandbox name and user-assigned managed identity.
+- separate Sandbox Groups and user-assigned identities for each other service role.
 - runtime image reference and runtime port.
 - Agent 365 package metadata.
 - runtime secrets.
 - sandbox disk/image names.
 - local generated configuration directory.
 
-The first implementation should run `terraform\apps` separately for each autopilot instance, using distinct tfvars files such as `.local\openclaw\apps.tfvars` and `.local\hermes\apps.tfvars`.
-
-A later refactor may convert the apps layer to a `for_each` map of autopilot deployments after both OpenClaw and Hermes are stable.
+Run `terraform\apps` in a separate workspace per Worker, using distinct generated state such as `.local\hermes\apps\generated.app.auto.tfvars.json` and `.local\hermes2\apps\generated.app.auto.tfvars.json`. The gateway cannot auto-suspend while it owns detached post-ACK work and continuous queue receive.
 
 ## Consequences
 

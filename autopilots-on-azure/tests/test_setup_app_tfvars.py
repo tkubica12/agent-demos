@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +18,57 @@ from scripts.setup_app_tfvars import (
 
 
 class SetupAppTfvarsTests(unittest.TestCase):
+    def test_generated_blueprint_loading_is_keyless_and_does_not_decrypt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            generated = root / ".local" / "worker-one" / "agent365" / "a365.generated.config.json"
+            generated.parent.mkdir(parents=True)
+            for secret_fields in ({}, {"agentBlueprintClientSecret": "opaque-protected-value",
+                                      "agentBlueprintClientSecretProtected": True}):
+                generated.write_text(json.dumps({"agentBlueprintId": "blueprint", **secret_fields}), encoding="utf-8")
+                with patch.object(setup_app_tfvars, "REPO_ROOT", root):
+                    self.assertEqual(setup_app_tfvars.load_agent365_auth("hermes", "worker-one"),
+                                     {"client_id": "blueprint"})
+
+    def test_all_service_image_digest_and_disk_source_pairs_persist(self):
+        values = {}
+        for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
+            values[f"{prefix}_image"] = f"registry.example/{prefix}@sha256:digest"
+            values[f"{prefix}_disk_source_image"] = f"registry.example/{prefix}:build-1"
+        kwargs = dict(runtime="hermes", autopilot_name="worker", data_volume_name="worker-data",
+                      role_blueprint="jpm", role_blueprint_source="https://example.com/roles.git",
+                      role_release="3.0.0", role_release_commit="a" * 40)
+        configured = build_tfvars(previous={}, **kwargs, **values)
+        reused = build_tfvars(previous=configured, **kwargs)
+        for key, value in values.items():
+            self.assertEqual(reused[key], value)
+
+    def test_changed_image_never_silently_reuses_old_disk_source(self):
+        for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
+            kwargs = dict(runtime="openclaw", autopilot_name="worker", data_volume_name="worker-data",
+                          device={"privateKeyPem": "private-key"})
+            previous = {f"{prefix}_image": "registry/image@sha256:old",
+                        f"{prefix}_disk_source_image": "registry/image:old"}
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(ValueError, "stale disk source"):
+                build_tfvars(previous=previous, **kwargs, **{f"{prefix}_image": "registry/image@sha256:new"})
+            updated = build_tfvars(previous=previous, **kwargs, **{
+                f"{prefix}_image": "registry/image@sha256:new",
+                f"{prefix}_disk_source_image": "registry/image:new",
+            })
+            self.assertEqual(updated[f"{prefix}_disk_source_image"], "registry/image:new")
+
+    def test_obsolete_keda_values_are_removed_without_changing_schedule(self):
+        tfvars = build_tfvars(
+            runtime="openclaw", autopilot_name="worker", data_volume_name="worker-data",
+            device={"privateKeyPem": "private-key"},
+            previous={"user_scheduling_keda_polling_seconds": 15,
+                      "user_scheduling_scale_down_seconds": 900,
+                      "servicebus_dream_cron_expression": "15 3 * * *"},
+        )
+        self.assertNotIn("user_scheduling_keda_polling_seconds", tfvars)
+        self.assertNotIn("user_scheduling_scale_down_seconds", tfvars)
+        self.assertEqual(tfvars["servicebus_dream_cron_expression"], "15 3 * * *")
+
     def test_collective_learning_approval_identity_is_stable(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "approval.json"
@@ -57,7 +109,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
             bridge_image="registry.example/bridge@sha256:test",
             private_mcp_image="registry.example/mcp@sha256:test",
             agent365_client_id="blueprint-id",
-            agent365_client_secret="blueprint-secret",
             agent365_tenant_id="tenant-id",
             role_blueprint="junior-project-manager",
             role_blueprint_source="https://github.com/example/agent-demos.git",
@@ -78,7 +129,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["private_mcp_image"], "registry.example/mcp@sha256:test")
         self.assertEqual(tfvars["runtime_disk_image_name"], "hermes-api-server-image")
         self.assertEqual(tfvars["agent365_client_id"], "blueprint-id")
-        self.assertEqual(tfvars["agent365_client_secret"], "blueprint-secret")
+        self.assertNotIn("agent365_client_secret", tfvars)
         self.assertEqual(tfvars["agent365_tenant_id"], "tenant-id")
         self.assertEqual(tfvars["hermes_role_blueprint"], "junior-project-manager")
         self.assertEqual(tfvars["hermes_role_release"], "3.0.0")
@@ -157,7 +208,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
         )
 
         self.assertEqual(tfvars["agent365_client_id"], "previous-client")
-        self.assertEqual(tfvars["agent365_client_secret"], "previous-secret")
+        self.assertNotIn("agent365_client_secret", tfvars)
         self.assertEqual(tfvars["agent365_tenant_id"], "previous-tenant")
 
     def test_hermes_tfvars_remove_pre_a10_blueprint_keys(self):

@@ -225,10 +225,8 @@ def _validate_owned_path(value: str) -> str:
     if relative.parts[0] in WORKER_OWNED_ROOTS:
         raise ValueError(f"Role Blueprint cannot own Worker-private path: {value!r}.")
     if relative.parts[0] == "skills":
-        if len(relative.parts) < 2 or relative.parts[1] != "role":
-            raise ValueError("Role Blueprint skill paths must be under skills/role.")
-        if len(relative.parts) >= 2 and relative.parts[1] in RESERVED_WORKER_SKILL_NAMESPACES:
-            raise ValueError(f"Role Blueprint cannot own reserved Worker skill namespace: {value!r}.")
+        if relative.as_posix() != "skills/role":
+            raise ValueError("Role Blueprint must own the whole skills/role tree, never individual skills or private namespaces.")
     return relative.as_posix()
 
 
@@ -256,6 +254,8 @@ def _distribution_manifest(
     if not isinstance(owned, list) or not owned:
         raise ValueError("distribution_owned must be a non-empty list.")
     normalized = [_validate_owned_path(str(item)) for item in owned]
+    if "skills/role" not in normalized:
+        raise ValueError("distribution_owned must include the whole skills/role tree.")
     if "distribution.yaml" not in normalized:
         normalized.append("distribution.yaml")
     return payload, normalized
@@ -356,6 +356,34 @@ def _require_export_receipt(profile_home: Path, manifest: dict[str, Any]) -> Non
         return
     commit = str(manifest["roleReleaseCommit"])
     exports = profile_home / "learning" / "exports"
+    rejection = _read_json(exports / f"{commit}.rejected.json")
+    if rejection:
+        descriptor = rejection.get("disposition") or {}
+        receipt = rejection.get("receipt") or {}
+        digest = hashlib.sha256(
+            json.dumps(descriptor, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        ).hexdigest()
+        signed = {key: value for key, value in receipt.items() if key != "signature"}
+        try:
+            Ed25519PublicKey.from_public_bytes(
+                base64.b64decode(os.getenv("COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY", ""))
+            ).verify(
+                base64.b64decode(receipt.get("signature", "")),
+                json.dumps(signed, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8"),
+            )
+            if (
+                receipt.get("disposition") == descriptor.get("disposition") == "reject_and_refresh"
+                and receipt.get("workerId") == descriptor.get("workerId") == manifest["workerId"]
+                and receipt.get("roleReleaseCommit") == descriptor.get("roleReleaseCommit") == commit
+                and receipt.get("governedStateHash") == descriptor.get("governedStateHash") == governed_state_hash(profile_home)
+                and receipt.get("dispositionDigest") == digest
+                and all(isinstance(receipt.get(key), str) and receipt[key].strip()
+                        for key in ("rejectedAt", "rejectedBy", "reason"))
+                and _read_json(profile_home / "learning" / "dispositions" / f"{digest}.json") == rejection
+            ):
+                return
+        except (InvalidSignature, ValueError, TypeError):
+            pass
     receipt = _read_json(exports / f"{commit}.approved.json")
     packet = _read_json(exports / f"{commit}.packet.json")
     packet_digest = hashlib.sha256(
@@ -388,7 +416,7 @@ def _require_export_receipt(profile_home: Path, manifest: dict[str, Any]) -> Non
     ):
         raise RuntimeError(
             "Worker Refresh is blocked until current Role Skill diffs and Candidate Improvements "
-            "have an approved export receipt."
+            "have an approved export receipt or a signed reject-and-refresh disposition."
         )
 
 
@@ -517,7 +545,7 @@ def install_or_refresh_role_release(
         if _release_tuple(settings.role_release) <= _release_tuple(current_release):
             raise ValueError(
                 f"Worker Refresh requires a newer Role Release than {current_release}; "
-                f"received {settings.role_release}."
+                f"received {settings.role_release}. Roll back behavior in a normal future release, not a downgrade."
             )
         if current_commit == settings.commit:
             raise ValueError("A new Role Release must use a new immutable commit.")

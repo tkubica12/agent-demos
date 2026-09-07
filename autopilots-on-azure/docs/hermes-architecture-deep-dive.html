@@ -464,13 +464,12 @@
         <span class="eyebrow">Autopilots on Azure · implementation architecture</span>
         <h1>A thin control plane. <em>A durable Worker.</em></h1>
         <p class="hero-lead">
-          This is the current, deployed architecture: Microsoft Teams and Agent 365 at the edge,
-          one always-ready lightweight Agent 365 bridge per Worker, scale-to-zero Hermes inside an Azure Container Apps Sandbox,
-          durable private state on an attached Data Disk, Service Bus as the wake-up clock,
-          identity-aware loopback proxies for Foundry and MCP, and Agent User-attributed
-          Microsoft 365 collaboration across Teams, Mail, Office documents, and notifications,
-          plus governed Adaptive Cards and Entra-protected generated applications.
+          The approved architecture unifies runtime, gateway, private MCP, public MCP, and generated
+          applications on separate ACA Sandbox Groups and user-assigned identities per Worker.
+          Hermes 0.19.0 uses native Foundry Entra authentication; the MCP identity adapter remains.
+          The gateway stays running, while runtime compute is OnDemand with a durable Data Disk.
         </p>
+        <div class="callout"><strong>Parent rewriting is isolated to Sandbox-origin egress · 6 September 2026, 22:33 CEST</strong><p>Local urllib preserved its supplied parent; fresh uninstrumented urllib inside the gateway Sandbox changed it while retaining TraceId. Platform intermediate parents are absent from AppInsights; the exact proxy implementation is unidentified. This is a native-platform waterfall limitation, not an application-exporter diagnosis. All 49 reviewed native parents and the 105-span metadata audit remain valid. Both Workers, native inference, MCP, schedule, Dream, and same-ID resume stand; targeted inbound, automatic eight-hour idle behavior, and general learning quality remain unproven.</p></div>
         <div class="hero-links">
           <a class="guide-link" href="hermes-on-azure-overview.html">← Main visual overview</a>
           <a class="guide-link" href="hermes-learning-deep-dive.html">Memory &amp; learning deep dive</a>
@@ -492,10 +491,10 @@
           </div>
           <div class="arrow">↓</div>
           <div class="lane">
-            <div class="lane-title">Per-Worker Container Apps control plane</div>
+            <div class="lane-title">Per-Worker gateway Sandbox</div>
             <div class="nodes">
-              <div class="node accent"><strong>Bridge Container App</strong><span>Agents SDK, attachment boundary, notification routing, lifecycle, queue consumer</span></div>
-              <div class="node azure"><strong>Service Bus queue</strong><span>One queue per Worker, scheduled messages, PeekLock, KEDA trigger</span></div>
+              <div class="node accent"><strong>Gateway Sandbox</strong><span>Auto-suspend disabled; Agents SDK auth, post-ACK work, lifecycle, queue receiver</span></div>
+              <div class="node azure"><strong>Service Bus queue</strong><span>One queue per Worker, scheduled messages, PeekLock; no Sandbox KEDA trigger</span></div>
             </div>
           </div>
           <div class="arrow">↓ wake / reuse</div>
@@ -507,7 +506,7 @@
                 <div class="node accent"><strong>Hermes Gateway</strong><span>Sessions, agent loop, native cron, memory, governed skills, document skills, Dreaming</span></div>
                 <div class="node"><strong>Health wrapper</strong><span>Stable runtime API, Role Release, governed learning, cron receipts</span></div>
                 <div class="node private"><strong>Attached Data Disk</strong><span>Worker profile and private state survive Sandbox replacement</span></div>
-                <div class="node purple"><strong>Loopback identity adapters</strong><span>Foundry tokens, Agent User MCP tokens, Graph file bridge</span></div>
+                <div class="node purple"><strong>Loopback tool identity adapters</strong><span>Agent Identity / Agent User MCP tokens and Graph file bridge; not a model proxy</span></div>
               </div>
             </div>
           </div>
@@ -515,7 +514,7 @@
           <div class="lane">
             <div class="lane-title">Azure and Microsoft services</div>
             <div class="nodes">
-              <div class="node azure"><strong>Azure AI Foundry</strong><span><code>gpt-5-6-terra</code> through managed-identity proxy</span></div>
+              <div class="node azure"><strong>Azure Foundry</strong><span><code>gpt-5-6-terra</code> through native <code>azure-foundry</code> Entra callback</span></div>
               <div class="node private"><strong>Private MCP in a VNet</strong><span>Internal endpoint + Entra authorization; incidents is the repository example</span></div>
               <div class="node"><strong>Public MCP</strong><span>Public HTTPS + Entra authorization; shipments is the repository example</span></div>
               <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Mail, Word, Teams, Calendar, OneDrive, SharePoint, Excel, M365 Copilot</span></div>
@@ -534,13 +533,13 @@
           <article class="card azure">
             <span class="card-index">SHARED PLATFORM STATE</span>
             <h3>Foundations used by every Worker</h3>
-            <p>Resource group, ACR, Foundry account/project/model, Sandbox Group, Service Bus namespace, VNets, peering, private DNS, and Container Apps environments.</p>
-            <div class="pill-row"><span class="pill">Shared model deployment</span><span class="pill">Shared Sandbox Group</span><span class="pill">Private network foundation</span></div>
+            <p>Resource group, ACR, Foundry model/project, Service Bus namespace, VNets, peering, Express private-ingress environment, Private Endpoint/DNS, and keyless monitoring.</p>
+            <div class="pill-row"><span class="pill">Shared model deployment</span><span class="pill">Private network foundation</span><span class="pill">Keyless monitoring</span></div>
           </article>
           <article class="card">
             <span class="card-index">PER-WORKER TERRAFORM WORKSPACE</span>
-            <h3>Nothing private is shared</h3>
-            <p>One bridge, bridge managed identity, Service Bus queue, Agent 365 blueprint, Agent Identity, Agent User, Sandbox Data Disk, MCP apps, runtime settings, and image digests.</p>
+            <h3>Service roles have distinct identities</h3>
+            <p>Five Groups and user-assigned identities per Worker: runtime, gateway, private MCP, public MCP, and generated apps. Separate queue, Agent 365 blueprint, Agent Identity/User, Data Disk, settings, and pinned image digests.</p>
             <div class="pill-row"><span class="pill">autopilot-hermes</span><span class="pill">autopilot-hermes2</span><span class="pill">separate Data Disks</span></div>
           </article>
         </div>
@@ -594,9 +593,9 @@
           <div class="card">
             <span class="card-index">INTERACTIVE TURN</span>
             <div class="sequence">
-              <div class="sequence-step"><div><strong>Teams sends an activity</strong><p>Personal chat, explicit mention, reaction, targeted activity, or a bounded Office attachment reaches Agent 365.</p></div></div>
+              <div class="sequence-step"><div><strong>Teams sends a supported activity</strong><p>The UI recheck found Hermes in public group <code>@</code> discovery, not targeted <code>/</code>. No private content was sent; targeted inbound remains unverified rather than universally unsupported.</p></div></div>
               <div class="sequence-step"><div><strong>Agents SDK authenticates ingress</strong><p>The bridge identifies the Worker, user, conversation type, authorization mode, and private attachment boundary.</p></div></div>
-              <div class="sequence-step"><div><strong>Bridge wakes the Sandbox</strong><p>It creates, resumes, or reuses the labeled Sandbox and waits for health.</p></div></div>
+              <div class="sequence-step"><div><strong>Bridge creates, resumes, or reuses compute</strong><p>Stopped runtimes are resumable; only Failed is recycled. Both native SDK and deployed application resume now preserve the same runtime ID and Data Disk. Application timing includes model work.</p></div></div>
               <div class="sequence-step"><div><strong>Hermes runs the turn</strong><p>The Gateway owns the session, model calls, tools, memory, skills, and learning transaction.</p></div></div>
               <div class="sequence-step"><div><strong>Bridge returns the activity</strong><p>Text and reactions use Activity Protocol; Work IQ Teams can also create chats and send messages or files as the Agent User.</p></div></div>
             </div>
@@ -605,7 +604,7 @@
             <span class="card-index">PROACTIVE SCHEDULED RESULT</span>
             <div class="sequence">
               <div class="sequence-step"><div><strong>Capture the conversation reference</strong><p>A user-created schedule is durably bound to its existing personal, group, or channel conversation.</p></div></div>
-              <div class="sequence-step"><div><strong>Execute after wake</strong><p>Service Bus starts the bridge; Hermes records the result on the Data Disk.</p></div></div>
+              <div class="sequence-step"><div><strong>Execute after runtime wake</strong><p>The running gateway receives the due message; Hermes persists the result on the Data Disk.</p></div></div>
               <div class="sequence-step"><div><strong>Continue the conversation</strong><p>The bridge uses app-ID continuation when persisted inbound claims are empty.</p></div></div>
               <div class="sequence-step"><div><strong>Require an activity ID</strong><p>The queue message is acknowledged only after Teams returns a concrete activity ID.</p></div></div>
             </div>
@@ -617,7 +616,7 @@
         </div>
         <div class="callout">
           <strong>Teams conversation is not a lifetime model transcript</strong>
-          <p>ADR 0017 keeps one stable Hermes memory key per authenticated Teams conversation/thread while rotating short-term transcripts hourly. The bridge creates native Hermes API sessions; Personal Memory and Work History preserve durable facts without replaying hundreds of old messages and tool results.</p>
+          <p>ADR 0017 keeps stable per-user memory keys while rotating conversation/thread transcripts hourly. Group transcripts remain shared. Key construction alone does not prove private memory or recall isolation; the tension with the intended privacy requirement remains an open design boundary, not an approved per-user transcript redesign.</p>
           <a class="callout-link" href="adr/0017-messaging-session-lifecycle.md">Read ADR 0017 →</a>
         </div>
       </section>
@@ -651,8 +650,8 @@
 
       <section id="scheduling">
         <div class="section-head">
-          <div><span class="section-number">06 / SCALE TO ZERO</span><h2>Service Bus is the alarm clock.</h2></div>
-          <p>Hermes owns user schedule meaning; deterministic system workflows own their own durable state. Service Bus holds minimal due messages and KEDA turns them into compute only when work is due.</p>
+          <div><span class="section-number">06 / DUE WORK</span><h2>Service Bus wakes runtime work, not the receiver.</h2></div>
+          <p>Hermes owns schedule meaning. Service Bus holds minimal due messages; the gateway's continuous receiver wakes the runtime. Auto-suspend is disabled on the gateway, so this is not full-system scale-to-zero.</p>
         </div>
         <div class="diagram">
           <div class="lane">
@@ -667,7 +666,7 @@
           <div class="lane">
             <div class="lane-title">Wake, execute, settle</div>
             <div class="nodes">
-              <div class="node azure"><strong>KEDA scalers</strong><span>Service Bus wakes due work; explicit HTTP concurrency keeps active Teams and notification turns alive</span></div>
+              <div class="node azure"><strong>Non-suspending gateway</strong><span>Preserves detached post-ACK work and continuous managed-identity queue receive</span></div>
               <div class="node accent"><strong>PeekLock consumer</strong><span>Lock renewal, single concurrency, retry, DLQ</span></div>
               <div class="node"><strong>Sandbox + Hermes</strong><span>Claim, execute, durable receipt, re-arm</span></div>
               <div class="node"><strong>Complete message</strong><span>Only after durable outcome and required delivery</span></div>
@@ -683,12 +682,12 @@
           <article class="card purple">
             <span class="card-index">PLATFORM TASK · <code>system.dream</code></span>
             <h3>Same wake path, no agent prompt</h3>
-            <p>A reserved daily Hermes schedule dispatches the existing Dreaming coordinator. Two-phase system receipts provide at-most-once execution and packet-preparation evidence. The former ACA scheduled Job is gone.</p>
+            <p>A reserved schedule dispatches Dreaming. Fenced phase checkpoints permit completed-response replay; an ambiguous <code>dream_started</code> stops rather than blindly rerunning. Run-now cannot consume the production occurrence.</p>
           </article>
           <article class="card azure">
             <span class="card-index">DOCUMENT TASK · <code>document.publish.retry</code></span>
             <h3>Deterministic retry without a model turn</h3>
-            <p>A private Data Disk operation owns staged bytes, ETag, retry deadline, recipient, and delivery reference. Service Bus carries only operation ID, attempt, Worker, and due time; success or 24-hour copy fallback is proactively delivered exactly once.</p>
+            <p>A private Data Disk operation owns staged bytes, ETag, deadline, recipient, and delivery reference. Service Bus carries minimal identifiers. A Teams send accepted before its durable receipt can be repeated after a crash: external delivery is not exactly-once.</p>
           </article>
         </div>
       </section>
@@ -699,8 +698,8 @@
           <p>Managed identity proves where code runs. Agent Identity authorizes autonomous application work. Agent User represents the digital teammate for Worker-owned Microsoft 365 resources.</p>
         </div>
         <div class="grid-3">
-          <article class="card azure"><span class="card-index">WORKLOAD CREDENTIAL</span><h3>Sandbox Group / bridge managed identity</h3><p>Bootstraps Azure access, Sandbox lifecycle, ACR, Service Bus receive, and the first federated exchange. It is not the business principal exposed to tools.</p></article>
-          <article class="card"><span class="card-index">AUTONOMOUS PRINCIPAL</span><h3>Agent Identity</h3><p>Obtains resource-specific application tokens for Foundry, custom private/public MCP servers, and Service Bus scheduling. Servers validate audience, tenant, issuer, object/client identity, and app role.</p></article>
+          <article class="card azure"><span class="card-index">WORKLOAD CREDENTIAL</span><h3>One user-assigned identity per service role</h3><p>Runtime, gateway, private MCP, public MCP, and generated-app Groups have separate permissions. Workload identity bootstraps Azure access and federation; it is not the business principal exposed to tools.</p></article>
+          <article class="card"><span class="card-index">AUTONOMOUS PRINCIPAL</span><h3>Agent Identity</h3><p>Obtains resource-specific application tokens for custom private/public MCP servers and Service Bus scheduling. Native Foundry inference uses the runtime's managed identity separately. Tool servers validate audience, tenant, issuer, object/client identity, and app role.</p></article>
           <article class="card purple"><span class="card-index">DIGITAL TEAMMATE</span><h3>Agent User</h3><p>Uses <code>user_fic</code> for licensed Worker-owned Microsoft 365 resources. Mail, proactive Teams, files, Word comments, Excel ranges, and Graph versions are attributed to this identity—not the invoking human.</p></article>
         </div>
         <div class="diagram" style="margin-top:18px;">
@@ -715,17 +714,17 @@
 
       <section id="model">
         <div class="section-head">
-          <div><span class="section-number">08 / MODEL</span><h2>Hermes sees OpenAI. Azure sees identity.</h2></div>
-          <p>Hermes expects an OpenAI-compatible endpoint and key. A small loopback proxy preserves that interface while acquiring Foundry tokens with managed identity.</p>
+          <div><span class="section-number">08 / MODEL</span><h2>Native Foundry authentication removes the model proxy.</h2></div>
+          <p>Hermes 0.19.0 supports <code>azure-foundry</code> and an Entra token callback. The provider acquires short-lived credentials for direct inference without a model API key or a custom HTTP relay.</p>
         </div>
         <div class="diagram">
           <div class="nodes">
-            <div class="node accent"><strong>Hermes agent</strong><span><code>OPENAI_BASE_URL=http://127.0.0.1:18080/v1</code></span></div>
-            <div class="node purple"><strong><code>foundry_token_proxy.py</code></strong><span>Acquire and cache Azure token; forward OpenAI-compatible request</span></div>
+            <div class="node accent"><strong>Hermes 0.19.0</strong><span>Native <code>azure-foundry</code> provider</span></div>
+            <div class="node purple"><strong>Entra token callback</strong><span>Refresh short-lived credentials inside the native client</span></div>
             <div class="node azure"><strong>Foundry OpenAI v1</strong><span><code>gpt-5-6-terra</code>, managed authorization, no model API key on disk</span></div>
           </div>
         </div>
-        <div class="callout"><strong>Why a proxy?</strong><p>It is a compatibility adapter, not a behavior layer. Hermes still owns prompts, sessions, tools, and inference decisions. The proxy only changes authentication and endpoint transport. It can be removed when Hermes supports native Foundry endpoints with managed or Agent Identity authentication.</p></div>
+        <div class="callout"><strong>Removing one adapter does not remove the others</strong><p>The custom model proxy is deleted. Agent Identity and Agent User federation for MCP still require the tool adapter; it is not human OBO. All four images built through the protected feed, both Workers returned native model responses, and Hermes private/public MCP execution spans are ingested. These bounded results do not establish every tool workflow, identity scope, or Teams parity.</p></div>
       </section>
 
       <section id="mcp">
@@ -746,7 +745,7 @@
           <div class="lane">
             <div class="lane-title">Current upstream examples</div>
             <div class="nodes">
-              <div class="node private"><strong>Private MCP in a VNet</strong><span>Internal Container App, public access disabled, private DNS, Entra application authorization</span></div>
+              <div class="node private"><strong>Private MCP Sandbox</strong><span>Group linked to Express environment; Private Endpoint/DNS plus MCP Entra authorization</span></div>
               <div class="node azure"><strong>Public MCP</strong><span>Public HTTPS endpoint, optional scale to zero, exact Entra audience and role validation</span></div>
               <div class="node purple"><strong>Microsoft-managed MCP</strong><span>Work IQ Mail, Word, Teams, Calendar, OneDrive, SharePoint, Excel, and M365 Copilot under Agent User identity</span></div>
             </div>
@@ -829,7 +828,7 @@
             <div class="lane-title">Agent 365 notification wake</div>
             <div class="nodes">
               <div class="node purple"><strong>Email or Office mention</strong><span><code>channelId=agents</code>; subchannel <code>email</code>, <code>word</code>, <code>excel</code>, or <code>powerpoint</code></span></div>
-              <div class="node accent"><strong>Existing <code>/api/messages</code></strong><span>Same Activity Protocol authentication and ACA HTTP scale-from-zero path</span></div>
+              <div class="node accent"><strong>Existing <code>/api/messages</code></strong><span>Native HTTPS transport and SDK authentication on the non-suspending gateway</span></div>
               <div class="node"><strong>Stable workload identifiers</strong><span>Email, conversation, document, parent-comment, and comment IDs support idempotency</span></div>
               <div class="node private"><strong>Originating-workload reply</strong><span>Email stays email; Office comments stay Office; no silent redirect to Teams</span></div>
             </div>
@@ -850,8 +849,8 @@
         <div class="grid-2">
           <article class="card">
             <span class="card-index">APPLICATION VNET</span>
-            <h3>Bridge and MCP hosting</h3>
-            <p>Public bridge Container Apps environment and an internal private-MCP environment, with an ACR available to the deployment.</p>
+            <h3>Private ingress foundation</h3>
+            <p>Express managed environment, Private Endpoint and private DNS for the linked private-MCP Group. No classic Container App workload. Native gateway/public-MCP ports use application-level authentication.</p>
           </article>
           <article class="card private">
             <span class="card-index">SANDBOX VNET</span>
@@ -859,7 +858,7 @@
             <p>Delegated Sandbox subnet connects through the Sandbox Group VNet connection. Global peering reaches the private MCP environment; linked private DNS resolves its internal FQDN.</p>
           </article>
         </div>
-        <div class="callout"><strong>Egress inspection remains active</strong><p>Python HTTP clients use the system trust bundle through <code>SSL_CERT_FILE</code> and <code>REQUESTS_CA_BUNDLE</code>. The Sandbox egress proxy may terminate and re-establish inspected TLS.</p></div>
+        <div class="callout"><strong>Linking is not a reversible switch</strong><p>A Sandbox Group's managed-environment link is irreversible; verify the destination before provisioning. Keep egress inspection and system TLS trust through <code>SSL_CERT_FILE</code> and <code>REQUESTS_CA_BUNDLE</code>. Do not bypass certificate checks or expose private tools publicly.</p></div>
       </section>
 
       <section id="ownership">
@@ -876,7 +875,7 @@
               <tr><td><strong>Agent behavior and sessions</strong></td><td>Hermes + Role Release</td><td>Bridge</td></tr>
               <tr><td><strong>Private Worker state</strong></td><td>Attached Data Disk profile</td><td>Container image</td></tr>
               <tr><td><strong>User schedule meaning</strong></td><td>Hermes cron store</td><td>Service Bus</td></tr>
-              <tr><td><strong>Future wake</strong></td><td>Service Bus scheduled message + KEDA</td><td>Sandbox ticker</td></tr>
+              <tr><td><strong>Future work</strong></td><td>Service Bus scheduled message + continuous gateway receiver</td><td>Suspended runtime ticker</td></tr>
               <tr><td><strong>Business authorization</strong></td><td>Agent Identity / Agent User token</td><td>Workload managed identity alone</td></tr>
               <tr><td><strong>Microsoft 365 semantics</strong></td><td>Work IQ managed MCP servers</td><td>Bridge prompt logic</td></tr>
               <tr><td><strong>File identity and versions</strong></td><td>Microsoft Graph drive item + Agent User + ETag</td><td>Local filename</td></tr>
@@ -892,32 +891,39 @@
       <section id="failure">
         <div class="section-head">
           <div><span class="section-number">13 / FAILURE MODEL</span><h2>Durability is explicit, not hopeful.</h2></div>
-          <p>Scale-to-zero and distributed delivery introduce retries and races. The implementation records enough state to distinguish stale work, duplicate work, interrupted work, and delivered work.</p>
+          <p>OnDemand runtime suspension and distributed delivery introduce retries and races. The implementation distinguishes stale, duplicate, interrupted, and delivered work; the gateway itself remains running.</p>
         </div>
         <div class="grid-3">
           <article class="card"><span class="card-index">QUEUE</span><h3>PeekLock + renewal</h3><p>Complete only after durable execution and required delivery. Retry transient failures; dead-letter bounded terminal failures for operator inspection.</p></article>
           <article class="card"><span class="card-index">HERMES</span><h3>Claims + revisions</h3><p>Schedule revision rejects stale cancellation/update races. Claims and receipts prevent redelivery from rerunning an occurrence.</p></article>
-          <article class="card"><span class="card-index">SESSION CONTEXT</span><h3>Rotate transcript, retain memory identity</h3><p>Native Hermes transcript sessions rotate hourly; stable per-conversation memory keys, compression, Personal Memory, and Work History provide bounded continuity.</p></article>
-          <article class="card"><span class="card-index">DREAMING</span><h3>At-most-once occurrence</h3><p><code>claiming → running → completing → completed</code>. An expired running lease records interruption and re-arms; it does not duplicate Dreaming side effects.</p></article>
-          <article class="card"><span class="card-index">TEAMS</span><h3>Warm ingress, elastic Worker</h3><p>One lightweight bridge replica stays ready because ACA cold start can exceed the Activity Protocol response window. Hermes Sandbox compute still scales independently to zero; a 900-second bridge cooldown protects acknowledged callbacks.</p></article>
-          <article class="card"><span class="card-index">SERVERLESS REVIEW</span><h3>Express is a gated future option</h3><p>ACA Express advertises subsecond scale-from-zero, but currently lacks required identity, networking, probes, regions, and SLA. ADR 0001 requires capability gates and measured Agent 365 p95 acknowledgement before returning the bridge to zero replicas.</p></article>
+          <article class="card"><span class="card-index">SESSION CONTEXT</span><h3>A memory key is not an isolation proof</h3><p>Hourly transcripts remain shared for a group. Stable per-user keys preserve segmentation intent but do not prove isolation of all memory/recall paths; ADR 0017 remains an open boundary.</p></article>
+          <article class="card"><span class="card-index">DREAMING</span><h3>Replay a result, not an ambiguous invocation</h3><p>Phase checkpoints and fencing retain completed responses. An ambiguous <code>dream_started</code> stops for inspection; run-now remains separate from the production occurrence.</p></article>
+          <article class="card"><span class="card-index">TEAMS</span><h3>ACK does not end the gateway's work</h3><p>Gateway auto-suspend is disabled for detached completion and Service Bus receive. The bridge owns both temporary-eyes actions and executes the agent's semantic reaction. Runtime compute remains OnDemand.</p></article>
+          <article class="card"><span class="card-index">PRIVATE INGRESS</span><h3>Express is a network boundary, not Worker compute</h3><p>A linked managed environment with Private Endpoint/private DNS gates the private MCP Sandbox. Group linking is irreversible. No classic MCP Container App or Foundry Hosted Agent compute is required.</p></article>
           <article class="card"><span class="card-index">SANDBOX</span><h3>Replace compute, retain disk</h3><p>Config/image/identity label drift replaces the Sandbox. Worker state remains on the named Data Disk.</p></article>
           <article class="card"><span class="card-index">DOCUMENT VERSION</span><h3>Baseline, validate, then publish</h3><p>Microsoft 365-targeted Open XML validation records source defects before editing. Unchanged legacy errors may remain; any error introduced by Hermes blocks upload. ETag conflicts never overwrite human work.</p></article>
           <article class="card"><span class="card-index">OFFICE LOCK</span><h3>Original first, useful fallback</h3><p>A validated <code>423 Locked</code> edit remains in bounded private storage. Teams offers retry-original or a shared copy; a Word comment returns the exact proposed content, rationale, and explicit not-applied status in the same thread.</p></article>
           <article class="card"><span class="card-index">PRIVATE FILE</span><h3>Cleanup is part of the transaction</h3><p>Downloads remain under one private workspace. Success, cancellation, validation failure, terminal failure, or bounded pending-operation expiry deletes the staged bytes and edit intent.</p></article>
           <article class="card"><span class="card-index">NOTIFICATION</span><h3>Workload-local and idempotent</h3><p>Email and Office notifications reuse <code>/api/messages</code>, stable workload IDs, and persistence-disabled turns. Responses stay in the originating workload; Word retries require a fresh explicit mention.</p></article>
-          <article class="card"><span class="card-index">OBSERVABILITY</span><h3>Sanitized persistent diagnostics</h3><p>Queue counters, provider schedule, bindings, execution receipts, system receipts, and packet summaries exclude prompts and token material.</p></article>
+          <article class="card"><span class="card-index">OBSERVABILITY</span><h3>Correlated execution, native-platform parent gap</h3><p>All 49 reviewed native parents match; 105 audited spans contain allowed metadata. A local control preserved its supplied parent, while fresh uninstrumented urllib inside the gateway Sandbox changed it. This isolates Sandbox-origin egress, not ingress alone or exporter loss. TraceId survives; platform intermediate parents are absent from AppInsights. Exact proxy implementation is unidentified. No custom trace headers, fake parents, or egress bypass. Registration remains external metadata, not Hosted compute.</p></article>
+          <article class="card"><span class="card-index">CORRELATION LIMIT</span><h3>Missing handoff must stay visible</h3><p>Gateway executor threads lose context; a short-lived local lease keyed by a hashed native session carries metadata only. Explicit session APIs can correlate; <code>/v1/responses</code> creates its own session and is marked <code>autopilots.trace.correlation=missing</code>. Interrupted leases require restarting the Hermes runtime wrapper/native gateway before reusing that session.</p></article>
+          <article class="card"><span class="card-index">DEPENDENCIES</span><h3>Locks make risk reproducible, not absent</h3><p>Hermes 0.19.0 uses Python/npm locks and weekly Dependabot. All four protected-feed image builds completed; both MCP Docker paths use frozen uv locks. Private/public local MCP tests (6/1) passed. Two inherited high-severity image-size findings have no published fix.</p></article>
+          <article class="card"><span class="card-index">MCP DEPLOYMENT</span><h3>Real tool spans and bounded service recovery</h3><p>Hermes returned expected service IDs and <code>SHIP1001</code>–<code>SHIP1003</code>; the exact morning private/public tool spans are ingested. Terminal <code>Failed</code> gateway/MCP replacement now passes 19 operator tests. A real healthy private-MCP redeploy preserved its ID and health <code>200</code>; that is reuse, not live failed recovery. Unchanged matching <code>Stopped</code>/<code>Suspended</code> services retain IDs. No image/endpoint rollout was needed. Tool execution is not independent VNet-route or MI-authentication proof.</p></article>
+          <article class="card"><span class="card-index">CREDENTIAL LIFECYCLE</span><h3>Redeployment needs no registry login</h3><p>Repeated live MCP deployment reused Sandbox IDs without registry login, verified with a fail-if-called guard. All ten workload <code>AcrPull</code> assignments were removed and ACR admin is <code>false</code>. Native SDK b4 MI conversion still fails; accepted transient Entra credentials are deployment-only. MCP reuse does not establish runtime/gateway behavior. <a href="adr/0021-deployment-time-sandbox-image-authentication.md">Accepted ADR 0021 →</a></p></article>
+          <article class="card"><span class="card-index">EXISTING WORKERS ONLY</span><h3>Preserve identity; apply reconciled values</h3><p>Identity setup succeeded for both Workers after device-code reauthentication. Hermes retains schedules/Dreaming <code>false/false</code>; Hermes 2 <code>true/true</code>. Infrastructure-only apply precedes identity reconciliation and a second apply before service creation. Fresh A365 bootstrap remains unresolved; no placeholder endpoint or replacement identity. <a href="../DEPLOYMENT.md">Operator chain →</a></p></article>
+          <article class="card"><span class="card-index">DEPLOYMENT AUTH</span><h3>Four images prepared; both Workers deployed</h3><p>The helper prepared runtime, gateway, private-MCP, and public-MCP disks using transient deployer Entra tokens. Gateway gets <code>AGENT_RUNTIME_DISK_IMAGE_ID</code>; direct CLI uses <code>--disk-image-id</code>. Both deployed Workers returned real model responses. No workload ACR roles/credentials, admin password, runtime/gateway conversion, or renewal/cache service. <a href="adr/0021-deployment-time-sandbox-image-authentication.md">Read ADR 0021 →</a></p></article>
+          <article class="card"><span class="card-index">LEARNING</span><h3>Four response cases passed; Dream found no changes</h3><p>Real Hermes 0.19 Role 3.2/3.3 comparison scored 3/4 versus 4/4, zero regressions. These were four operator-authored response-only cases, not an agent-proposed packet. Hermes 2's ad-hoc Dream completed with zero records/no packet and unchanged production cron. Neither result proves tool-workflow quality, native discovery, statistical generalization, or interruption recovery.</p></article>
         </div>
         <div class="callout">
-          <strong>Repeatable proof</strong>
-          <p><code>scripts.user_schedule_smoke</code> proves scheduled scale-to-zero; <code>scripts.servicebus_dream_smoke</code> proves queue-driven Dreaming; <code>scripts.document_smoke</code> proves Word create/read/comment/reply; and <code>scripts.m365_actions_smoke</code> proves proactive Agent User chat with independent message read-back.</p>
+          <strong>Repeatable validation targets</strong>
+          <p>User scheduling produced a delivered receipt, verified SHA, and DLQ <code>0</code> on an already Running runtime—not wake proof. Ad-hoc Dream completed at phase <code>prepared</code>, <code>success=true</code>, <code>recordCount=0</code>, <code>packet=null</code>, with production cron unchanged, scheduled count <code>1</code>, DLQ <code>0</code>. Separate native SDK and final application same-ID/Data-Disk resume checks both passed. Automatic eight-hour idle suspension remains unverified.</p>
           <a class="callout-link" href="../DEMO.md">Open the demonstration guide →</a>
         </div>
       </section>
 
       <footer class="footer">
         <span>Autopilots on Azure · Hermes architecture</span>
-        <span>Current implementation · Updated 2026-07-29</span>
+        <span>Modernization in progress · Updated 2026-09-06</span>
       </footer>
     </main>
   </div>

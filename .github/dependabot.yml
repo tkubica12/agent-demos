@@ -1,0 +1,32 @@
+version: 2
+registries:
+  protected-pypi:
+    type: python-index
+    url: https://packagefeedproxy.microsoft.io/pypi/simple
+    replaces-base: true
+updates:
+  - package-ecosystem: uv
+    directories:
+      - /autopilots-on-azure
+      - /autopilots-on-azure/runtimes/hermes
+      - /autopilots-on-azure/private-incidents-mcp
+      - /autopilots-on-azure/public-shipments-mcp
+    registries:
+      - protected-pypi
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /autopilots-on-azure/runtimes/hermes
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: docker
+    directories:
+      - /autopilots-on-azure/bridge
+      - /autopilots-on-azure/runtimes/hermes
+      - /autopilots-on-azure/private-incidents-mcp
+      - /autopilots-on-azure/public-shipments-mcp
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

@@ -1,4 +1,6 @@
 *
+!pyproject.toml
+!uv.lock
 !bridge/
 !bridge/**
 !scripts/
@@ -14,3 +16,6 @@
 !runtimes/openclaw/**
 !runtimes/hermes/
 !runtimes/hermes/**
+**/.venv/
+**/__pycache__/
+**/node_modules/

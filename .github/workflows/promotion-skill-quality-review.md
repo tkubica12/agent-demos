@@ -62,6 +62,10 @@ Check each proposed `SKILL.md` for:
 - vague slogans, excessive prose, fake capabilities, unsupported tools, or non-testable requirements;
 - consistency between the proposed skill, `distribution.yaml` Role Release, and review decision.
 
+The governed artifact contract is one `skills/role/<name>/SKILL.md`, with matching frontmatter name and discovery description. Bundles, sidecar code, and skill deletion are not supported promotion actions. `distribution_owned` must own the entire `skills/role` parent, never enumerate individual skills or include `skills/private`.
+
+For reviewVersion `2.0`, inspect `decision` and the cumulative evidence and **AGENT-PROPOSED TEST SCENARIOS** inside `approvedSources`. Assess whether declarative assertions measure the proposed behavior, but do not report them as executed tests, independent holdout, or proof of behavioral quality. Missing execution evidence must stay explicit.
+
 Read earlier Skill Quality reviews on this PR before deciding. Verify that previously reported defects are fixed and do not replace them with progressively stricter wording preferences.
 
 Use `skill-quality-risk` only for a concrete operational defect that would cause at least one of:

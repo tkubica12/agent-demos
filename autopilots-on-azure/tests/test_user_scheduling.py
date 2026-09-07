@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import json
 import os
 import sys
@@ -9,15 +10,21 @@ import tempfile
 import time
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+
 import bridge.app as bridge_app
+import bridge.servicebus_scheduler as servicebus_scheduler
 from bridge.proactive_delivery import delivery_reference_key, send_proactive_activity
 from bridge.servicebus_scheduler import (
     ServiceBusScheduleConsumer,
     ServiceBusScheduleSender,
+    message_trace_headers,
 )
 
 
@@ -132,16 +139,19 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(result["activityId"], "activity-1")
 
     def test_service_bus_message_completes_after_success(self):
+        handled = []
+        spans = []
+        handler_traces = []
+        tracer = TracerProvider().get_tracer("scheduler-test")
         async def run():
             previous = os.environ.get("WORKER_ID")
             os.environ["WORKER_ID"] = "hermes2"
             try:
-                consumer = ServiceBusScheduleConsumer(
-                    handler=lambda payload: asyncio.sleep(
-                        0,
-                        result={"status": "completed"},
-                    )
-                )
+                async def handler(payload):
+                    handled.append(payload)
+                    handler_traces.append(trace.get_current_span().get_span_context().trace_id)
+                    return {"status": "completed"}
+                consumer = ServiceBusScheduleConsumer(handler=handler)
                 consumer._loop = asyncio.get_running_loop()
                 receiver = FakeReceiver()
                 message = FakeReceivedMessage({
@@ -150,8 +160,17 @@ class UserSchedulingTests(unittest.TestCase):
                     "workerId": "hermes2",
                     "jobId": "job-1",
                     "revision": "revision-1",
+                    "_traceCarrier": {"baggage": "must-not-be-forwarded"},
                 })
-                await asyncio.to_thread(consumer._process, receiver, message)
+                message.application_properties = {
+                    b"traceparent": b"00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+                }
+                with patch(
+                    "bridge.servicebus_scheduler.operation_span",
+                    wraps=servicebus_scheduler.operation_span,
+                ) as span, patch("bridge.telemetry.trace.get_tracer", return_value=tracer):
+                    await asyncio.to_thread(consumer._process, receiver, message)
+                    spans.append(span.call_args.kwargs)
                 return consumer, receiver
             finally:
                 if previous is None:
@@ -164,6 +183,11 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(len(receiver.completed), 1)
         self.assertEqual(consumer.status()["completed"], 1)
         self.assertEqual(receiver.abandoned, [])
+        self.assertEqual(spans[0]["carrier"], {
+            "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+        })
+        self.assertEqual(spans[0]["operation_id"], "job-1:revision-1")
+        self.assertEqual(handler_traces, [int("a" * 32, 16)])
 
     def test_document_retry_message_is_scheduled_with_identity(self):
         scheduled = []
@@ -203,6 +227,9 @@ class UserSchedulingTests(unittest.TestCase):
                 ),
                 "SCHEDULER_SERVICEBUS_QUEUE": "worker-hermes2",
             },
+        ), patch(
+            "bridge.servicebus_scheduler.trace_headers",
+            return_value={"traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01"},
         ):
             sender = ServiceBusScheduleSender(
                 client_factory=lambda *args, **kwargs: Client(),
@@ -227,6 +254,87 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(body["workerId"], "hermes2")
         self.assertEqual(result["sequenceNumber"], 42)
         self.assertEqual(cancelled, [42])
+        self.assertEqual(scheduled[0][0].application_properties, {
+            "traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
+        })
+
+    def test_service_bus_trace_carrier_excludes_baggage_and_nontext_values(self):
+        message = FakeReceivedMessage({})
+        message.application_properties = {
+            b"traceparent": b"00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+            "tracestate": "vendor=value",
+            b"baggage": b"private=user@example.test",
+            "Authorization": "secret",
+            b"another": 1,
+        }
+        self.assertEqual(message_trace_headers(message), {
+            "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+            "tracestate": "vendor=value",
+        })
+        message.application_properties = {"traceparent": 12}
+        self.assertEqual(message_trace_headers(message), {})
+
+    def test_consumer_without_transport_carrier_starts_clean_root(self):
+        captured = []
+        tracer = TracerProvider().get_tracer("scheduler-test")
+
+        async def handler(payload):
+            captured.append(trace.get_current_span().get_span_context().trace_id)
+            return {"status": "completed"}
+
+        consumer = ServiceBusScheduleConsumer(handler=handler)
+        with (
+            patch("bridge.telemetry.trace.get_tracer", return_value=tracer),
+            tracer.start_as_current_span("unrelated") as unrelated,
+        ):
+            asyncio.run(consumer._invoke_handler({
+                "jobId": "job", "revision": "revision",
+                "_traceCarrier": {"traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01"},
+            }, {}))
+            unrelated_id = unrelated.get_span_context().trace_id
+        self.assertNotEqual(captured[0], unrelated_id)
+        self.assertNotEqual(captured[0], int("a" * 32, 16))
+
+    def test_consumer_span_closes_after_handler_error_or_timeout(self):
+        async def run(timeout):
+            spans = []
+            finished = asyncio.Event()
+
+            async def handler(payload):
+                spans.append(trace.get_current_span())
+                try:
+                    if timeout:
+                        await asyncio.sleep(10)
+                    raise RuntimeError("handler failure")
+                finally:
+                    finished.set()
+
+            consumer = ServiceBusScheduleConsumer(handler=handler)
+            consumer._loop = asyncio.get_running_loop()
+            receiver = FakeReceiver()
+            message = FakeReceivedMessage({
+                "version": "1.0", "type": "hermes.cron.fire", "workerId": "worker",
+                "jobId": "job", "revision": "revision",
+            })
+            await asyncio.to_thread(consumer._process, receiver, message)
+            await asyncio.wait_for(finished.wait(), timeout=2)
+            await asyncio.sleep(0)
+            return receiver, spans
+
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout):
+                tracer = TracerProvider().get_tracer("scheduler-test")
+                with (
+                    patch.dict(os.environ, {
+                        "WORKER_ID": "worker", "SCHEDULER_MAX_LOCK_RENEWAL_SECONDS": "1",
+                        "SCHEDULER_MAX_DELIVERY_COUNT": "5",
+                    }),
+                    patch("bridge.telemetry.trace.get_tracer", return_value=tracer),
+                ):
+                    receiver, spans = asyncio.run(run(timeout))
+                self.assertEqual(len(receiver.abandoned), 1)
+                self.assertEqual(len(spans), 1)
+                self.assertFalse(spans[0].is_recording())
 
     def test_scheduled_document_lock_rearms_without_model_turn(self):
         class Adapter:
@@ -394,7 +502,7 @@ class UserSchedulingTests(unittest.TestCase):
         revision = "revision-1"
         fire_count = 0
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             profile = Path(temp_dir)
             cron_modules = {
                 "cron": types.ModuleType("cron"),
@@ -405,16 +513,18 @@ class UserSchedulingTests(unittest.TestCase):
             cron_modules["cron.jobs"].get_job = lambda job_id: job
 
             class Provider:
-                def fire_due(self, job_id):
+                def fire_due(self, job_id, *, output_callback):
                     nonlocal fire_count
                     fire_count += 1
                     output_dir = profile / "cron" / "output" / job_id
                     output_dir.mkdir(parents=True)
-                    (output_dir / "2026-07-22_17-00-00.md").write_text(
+                    output_path = output_dir / "2026-07-22_17-00-00.md"
+                    output_path.write_text(
                         "# Cron Job\n\n## Prompt\n\nprivate scheduled prompt"
                         "\n\n## Response\n\nScheduled hello",
                         encoding="utf-8",
                     )
+                    output_callback(output_path)
                     return True
 
             cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = Provider
@@ -449,6 +559,14 @@ class UserSchedulingTests(unittest.TestCase):
                     profile,
                     job_id="job-1",
                     revision=revision,
+                    delivery_activity_id="original-activity",
+                )
+                original_receipt = cron_runtime.read_json_object(
+                    cron_runtime.cron_delivery_receipts_path(profile)
+                )["job-1:revision-1"]
+                cron_runtime.acknowledge_cron_delivery(
+                    profile, job_id="job-1", revision=revision,
+                    delivery_activity_id="another-activity",
                 )
                 duplicate = cron_runtime.fire_cron_job(
                     profile,
@@ -466,6 +584,9 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(fire_count, 1)
         self.assertEqual(stored_receipt["output"], "")
         self.assertIsNone(stored_receipt["deliveryReference"])
+        self.assertEqual(stored_receipt, original_receipt)
+        self.assertTrue(stored_receipt["hasOutput"])
+        self.assertEqual(stored_receipt["deliveryActivityId"], "original-activity")
         self.assertEqual(
             stored_receipt["outputSha256"],
             hashlib.sha256(b"Scheduled hello").hexdigest(),
@@ -481,7 +602,7 @@ class UserSchedulingTests(unittest.TestCase):
         }
         revision = "revision-1"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             profile = Path(temp_dir)
             output_dir = profile / "cron" / "output" / "job-1"
             output_dir.mkdir(parents=True)
@@ -494,14 +615,23 @@ class UserSchedulingTests(unittest.TestCase):
                 "delivered": False,
                 "state": "executing",
                 "lastRunAtBefore": None,
-                "outputFingerprintBefore": cron_runtime._output_fingerprint(previous),
+                "executionId": "execution-1",
             }
             cron_runtime.atomic_write_json(
                 cron_runtime.cron_delivery_receipts_path(profile),
                 {"job-1:revision-1": receipt},
             )
-            (output_dir / "2026-07-22_17-03-00.md").write_text(
+            output_path = output_dir / "2026-07-22_17-03-00.md"
+            output_path.write_text(
                 "# Cron Job\n\n## Response\n\nRecovered output",
+                encoding="utf-8",
+            )
+            cron_runtime._record_cron_output(
+                profile, job_id="job-1", revision=revision,
+                execution_id="execution-1", output_path=output_path,
+            )
+            (output_dir / "2026-07-22_17-06-00.md").write_text(
+                "# Cron Job\n\n## Response\n\nLater occurrence output",
                 encoding="utf-8",
             )
             cron_modules = {
@@ -553,11 +683,11 @@ class UserSchedulingTests(unittest.TestCase):
         }
         cron_modules["cron.jobs"].get_job = lambda job_id: next(jobs)
         cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = (
-            lambda: SimpleNamespace(fire_due=lambda job_id: False)
+            lambda: SimpleNamespace(fire_due=lambda job_id, **kwargs: False)
         )
         cron_modules["azure_cron_provider"].schedule_revision = lambda value: "revision-1"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             with patch.dict(sys.modules, cron_modules):
                 result = cron_runtime.fire_cron_job(
                     Path(temp_dir),
@@ -601,7 +731,7 @@ class UserSchedulingTests(unittest.TestCase):
         )
         cron_modules["azure_cron_provider"].schedule_revision = lambda value: "revision-1"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             profile = Path(temp_dir)
             cron_runtime.atomic_write_json(
                 cron_runtime.cron_delivery_receipts_path(profile),
@@ -653,7 +783,7 @@ class UserSchedulingTests(unittest.TestCase):
                 if key.startswith("job-2:")
                 and value.get("state") == "pending_delivery"
             ]),
-            20,
+            25,
         )
         self.assertIn("job-2:executing", receipts)
 
@@ -664,6 +794,7 @@ class UserSchedulingTests(unittest.TestCase):
             "prompt": "Changed by user",
             "schedule": {"kind": "cron", "expr": "0 2 * * *"},
             "schedule_display": "0 2 * * *",
+            "repeat": {"times": None, "completed": 2},
             "next_run_at": "2026-07-25T02:00:00+00:00",
             "enabled": True,
             "state": "scheduled",
@@ -704,7 +835,7 @@ class UserSchedulingTests(unittest.TestCase):
             lambda value: "dream-revision"
         )
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             profile = Path(temp_dir)
             cron_runtime.atomic_write_json(
                 cron_runtime.cron_delivery_path(profile),
@@ -725,15 +856,17 @@ class UserSchedulingTests(unittest.TestCase):
                     profile,
                     job_id="dream-job",
                     revision="dream-revision",
-                    occurrence_id="manual-1",
+                    occurrence_id="dream-revision",
                 )
+                self._prepare_dream_checkpoint(profile, claimed)
                 completed = cron_runtime.complete_system_schedule(
                     profile,
                     job_id="dream-job",
                     revision="dream-revision",
-                    occurrence_id="manual-1",
+                    occurrence_id="dream-revision",
                     success=True,
                     summary={"dream": {"recordCount": 1}},
+                    owner_token=claimed["ownerToken"],
                 )
                 production_claim = cron_runtime.claim_system_schedule(
                     profile,
@@ -750,10 +883,12 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(job["prompt"], cron_runtime.SYSTEM_DREAM_PROMPT)
         self.assertEqual(user_jobs, [])
         self.assertEqual(all_jobs[0]["systemType"], "dream")
+        self.assertEqual(all_jobs[0]["schedule"], {"kind": "cron", "expr": "0 2 * * *"})
+        self.assertEqual(all_jobs[0]["repeat"], {"times": None, "completed": 2})
         self.assertEqual(binding, {"systemType": "dream"})
         self.assertEqual(claimed["status"], "claimed")
         self.assertEqual(completed["status"], "completed")
-        self.assertEqual(production_claim["status"], "claimed")
+        self.assertEqual(production_claim["status"], "duplicate")
         self.assertEqual(marked, [("dream-job", True, None)])
         self.assertEqual(reconciled, [True])
 
@@ -784,7 +919,7 @@ class UserSchedulingTests(unittest.TestCase):
             lambda value: "new-revision"
         )
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             profile = Path(temp_dir)
             cron_runtime.atomic_write_json(
                 cron_runtime.system_schedule_receipts_path(profile),
@@ -831,7 +966,7 @@ class UserSchedulingTests(unittest.TestCase):
             lambda value: "dream-revision"
         )
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as temp_dir:
             profile = Path(temp_dir)
             cron_runtime.atomic_write_json(
                 cron_runtime.system_schedule_receipts_path(profile),
@@ -853,6 +988,294 @@ class UserSchedulingTests(unittest.TestCase):
                 )
 
         self.assertEqual(result["status"], "interrupted")
+
+    def test_unbound_later_output_is_not_recovered_for_old_occurrence(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            output_dir = profile / "cron" / "output" / "job-1"
+            output_dir.mkdir(parents=True)
+            (output_dir / "later.md").write_text(
+                "# Cron Job\n\n## Response\n\nNot this occurrence", encoding="utf-8"
+            )
+            cron_runtime.atomic_write_json(cron_runtime.cron_delivery_receipts_path(profile), {
+                "job-1:revision-1": {
+                    "state": "executing", "executionId": "old-execution",
+                    "startedAtEpoch": 1, "delivered": False,
+                }
+            })
+            modules = {
+                "cron.jobs": SimpleNamespace(get_job=lambda _: None),
+                "cron.scheduler_provider": SimpleNamespace(
+                    resolve_cron_scheduler=lambda: SimpleNamespace(reconcile=lambda: None)
+                ),
+                "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision-1"),
+            }
+            with patch.dict(sys.modules, modules):
+                result = cron_runtime.fire_cron_job(profile, job_id="job-1", revision="revision-1")
+        self.assertEqual(result["status"], "pending_delivery")
+        self.assertEqual(result["lastStatus"], "error")
+        self.assertNotIn("Not this occurrence", result["output"])
+        self.assertIn("no unambiguous output", result["output"])
+
+    def test_native_output_checkpoint_survives_provider_reconcile_failure(self):
+        job = {
+            "id": "job-1", "next_run_at": "2026-09-01T00:00:00+00:00",
+            "last_run_at": None, "enabled": True,
+        }
+        native_runs = []
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            def save_output(job_id, output):
+                path = profile / "cron" / "output" / job_id / "native-output.md"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(output, encoding="utf-8")
+                return path
+
+            def native_run(job, **kwargs):
+                scheduler.save_job_output(
+                    job["id"], "# Cron Job\n\n## Response\n\nNative owned output"
+                )
+                return True
+            scheduler = SimpleNamespace(save_job_output=save_output, run_one_job=native_run)
+
+            class NativeCronScheduler:
+                def fire_due(self, job_id, **kwargs):
+                    native_runs.append(job_id)
+                    scheduler.run_one_job(
+                        {"id": job_id, "execution_id": "native-execution"},
+                    )
+                    job["last_status"] = "success"
+                    return True
+
+            native_module = SimpleNamespace(
+                CronScheduler=NativeCronScheduler, resolve_cron_scheduler=lambda: provider
+            )
+            modules = {
+                "cron": SimpleNamespace(scheduler=scheduler),
+                "cron.scheduler_provider": native_module,
+                "cron.jobs": SimpleNamespace(get_job=lambda _: job),
+            }
+            with patch.dict(sys.modules, modules):
+                spec = importlib.util.spec_from_file_location(
+                    "_test_azure_provider", RUNTIME_DIR / "azure_cron_provider.py"
+                )
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                provider = module.AzureCronScheduler()
+                with (
+                    patch.dict(sys.modules, {"azure_cron_provider": module}),
+                    patch.object(provider, "reconcile", side_effect=[RuntimeError("broker unavailable"), None]),
+                ):
+                    revision = module.schedule_revision(job)
+                    with self.assertRaisesRegex(RuntimeError, "broker unavailable"):
+                        cron_runtime.fire_cron_job(profile, job_id="job-1", revision=revision)
+                    recovered = cron_runtime.fire_cron_job(
+                        profile, job_id="job-1", revision=revision
+                    )
+                    scheduler.save_job_output(
+                        "job-1", "# Cron Job\n\n## Response\n\nAnother native run"
+                    )
+                    stored = cron_runtime.read_json_object(
+                        cron_runtime.cron_delivery_receipts_path(profile)
+                    )[f"job-1:{revision}"]
+        self.assertEqual(native_runs, ["job-1"])
+        self.assertEqual(recovered["output"], "Native owned output")
+        self.assertEqual(stored["output"], "Native owned output")
+        self.assertTrue(stored["nativeOutputPath"])
+        self.assertTrue(stored["nativeOutputSha256"])
+        self.assertEqual(stored["nativeExecutionId"], "native-execution")
+
+    def test_atomic_receipt_transitions_preserve_concurrent_updates(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            path = cron_runtime.cron_delivery_receipts_path(profile)
+            cron_runtime.atomic_write_json(path, {
+                f"job-{index}:revision": {
+                    "state": "pending_delivery", "delivered": False, "output": str(index)
+                } for index in range(30)
+            })
+            def acknowledge(index):
+                return cron_runtime.acknowledge_cron_delivery(
+                    profile, job_id=f"job-{index}", revision="revision",
+                    delivery_activity_id=f"activity-{index}",
+                )
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(acknowledge, range(30)))
+            receipts = cron_runtime.read_json_object(path)
+        self.assertEqual(len(receipts), 30)
+        self.assertTrue(all(value["delivered"] for value in receipts.values()))
+
+    def test_native_provider_injects_producer_trace_for_each_occurrence(self):
+        sent = []
+
+        class Sender:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send_messages(self, message):
+                span = trace.get_current_span()
+                sent.append((message, span.get_span_context(), span.kind, dict(span.attributes)))
+
+            def schedule_messages(self, message, due_at):
+                self.send_messages(message)
+                return [42]
+
+        modules = {"cron.scheduler_provider": SimpleNamespace(CronScheduler=object)}
+        with patch.dict(sys.modules, modules):
+            spec = importlib.util.spec_from_file_location(
+                "_test_traced_azure_provider", RUNTIME_DIR / "azure_cron_provider.py"
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        provider = module.AzureCronScheduler()
+        provider._client = SimpleNamespace(get_queue_sender=lambda _: Sender())
+        tracer = TracerProvider().get_tracer("scheduler-test")
+        with (
+            patch.dict(os.environ, {"WORKER_ID": "worker", "SCHEDULER_SERVICEBUS_QUEUE": "queue"}),
+            patch("bridge.telemetry.trace.get_tracer", return_value=tracer),
+            tracer.start_as_current_span("upstream") as parent,
+        ):
+            job = {"id": "dream-job", "next_run_at": "2026-09-07T02:00:00Z"}
+            self.assertEqual(provider._schedule(job, "revision", {"systemType": "dream"}), 42)
+            provider.enqueue_now(job, "revision", {"systemType": "dream"}, occurrence_id="manual")
+            parent_context = parent.get_span_context()
+        for message, context, kind, _ in sent:
+            traceparent = message.application_properties["traceparent"].split("-")
+            self.assertEqual(int(traceparent[1], 16), parent_context.trace_id)
+            self.assertEqual(int(traceparent[2], 16), context.span_id)
+            self.assertNotEqual(context.span_id, parent_context.span_id)
+            self.assertEqual(kind, module.SpanKind.PRODUCER)
+            self.assertNotIn("baggage", message.application_properties)
+        self.assertNotEqual(
+            sent[0][3]["autopilots.operation.id"], sent[1][3]["autopilots.operation.id"],
+        )
+
+    def test_manual_dream_preserves_actual_production_next_run(self):
+        job = {
+            "id": "dream-job", "name": cron_runtime.SYSTEM_DREAM_JOB_NAME,
+            "prompt": cron_runtime.SYSTEM_DREAM_PROMPT, "last_run_at": None,
+            "next_run_at": "2026-09-06T02:00:00+00:00",
+        }
+        scheduled_next_run = job["next_run_at"]
+        def mutate_production(*args, **kwargs):
+            job["next_run_at"] = "2026-09-07T02:00:00+00:00"
+            raise AssertionError("Ad-hoc execution must not claim or complete the production job.")
+        enqueued = []
+        def enqueue(job, revision, binding, *, occurrence_id):
+            enqueued.append(occurrence_id)
+            return {"occurrenceId": occurrence_id, "messageId": "manual-message"}
+        modules = {
+            "cron.jobs": SimpleNamespace(
+                get_job=lambda _: job, list_jobs=lambda **_: [job],
+                claim_job_for_fire=mutate_production, mark_job_run=mutate_production,
+            ),
+            "cron.scheduler_provider": SimpleNamespace(
+                resolve_cron_scheduler=lambda: SimpleNamespace(
+                    enqueue_now=enqueue, reconcile=mutate_production
+                )
+            ),
+            "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision-1"),
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            cron_runtime.atomic_write_json(
+                cron_runtime.cron_delivery_path(profile), {"dream-job": {"systemType": "dream"}}
+            )
+            with patch.dict(sys.modules, modules):
+                queued = cron_runtime.enqueue_system_dream_now(profile)
+                claimed = cron_runtime.claim_system_schedule(
+                    profile, job_id="dream-job", revision="revision-1",
+                    occurrence_id=queued["occurrenceId"],
+                )
+                self._prepare_dream_checkpoint(profile, claimed)
+                with patch.object(cron_runtime.time, "time", return_value=1788660600):
+                    completed = cron_runtime.complete_system_schedule(
+                        profile, job_id="dream-job", revision="revision-1",
+                        occurrence_id=queued["occurrenceId"], success=True,
+                        owner_token=claimed["ownerToken"],
+                    )
+                repeated = cron_runtime.claim_system_schedule(
+                    profile, job_id="dream-job", revision="revision-1",
+                    occurrence_id=queued["occurrenceId"],
+                )
+        self.assertEqual(queued["scheduledNextRunAt"], scheduled_next_run)
+        self.assertEqual(completed["nextRunAt"], scheduled_next_run)
+        self.assertEqual(job["next_run_at"], scheduled_next_run)
+        self.assertIsNone(job["last_run_at"])
+        self.assertEqual(claimed["operationKind"], "adhoc")
+        self.assertEqual(repeated["status"], "duplicate")
+
+    @staticmethod
+    def _prepare_dream_checkpoint(profile, operation):
+        phases = ["pending", "dream_started", "dream_completed", "status_completed", "prepared"]
+        for before, after in zip(phases, phases[1:]):
+            cron_runtime.checkpoint_system_schedule(
+                profile, job_id=operation["jobId"], revision=operation["revision"],
+                occurrence_id=operation["occurrenceId"], owner_token=operation["ownerToken"],
+                expected_phase=before, phase=after, payload={},
+            )
+
+    def test_checkpoint_commit_retry_is_idempotent_and_stale_owner_is_fenced(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            receipt = cron_runtime._new_system_operation(
+                {"id": "dream-job"}, "revision", "occurrence", "adhoc"
+            )
+            receipt["state"] = "running"
+            cron_runtime.atomic_write_json(
+                cron_runtime.system_schedule_receipts_path(profile),
+                {"dream-job:occurrence": receipt},
+            )
+            arguments = {
+                "job_id": "dream-job", "revision": "revision", "occurrence_id": "occurrence",
+                "owner_token": receipt["ownerToken"],
+                "expected_phase": "pending", "phase": "dream_started", "payload": {},
+            }
+            first = cron_runtime.checkpoint_system_schedule(profile, **arguments)
+            retry = cron_runtime.checkpoint_system_schedule(profile, **arguments)
+            self.assertEqual(first, retry)
+            with self.assertRaisesRegex(RuntimeError, "prepared checkpoint"):
+                cron_runtime.complete_system_schedule(
+                    profile, job_id="dream-job", revision="revision", occurrence_id="occurrence",
+                    owner_token=receipt["ownerToken"], success=True,
+                )
+            with self.assertRaisesRegex(RuntimeError, "ownership"):
+                cron_runtime.checkpoint_system_schedule(
+                    profile, **{**arguments, "owner_token": "old-owner"}
+                )
+            with self.assertRaisesRegex(RuntimeError, "conflicting"):
+                cron_runtime.checkpoint_system_schedule(
+                    profile, **{**arguments, "payload": {"different": "payload"}}
+                )
+
+    def test_expired_completed_dream_resumes_with_new_owner_and_same_session(self):
+        receipt = cron_runtime._new_system_operation(
+            {"id": "dream-job"}, "revision", "occurrence", "adhoc"
+        )
+        receipt.update({"state": "running", "phase": "dream_completed", "startedAtEpoch": 1})
+        modules = {
+            "cron.jobs": SimpleNamespace(
+                get_job=lambda _: None,
+                claim_job_for_fire=lambda _: self.fail("Must not reclaim native job"),
+            ),
+            "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: ""),
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            cron_runtime.atomic_write_json(cron_runtime.system_schedule_receipts_path(profile), {
+                "dream-job:occurrence": receipt,
+            })
+            with patch.dict(sys.modules, modules):
+                result = cron_runtime.claim_system_schedule(
+                    profile, job_id="dream-job", revision="revision", occurrence_id="occurrence"
+                )
+        self.assertEqual(result["status"], "claimed")
+        self.assertEqual(result["phase"], "dream_completed")
+        self.assertEqual(result["sessionId"], receipt["sessionId"])
+        self.assertNotEqual(result["ownerToken"], receipt["ownerToken"])
 
 
 if __name__ == "__main__":

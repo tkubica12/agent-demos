@@ -3,15 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import time
 import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
+from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
+from azure.identity import DefaultAzureCredential
+
 from scripts.deploy_apps_runtime import activate_runtime_tfvars, terraform_workspace_name
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
-from scripts.tf_helpers import PLATFORM_DIR, resolve_executable
+from scripts.tf_helpers import resolve_executable
 
 
 RUNTIMES = ("openclaw", "hermes")
@@ -31,6 +35,8 @@ EXPECTED_MARKERS = {
 }
 SANDBOX_RESOURCE = "https://dynamicsessions.io"
 SANDBOX_DATA_OWNER_ROLE = "Container Apps SandboxGroup Data Owner"
+SANDBOX_ROLES = ("runtime", "gateway", "private-mcp", "public-mcp", "generated-apps")
+SANDBOX_API_VERSION = "2026-02-01-preview"
 
 
 def runtime_list(value: str) -> list[str]:
@@ -48,31 +54,6 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"{path} must contain a JSON object.")
     return payload
-
-
-def terraform_outputs(directory: Path) -> dict[str, Any]:
-    result = subprocess.run(
-        [resolve_executable("terraform"), "output", "-json"],
-        cwd=str(directory),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    payload = json.loads(result.stdout)
-    return {key: value["value"] for key, value in payload.items()}
-
-
-def az_account_id() -> str:
-    result = subprocess.run(
-        [resolve_executable("az"), "account", "show", "--query", "id", "-o", "tsv"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    value = result.stdout.strip()
-    if not value:
-        raise RuntimeError("Azure account subscription id was empty.")
-    return value
 
 
 def signed_in_user_id() -> str:
@@ -134,13 +115,90 @@ def missing_expected_markers(runtime: str, payload: Any) -> list[str]:
     return [marker for marker in EXPECTED_MARKERS[runtime] if marker.lower() not in text]
 
 
-def sandbox_group_url(platform: dict[str, Any], subscription_id: str) -> str:
+def sandbox_group_url(outputs: dict[str, Any], role: str = "runtime") -> str:
+    group = outputs["sandbox_groups"][role]
     return (
-        f"https://management.{platform['sandbox_location']}.azuredevcompute.io"
-        f"/subscriptions/{subscription_id}"
-        f"/resourceGroups/{platform['resource_group_name']}"
-        f"/sandboxGroups/{platform['sandbox_group_name']}"
+        f"https://management.{outputs['sandbox_location']}.azuredevcompute.io"
+        f"/subscriptions/{outputs['subscription_id']}"
+        f"/resourceGroups/{outputs['resource_group_name']}"
+        f"/sandboxGroups/{group['name']}"
     )
+
+
+def sandbox_items(payload: Any) -> list[dict[str, Any]]:
+    items = payload.get("value") if isinstance(payload, dict) else payload
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise ValueError("Sandbox API did not return a list of Sandbox resources.")
+    return items
+
+
+def list_role_sandboxes(outputs: dict[str, Any], role: str, *, timeout: int = 120) -> list[dict[str, Any]]:
+    result = az_rest_json(f"{sandbox_group_url(outputs, role)}/sandboxes", timeout=timeout)
+    if not result.get("ok"):
+        raise RuntimeError(f"Listing {role} Sandboxes failed: {result}")
+    return sandbox_items(result["body"])
+
+
+def worker_sandbox(outputs: dict[str, Any], role: str, *, timeout: int = 120) -> dict[str, Any]:
+    sandboxes = list_role_sandboxes(outputs, role, timeout=timeout)
+    if role == "runtime":
+        selector = runtime_sandbox_selector(str(outputs["agent_runtime"]), outputs)
+        matches = [item for item in sandboxes if sandbox_matches(item, selector)]
+    else:
+        sandbox_id = outputs["sandbox_services"][role]["sandbox_id"]
+        matches = [
+            item for item in sandboxes
+            if item.get("id") == sandbox_id
+            and (item.get("labels") or {}).get("worker") == outputs["worker_id"]
+            and (item.get("labels") or {}).get("service") == role
+        ]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected exactly one {role} Sandbox for {outputs['worker_id']}; found {len(matches)}.")
+    return matches[0]
+
+
+def sandbox_status_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> dict[str, Any]:
+    try:
+        outputs = load_json(runtime_outputs_path(runtime, state_name))
+        if outputs["agent_runtime"] != runtime:
+            raise ValueError("Captured outputs belong to a different runtime.")
+        groups = {}
+        ok = True
+        for role in SANDBOX_ROLES:
+            items = list_role_sandboxes(outputs, role, timeout=timeout)
+            summaries = [
+                {key: item.get(key) for key in ("id", "state", "labels", "lifecycle")}
+                for item in items
+            ]
+            groups[role] = {"name": outputs["sandbox_groups"][role]["name"], "sandboxes": summaries}
+            if role == "runtime":
+                selector = runtime_sandbox_selector(runtime, outputs)
+                matches = [item for item in items if sandbox_matches(item, selector)]
+                valid = len(matches) <= 1 and all(
+                    str(item.get("state") or "").lower() in {"running", "suspended", "stopped", "idle"}
+                    for item in matches
+                )
+                groups[role]["ok"] = valid
+                groups[role]["created"] = bool(matches)
+                ok = ok and valid
+            if role in ("gateway", "private-mcp", "public-mcp"):
+                service_id = outputs["sandbox_services"][role]["sandbox_id"]
+                matches = [item for item in items if item.get("id") == service_id]
+                valid = len(matches) == 1
+                if valid:
+                    item = matches[0]
+                    valid = (item.get("labels") or {}).get("worker") == outputs["worker_id"]
+                    valid = valid and (item.get("labels") or {}).get("service") == role
+                    state = str(item.get("state") or "").lower()
+                    valid = valid and state in {"running", "suspended", "stopped", "idle"}
+                    if role == "gateway":
+                        policy = (item.get("lifecycle") or {}).get("autoSuspendPolicy") or {}
+                        valid = valid and state == "running" and policy.get("enabled") is False
+                groups[role]["ok"] = valid
+                ok = ok and valid
+        return {"runtime": runtime, "check": "sandboxes", "ok": ok, "groups": groups}
+    except Exception as exc:
+        return {"runtime": runtime, "check": "sandboxes", "ok": False, "error": type(exc).__name__, "message": str(exc)}
 
 
 def runtime_sandbox_selector(runtime: str, outputs: dict[str, Any]) -> dict[str, Any]:
@@ -148,6 +206,7 @@ def runtime_sandbox_selector(runtime: str, outputs: dict[str, Any]) -> dict[str,
         "labels": {
             "app": "autopilots-on-azure",
             "kind": runtime,
+            "worker": outputs["worker_id"],
         },
         "dataVolume": outputs.get("runtime_data_volume_name") or "",
     }
@@ -196,6 +255,8 @@ def http_json(
 
 
 def az_rest_json(url: str, *, method: str = "get", resource: str = SANDBOX_RESOURCE, timeout: int = 120) -> dict[str, Any]:
+    if resource == SANDBOX_RESOURCE and "api-version=" not in url:
+        url += ("&" if "?" in url else "?") + f"api-version={SANDBOX_API_VERSION}"
     result = subprocess.run(
         [
             resolve_executable("az"),
@@ -326,65 +387,7 @@ def diag_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> dic
         return {"runtime": runtime, "check": "diag", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
 
     result = http_json(f"{url}/diag/teams", timeout=timeout)
-    if result.get("statusCode") == 404:
-        return {
-            "runtime": runtime,
-            "check": "diag",
-            "ok": True,
-            "statusCode": 404,
-            "message": "OPENCLAW_BRIDGE_DEBUG is disabled on the bridge.",
-        }
     return {"runtime": runtime, "check": "diag", "url": f"{url}/diag/teams", **result}
-
-
-def az_log_command(app_name: str, resource_group: str, *, tail: int, follow: bool) -> list[str]:
-    command = [
-        "az",
-        "containerapp",
-        "logs",
-        "show",
-        "--name",
-        app_name,
-        "--resource-group",
-        resource_group,
-        "--tail",
-        str(tail),
-    ]
-    if follow:
-        command.append("--follow")
-    return command
-
-
-def lookup_resource_group(app_name: str) -> str:
-    result = subprocess.run(
-        [
-            resolve_executable("az"),
-            "resource",
-            "list",
-            "--name",
-            app_name,
-            "--query",
-            "[0].resourceGroup",
-            "-o",
-            "tsv",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    value = result.stdout.strip()
-    if not value:
-        raise RuntimeError(f"Could not find resource group for Container App '{app_name}'.")
-    return value
-
-
-def runtime_app_name(runtime: str, app: str, state_name: str = "") -> str:
-    outputs = load_json(runtime_outputs_path(runtime, state_name))
-    key = "private_mcp_app_name" if app == "private-mcp" else "bridge_app_name"
-    value = str(outputs.get(key) or "")
-    if not value:
-        raise KeyError(key)
-    return value
 
 
 def print_json(payload: Any) -> None:
@@ -394,6 +397,7 @@ def print_json(payload: Any) -> None:
 def run_status(args: argparse.Namespace) -> int:
     results: list[dict[str, Any]] = []
     for runtime in runtime_list(args.runtime):
+        results.append(sandbox_status_check(runtime, timeout=args.timeout, state_name=args.state_name))
         results.append(health_check(runtime, timeout=args.timeout, state_name=args.state_name))
         if args.invoke:
             results.append(invoke_check(runtime, timeout=args.timeout, state_name=args.state_name))
@@ -404,10 +408,10 @@ def run_status(args: argparse.Namespace) -> int:
 
 
 def run_smoke(args: argparse.Namespace) -> int:
-    results = [
-        invoke_check(runtime, message=args.message, timeout=args.timeout, state_name=args.state_name)
-        for runtime in runtime_list(args.runtime)
-    ]
+    results = []
+    for runtime in runtime_list(args.runtime):
+        results.append(sandbox_status_check(runtime, timeout=args.timeout, state_name=args.state_name))
+        results.append(invoke_check(runtime, message=args.message, timeout=args.timeout, state_name=args.state_name))
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
 
@@ -434,18 +438,25 @@ def run_scheduled_learning(args: argparse.Namespace) -> int:
 
 
 def run_activate(args: argparse.Namespace) -> int:
+    outputs_path = runtime_outputs_path(args.runtime, args.state_name)
+    outputs = load_json(outputs_path) if outputs_path.exists() else {}
+    workspace = args.workspace or outputs.get("terraform_workspace")
+    if not workspace:
+        if args.state_name:
+            raise ValueError("A named Worker without captured outputs requires an explicit --workspace.")
+        workspace = terraform_workspace_name(args.runtime)
     activate_runtime_tfvars(args.runtime, args.state_name)
     print_json(
         {
             "runtime": args.runtime,
-            "terraformWorkspace": terraform_workspace_name(args.runtime),
+            "terraformWorkspace": workspace,
             "runtimeTfvarsFile": str(runtime_app_tfvars_path(args.runtime, args.state_name)),
             "activeTfvarsFiles": [
                 "terraform\\apps\\generated.app.auto.tfvars.json",
                 "terraform\\apps\\generated.runtime.auto.tfvars.json",
             ],
             "next": [
-                f"terraform -chdir=terraform\\apps workspace select {terraform_workspace_name(args.runtime)}",
+                f"terraform -chdir=terraform\\apps workspace select {workspace}",
                 "terraform -chdir=terraform\\apps plan",
             ],
         }
@@ -454,19 +465,49 @@ def run_activate(args: argparse.Namespace) -> int:
 
 
 def run_logs(args: argparse.Namespace) -> int:
-    app_name = runtime_app_name(args.runtime, args.app, args.state_name)
-    resource_group = args.resource_group or lookup_resource_group(app_name)
-    command = az_log_command(app_name, resource_group, tail=args.tail, follow=args.follow)
-    if not args.execute:
-        print("+ " + " ".join(command), flush=True)
+    try:
+        if args.tail < 1:
+            raise ValueError("--tail must be positive.")
+        outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
+        role = "gateway" if args.app == "bridge" else args.app
+        if role == "runtime" and not args.path:
+            raise ValueError("Runtime logs require --path to an existing log file inside its Sandbox.")
+        log_path = args.path or "/app/.sandbox-service.log"
+        sandbox = worker_sandbox(outputs, role)
+        if not args.execute:
+            print_json({"sandboxId": sandbox["id"], "group": outputs["sandbox_groups"][role]["name"],
+                        "path": log_path, "follow": args.follow, "execute": False})
+            return 0
+        if str(sandbox.get("state")).lower() != "running":
+            raise RuntimeError("Sandbox is not running; logs will not implicitly resume it.")
+        with DefaultAzureCredential() as credential, SandboxGroupClient(
+            endpoint_for_region(outputs["sandbox_location"]), credential,
+            subscription_id=outputs["subscription_id"], resource_group=outputs["resource_group_name"],
+            sandbox_group=outputs["sandbox_groups"][role]["name"],
+        ) as group:
+            client = group.get_sandbox_client(sandbox["id"])
+            previous = ""
+            while True:
+                data = client.read_file(log_path)
+                text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+                if previous and text.startswith(previous):
+                    print(text[len(previous):], end="", flush=True)
+                else:
+                    print("\n".join(text.splitlines()[-args.tail:]), flush=True)
+                previous = text
+                if not args.follow:
+                    return 0
+                time.sleep(2)
+    except KeyboardInterrupt:
         return 0
-    return subprocess.run([resolve_executable(command[0]), *command[1:]], check=False).returncode
+    except Exception as exc:
+        print_json({"check": "logs", "ok": False, "error": type(exc).__name__, "message": str(exc)})
+        return 1
 
 
 def run_reset_sandbox(args: argparse.Namespace) -> int:
-    platform = terraform_outputs(PLATFORM_DIR)
     outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
-    base_url = sandbox_group_url(platform, az_account_id())
+    base_url = sandbox_group_url(outputs)
     selector = runtime_sandbox_selector(args.runtime, outputs)
     listed = az_rest_json(f"{base_url}/sandboxes", timeout=args.timeout)
     if not listed.get("ok"):
@@ -474,8 +515,11 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
         return 1
 
     body = listed.get("body")
-    sandboxes = body if isinstance(body, list) else body.get("value", []) if isinstance(body, dict) else []
-    sandbox = next((item for item in sandboxes if isinstance(item, dict) and sandbox_matches(item, selector)), None)
+    sandboxes = sandbox_items(body)
+    matches = [item for item in sandboxes if sandbox_matches(item, selector)]
+    if len(matches) > 1:
+        raise RuntimeError("Multiple runtime Sandboxes match; refusing an ambiguous reset.")
+    sandbox = matches[0] if matches else None
     if not sandbox:
         print_json(
             {
@@ -501,10 +545,12 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
         print_json(summary)
         return 0
 
-    deleted = az_rest_json(f"{base_url}/sandboxes/{sandbox_id}", method="delete", timeout=args.timeout)
-    if not deleted.get("ok"):
-        print_json({"runtime": args.runtime, "sandboxId": sandbox_id, "error": "sandboxDeleteFailed", **deleted})
-        return 1
+    with DefaultAzureCredential() as credential, SandboxGroupClient(
+        endpoint_for_region(outputs["sandbox_location"]), credential,
+        subscription_id=outputs["subscription_id"], resource_group=outputs["resource_group_name"],
+        sandbox_group=outputs["sandbox_groups"]["runtime"]["name"],
+    ) as group:
+        group.get_sandbox_client(sandbox_id).begin_delete(polling_timeout=args.timeout).result()
     summary["deleted"] = True
     summary["next"] = f"Run `uv run python -m scripts.demo_ops smoke --runtime {args.runtime}` to create a fresh sandbox."
     print_json(summary)
@@ -512,8 +558,8 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
 
 
 def run_grant_sandbox_access(args: argparse.Namespace) -> int:
-    platform = terraform_outputs(PLATFORM_DIR)
-    scope = str(platform["sandbox_group_id"])
+    outputs = load_json(runtime_outputs_path(args.runtime, args.state_name))
+    scope = str(outputs["sandbox_groups"][args.role]["id"])
     assignee_object_id = args.assignee_object_id or signed_in_user_id()
     command = role_assignment_command(scope, assignee_object_id)
     summary = {
@@ -583,13 +629,14 @@ def main() -> None:
     activate = subparsers.add_parser("activate", help="Make one runtime's tfvars active for Terraform operations.")
     activate.add_argument("--runtime", choices=RUNTIMES, required=True)
     activate.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
+    activate.add_argument("--workspace", default="", help="Override the captured Worker Terraform workspace.")
     activate.set_defaults(func=run_activate)
 
-    logs = subparsers.add_parser("logs", help="Print or run the Azure Container Apps log command for a runtime app.")
+    logs = subparsers.add_parser("logs", help="Read real service log files through the Sandbox data plane.")
     logs.add_argument("--runtime", choices=RUNTIMES, required=True)
     logs.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
-    logs.add_argument("--app", choices=["bridge", "private-mcp"], default="bridge")
-    logs.add_argument("--resource-group", default="", help="Skip Azure lookup and use this resource group.")
+    logs.add_argument("--app", choices=["bridge", *SANDBOX_ROLES[:-1]], default="gateway")
+    logs.add_argument("--path", default="", help="Existing log file in the Sandbox; services default to /app/.sandbox-service.log.")
     logs.add_argument("--tail", type=int, default=80)
     logs.add_argument("--follow", action="store_true")
     logs.add_argument("--execute", action="store_true", help="Run the log command instead of only printing it.")
@@ -603,6 +650,9 @@ def main() -> None:
     reset.set_defaults(func=run_reset_sandbox)
 
     grant = subparsers.add_parser("grant-sandbox-access", help="Grant SandboxGroup Data Owner to an operator user.")
+    grant.add_argument("--runtime", choices=RUNTIMES, required=True)
+    grant.add_argument("--state-name", default="")
+    grant.add_argument("--role", choices=SANDBOX_ROLES, default="runtime")
     grant.add_argument("--assignee-object-id", default="", help="User object id. Defaults to the current az signed-in user.")
     grant.add_argument("--execute", action="store_true", help="Actually create the role assignment. Omitted means dry-run.")
     grant.set_defaults(func=run_grant_sandbox_access)

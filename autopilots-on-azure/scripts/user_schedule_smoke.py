@@ -14,6 +14,7 @@ import httpx
 
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
 from scripts.tf_helpers import PLATFORM_DIR, terraform_output
+from scripts.demo_ops import worker_sandbox
 
 
 def wait_until(
@@ -82,16 +83,39 @@ def request_with_retry(
     return response
 
 
+def require_awake_gateway(outputs: dict[str, Any]) -> dict[str, Any]:
+    gateway = worker_sandbox(outputs, "gateway")
+    policy = (gateway.get("lifecycle") or {}).get("autoSuspendPolicy") or {}
+    if str(gateway.get("state") or "").lower() != "running" or policy.get("enabled") is not False:
+        raise RuntimeError("The gateway Sandbox must be running with auto-suspend disabled to receive Service Bus messages.")
+    return {"sandboxId": gateway["id"], "state": gateway["state"], "autoSuspendEnabled": False}
+
+
+def runtime_state(outputs: dict[str, Any]) -> str:
+    return str(worker_sandbox(outputs, "runtime").get("state") or "")
+
+
+def require_suspend_window(outputs: dict[str, Any], due_seconds: int) -> None:
+    runtime = worker_sandbox(outputs, "runtime")
+    policy = (runtime.get("lifecycle") or {}).get("autoSuspendPolicy") or {}
+    interval = int(policy.get("interval") or 0)
+    if policy.get("enabled") is not True or not interval:
+        raise RuntimeError("Runtime Sandbox does not report an enabled auto-suspend policy.")
+    if due_seconds < interval + 60:
+        raise ValueError(f"--due-seconds must be at least {interval + 60} to observe the configured runtime suspension.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run one real Hermes cron job through Service Bus and verify scale-to-zero."
+        description="Run one real Hermes cron job through Service Bus with an always-awake Sandbox gateway."
     )
     parser.add_argument("--state-name", default="hermes2")
     parser.add_argument("--due-seconds", type=int, default=180)
     parser.add_argument("--timeout", type=int, default=1200)
+    parser.add_argument("--require-runtime-suspension", action="store_true", help="Observe the existing runtime idle policy before the job becomes due; never change that policy.")
     args = parser.parse_args()
     if args.due_seconds < 120:
-        raise ValueError("--due-seconds must be at least 120 to observe scale-to-zero.")
+        raise ValueError("--due-seconds must be at least 120.")
 
     tfvars = json.loads(
         runtime_app_tfvars_path("hermes", args.state_name).read_text(encoding="utf-8")
@@ -102,6 +126,7 @@ def main() -> None:
     platform = terraform_output(PLATFORM_DIR)
     if not outputs.get("user_scheduling_enabled"):
         raise RuntimeError("User scheduling is not enabled for this Worker.")
+    gateway_before = require_awake_gateway(outputs)
 
     bridge_url = str(outputs["bridge_url"]).rstrip("/")
     api_key = str(tfvars["api_server_key"])
@@ -123,11 +148,11 @@ def main() -> None:
         )
         invoke.raise_for_status()
         gateway_url = str(invoke.json()["gatewayUrl"]).rstrip("/")
+        if args.require_runtime_suspension:
+            require_suspend_window(outputs, args.due_seconds)
         due_at = datetime.now(UTC) + timedelta(seconds=args.due_seconds)
         try:
-            created = request_with_retry(
-                client,
-                "POST",
+            created = client.post(
                 f"{gateway_url}/api/jobs",
                 headers=gateway_headers,
                 json={
@@ -171,24 +196,6 @@ def main() -> None:
             namespace = str(platform["scheduler_servicebus_namespace_name"])
             resource_group = str(platform["resource_group_name"])
             queue = str(outputs["scheduler_servicebus_queue_name"])
-            bridge_app = str(outputs["bridge_app_name"])
-
-            def replica_count() -> int:
-                return len([
-                    line for line in az_value(
-                        "containerapp",
-                        "replica",
-                        "list",
-                        "--resource-group",
-                        resource_group,
-                        "--name",
-                        bridge_app,
-                        "--query",
-                        "[].name",
-                    ).splitlines()
-                    if line.strip()
-                ])
-
             wait_until(
                 lambda: int(az_value(
                     "servicebus",
@@ -206,16 +213,20 @@ def main() -> None:
                 lambda count: count >= 1,
                 timeout=60,
             )
-            wait_until(
-                replica_count,
-                lambda count: count == 0,
-                timeout=max(120, args.due_seconds - 30),
-            )
+            before_due = runtime_state(outputs)
+            if args.require_runtime_suspension:
+                before_due = wait_until(
+                    lambda: runtime_state(outputs),
+                    lambda state: state.lower() in {"suspended", "stopped", "idle"},
+                    timeout=max(1, int((due_at - datetime.now(UTC)).total_seconds()) - 15),
+                )
+            require_awake_gateway(outputs)
             seconds_until_due = (due_at - datetime.now(UTC)).total_seconds()
             if seconds_until_due > 0:
                 time.sleep(seconds_until_due + 30)
-            if replica_count() < 1:
-                raise RuntimeError("KEDA did not wake the bridge after the message became due.")
+            require_awake_gateway(outputs)
+            if args.require_runtime_suspension:
+                wait_until(lambda: runtime_state(outputs), lambda state: state.lower() == "running", timeout=300)
 
             def receipt_probe() -> dict[str, Any]:
                 nonlocal gateway_url
@@ -289,29 +300,34 @@ def main() -> None:
                 "--query",
                 "countDetails",
             )
-            print(json.dumps({
+            result = {
                 "ok": True,
                 "workerId": outputs["worker_id"],
                 "jobId": job_id,
                 "dueAt": due_at.isoformat(),
-                "bridgeScaledToZeroBeforeDue": True,
+                "gatewayBefore": gateway_before,
+                "gatewayAfter": require_awake_gateway(outputs),
+                "runtimeStateBeforeDue": before_due,
+                "runtimeSuspensionObserved": before_due.lower() in {"suspended", "stopped", "idle"},
                 "executionStatus": receipt["status"],
                 "outputSha256": receipt["outputSha256"],
                 "queueCounts": queue_counts,
-            }, indent=2), flush=True)
+            }
         finally:
             if gateway_url and job_id:
-                try:
-                    request_with_retry(
-                        client,
-                        "DELETE",
-                        f"{gateway_url}/api/jobs/{job_id}",
-                        headers=gateway_headers,
-                        attempts=2,
-                        timeout=60,
-                    )
-                except httpx.HTTPError:
-                    pass
+                ensured = request_with_retry(
+                    client, "POST", f"{bridge_url}/internal/runtime/ensure",
+                    headers=bridge_headers, timeout=300,
+                )
+                ensured.raise_for_status()
+                gateway_url = str(ensured.json()["gatewayUrl"]).rstrip("/")
+                removed = request_with_retry(
+                    client, "DELETE", f"{gateway_url}/api/jobs/{job_id}",
+                    headers=gateway_headers, attempts=2, timeout=60,
+                )
+                if removed.status_code != 404:
+                    removed.raise_for_status()
+        print(json.dumps(result, indent=2), flush=True)
 
 
 if __name__ == "__main__":

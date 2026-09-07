@@ -16,7 +16,8 @@ from scripts.setup_agent365 import (
     missing_tooling_permissions,
     write_json,
 )
-from scripts.tf_helpers import APPS_DIR, PLATFORM_DIR, REPO_ROOT, output, resolve_executable, terraform_output, write_tfvars
+from scripts.setup_app_tfvars import runtime_outputs_path
+from scripts.tf_helpers import APPS_DIR, REPO_ROOT, output, resolve_executable, write_tfvars
 
 
 PRIVATE_API_STATE = REPO_ROOT / ".local" / "private-mcp-api.json"
@@ -418,14 +419,17 @@ def update_runtime_tfvars(
     api_state: dict[str, str],
     public_api_state: dict[str, str],
     tenant_id: str,
+    blueprint_client_id: str,
 ) -> dict[str, Any]:
     runtime_path = runtime_app_tfvars_path(runtime, state_name)
     if not runtime_path.exists():
         raise FileNotFoundError(f"{runtime_path} does not exist. Run scripts.setup_app_tfvars first.")
     tfvars = load_json(runtime_path)
+    tfvars.pop("agent365_client_secret", None)
     tfvars.update(
         {
             "agent365_tenant_id": tenant_id,
+            "agent365_client_id": blueprint_client_id,
             "agent365_agent_identity_client_id": identity_state["agentIdentityAppId"],
             "agent365_agent_identity_object_id": identity_state["agentIdentityId"],
             "agent365_agent_user_id": identity_state["agentUserId"],
@@ -503,29 +507,64 @@ def ensure_workiq_agent_user_grants(
             )
 
 
-def sandbox_group_principal_id(platform_outputs: dict[str, Any]) -> str:
-    principal_id = str(platform_outputs.get("sandbox_group_principal_id", "")).strip()
-    if principal_id:
-        return principal_id
-    return output(
-        [
-            "az",
-            "resource",
-            "show",
-            "--resource-group",
-            str(platform_outputs["resource_group_name"]),
-            "--resource-type",
-            "Microsoft.App/sandboxGroups",
-            "--name",
-            str(platform_outputs["sandbox_group_name"]),
-            "--api-version",
-            "2026-02-01-preview",
-            "--query",
-            "identity.principalId",
-            "-o",
-            "tsv",
-        ]
-    )
+def worker_federation_principals(apps_outputs: dict[str, Any]) -> dict[str, str]:
+    groups = apps_outputs.get("sandbox_groups") or {}
+    principals = {
+        role: str((groups.get(role) or {}).get("identity_principal_id") or "").strip()
+        for role in ("gateway", "runtime")
+    }
+    if not all(principals.values()):
+        raise ValueError("Worker apps outputs must contain gateway and runtime Sandbox identity principal IDs.")
+    if len(set(principals.values())) != 2:
+        raise ValueError("Gateway and runtime must have distinct per-Worker managed identities.")
+    return principals
+
+
+def validate_worker_identity_context(
+    apps_outputs: dict[str, Any],
+    tfvars: dict[str, Any],
+    *,
+    runtime: str,
+    tenant_id: str,
+    blueprint_client_id: str,
+) -> None:
+    if not tfvars.get("autopilot_name") or apps_outputs.get("worker_id") != tfvars["autopilot_name"] or apps_outputs.get("agent_runtime") != runtime:
+        raise ValueError("Captured apps outputs do not belong to this Worker and runtime.")
+    if not tenant_id or apps_outputs.get("tenant_id") != tenant_id:
+        raise ValueError("The Azure CLI tenant does not match this Worker's captured apps tenant.")
+    if tfvars.get("agent365_tenant_id") and tfvars["agent365_tenant_id"] != tenant_id:
+        raise ValueError("The Worker Agent 365 tenant differs from its apps tenant.")
+    if tfvars.get("agent365_client_id") and tfvars["agent365_client_id"] != blueprint_client_id:
+        raise ValueError("The Worker configuration and generated Agent 365 blueprint IDs differ.")
+    worker_federation_principals(apps_outputs)
+
+
+def configure_worker_federation(
+    graph: GraphClient,
+    *,
+    apps_outputs: dict[str, Any],
+    blueprint_object_id: str,
+    tenant_id: str,
+    state_name: str,
+) -> dict[str, str]:
+    principals = worker_federation_principals(apps_outputs)
+    for role, principal_id in principals.items():
+        ensure_federated_credential(
+            graph,
+            blueprint_object_id=blueprint_object_id,
+            tenant_id=tenant_id,
+            name=f"identity-{state_name}-{role}",
+            managed_identity_principal_id=principal_id,
+        )
+    credentials_path = f"/applications/{blueprint_object_id}/federatedIdentityCredentials"
+    credentials = graph.request("GET", credentials_path).get("value", [])
+    for credential in credentials:
+        if credential.get("name") == f"identity-{state_name}-sandbox":
+            credential_id = credential.get("id")
+            if not credential_id:
+                raise ValueError("Obsolete shared Sandbox federation credential has no ID.")
+            graph.request("DELETE", f"{credentials_path}/{credential_id}")
+    return principals
 
 
 def main() -> None:
@@ -534,6 +573,7 @@ def main() -> None:
     parser.add_argument("--state-name", default="", help="Local Worker state directory under .local.")
     parser.add_argument("--mail-nickname", default="")
     parser.add_argument("--state-file", default="")
+    parser.add_argument("--apps-outputs-file", default="", help="Captured apps outputs for this Worker, including Sandbox identities.")
     parser.add_argument("--api-state-file", default=str(PRIVATE_API_STATE))
     parser.add_argument("--public-api-state-file", default=str(PUBLIC_API_STATE))
     parser.add_argument("--api-display-name", default="Autopilots Private Incidents MCP")
@@ -558,9 +598,16 @@ def main() -> None:
         raise KeyError(f"{instance_path} is missing: {', '.join(missing)}")
 
     tenant_id = output(["az", "account", "show", "--query", "tenantId", "-o", "tsv"])
-    platform_outputs = terraform_output(PLATFORM_DIR)
-    sandbox_principal_id = sandbox_group_principal_id(platform_outputs)
+    apps_path = Path(args.apps_outputs_file) if args.apps_outputs_file else runtime_outputs_path(runtime, state_name)
+    apps_outputs = load_json(apps_path)
+    tfvars = load_json(runtime_app_tfvars_path(runtime, state_name))
+    blueprint_client_id = generated_blueprint_id(runtime, state_name)
+    validate_worker_identity_context(
+        apps_outputs, tfvars, runtime=runtime, tenant_id=tenant_id,
+        blueprint_client_id=blueprint_client_id,
+    )
     graph = GraphClient.from_az_cli(dry_run=args.dry_run)
+    blueprint_object_id = blueprint_application_object_id(graph, blueprint_client_id)
     api_state_path = Path(args.api_state_file)
     api_state = ensure_private_mcp_api(
         graph,
@@ -578,14 +625,12 @@ def main() -> None:
     if not args.dry_run:
         write_json(public_api_state_path, public_api_state)
 
-    blueprint_client_id = generated_blueprint_id(runtime, state_name)
-    blueprint_object_id = blueprint_application_object_id(graph, blueprint_client_id)
-    ensure_federated_credential(
+    principals = configure_worker_federation(
         graph,
+        apps_outputs=apps_outputs,
         blueprint_object_id=blueprint_object_id,
         tenant_id=tenant_id,
-        name=f"identity-{state_name}-sandbox",
-        managed_identity_principal_id=sandbox_principal_id,
+        state_name=state_name,
     )
     ensure_app_role_assignment(
         graph,
@@ -616,6 +661,7 @@ def main() -> None:
             api_state=api_state,
             public_api_state=public_api_state,
             tenant_id=tenant_id,
+            blueprint_client_id=blueprint_client_id,
         )
         print(
             json.dumps(
@@ -626,7 +672,8 @@ def main() -> None:
                     "privateMcpAudience": tfvars["private_mcp_api_audience"],
                     "publicShipmentsMcpAudience": tfvars["public_shipments_mcp_api_audience"],
                     "toolingManifest": str(TOOLING_MANIFEST),
-                    "next": "Apply terraform/apps, rebuild the runtime and private MCP images, then reset the sandbox.",
+                    "federatedManagedIdentityPrincipals": principals,
+                    "next": "Deploy this Worker's apps and Sandbox services with scripts.deploy_apps_runtime.",
                 },
                 indent=2,
             )

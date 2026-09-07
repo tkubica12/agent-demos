@@ -1,11 +1,13 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from scripts.sandbox_runtime import (
     AgentSandboxConfig,
     create_agent_sandbox,
+    ensure_agent_sandbox,
     ensure_sandbox_runtime_process,
-    recycle_stopped_agent_sandbox,
+    recycle_failed_agent_sandbox,
 )
 
 
@@ -109,7 +111,7 @@ class SandboxLauncherTests(unittest.TestCase):
             sandbox.command,
         )
 
-    def test_stopped_runtime_compute_is_recreated(self):
+    def test_only_failed_runtime_compute_is_recreated(self):
         class Poller:
             def result(self):
                 return None
@@ -124,13 +126,44 @@ class SandboxLauncherTests(unittest.TestCase):
 
         client = Client()
 
-        result = recycle_stopped_agent_sandbox(
+        stopped = {"id": "sandbox-stopped", "state": "Stopped"}
+        self.assertIs(recycle_failed_agent_sandbox(client, stopped), stopped)
+        self.assertEqual(client.deleted, [])
+        result = recycle_failed_agent_sandbox(
             client,
-            {"id": "sandbox-1", "state": "Stopped"},
+            {"id": "sandbox-1", "state": "Failed"},
         )
 
         self.assertIsNone(result)
         self.assertEqual(client.deleted, [("sandbox-1", 600)])
+
+    def test_stopped_runtime_is_started_in_place(self):
+        config = AgentSandboxConfig(
+            subscription_id="subscription",
+            resource_group="resource-group",
+            sandbox_group="group",
+            region="swedencentral",
+            image_name="registry/runtime@sha256:digest",
+            disk_image_id="disk-1",
+            runtime_kind="hermes",
+        )
+        client = Mock()
+        sandbox = client.get_sandbox_client.return_value
+        sandbox.get.return_value = SimpleNamespace(id="sandbox-1", ports=[])
+        client.get_sandbox.return_value = SimpleNamespace(id="sandbox-1")
+        with (
+            patch("scripts.sandbox_runtime.create_sandbox_group_client", return_value=client),
+            patch("scripts.sandbox_runtime.stale_agent_sandboxes", return_value=[]),
+            patch("scripts.sandbox_runtime.existing_agent_sandbox", return_value={"id": "sandbox-1", "state": "Stopped"}),
+            patch("scripts.sandbox_runtime.ensure_sandbox_runtime_process") as ensure_process,
+        ):
+            result = ensure_agent_sandbox(config, wait_for_ready_seconds=0)
+        sandbox.ensure_running.assert_called_once_with(timeout=600)
+        client.begin_delete_sandbox.assert_not_called()
+        client.create_volume.assert_not_called()
+        ensure_process.assert_called_once_with(sandbox, config)
+        self.assertEqual(result.sandbox_id, "sandbox-1")
+        self.assertTrue(result.reused_existing_sandbox)
 
 
 if __name__ == "__main__":

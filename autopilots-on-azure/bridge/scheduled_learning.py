@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from typing import Any, Callable
 import httpx
 
 from bridge.runtime.base import DreamRequest
+from bridge.runtime.hermes import DreamExecutionUncertainError
 
 
 RETRYABLE_ERRORS = (
@@ -160,7 +160,7 @@ class ScheduledLearningCoordinator:
         except asyncio.TimeoutError:
             return
 
-    async def run_once(self) -> dict[str, Any]:
+    async def run_once(self, *, operation: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._run_lock.locked():
             raise RuntimeError("Scheduled learning is already running for this Worker.")
         async with self._run_lock:
@@ -169,7 +169,10 @@ class ScheduledLearningCoordinator:
             self._status["lastStartedAt"] = utc_now()
             self._status["lastError"] = None
             try:
-                result = await self._run_with_retry()
+                session_id = str((operation or {}).get("sessionId") or (
+                    f"scheduled-dream:{self.worker_id}:{uuid.uuid4().hex}"
+                ))
+                result = await self._run_with_retry(operation, session_id)
             except RETRYABLE_ERRORS as exc:
                 self._status["failureCount"] += 1
                 self._status["lastError"] = {
@@ -185,11 +188,16 @@ class ScheduledLearningCoordinator:
                 self._status["running"] = False
                 self._status["lastCompletedAt"] = utc_now()
 
-    async def _run_with_retry(self) -> dict[str, Any]:
+    async def _run_with_retry(
+        self, operation: dict[str, Any] | None, session_id: str
+    ) -> dict[str, Any]:
         last_error: Exception | None = None
+        completed: dict[str, Any] = {}
         for attempt in range(self.settings.retry_limit + 1):
             try:
-                return await self._run_operation()
+                return await self._run_operation(operation, session_id, completed)
+            except DreamExecutionUncertainError:
+                raise
             except RETRYABLE_ERRORS as exc:
                 last_error = exc
                 if attempt >= self.settings.retry_limit:
@@ -202,39 +210,80 @@ class ScheduledLearningCoordinator:
                 )
         raise RuntimeError("Scheduled learning exhausted retries.") from last_error
 
-    async def _run_operation(self) -> dict[str, Any]:
+    async def _run_operation(
+        self, operation: dict[str, Any] | None, session_id: str, completed: dict[str, Any]
+    ) -> dict[str, Any]:
         adapter = self._adapter_factory()
         if adapter.runtime_kind != "hermes":
             raise RuntimeError("Scheduled learning is supported only by Hermes.")
-        session_id = f"scheduled-dream:{self.worker_id}:{uuid.uuid4().hex}"
-        dream = await adapter.dream(
-            DreamRequest(
+        identity = {
+            "job_id": operation["jobId"],
+            "revision": operation["revision"],
+            "occurrence_id": operation["occurrenceId"],
+        } if operation else {}
+        checkpoint = await adapter.get_system_schedule_checkpoint(**identity) if operation else {}
+        if operation and checkpoint.get("ownerToken") != operation["ownerToken"]:
+            raise RuntimeError("Scheduled Dreaming lost occurrence ownership.")
+        phase = checkpoint.get("phase") or "pending"
+        saved = checkpoint.get("checkpoint") or {}
+        if phase in {"status_completed", "prepared"}:
+            dream_summary = saved["dream"]
+        else:
+            request = DreamRequest(
                 session_id=session_id,
                 focus=self.settings.focus,
                 max_records=self.settings.max_records,
             )
-        )
-        records = dream.learning_status.get("records") or []
-        dream_summary = {
-            "sessionId": session_id,
-            "recordCount": len(records),
-            "rejectedRecordCount": len(
-                dream.learning_status.get("rejectedRecords") or []
-            ),
-            "roleRelease": dream.learning_status.get("roleRelease"),
-        }
+            if "dream" not in completed:
+                if not operation and completed.get("dream_started"):
+                    raise DreamExecutionUncertainError(
+                        "Uncheckpointed Dream execution has an unknown outcome; automatic inference retry is blocked."
+                    )
+                completed["dream_started"] = True
+                completed["dream"] = (
+                    await adapter.dream(request, operation=operation)
+                    if operation else await adapter.dream(request)
+                )
+            dream = completed["dream"]
+            dream_summary = {
+                "sessionId": session_id,
+                "recordCount": len(dream.learning_status.get("records") or []),
+                "rejectedRecordCount": len(dream.learning_status.get("rejectedRecords") or []),
+                "roleRelease": dream.learning_status.get("roleRelease"),
+            }
+            if operation:
+                await adapter.checkpoint_system_schedule(
+                    **identity,
+                    owner_token=operation["ownerToken"],
+                    expected_phase="dream_completed",
+                    phase="status_completed",
+                    payload={"dream": dream_summary},
+                )
         self._status["lastDream"] = dream_summary
 
-        packet_summary = None
-        if self.settings.prepare_packet and records:
-            packet = await adapter.prepare_collective_learning()
-            packet_summary = {
-                "packetDigest": packet.get("packetDigest"),
-                "improvementCount": len(packet.get("improvements") or []),
-                "roleRelease": packet.get("roleRelease"),
-                "approvalRequired": packet.get("approvalRequired"),
-            }
-            self._status["lastPacket"] = packet_summary
+        if phase == "prepared":
+            packet_summary = saved.get("packet")
+        else:
+            packet_summary = None
+            if self.settings.prepare_packet and dream_summary["recordCount"]:
+                if "packet" not in completed:
+                    completed["packet"] = await adapter.prepare_collective_learning()
+                packet = completed["packet"]
+                packet_summary = {
+                    "packetDigest": packet.get("packetDigest"),
+                    "improvementCount": len(packet.get("improvements") or []),
+                    "roleRelease": packet.get("roleRelease"),
+                    "approvalRequired": packet.get("approvalRequired"),
+                }
+            if operation:
+                await adapter.checkpoint_system_schedule(
+                    **identity,
+                    owner_token=operation["ownerToken"],
+                    expected_phase="status_completed",
+                    phase="prepared",
+                    payload={"packet": packet_summary},
+                )
+        self._status["lastPacket"] = packet_summary
 
         return {
             "workerId": self.worker_id,

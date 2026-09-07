@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import inspect
+import json
 import os
 import unittest
 import urllib.error
@@ -41,6 +42,9 @@ from scripts.sandbox_runtime import (
 )
 
 
+SCENARIOS_JSON = json.dumps(json.loads(hermes_runtime.PROVENANCE_SHAPE_EXAMPLE)["agentProposedScenarios"])
+
+
 def sandbox_config() -> AgentSandboxConfig:
     return AgentSandboxConfig(
         subscription_id="sub-1",
@@ -55,6 +59,70 @@ def sandbox_config() -> AgentSandboxConfig:
 
 
 class RuntimeAdapterTests(unittest.TestCase):
+    def test_hermes_runtime_requests_propagate_trace_and_opaque_correlations(self):
+        requests = []
+        trace_headers = {
+            "traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01",
+            "x-autopilot-otel-session": "3" * 32,
+            "x-autopilot-otel-operation": "4" * 32,
+        }
+
+        def handle(request):
+            requests.append(request)
+            return httpx.Response(200, json={"token": "turn-1"})
+
+        adapter = HermesRuntimeAdapter(
+            credential_factory=lambda: "credential-1",
+            sandbox_config_factory=sandbox_config,
+            ensure_sandbox=lambda *args, **kwargs: SimpleNamespace(
+                sandbox_id="sandbox-1",
+                endpoint_url="https://hermes.example",
+                reused_existing_sandbox=True,
+            ),
+            client_factory=lambda **kwargs: httpx.AsyncClient(
+                transport=httpx.MockTransport(handle), **kwargs
+            ),
+        )
+        request = AgentRequest(
+            prompt="hello",
+            conversation_id="conversation-1",
+            user_id="user-1",
+            source="invoke",
+            must_answer=True,
+        )
+
+        async def run():
+            await adapter._wait_for_health("https://hermes.example", "api-key")
+            await adapter._session_chat("https://hermes.example", "api-key", request)
+            await adapter._cron_request(
+                "https://hermes.example", "api-key", "GET", "/internal/cron/jobs"
+            )
+            await adapter._collective_learning_request(
+                "GET", "/internal/collective-learning/pending"
+            )
+            await adapter._begin_learning_turn("https://hermes.example", "api-key")
+            await adapter._reconcile_learning_turn(
+                "https://hermes.example", "api-key", "turn-1", []
+            )
+            await adapter._abort_learning_turn(
+                "https://hermes.example", "api-key", "turn-1"
+            )
+
+        with (
+            patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}),
+            patch.object(hermes_runtime, "runtime_trace_headers", return_value=trace_headers),
+        ):
+            asyncio.run(run())
+
+        self.assertGreaterEqual(len(requests), 12)
+        for outgoing in requests:
+            with self.subTest(path=outgoing.url.path):
+                for name, value in trace_headers.items():
+                    self.assertEqual(outgoing.headers[name], value)
+                self.assertNotIn("baggage", outgoing.headers)
+                if outgoing.url.path.startswith("/internal/"):
+                    self.assertEqual(outgoing.headers["X-Autopilot-Key"], "api-key")
+
     def test_session_reset_command_accepts_only_exact_aliases(self):
         self.assertTrue(session_reset_command("/new"))
         self.assertTrue(session_reset_command("  /RESET  "))
@@ -358,7 +426,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         )
         self.assertEqual(post["json"]["input"], "hello")
 
-    def test_hermes_adapter_falls_back_to_responses_api_when_session_chat_is_unavailable(self):
+    def test_hermes_adapter_fails_closed_when_session_chat_is_unavailable(self):
         calls: list[dict] = []
         post_responses = [(404, {"error": "not found"}), (200, {"output_text": "responses OK"})]
 
@@ -372,7 +440,7 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "HERMES_BRIDGE_ENDPOINT_MODE", "AUTOPILOT_NAME"]}
         os.environ["API_SERVER_KEY"] = "api-key-1"
-        os.environ["HERMES_BRIDGE_ENDPOINT_MODE"] = "auto"
+        os.environ["HERMES_BRIDGE_ENDPOINT_MODE"] = "sessions"
         os.environ["AUTOPILOT_NAME"] = "hermes-worker"
         try:
             adapter = HermesRuntimeAdapter(
@@ -381,17 +449,18 @@ class RuntimeAdapterTests(unittest.TestCase):
                 ensure_sandbox=ensure_sandbox,
                 client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
             )
-            response = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="hello",
-                        conversation_id="teams:thread:1",
-                        user_id="user-1",
-                        source="teams_personal",
-                        must_answer=True,
+            with self.assertRaises(httpx.HTTPStatusError):
+                asyncio.run(
+                    adapter.invoke(
+                        AgentRequest(
+                            prompt="hello",
+                            conversation_id="teams:thread:1",
+                            user_id="user-1",
+                            source="teams_personal",
+                            must_answer=True,
+                        )
                     )
                 )
-            )
         finally:
             restore_env(previous_env)
 
@@ -404,14 +473,9 @@ class RuntimeAdapterTests(unittest.TestCase):
                 or call["url"].endswith("/v1/responses")
             )
         ]
-        self.assertEqual(response.text, "responses OK")
-        self.assertEqual(response.raw["hermesEndpoint"], "responses")
-        self.assertEqual(len(post_urls), 2)
+        self.assertEqual(len(post_urls), 1)
         self.assertTrue(post_urls[0].endswith("/chat"))
-        self.assertEqual(
-            post_urls[1],
-            "https://hermes.example/v1/responses",
-        )
+        self.assertTrue(any(call["url"].endswith("/internal/learning/abort") for call in calls))
 
     def test_hermes_adapter_creates_missing_native_session(self):
         calls = []
@@ -641,6 +705,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                         '"title":"Require action ownership","generalizedLearning":"Require an accountable owner.",'
                         '"rationale":"Ownership prevents ambiguity.",'
                         '"evidence":[{"sourceType":"private_session","summary":"A generalized correction established the rule."}],'
+                        f'"agentProposedScenarios":{SCENARIOS_JSON},'
                         '"confidence":0.9,"sourceStage":"foreground"}]'
                         "</LEARNING_PROVENANCE_RECORDS>"
                     )
@@ -721,6 +786,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                         '"title":"Require action ownership","generalizedLearning":"Require an accountable owner.",'
                         '"rationale":"Ownership prevents ambiguity.",'
                         '"evidence":[{"sourceType":"private_session","summary":"A generalized correction established the rule."}],'
+                        f'"agentProposedScenarios":{SCENARIOS_JSON},'
                         '"confidence":0.9,"sourceStage":"foreground"}]'
                         "</LEARNING_PROVENANCE_RECORDS>"
                     )
@@ -931,6 +997,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                         '"title":"Require action ownership","generalizedLearning":"Require an accountable owner.",'
                         '"rationale":"Ownership prevents ambiguity.",'
                         '"evidence":[{"sourceType":"private_session","summary":"Generalized action gaps recurred."}],'
+                        f'"agentProposedScenarios":{SCENARIOS_JSON},'
                         '"confidence":0.9,"sourceStage":"dream"}]'
                         "</LEARNING_PROVENANCE_RECORDS>"
                     )
@@ -1072,6 +1139,49 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertIn("Private Playbook changes have no provenance object", instructions)
         self.assertIn("Never edit learning/records.jsonl directly", instructions)
 
+    def test_learning_prompts_require_declarative_scenarios(self):
+        from runtimes.hermes.learning import validate_agent_proposed_scenarios
+
+        example = json.loads(hermes_runtime.PROVENANCE_SHAPE_EXAMPLE)
+        validate_agent_proposed_scenarios(example["agentProposedScenarios"])
+        request = AgentRequest(
+            prompt="Improve the role.", conversation_id="conversation", user_id="user",
+            source="teams_personal", must_answer=True,
+        )
+        for instructions in (
+            bridge_instructions(request), explicit_learning_instructions(),
+            quarantine_recovery_instructions(), dream_prompt(DreamRequest(session_id="dream")),
+        ):
+            self.assertIn("agentProposedScenarios", instructions)
+            self.assertIn("response.text", instructions)
+            self.assertIn("not_contains", instructions)
+            self.assertIn("independent regression/holdout", instructions)
+            self.assertNotIn("create, patch, or delete", instructions)
+
+    def test_group_history_is_shared_but_memory_keys_remain_per_user(self):
+        first = AgentRequest(
+            prompt="Project update", conversation_id="group-conversation", user_id="user-a",
+            source="teams_group", must_answer=True,
+        )
+        second = AgentRequest(
+            prompt="A follow-up", conversation_id="group-conversation", user_id="user-b",
+            source="teams_group", must_answer=True,
+        )
+        self.assertEqual(hermes_runtime._hermes_transcript_id(first), hermes_runtime._hermes_transcript_id(second))
+        self.assertNotEqual(hermes_runtime._hermes_session_key(first), hermes_runtime._hermes_session_key(second))
+
+    def test_legacy_endpoint_modes_are_rejected_before_inference(self):
+        adapter = HermesRuntimeAdapter()
+        request = AgentRequest(
+            prompt="hello", conversation_id="conversation", user_id="user", source="invoke", must_answer=True,
+        )
+        for mode in ("auto", "responses", "chat_completions"):
+            with patch.dict(os.environ, {"HERMES_BRIDGE_ENDPOINT_MODE": mode}):
+                with patch.object(adapter, "_session_chat", new_callable=AsyncMock) as invoke:
+                    with self.assertRaisesRegex(ValueError, "only 'sessions'"):
+                        asyncio.run(adapter._invoke_hermes("http://runtime.test", "key", request))
+                    invoke.assert_not_awaited()
+
     def test_office_lock_guidance_does_not_require_teams_mcp(self):
         request = AgentRequest(
             prompt="Edit this file.",
@@ -1092,18 +1202,11 @@ class RuntimeAdapterTests(unittest.TestCase):
         ):
             instructions = bridge_instructions(request)
 
-        self.assertIn(
-            "retry_pending_office_publish",
-            instructions,
-        )
-        self.assertIn(
-            "find_pending_office_publishes",
-            instructions,
-        )
-        self.assertIn(
-            "share_office_file_with_user",
-            instructions,
-        )
+        self.assertIn("load the existing office-collaboration skill", instructions)
+        self.assertIn("operationScope", instructions)
+        self.assertNotIn("retry_pending_office_publish", instructions)
+        self.assertNotIn("find_pending_office_publishes", instructions)
+        self.assertNotIn("share_office_file_with_user", instructions)
         self.assertNotIn(
             "Agent User Teams collaboration is enabled",
             instructions,
@@ -1161,7 +1264,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(len(operation_calls[2]["json"]["receipt"]["signature"]), 88)
         self.assertEqual(prepared["sandboxId"], "sandbox-1")
         self.assertTrue(approved["approved"])
-        self.assertEqual(exported["packet"]["packetVersion"], "1.0")
+        self.assertEqual(exported["packet"]["packetVersion"], "2.0")
 
     def test_hermes_serializes_complete_learning_transactions(self):
         calls: list[dict] = []
@@ -1248,6 +1351,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             '"generalizedLearning":"Record the decision, owner, effective date, and affected commitments.",'
             '"rationale":"Complete decision records improve follow-through.",'
             '"evidence":[{"sourceType":"tool_result","summary":"A direct CLI skill write was quarantined for review."}],'
+            f'"agentProposedScenarios":{SCENARIOS_JSON},'
             '"confidence":0.9,"sourceStage":"operator"}]'
             "</LEARNING_PROVENANCE_RECORDS>"
         )
@@ -1362,7 +1466,10 @@ class RuntimeAdapterTests(unittest.TestCase):
                     **kwargs,
                 ),
             )
-            with self.assertRaises(httpx.HTTPStatusError):
+            with (
+                patch.dict(os.environ, {"HERMES_SESSION_RECOVERY_TIMEOUT_SECONDS": "1"}),
+                self.assertRaises(httpx.HTTPStatusError),
+            ):
                 asyncio.run(
                     adapter.invoke(
                         AgentRequest(
@@ -1411,6 +1518,7 @@ class RuntimeAdapterTests(unittest.TestCase):
     def test_hermes_sandbox_config_can_be_built_without_starting_runtime(self):
         config = hermes_sandbox_config(
             image_name="registry.example/hermes-runtime@sha256:test",
+            disk_image_id="ready-hermes-disk",
             api_server_key="api-key-1",
             private_incidents_mcp_url="https://mcp.example/mcp",
             private_incidents_mcp_scope="api://private/.default",
@@ -1432,8 +1540,12 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(config.runtime_kind, "hermes")
         self.assertEqual(config.port, 8642)
         self.assertEqual(config.health_path, "/health")
-        self.assertEqual(config.command, ("python3",))
+        self.assertEqual(config.command, ("/app/.venv/bin/python",))
+        self.assertEqual(config.disk_image_id, "ready-hermes-disk")
         self.assertEqual(config.args, ("/app/start_hermes.py",))
+        self.assertEqual(config.environment["PATH"].split(":")[0], "/app/.venv/bin")
+        self.assertEqual(config.environment["PYTHONPATH"], "/app")
+        self.assertEqual(config.environment["NODE_PATH"], "/app/node_modules")
         self.assertEqual(config.environment["API_SERVER_ENABLED"], "true")
         self.assertEqual(config.environment["API_SERVER_HOST"], "0.0.0.0")
         self.assertEqual(config.environment["API_SERVER_PORT"], "8642")
@@ -1458,30 +1570,46 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(runtime_labels(config)["worker"], "worker-1")
         self.assertEqual(runtime_labels(config)["runtimeImage"], "hermes-api-server-image")
 
-    def test_environment_config_uses_bridge_registry_credentials(self):
-        previous = {key: os.environ.get(key) for key in ["AGENT_RUNTIME_REGISTRY_USERNAME", "AGENT_RUNTIME_REGISTRY_PASSWORD"]}
-        os.environ["AGENT_RUNTIME_REGISTRY_USERNAME"] = "registry-user"
-        os.environ["AGENT_RUNTIME_REGISTRY_PASSWORD"] = "registry-pass"
-        try:
-            config = config_from_environment(
-                runtime_kind="openclaw",
-                subscription_id="sub-1",
-                resource_group="rg-1",
-                sandbox_group="sandbox-group-1",
-                region="swedencentral",
-                image_name="registry.example/openclaw-runtime@sha256:test",
-                foundry_openai_base_url="https://foundry.example/openai/v1",
-                gateway_token="token-1",
-            )
-        finally:
-            for key, value in previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+    @patch("scripts.sandbox_runtime.get_config", side_effect=lambda name, fallback="": os.getenv(name) or fallback)
+    def test_environment_config_uses_predeployed_disk_and_runtime_identity(self, _get_config):
+        image = "registry.example/runtime@sha256:" + "a" * 64
+        with patch.dict(os.environ, {
+            "AGENT_RUNTIME_DISK_IMAGE_ID": "ready-disk-1",
+            "AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID": "runtime-client",
+            "AGENT_RUNTIME_IMAGE": image,
+            "DISK_SOURCE_IMAGE": "obsolete-conversion-source",
+        }, clear=True):
+            for runtime_kind in ("hermes", "openclaw"):
+                with self.subTest(runtime_kind=runtime_kind):
+                    config = config_from_environment(
+                        runtime_kind=runtime_kind,
+                        subscription_id="sub-1",
+                        resource_group="rg-1",
+                        sandbox_group="sandbox-group-1",
+                        region="swedencentral",
+                        foundry_openai_base_url="https://foundry.example/openai/v1",
+                        gateway_token="token-1",
+                        api_server_key="api-key-1",
+                    )
+                    self.assertEqual(config.disk_image_id, "ready-disk-1")
+                    self.assertEqual(config.managed_identity_client_id, "runtime-client")
+                    self.assertEqual(config.image_name, image)
+                    self.assertEqual(config.runtime_image_reference, image)
 
-        self.assertEqual(config.registry_username, "registry-user")
-        self.assertEqual(config.registry_password, "registry-pass")
+    def test_missing_predeployed_disk_fails_before_any_sandbox_lifecycle_action(self):
+        for config_factory in (hermes_sandbox_config, openclaw_sandbox_config):
+            with self.subTest(runtime=config_factory.__name__):
+                config = config_factory(
+                    subscription_id="sub-1",
+                    resource_group="rg-1",
+                    sandbox_group="sandbox-group-1",
+                    region="swedencentral",
+                    image_name="registry.example/runtime@sha256:" + "a" * 64,
+                )
+                with patch.object(sandbox_runtime, "create_sandbox_group_client") as create_client:
+                    with self.assertRaisesRegex(ValueError, "AGENT_RUNTIME_DISK_IMAGE_ID is required"):
+                        ensure_agent_sandbox(config, wait_for_ready_seconds=0)
+                create_client.assert_not_called()
 
     def test_hermes_environment_config_uses_runtime_volume_env(self):
         previous = os.environ.get("AGENT_RUNTIME_DATA_VOLUME_NAME")
@@ -1504,13 +1632,14 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(config.data_volume_name, "hermes-env-data")
 
-    def test_existing_sandbox_reuse_does_not_require_registry_credentials(self):
+    def test_existing_sandbox_reuse_uses_predeployed_disk_without_conversion(self):
         config = openclaw_sandbox_config(
             subscription_id="sub-1",
             resource_group="rg-1",
             sandbox_group="sandbox-group-1",
             region="swedencentral",
             image_name="",
+            disk_image_id="ready-disk-1",
             data_volume_name="openclaw-data",
             gateway_token="token-1",
         )
@@ -1711,7 +1840,7 @@ class FakeHermesClient:
             payload = {"approved": True, "packetDigest": "b" * 64}
         elif url.endswith("/internal/collective-learning/export"):
             payload = {
-                "packet": {"packetVersion": "1.0", "improvements": []},
+                "packet": {"packetVersion": "2.0", "improvements": []},
                 "receipt": {"approved": True},
             }
         else:

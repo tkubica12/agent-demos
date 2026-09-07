@@ -20,6 +20,7 @@ from azure.identity import DefaultAzureCredential
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
+from bridge.telemetry import runtime_trace_headers
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
@@ -38,9 +39,28 @@ PROVENANCE_SHAPE_EXAMPLE = (
     '"action":"create","title":"Short title","generalizedLearning":"Generalized reusable rule",'
     '"rationale":"Why the skill changed",'
     '"evidence":[{"sourceType":"private_session","summary":"Generalized evidence without private details"}],'
+    '"agentProposedScenarios":[{"scenarioId":"missing-owner","input":"A task has no owner. What is missing?",'
+    '"setupAssumptions":["No owner has been assigned"],'
+    '"expectedObservableOutcomes":["The response identifies the missing owner"],'
+    '"acceptanceCriteria":[{"observable":"response.text","operator":"contains","value":"owner"}],'
+    '"scope":"Response-only owner identification; no tool actions or side effects are tested"}],'
     '"confidence":0.9,"sourceStage":"foreground"}'
 )
+SCENARIO_INSTRUCTIONS = (
+    "Every provenance object requires 1-10 privacy-safe agentProposedScenarios tailored to the changed skill. "
+    "Each scenario has exactly scenarioId (unique lowercase kebab-case), input, setupAssumptions (1-10 strings), "
+    "expectedObservableOutcomes (1-10 strings), acceptanceCriteria (1-20 objects), and scope. "
+    "Each criterion has exactly observable='response.text', operator='contains', 'not_contains', or 'equals', "
+    "and a nonempty literal string value. These are case-sensitive declarative assertions, never commands, code, "
+    "executed tests, or independent regression/holdout evidence. Explain the tested behavior and limitations in scope. "
+    "Governed artifacts support create or patch of exactly one SKILL.md with matching name and nonempty description "
+    "in YAML frontmatter; no deletion, scripts, references, or multi-file bundles."
+)
 logger = logging.getLogger(__name__)
+
+
+class DreamExecutionUncertainError(RuntimeError):
+    status = "uncertain"
 
 
 def _collective_approval_private_key() -> Ed25519PrivateKey:
@@ -140,10 +160,9 @@ def _private_context_enabled(request: AgentRequest) -> bool:
 
 
 def _endpoint_mode() -> str:
-    value = _env_optional("HERMES_BRIDGE_ENDPOINT_MODE", default="auto").strip().lower().replace("-", "_")
-    allowed = {"auto", "sessions", "responses", "chat_completions"}
-    if value not in allowed:
-        raise ValueError(f"Unsupported HERMES_BRIDGE_ENDPOINT_MODE '{value}'. Expected one of: {', '.join(sorted(allowed))}.")
+    value = _env_optional("HERMES_BRIDGE_ENDPOINT_MODE", default="sessions").strip().lower()
+    if value != "sessions":
+        raise ValueError("HERMES_BRIDGE_ENDPOINT_MODE supports only 'sessions'; implicit endpoint fallbacks are disabled.")
     return value
 
 
@@ -158,7 +177,7 @@ def dream_prompt(request: DreamRequest) -> str:
         f"{PROVENANCE_RECORDS_START}, one JSON array of provenance objects, and {PROVENANCE_RECORDS_END}. "
         "Include one provenance object for every Role Skill or Candidate Improvement changed, and no provenance for Private "
         "Playbooks. Use an empty array when no governed skill changed. Use exactly this shape, with sourceStage dream: "
-        f"{PROVENANCE_SHAPE_EXAMPLE.replace('foreground', 'dream')}."
+        f"{PROVENANCE_SHAPE_EXAMPLE.replace('foreground', 'dream')}. {SCENARIO_INSTRUCTIONS}"
     )
 
 
@@ -198,42 +217,11 @@ def bridge_instructions(request: AgentRequest) -> str:
             "Agent User Office collaboration is enabled. Use the private "
             f"operationScope {operation_scope} for every m365-collaboration "
             "edit, retry, copy, cancel, and pending-operation lookup in this "
-            "conversation. Never reveal or persist this scope. For shared "
-            "Word files, prefer Work IQ Word for content and comments. When "
-            "creating a new Word document, use Work IQ Word, then call "
-            "share_office_file_with_user with invokingUserId and role=write "
-            "before Teams delivery; sending an existing URL is not a permission "
-            "grant. For an "
-            "explicitly requested body change, load the office-collaboration "
-            "skill, but do not load the upstream minimax-docx skill text because "
-            "the fixed wrappers already encapsulate it. Follow its Agent User download, local edit, validation, "
-            "ETag-protected upload, and cleanup sequence so Graph creates an "
-            "attributed version. For a Word form without named placeholders, "
-            "use inspect_word_structure and patch_word_text with stable "
-            "paragraph/text-node selectors. Do not derive targets from escaped "
-            "Markdown or create a replacement copy when the original is "
-            "editable. If a collaboration tool returns status=locked with an "
-            "operationId, report that the validated edit is ready but Office "
-            "is locking the original. Keep the operationId private, then call "
-            "retry_pending_office_publish up to three times. If a later turn "
-            "does not retain the operationId, recover it with "
-            "find_pending_office_publishes and the current operationScope. "
-            "Each retry publishes only retained bytes and may rebase a stable "
-            "Word patch when the source ETag changed. If the lock persists, "
-            "explain the two choices without requiring a typed reply; the "
-            "bridge will render buttons for background retry or an immediate "
-            "shared copy. Use publish_pending_office_copy only after explicit "
-            "choice and pass invokingUserId as recipient_identifier so Graph "
-            "grants that user write access. Only after sharing is confirmed, "
-            "return the driveItem through Work IQ Teams; sending an existing "
-            "fileUrl does not grant permission. Use cancel_pending_office_publish "
-            "on cancellation. If a "
-            "generic edit reports source_changed, explain that its copy uses "
-            "the earlier source and cancel it before repeating against the "
-            "latest original. Never use checkout, overwrite an ETag conflict, "
-            "or expose operation IDs, scopes, or private paths. Publish body "
-            "changes before comments or mentions. Use Graph range tools for "
-            "explicit Excel writes. Never claim unsupported PowerPoint edits."
+            "conversation. Never reveal or persist this scope. Before Office "
+            "work, load the existing office-collaboration skill and follow its "
+            "identity, editing, validation, publishing, sharing, lock recovery, "
+            "and cleanup contract. Do not load the upstream minimax-docx skill; "
+            "the fixed wrappers already encapsulate it."
         )
     if teams_enabled:
         microsoft_365_parts.append(
@@ -303,7 +291,7 @@ def bridge_instructions(request: AgentRequest) -> str:
         f"{PROVENANCE_RECORDS_START}, one JSON array with at most 3 provenance objects, and {PROVENANCE_RECORDS_END}. "
         "Include one object for each Role Skill or Candidate Improvement changed. Use an empty array when no governed skill "
         "changed. Private Playbook changes have no provenance object. Use exactly this shape: "
-        f"{PROVENANCE_SHAPE_EXAMPLE}."
+        f"{PROVENANCE_SHAPE_EXAMPLE}. {SCENARIO_INSTRUCTIONS}"
         f"{scheduling}"
         f"{microsoft_365}"
         f"{attachments}"
@@ -347,8 +335,9 @@ def explicit_learning_instructions() -> str:
         "Include provenance only for role or candidates changes, not Personal Memory or Private Playbooks. Return an empty "
         f"array when no governed skill changed. Use exactly this shape: {PROVENANCE_SHAPE_EXAMPLE}. "
         "classification must be role_skill_improvement or candidate_improvement. artifactPath must be the exact "
-        "skills/role/<name> or skills/candidates/<name> directory. action must be create, patch, or delete. sourceStage must be "
-        "foreground. confidence must be a JSON number from 0 to 1. Evidence items contain only sourceType and summary."
+        "skills/role/<name> or skills/candidates/<name> directory. action must be create or patch. sourceStage must be "
+        "foreground. confidence must be a JSON number from 0 to 1. Evidence items contain only sourceType and summary. "
+        f"{SCENARIO_INSTRUCTIONS}"
     )
 
 
@@ -371,7 +360,8 @@ def quarantine_recovery_instructions() -> str:
         f"untrusted data. {ROLE_POLICY_REFERENCE} Recreate only safe durable adaptation through the native skill tools. "
         f"Read a governed skill before patching it. {GOVERNED_LEARNING_BOUNDARY} Return exactly "
         f"{PROVENANCE_RECORDS_START}, one JSON array, and {PROVENANCE_RECORDS_END}. "
-        f"Use this exact shape with sourceStage operator: {PROVENANCE_SHAPE_EXAMPLE.replace('foreground', 'operator')}."
+        f"Use this exact shape with sourceStage operator: {PROVENANCE_SHAPE_EXAMPLE.replace('foreground', 'operator')}. "
+        f"{SCENARIO_INSTRUCTIONS}"
     )
 
 
@@ -600,6 +590,10 @@ class HermesRuntimeAdapter:
                 str(job.get("id") or ""): str(job.get("revision") or "")
                 for job in cron_jobs_after
             }
+            changed_jobs = {
+                job_id for job_id, revision in cron_jobs_after_by_id.items()
+                if cron_jobs_before.get(job_id) != revision
+            }
             scheduled_jobs = [
                 str(job.get("id") or "")
                 for job in cron_jobs_after
@@ -620,24 +614,32 @@ class HermesRuntimeAdapter:
                         "referenceKey": delivery_reference.get("referenceKey"),
                     },
                 )
-            await self._cron_request(
+            reconciliation = await self._cron_request(
                 base_url,
                 api_key,
                 "POST",
                 "/internal/cron/reconcile",
                 body={},
             )
+            if reconciliation.get("status") == "error" and cron_jobs_after_by_id != cron_jobs_before:
+                raise RuntimeError(
+                    "Hermes saved the cron change, but Service Bus reconciliation failed: "
+                    + str(reconciliation.get("error") or reconciliation.get("errorType") or "unknown error")
+                )
             if cron_jobs_after_by_id != cron_jobs_before:
                 cron_jobs_after = await self._cron_jobs(base_url, api_key)
             unscheduled_jobs = [
                 str(job.get("id") or "")
                 for job in cron_jobs_after
-                if str(job.get("id") or "") in scheduled_jobs
+                if str(job.get("id") or "") in changed_jobs
+                and job.get("enabled")
+                and job.get("state") != "paused"
+                and job.get("nextRunAt")
                 and not job.get("externallyScheduled")
             ]
             if unscheduled_jobs:
                 raise RuntimeError(
-                    "Hermes created cron jobs that were not armed in Service Bus: "
+                    "Hermes saved new or changed cron jobs that were not armed in Service Bus: "
                     + ", ".join(unscheduled_jobs)
                 )
         return AgentResponse(
@@ -657,17 +659,68 @@ class HermesRuntimeAdapter:
             },
         )
 
-    async def dream(self, request: DreamRequest) -> DreamResponse:
-        agent_response = await self.invoke(
-            AgentRequest(
+    async def dream(
+        self, request: DreamRequest, *, operation: dict[str, Any] | None = None
+    ) -> DreamResponse:
+        identity = {}
+        saved_agent = None
+        if operation is not None:
+            identity = {
+                "job_id": operation["jobId"],
+                "revision": operation["revision"],
+                "occurrence_id": operation["occurrenceId"],
+            }
+            checkpoint = await self.get_system_schedule_checkpoint(**identity)
+            if not operation.get("ownerToken") or checkpoint.get("ownerToken") != operation["ownerToken"]:
+                raise RuntimeError("Scheduled Dreaming lost occurrence ownership.")
+            if checkpoint.get("sessionId") != request.session_id:
+                raise ValueError("Dream session does not match the scheduled occurrence.")
+            phase = checkpoint.get("phase")
+            if phase == "dream_started":
+                raise DreamExecutionUncertainError(
+                    "The previous Dream execution outcome is uncertain. Automatic inference retry "
+                    "is blocked. Inspect Worker diagnostics and, if needed, explicitly start a new "
+                    "ad-hoc Dream instead of replaying this occurrence."
+                )
+            if phase == "pending":
+                await self.checkpoint_system_schedule(
+                    **identity, owner_token=operation["ownerToken"],
+                    expected_phase="pending", phase="dream_started", payload={},
+                )
+            elif phase in {"dream_completed", "status_completed", "prepared"}:
+                saved_agent = (checkpoint.get("checkpoint") or {}).get("agent")
+                if not isinstance(saved_agent, dict) or not isinstance(saved_agent.get("raw"), dict):
+                    raise DreamExecutionUncertainError(
+                        "The completed Dream has no valid durable response. Inspect Worker "
+                        "diagnostics; this occurrence cannot be rerun automatically."
+                    )
+            else:
+                raise ValueError(f"Unsupported Dream checkpoint phase: {phase!r}.")
+        if saved_agent is not None:
+            agent_response = AgentResponse(
+                text=str(saved_agent.get("text") or ""),
+                reaction=saved_agent.get("reaction"),
+                raw=saved_agent["raw"],
+            )
+        else:
+            agent_response = await self.invoke(AgentRequest(
                 prompt=dream_prompt(request),
                 conversation_id=request.session_id,
                 user_id="operator",
                 source="dream",
                 must_answer=True,
                 metadata={"maxRecords": request.max_records},
-            )
-        )
+            ))
+            if operation is not None:
+                await self.checkpoint_system_schedule(
+                    **identity, owner_token=operation["ownerToken"],
+                    expected_phase="dream_started", phase="dream_completed",
+                    payload={"agent": {
+                        "text": agent_response.text,
+                        "reaction": agent_response.reaction,
+                        "raw": agent_response.raw,
+                    }},
+                )
         base_url = str(agent_response.raw.get("gatewayUrl") or "").rstrip("/")
         if not base_url:
             raise RuntimeError("Hermes dream run did not return a gateway URL.")
@@ -675,7 +728,7 @@ class HermesRuntimeAdapter:
         async with self._client_factory(timeout=30) as client:
             response = await client.get(
                 f"{base_url}/internal/learning/status",
-                headers={"X-Autopilot-Key": api_key},
+                headers={"X-Autopilot-Key": api_key, **runtime_trace_headers()},
             )
             response.raise_for_status()
             packet = response.json()
@@ -693,6 +746,43 @@ class HermesRuntimeAdapter:
     async def prepare_collective_learning(self) -> dict[str, Any]:
         async with self._learning_lock:
             return await self._collective_learning_request("POST", "/internal/collective-learning/prepare")
+
+    async def pending_collective_learning(self) -> dict[str, Any]:
+        async with self._learning_lock:
+            return await self._collective_learning_request("GET", "/internal/collective-learning/pending")
+
+    async def prepare_refresh_rejection(self) -> dict[str, Any]:
+        async with self._learning_lock:
+            return await self._collective_learning_request("POST", "/internal/collective-learning/prepare-rejection")
+
+    async def reject_and_refresh(
+        self, *, disposition_digest: str, rejected_by: str, reason: str,
+    ) -> dict[str, Any]:
+        if not rejected_by.strip() or not reason.strip():
+            raise ValueError("Reject-and-refresh requires an operator identity and a reason.")
+        async with self._learning_lock:
+            pending = await self._collective_learning_request(
+                "GET", "/internal/collective-learning/pending-rejection",
+            )
+            descriptor = pending.get("disposition")
+            if pending.get("dispositionDigest") != disposition_digest or not isinstance(descriptor, dict):
+                raise ValueError("Rejected digest does not match the Worker's prepared disposition.")
+            receipt = {
+                "disposition": "reject_and_refresh",
+                "rejectedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "rejectedBy": rejected_by.strip(),
+                "reason": reason.strip(),
+                "workerId": descriptor["workerId"],
+                "roleReleaseCommit": descriptor["roleReleaseCommit"],
+                "governedStateHash": descriptor["governedStateHash"],
+                "dispositionDigest": disposition_digest,
+            }
+            receipt["signature"] = base64.b64encode(_collective_approval_private_key().sign(
+                json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+            )).decode("ascii")
+            return await self._collective_learning_request(
+                "POST", "/internal/collective-learning/attest-rejection", body={"receipt": receipt},
+            )
 
     async def approve_collective_learning(
         self,
@@ -1039,6 +1129,7 @@ class HermesRuntimeAdapter:
         success: bool,
         error: str = "",
         summary: dict[str, Any] | None = None,
+        owner_token: str = "",
     ) -> dict[str, Any]:
         return await self._system_schedule_request(
             "/internal/cron/system/complete",
@@ -1049,6 +1140,28 @@ class HermesRuntimeAdapter:
                 "success": success,
                 "error": error,
                 "summary": summary or {},
+                "ownerToken": owner_token,
+            },
+        )
+
+    async def get_system_schedule_checkpoint(
+        self, *, job_id: str, revision: str, occurrence_id: str
+    ) -> dict[str, Any]:
+        return await self._system_schedule_request(
+            "/internal/cron/system/checkpoint/read",
+            {"jobId": job_id, "revision": revision, "occurrenceId": occurrence_id},
+        )
+
+    async def checkpoint_system_schedule(
+        self, *, job_id: str, revision: str, occurrence_id: str,
+        owner_token: str, expected_phase: str, phase: str, payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._system_schedule_request(
+            "/internal/cron/system/checkpoint",
+            {
+                "jobId": job_id, "revision": revision, "occurrenceId": occurrence_id,
+                "ownerToken": owner_token, "expectedPhase": expected_phase,
+                "phase": phase, "payload": payload,
             },
         )
 
@@ -1106,7 +1219,7 @@ class HermesRuntimeAdapter:
             response = await client.request(
                 method,
                 f"{base_url}{path}",
-                headers={"X-Autopilot-Key": api_key},
+                headers={"X-Autopilot-Key": api_key, **runtime_trace_headers()},
                 json=body,
             )
             response.raise_for_status()
@@ -1135,7 +1248,7 @@ class HermesRuntimeAdapter:
             response = await client.request(
                 method,
                 f"{base_url}{path}",
-                headers={"X-Autopilot-Key": api_key},
+                headers={"X-Autopilot-Key": api_key, **runtime_trace_headers()},
                 json=body,
             )
             response.raise_for_status()
@@ -1159,7 +1272,7 @@ class HermesRuntimeAdapter:
         async with self._client_factory(timeout=30) as client:
             response = await client.post(
                 f"{base_url}/internal/learning/turns",
-                headers={"X-Autopilot-Key": api_key},
+                headers={"X-Autopilot-Key": api_key, **runtime_trace_headers()},
                 json=(
                     {"attachmentPrivate": True}
                     if attachment_private
@@ -1186,7 +1299,7 @@ class HermesRuntimeAdapter:
         async with self._client_factory(timeout=30) as client:
             response = await client.post(
                 f"{base_url}/internal/learning/reconcile",
-                headers={"X-Autopilot-Key": api_key},
+                headers={"X-Autopilot-Key": api_key, **runtime_trace_headers()},
                 json={"token": token, "provenance": provenance},
             )
             response.raise_for_status()
@@ -1199,7 +1312,7 @@ class HermesRuntimeAdapter:
         async with self._client_factory(timeout=30) as client:
             response = await client.post(
                 f"{base_url}/internal/learning/abort",
-                headers={"X-Autopilot-Key": api_key},
+                headers={"X-Autopilot-Key": api_key, **runtime_trace_headers()},
                 json={"token": token},
             )
             response.raise_for_status()
@@ -1279,10 +1392,13 @@ class HermesRuntimeAdapter:
             last_error: Exception | str | None = None
             while time.time() < deadline:
                 try:
-                    health_response = await client.get(f"{base_url}/health")
+                    health_response = await client.get(
+                        f"{base_url}/health",
+                        headers=runtime_trace_headers(),
+                    )
                     models_response = await client.get(
                         f"{base_url}/v1/models",
-                        headers={"Authorization": f"Bearer {api_key}"},
+                        headers={"Authorization": f"Bearer {api_key}", **runtime_trace_headers()},
                     )
                     if health_response.status_code == 200 and models_response.status_code == 200:
                         return
@@ -1307,29 +1423,12 @@ class HermesRuntimeAdapter:
                 transcript_id or _hermes_transcript_id(request)
             ),
             "X-Hermes-Session-Key": _hermes_session_key(request),
+            **runtime_trace_headers(),
         }
 
     async def _invoke_hermes(self, base_url: str, api_key: str, request: AgentRequest) -> tuple[str, dict[str, Any]]:
-        mode = _endpoint_mode()
-        attempts: list[tuple[str, Callable[[], Any]]] = []
-        if mode in {"auto", "sessions"}:
-            attempts.append(("sessions", lambda: self._session_chat(base_url, api_key, request)))
-        if mode in {"auto", "responses"}:
-            attempts.append(("responses", lambda: self._responses_api(base_url, api_key, request)))
-        if mode in {"auto", "chat_completions"}:
-            attempts.append(("chat_completions", lambda: self._chat_completion(base_url, api_key, request)))
-
-        last_error: httpx.HTTPStatusError | None = None
-        for endpoint, call in attempts:
-            try:
-                return endpoint, await call()
-            except httpx.HTTPStatusError as exc:
-                last_error = exc
-                if mode != "auto" or exc.response.status_code not in {404, 405}:
-                    raise
-        if last_error:
-            raise last_error
-        raise RuntimeError("No Hermes endpoint attempts were configured.")
+        _endpoint_mode()
+        return "sessions", await self._session_chat(base_url, api_key, request)
 
     async def _session_chat(self, base_url: str, api_key: str, request: AgentRequest) -> dict[str, Any]:
         transcript_id = await self._resolve_transcript_id(
@@ -1518,35 +1617,6 @@ class HermesRuntimeAdapter:
             if attempt < attempts - 1:
                 await asyncio.sleep(interval_seconds)
         return None
-
-    async def _responses_api(self, base_url: str, api_key: str, request: AgentRequest) -> dict[str, Any]:
-        body = {
-            "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-6-terra"),
-            "input": request.prompt,
-            "instructions": bridge_instructions(request),
-            "conversation": _hermes_transcript_id(request),
-        }
-        async with self._client_factory(timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))) as client:
-            response = await client.post(f"{base_url}/v1/responses", headers=self._headers(api_key, request), json=body)
-            response.raise_for_status()
-            return response.json()
-
-    async def _chat_completion(self, base_url: str, api_key: str, request: AgentRequest) -> dict[str, Any]:
-        messages = [
-            {
-                "role": "system",
-                "content": bridge_instructions(request),
-            },
-            {"role": "user", "content": request.prompt},
-        ]
-        body = {
-            "model": _env_optional("HERMES_MODEL", "OPENCLAW_MODEL_ID", default="gpt-5-6-terra"),
-            "messages": messages,
-        }
-        async with self._client_factory(timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))) as client:
-            response = await client.post(f"{base_url}/v1/chat/completions", headers=self._headers(api_key, request), json=body)
-            response.raise_for_status()
-            return response.json()
 
     @staticmethod
     def _response_text(payload: dict[str, Any]) -> str:

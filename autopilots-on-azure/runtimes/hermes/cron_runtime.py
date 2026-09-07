@@ -4,7 +4,10 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
+import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,40 @@ from urllib.parse import urlparse
 
 SYSTEM_DREAM_JOB_NAME = "Platform Dreaming"
 SYSTEM_DREAM_PROMPT = "__AUTOPILOT_SYSTEM_DREAM__"
+_JSON_LOCKS: dict[str, threading.RLock] = {}
+_JSON_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def json_transaction(path: Path):
+    """Serialize a short read/modify/replace across runtime threads and processes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _JSON_LOCKS_GUARD:
+        lock = _JSON_LOCKS.setdefault(str(path.resolve()), threading.RLock())
+    with lock, path.with_suffix(path.suffix + ".lock").open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if not handle.tell():
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            payload = read_json_object(path)
+            yield payload
+            atomic_write_json(path, payload)
+        finally:
+            if os.name == "nt":
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -75,12 +112,11 @@ def upsert_delivery_reference(
     if boundary not in {"one_to_one", "shared_group", "public_channel"}:
         raise ValueError("Scheduled proactive delivery currently supports personal, group, and public channel boundaries.")
     path = delivery_references_path(profile_home)
-    references = read_json_object(path)
-    references[reference_key] = {
-        "boundary": boundary,
-        "conversation": conversation,
-    }
-    atomic_write_json(path, references)
+    with json_transaction(path) as references:
+        references[reference_key] = {
+            "boundary": boundary,
+            "conversation": conversation,
+        }
     return {"referenceKey": reference_key, "boundary": boundary}
 
 
@@ -117,6 +153,8 @@ def list_cron_jobs(
         result.append({
             "id": str(job.get("id") or ""),
             "name": str(job.get("name") or ""),
+            "schedule": job.get("schedule"),
+            "repeat": job.get("repeat"),
             "enabled": bool(job.get("enabled")),
             "state": str(job.get("state") or ""),
             "nextRunAt": job.get("next_run_at"),
@@ -143,7 +181,6 @@ def bind_cron_delivery(
     if not get_delivery_reference(profile_home, reference_key):
         raise ValueError("Delivery reference does not exist.")
     path = cron_delivery_path(profile_home)
-    bindings = read_json_object(path)
     bound: list[str] = []
     for job_id in job_ids:
         job = get_job(job_id)
@@ -151,9 +188,10 @@ def bind_cron_delivery(
             continue
         if job.get("script") or job.get("no_agent"):
             raise ValueError("Hosted scheduled scripts are not allowed.")
-        bindings[job_id] = {"referenceKey": reference_key}
         bound.append(job_id)
-    atomic_write_json(path, bindings)
+    with json_transaction(path) as bindings:
+        for job_id in bound:
+            bindings[job_id] = {"referenceKey": reference_key}
     return {"bound": bound, "referenceKey": reference_key}
 
 
@@ -165,7 +203,6 @@ def bind_cron_local(
     from cron.jobs import get_job
 
     path = cron_delivery_path(profile_home)
-    bindings = read_json_object(path)
     bound: list[str] = []
     for job_id in job_ids:
         job = get_job(job_id)
@@ -173,9 +210,10 @@ def bind_cron_local(
             continue
         if job.get("script") or job.get("no_agent"):
             raise ValueError("Hosted scheduled scripts are not allowed.")
-        bindings[job_id] = {"local": True}
         bound.append(job_id)
-    atomic_write_json(path, bindings)
+    with json_transaction(path) as bindings:
+        for job_id in bound:
+            bindings[job_id] = {"local": True}
     return {"bound": bound, "deliveryMode": "local"}
 
 
@@ -209,7 +247,9 @@ def ensure_system_dream_schedule(
         for job in jobs:
             remove_job(str(job["id"]))
             bindings.pop(str(job["id"]), None)
-        atomic_write_json(bindings_path, bindings)
+        with json_transaction(bindings_path) as current:
+            for job in jobs:
+                current.pop(str(job["id"]), None)
         return {"enabled": False, "removed": len(jobs)}
     if not schedule.strip():
         raise ValueError("SERVICEBUS_DREAM_CRON_EXPRESSION is required.")
@@ -237,8 +277,10 @@ def ensure_system_dream_schedule(
         if updated:
             job = updated
     job_id = str(job["id"])
-    bindings[job_id] = {"systemType": "dream"}
-    atomic_write_json(bindings_path, bindings)
+    with json_transaction(bindings_path) as current:
+        for duplicate in jobs[1:]:
+            current.pop(str(duplicate["id"]), None)
+        current[job_id] = {"systemType": "dream"}
     return {
         "enabled": True,
         "jobId": job_id,
@@ -258,90 +300,143 @@ def claim_system_schedule(
     from azure_cron_provider import schedule_revision
 
     path = system_schedule_receipts_path(profile_home)
-    receipts = read_json_object(path)
     key = _receipt_key(job_id, occurrence_id)
-    receipt = receipts.get(key)
-    if isinstance(receipt, dict):
-        if receipt.get("state") == "completed":
-            return {"status": "duplicate", "jobId": job_id}
-        if receipt.get("state") == "completing":
-            _finish_system_schedule_completion(
-                profile_home,
-                job_id=job_id,
-                receipts=receipts,
-                receipt_key=key,
-            )
-            return {"status": "duplicate", "jobId": job_id}
-        if receipt.get("state") == "claiming":
-            current_job = get_job(job_id)
-            if current_job is not None and not current_job.get("fire_claim"):
-                if claim_job_for_fire(job_id):
-                    claimed_job = get_job(job_id)
-                    receipt.update({
-                        "state": "running",
-                        "claimedNextRunAt": (
-                            claimed_job or {}
-                        ).get("next_run_at"),
-                    })
-                    receipts[key] = receipt
-                    atomic_write_json(path, receipts)
+    completing = False
+    with json_transaction(path) as receipts:
+        receipt = receipts.get(key)
+        if isinstance(receipt, dict):
+            if receipt.get("revision", revision) != revision:
+                return {"status": "stale", "reason": "revision_mismatch", "jobId": job_id}
+            if receipt.get("state") == "completed":
+                return {"status": "duplicate", "jobId": job_id}
+            completing = receipt.get("state") == "completing"
+            if not completing and receipt.get("state") != "queued":
+                started_at = float(receipt.get("startedAtEpoch") or 0)
+                lease_seconds = int(os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800"))
+                if started_at and time.time() - started_at < lease_seconds:
+                    return {"status": "in_progress", "jobId": job_id}
+                if receipt.get("state") == "claiming" or receipt.get("phase") not in {
+                    "pending", "dream_completed", "status_completed", "prepared"
+                }:
+                    receipt["ownerToken"] = uuid.uuid4().hex
                     return {
-                        "status": "claimed",
-                        "jobId": job_id,
-                        "recovered": True,
+                        **_system_operation(receipt, job_id),
+                        "status": "interrupted",
+                        "reason": "execution_outcome_unknown",
                     }
-        started_at = float(receipt.get("startedAtEpoch") or 0)
-        lease_seconds = int(
-            os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800")
-        )
-        if started_at and time.time() - started_at < lease_seconds:
-            return {"status": "in_progress", "jobId": job_id}
-        if receipt.get("state") == "running":
-            return {
-                "status": "interrupted",
-                "jobId": job_id,
-                "reason": "execution_lease_expired",
-            }
-        receipt["state"] = "running"
-        receipt["startedAtEpoch"] = time.time()
-        receipt["recovered"] = True
-        receipts[key] = receipt
-        atomic_write_json(path, receipts)
-        return {"status": "claimed", "jobId": job_id, "recovered": True}
+            if not completing:
+                receipt.update({
+                    "state": "running",
+                    "ownerToken": uuid.uuid4().hex,
+                    "startedAtEpoch": time.time(),
+                })
+                return {**_system_operation(receipt, job_id), "status": "claimed", "recovered": True}
+        else:
+            job = get_job(job_id)
+            if not job:
+                return {"status": "stale", "reason": "job_not_found", "jobId": job_id}
+            if schedule_revision(job) != revision:
+                return {"status": "stale", "reason": "revision_mismatch", "jobId": job_id}
+            if occurrence_id != revision:
+                raise ValueError("Ad-hoc Dreaming occurrence has not been registered.")
+            binding = read_json_object(cron_delivery_path(profile_home)).get(job_id)
+            if not isinstance(binding, dict) or binding.get("systemType") != "dream":
+                raise ValueError("Cron job is not the managed Dreaming schedule.")
+            due_at = datetime.fromisoformat(str(job["next_run_at"]).replace("Z", "+00:00"))
+            if due_at.timestamp() > time.time():
+                raise RuntimeError("System Dreaming occurrence is not due yet.")
+            receipt = _new_system_operation(job, revision, occurrence_id, "scheduled")
+            receipt["state"] = "claiming"
+            receipts[key] = receipt
+    if completing:
+        _finish_system_schedule_completion(profile_home, job_id=job_id, receipt_key=key)
+        return {"status": "duplicate", "jobId": job_id}
+    if not claim_job_for_fire(job_id):
+        return {"status": "in_progress", "jobId": job_id}
+    with json_transaction(path) as receipts:
+        current = receipts[key]
+        if current.get("ownerToken") != receipt["ownerToken"]:
+            raise RuntimeError("System schedule claim lost ownership.")
+        current.update({
+            "state": "running",
+            "claimedNextRunAt": (get_job(job_id) or {}).get("next_run_at"),
+        })
+        return {**_system_operation(current, job_id), "status": "claimed", "recovered": False}
 
-    job = get_job(job_id)
-    if not job:
-        return {"status": "stale", "reason": "job_not_found", "jobId": job_id}
-    if schedule_revision(job) != revision:
-        return {
-            "status": "stale",
-            "reason": "revision_mismatch",
-            "jobId": job_id,
-        }
-    binding = read_json_object(cron_delivery_path(profile_home)).get(job_id)
-    if not isinstance(binding, dict) or binding.get("systemType") != "dream":
-        raise ValueError("Cron job is not the managed Dreaming schedule.")
-    last_run_at_before = job.get("last_run_at")
-    receipts[key] = {
-        "state": "claiming",
+
+def _new_system_operation(
+    job: dict[str, Any], revision: str, occurrence_id: str, kind: str
+) -> dict[str, Any]:
+    operation_id = hashlib.sha256(
+        json.dumps([str(job["id"]), occurrence_id]).encode("utf-8")
+    ).hexdigest()
+    return {
+        "operationId": operation_id,
+        "sessionId": f"scheduled-dream:{operation_id}",
+        "ownerToken": uuid.uuid4().hex,
+        "operationKind": kind,
+        "state": "queued",
+        "phase": "pending",
+        "checkpoint": {},
         "revision": revision,
         "occurrenceId": occurrence_id,
         "startedAtEpoch": time.time(),
         "completedAt": None,
         "success": None,
-        "lastRunAtBefore": last_run_at_before,
+        "lastRunAtBefore": job.get("last_run_at"),
+        "scheduledNextRunAt": job.get("next_run_at"),
         "claimedNextRunAt": None,
     }
-    atomic_write_json(path, receipts)
-    if not claim_job_for_fire(job_id):
-        return {"status": "in_progress", "jobId": job_id}
-    claimed_job = get_job(job_id)
-    receipts[key].update({
-        "state": "running",
-        "claimedNextRunAt": (claimed_job or {}).get("next_run_at"),
-    })
-    atomic_write_json(path, receipts)
-    return {"status": "claimed", "jobId": job_id, "recovered": False}
+
+
+def _system_operation(receipt: dict[str, Any], job_id: str) -> dict[str, Any]:
+    return {
+        "jobId": job_id,
+        **{key: receipt.get(key) for key in (
+            "revision", "occurrenceId", "operationId", "sessionId", "ownerToken",
+            "operationKind", "phase", "checkpoint",
+        )},
+    }
+
+
+def get_system_schedule_checkpoint(
+    profile_home: Path, *, job_id: str, revision: str, occurrence_id: str
+) -> dict[str, Any]:
+    receipt = read_json_object(system_schedule_receipts_path(profile_home)).get(
+        _receipt_key(job_id, occurrence_id)
+    )
+    if not isinstance(receipt, dict) or receipt.get("revision") != revision:
+        raise ValueError("System schedule occurrence does not exist.")
+    return _system_operation(receipt, job_id)
+
+
+def checkpoint_system_schedule(
+    profile_home: Path, *, job_id: str, revision: str, occurrence_id: str,
+    owner_token: str, expected_phase: str, phase: str, payload: dict[str, Any],
+) -> dict[str, Any]:
+    phases = ["pending", "dream_started", "dream_completed", "status_completed", "prepared"]
+    if expected_phase not in phases or phase not in phases or (
+        phases.index(phase) != phases.index(expected_phase) + 1
+    ):
+        raise ValueError("Invalid system schedule phase transition.")
+    with json_transaction(system_schedule_receipts_path(profile_home)) as receipts:
+        receipt = receipts.get(_receipt_key(job_id, occurrence_id))
+        if not isinstance(receipt, dict) or receipt.get("revision") != revision:
+            raise ValueError("System schedule occurrence does not exist.")
+        if not owner_token or receipt.get("ownerToken") != owner_token:
+            raise RuntimeError("System schedule checkpoint lost ownership.")
+        if receipt.get("state") != "running":
+            raise RuntimeError("System schedule is not running.")
+        if receipt.get("phase") == phase:
+            if all(receipt.get("checkpoint", {}).get(key) == value for key, value in payload.items()):
+                return _system_operation(receipt, job_id)
+            raise RuntimeError("System schedule checkpoint has conflicting data.")
+        if receipt.get("phase") != expected_phase:
+            raise RuntimeError("System schedule phase changed concurrently.")
+        receipt["checkpoint"].update(payload)
+        receipt["phase"] = phase
+        receipt["startedAtEpoch"] = time.time()
+        return _system_operation(receipt, job_id)
 
 
 def complete_system_schedule(
@@ -353,28 +448,31 @@ def complete_system_schedule(
     success: bool,
     error: str = "",
     summary: dict[str, Any] | None = None,
+    owner_token: str = "",
 ) -> dict[str, Any]:
     path = system_schedule_receipts_path(profile_home)
-    receipts = read_json_object(path)
     key = _receipt_key(job_id, occurrence_id)
-    receipt = receipts.get(key)
-    if not isinstance(receipt, dict):
-        raise ValueError("System schedule receipt does not exist.")
-    if receipt.get("state") == "completed":
-        return {"status": "duplicate", "jobId": job_id}
-    receipt.update({
-        "state": "completing",
-        "success": success,
-        "errorType": "scheduled_dream_failed" if not success else None,
-        "error": error[:1000],
-        "summary": summary or {},
-    })
-    receipts[key] = receipt
-    atomic_write_json(path, receipts)
+    with json_transaction(path) as receipts:
+        receipt = receipts.get(key)
+        if not isinstance(receipt, dict) or receipt.get("revision", revision) != revision:
+            raise ValueError("System schedule receipt does not exist.")
+        if receipt.get("state") == "completed":
+            return {"status": "duplicate", "jobId": job_id}
+        if not owner_token or receipt.get("ownerToken") != owner_token:
+            raise RuntimeError("System schedule completion lost ownership.")
+        if success and receipt.get("phase") != "prepared":
+            raise RuntimeError("Successful system schedule completion requires the prepared checkpoint.")
+        if receipt.get("state") != "completing":
+            receipt.update({
+                "state": "completing",
+                "success": success,
+                "errorType": "scheduled_dream_failed" if not success else None,
+                "error": error[:1000],
+                "summary": summary or {},
+            })
     return _finish_system_schedule_completion(
         profile_home,
         job_id=job_id,
-        receipts=receipts,
         receipt_key=key,
     )
 
@@ -383,29 +481,33 @@ def _finish_system_schedule_completion(
     profile_home: Path,
     *,
     job_id: str,
-    receipts: dict[str, Any],
     receipt_key: str,
 ) -> dict[str, Any]:
     from cron.jobs import get_job, mark_job_run
     from cron.scheduler_provider import resolve_cron_scheduler
 
-    receipt = receipts[receipt_key]
-    job = get_job(job_id)
-    if (
-        job is not None
-        and job.get("last_run_at") == receipt.get("lastRunAtBefore")
-    ):
-        mark_job_run(
-            job_id,
-            bool(receipt.get("success")),
-            str(receipt.get("error") or "") or None,
-        )
-    resolve_cron_scheduler().reconcile()
-    receipt["state"] = "completed"
-    receipt["completedAt"] = datetime.now(UTC).isoformat()
-    receipts[receipt_key] = receipt
-    _prune_system_schedule_receipts(receipts)
-    atomic_write_json(system_schedule_receipts_path(profile_home), receipts)
+    path = system_schedule_receipts_path(profile_home)
+    with json_transaction(path) as receipts:
+        receipt = receipts[receipt_key]
+        if receipt.get("state") == "completed":
+            return {"status": "duplicate", "jobId": job_id}
+        if receipt.get("operationKind") != "adhoc":
+            job = get_job(job_id)
+            if job is not None and job.get("last_run_at") == receipt.get("lastRunAtBefore"):
+                if receipt.get("claimedNextRunAt") is not None and (
+                    job.get("next_run_at") != receipt["claimedNextRunAt"]
+                ):
+                    raise RuntimeError("Native schedule advanced beyond this occurrence's claim.")
+                mark_job_run(
+                    job_id, bool(receipt.get("success")), str(receipt.get("error") or "") or None,
+                )
+    if receipt.get("operationKind") != "adhoc":
+        resolve_cron_scheduler().reconcile()
+    with json_transaction(path) as receipts:
+        receipt = receipts[receipt_key]
+        receipt["state"] = "completed"
+        receipt["completedAt"] = datetime.now(UTC).isoformat()
+        _prune_system_schedule_receipts(receipts)
     refreshed = get_job(job_id)
     return {
         "status": "completed",
@@ -416,7 +518,7 @@ def _finish_system_schedule_completion(
 
 
 def enqueue_system_dream_now(profile_home: Path) -> dict[str, Any]:
-    from cron.jobs import get_job, list_jobs
+    from cron.jobs import list_jobs
     from cron.scheduler_provider import resolve_cron_scheduler
     from azure_cron_provider import schedule_revision
 
@@ -443,7 +545,12 @@ def enqueue_system_dream_now(profile_home: Path) -> dict[str, Any]:
             "Active cron provider cannot enqueue Platform Dreaming."
         )
     revision = schedule_revision(job)
-    enqueued = enqueue(job, revision, binding)
+    occurrence_id = f"manual-{uuid.uuid4().hex}"
+    with json_transaction(system_schedule_receipts_path(profile_home)) as receipts:
+        receipts[_receipt_key(str(job["id"]), occurrence_id)] = _new_system_operation(
+            job, revision, occurrence_id, "adhoc"
+        )
+    enqueued = enqueue(job, revision, binding, occurrence_id=occurrence_id)
     return {
         "status": "enqueued",
         "jobId": str(job["id"]),
@@ -474,26 +581,68 @@ def _prune_system_schedule_receipts(
             receipts.pop(key, None)
 
 
-def _latest_output_path(profile_home: Path, job_id: str) -> Path | None:
-    output_dir = profile_home / "cron" / "output" / job_id
-    files = sorted(output_dir.glob("*.md"), reverse=True) if output_dir.is_dir() else []
-    return files[0] if files else None
-
-
-def _output_fingerprint(path: Path | None) -> str:
-    if path is None or not path.is_file():
-        return ""
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return f"{path.name}:{digest}"
-
-
-def _delivery_output(profile_home: Path, job_id: str) -> str:
-    path = _latest_output_path(profile_home, job_id)
-    output = path.read_text(encoding="utf-8") if path else ""
+def _delivery_output(output: str) -> str:
+    output = output.replace("\r\n", "\n")
     marker = "\n## Response\n\n"
     if marker not in output:
         return "The scheduled task failed. Check the Worker diagnostics for details."
     return output.rsplit(marker, 1)[1].strip()
+
+
+def _record_cron_output(
+    profile_home: Path,
+    *,
+    job_id: str,
+    revision: str,
+    execution_id: str,
+    output_path: Path,
+    native_execution_id: str = "",
+) -> None:
+    output_path = output_path.resolve()
+    output_path.relative_to((profile_home / "cron" / "output" / job_id).resolve())
+    content = output_path.read_bytes()
+    with json_transaction(cron_delivery_receipts_path(profile_home)) as receipts:
+        receipt = receipts.get(_receipt_key(job_id, revision))
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("executionId") != execution_id
+            or receipt.get("state") != "executing"
+        ):
+            raise RuntimeError("Cron execution no longer owns the output receipt.")
+        receipt.update({
+            "nativeOutputPath": str(output_path.relative_to(profile_home.resolve())),
+            "nativeOutputSha256": hashlib.sha256(content).hexdigest(),
+            "nativeExecutionId": native_execution_id,
+            "output": _delivery_output(content.decode("utf-8")),
+        })
+
+
+def _bound_cron_output(profile_home: Path, receipt: dict[str, Any]) -> bool:
+    relative = receipt.get("nativeOutputPath")
+    digest = receipt.get("nativeOutputSha256")
+    if not receipt.get("executionId") or not relative or not digest:
+        return False
+    path = (profile_home / str(relative)).resolve()
+    try:
+        path.relative_to((profile_home / "cron" / "output").resolve())
+    except ValueError:
+        return False
+    return path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
+def _reconcile_delivery(profile_home: Path, key: str) -> dict[str, Any]:
+    from cron.scheduler_provider import resolve_cron_scheduler
+
+    path = cron_delivery_receipts_path(profile_home)
+    receipt = read_json_object(path)[key]
+    if not receipt.get("delivered") and not receipt.get("reconciled"):
+        resolve_cron_scheduler().reconcile()
+        with json_transaction(path) as receipts:
+            current = receipts[key]
+            if current.get("executionId") == receipt.get("executionId"):
+                current["reconciled"] = True
+            receipt = dict(current)
+    return receipt
 
 
 def fire_cron_job(
@@ -507,188 +656,102 @@ def fire_cron_job(
     from azure_cron_provider import schedule_revision
 
     receipts_path = cron_delivery_receipts_path(profile_home)
-    receipts = read_json_object(receipts_path)
     receipt_key = _receipt_key(job_id, revision)
-    existing_receipt = receipts.get(receipt_key)
-    if isinstance(existing_receipt, dict):
-        delivered = bool(existing_receipt.get("delivered"))
-        if existing_receipt.get("state") == "executing" and not delivered:
-            current_output = _latest_output_path(profile_home, job_id)
-            current_fingerprint = _output_fingerprint(current_output)
-            if current_fingerprint != existing_receipt.get("outputFingerprintBefore"):
-                existing_receipt["output"] = _delivery_output(profile_home, job_id)
-                existing_receipt["state"] = "pending_delivery"
-            else:
-                current_job = get_job(job_id)
-                can_retry_unclaimed = (
-                    current_job is not None
-                    and schedule_revision(current_job) == revision
-                    and not current_job.get("fire_claim")
-                    and current_job.get("last_run_at") == existing_receipt.get("lastRunAtBefore")
-                )
-                if can_retry_unclaimed:
-                    receipts.pop(receipt_key, None)
-                    atomic_write_json(receipts_path, receipts)
-                    existing_receipt = None
+    execute = False
+    with json_transaction(receipts_path) as receipts:
+        receipt = receipts.get(receipt_key)
+        if isinstance(receipt, dict):
+            if receipt.get("delivered"):
+                return {**receipt, "status": "duplicate", "jobId": job_id}
+            if receipt.get("state") == "executing":
+                if _bound_cron_output(profile_home, receipt):
+                    receipt["state"] = "pending_delivery"
+                elif time.time() - float(receipt.get("startedAtEpoch") or 0) < int(
+                    os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800")
+                ):
+                    return {**receipt, "status": "in_progress", "jobId": job_id}
                 else:
-                    started_at = float(existing_receipt.get("startedAtEpoch") or 0)
-                    lease_seconds = int(
-                        os.getenv("SCHEDULER_MAX_LOCK_RENEWAL_SECONDS", "1800")
-                    )
-                    if started_at and time.time() - started_at < lease_seconds:
-                        return {
-                            **existing_receipt,
-                            "status": "in_progress",
-                            "jobId": job_id,
-                        }
-                    existing_receipt.update({
+                    receipt.update({
                         "output": (
-                            "The scheduled task was interrupted before it produced a result. "
-                            "Check the Worker diagnostics and run it again if needed."
+                            "The scheduled task was interrupted; no unambiguous output "
+                            "is bound to this execution. Check the Worker diagnostics."
                         ),
                         "lastStatus": "error",
                         "state": "pending_delivery",
                         "reconciled": False,
                     })
-            if isinstance(existing_receipt, dict):
-                if (
-                    existing_receipt.get("state") == "pending_delivery"
-                    and not existing_receipt.get("reconciled")
-                ):
-                    resolve_cron_scheduler().reconcile()
-                    existing_receipt["reconciled"] = True
-                receipts[receipt_key] = existing_receipt
-                _prune_delivery_receipts(receipts)
-                atomic_write_json(receipts_path, receipts)
-                return {
-                    **existing_receipt,
-                    "status": "pending_delivery",
-                    "jobId": job_id,
-                }
-        if existing_receipt is not None:
-            if (
-                not delivered
-                and existing_receipt.get("state") == "pending_delivery"
-                and not existing_receipt.get("reconciled")
-            ):
-                resolve_cron_scheduler().reconcile()
-                existing_receipt["reconciled"] = True
-                receipts[receipt_key] = existing_receipt
-                _prune_delivery_receipts(receipts)
-                atomic_write_json(receipts_path, receipts)
-            return {
-                **existing_receipt,
-                "status": "duplicate" if delivered else "pending_delivery",
-                "jobId": job_id,
+        else:
+            job = get_job(job_id)
+            if not job:
+                return {"status": "stale", "reason": "job_not_found", "jobId": job_id}
+            if schedule_revision(job) != revision:
+                return {"status": "stale", "reason": "revision_mismatch", "jobId": job_id}
+            if job.get("script") or job.get("no_agent"):
+                raise ValueError("Hosted scheduled scripts are not allowed.")
+            due_at = datetime.fromisoformat(str(job["next_run_at"]).replace("Z", "+00:00"))
+            if due_at.timestamp() > time.time():
+                raise RuntimeError("Cron occurrence is not due yet.")
+            binding = read_json_object(cron_delivery_path(profile_home)).get(job_id) or {}
+            reference_key = str(binding.get("referenceKey") or "")
+            receipt = {
+                "executionId": uuid.uuid4().hex,
+                "output": "",
+                "lastStatus": None,
+                "nextRunAt": job.get("next_run_at"),
+                "deliveryReference": (
+                    get_delivery_reference(profile_home, reference_key) if reference_key else None
+                ),
+                "deliveryMode": str(job.get("deliver") or "local"),
+                "delivered": False,
+                "state": "executing",
+                "startedAtEpoch": time.time(),
+                "reconciled": False,
             }
-
-    job = get_job(job_id)
-    if not job:
-        return {"status": "stale", "reason": "job_not_found", "jobId": job_id}
-    current_revision = schedule_revision(job)
-    if current_revision != revision:
+            receipts[receipt_key] = receipt
+            execute = True
+        execution_id = receipt.get("executionId")
+    if not execute:
+        receipt = _reconcile_delivery(profile_home, receipt_key)
         return {
-            "status": "stale",
-            "reason": "revision_mismatch",
+            **receipt,
+            "status": "duplicate" if receipt.get("delivered") else "pending_delivery",
             "jobId": job_id,
-            "currentRevision": current_revision,
         }
-    if job.get("script") or job.get("no_agent"):
-        raise ValueError("Hosted scheduled scripts are not allowed.")
-    binding = read_json_object(cron_delivery_path(profile_home)).get(job_id) or {}
-    reference_key = str(binding.get("referenceKey") or "")
-    reference = get_delivery_reference(profile_home, reference_key) if reference_key else None
-    output_before = _latest_output_path(profile_home, job_id)
-    receipts[receipt_key] = {
-        "output": "",
-        "lastStatus": None,
-        "nextRunAt": job.get("next_run_at"),
-        "deliveryReference": reference,
-        "deliveryMode": str(job.get("deliver") or "local"),
-        "delivered": False,
-        "state": "executing",
-        "lastRunAtBefore": job.get("last_run_at"),
-        "outputFingerprintBefore": _output_fingerprint(output_before),
-        "startedAtEpoch": time.time(),
-        "reconciled": False,
-    }
-    _prune_delivery_receipts(receipts)
-    atomic_write_json(receipts_path, receipts)
 
     provider = resolve_cron_scheduler()
-    ran = provider.fire_due(job_id)
-    refreshed = get_job(job_id)
-    current_output = _latest_output_path(profile_home, job_id)
-    output_changed = (
-        _output_fingerprint(current_output)
-        != receipts[receipt_key]["outputFingerprintBefore"]
-    )
-    failed_run = bool(
-        not ran
-        and (
-            refreshed is None
-            or (
-                refreshed.get("last_status") == "error"
-                and refreshed.get("last_run_at") != job.get("last_run_at")
-            )
-        )
-    )
-    if not ran and not output_changed and not failed_run:
-        if refreshed and refreshed.get("fire_claim"):
-            return {
-                **receipts[receipt_key],
-                "status": "in_progress",
-                "jobId": job_id,
-            }
-        receipts.pop(receipt_key, None)
-        atomic_write_json(receipts_path, receipts)
-        return {"status": "duplicate", "jobId": job_id}
-
-    latest_receipts = read_json_object(receipts_path)
-    latest_receipt = latest_receipts.get(receipt_key)
-    if isinstance(latest_receipt, dict):
-        if latest_receipt.get("delivered"):
-            return {"status": "duplicate", "jobId": job_id}
-        if latest_receipt.get("state") == "pending_delivery":
-            return {
-                **latest_receipt,
-                "status": "pending_delivery",
-                "jobId": job_id,
-            }
-    receipts = latest_receipts
-    result = {
-        "status": "completed",
-        "jobId": job_id,
-        "output": (
-            _delivery_output(profile_home, job_id)
-            if output_changed
-            else "The scheduled task failed. Check the Worker diagnostics for details."
+    ran = provider.fire_due(
+        job_id,
+        output_callback=lambda path, native_id="": _record_cron_output(
+            profile_home,
+            job_id=job_id,
+            revision=revision,
+            execution_id=execution_id,
+            output_path=path,
+            native_execution_id=native_id,
         ),
-        "lastStatus": (refreshed or {}).get("last_status"),
-        "nextRunAt": (refreshed or {}).get("next_run_at"),
-        "deliveryReference": reference,
-        "deliveryMode": str(job.get("deliver") or "local"),
-    }
-    receipts[receipt_key] = {
-        "output": result["output"],
-        "lastStatus": result["lastStatus"],
-        "nextRunAt": result["nextRunAt"],
-        "deliveryReference": reference,
-        "deliveryMode": result["deliveryMode"],
-        "delivered": False,
-        "state": "pending_delivery",
-        "lastRunAtBefore": job.get("last_run_at"),
-        "outputFingerprintBefore": latest_receipt.get("outputFingerprintBefore")
-        if isinstance(latest_receipt, dict)
-        else "",
-        "startedAtEpoch": latest_receipt.get("startedAtEpoch")
-        if isinstance(latest_receipt, dict)
-        else time.time(),
-        "reconciled": True,
-    }
-    _prune_delivery_receipts(receipts)
-    atomic_write_json(receipts_path, receipts)
-    return result
+    )
+    refreshed = get_job(job_id)
+    with json_transaction(receipts_path) as receipts:
+        receipt = receipts[receipt_key]
+        if receipt.get("delivered"):
+            return {**receipt, "status": "duplicate", "jobId": job_id}
+        if receipt.get("executionId") != execution_id:
+            raise RuntimeError("Cron execution lost receipt ownership.")
+        if not ran and not receipt.get("nativeOutputPath") and (refreshed or {}).get("fire_claim"):
+            return {**receipt, "status": "in_progress", "jobId": job_id}
+        receipt.update({
+            "state": "pending_delivery",
+            "lastStatus": (refreshed or {}).get("last_status"),
+            "nextRunAt": (refreshed or {}).get("next_run_at"),
+            "reconciled": True,
+        })
+        if not _bound_cron_output(profile_home, receipt):
+            receipt["output"] = (
+                "The scheduled task failed. No unambiguous output is bound to this execution. "
+                "Check the Worker diagnostics for details."
+            )
+            receipt["lastStatus"] = "error"
+        return {**receipt, "status": "completed", "jobId": job_id}
 
 
 def acknowledge_cron_delivery(
@@ -699,23 +762,24 @@ def acknowledge_cron_delivery(
     delivery_activity_id: str = "",
 ) -> dict[str, Any]:
     path = cron_delivery_receipts_path(profile_home)
-    receipts = read_json_object(path)
     key = _receipt_key(job_id, revision)
-    receipt = receipts.get(key)
-    if not isinstance(receipt, dict):
-        raise ValueError("Cron delivery receipt does not exist.")
-    output = str(receipt.get("output") or "")
-    receipt["outputSha256"] = hashlib.sha256(output.encode("utf-8")).hexdigest()
-    receipt["hasOutput"] = bool(output)
-    receipt["output"] = ""
-    receipt["deliveryReference"] = None
-    receipt["delivered"] = True
-    receipt["deliveredAt"] = datetime.now(UTC).isoformat()
-    receipt["deliveryActivityId"] = delivery_activity_id
-    receipt["state"] = "delivered"
-    receipts[key] = receipt
-    _prune_delivery_receipts(receipts)
-    atomic_write_json(path, receipts)
+    with json_transaction(path) as receipts:
+        receipt = receipts.get(key)
+        if not isinstance(receipt, dict):
+            raise ValueError("Cron delivery receipt does not exist.")
+        if not receipt.get("delivered"):
+            if receipt.get("state") != "pending_delivery":
+                raise ValueError("Cron result is not ready for delivery acknowledgement.")
+            output = str(receipt.get("output") or "")
+            receipt["outputSha256"] = hashlib.sha256(output.encode("utf-8")).hexdigest()
+            receipt["hasOutput"] = bool(output)
+            receipt["output"] = ""
+            receipt["deliveryReference"] = None
+            receipt["delivered"] = True
+            receipt["deliveredAt"] = datetime.now(UTC).isoformat()
+            receipt["deliveryActivityId"] = delivery_activity_id
+            receipt["state"] = "delivered"
+            _prune_delivery_receipts(receipts)
     return {"status": "delivered", "jobId": job_id}
 
 
@@ -723,10 +787,8 @@ def _prune_delivery_receipts(
     receipts: dict[str, Any],
     *,
     keep_delivered_per_job: int = 20,
-    keep_pending_per_job: int = 20,
 ) -> None:
     delivered_by_job: dict[str, list[tuple[str, str]]] = {}
-    pending_by_job: dict[str, list[tuple[float, str]]] = {}
     for key, value in receipts.items():
         if not isinstance(value, dict):
             continue
@@ -737,17 +799,9 @@ def _prune_delivery_receipts(
             delivered_by_job.setdefault(job_id, []).append(
                 (str(value.get("deliveredAt") or ""), key)
             )
-        elif value.get("state") != "executing":
-            pending_by_job.setdefault(job_id, []).append(
-                (float(value.get("startedAtEpoch") or 0), key)
-            )
     for values in delivered_by_job.values():
         values.sort(reverse=True)
         for _, key in values[keep_delivered_per_job:]:
-            receipts.pop(key, None)
-    for values in pending_by_job.values():
-        values.sort(reverse=True)
-        for _, key in values[keep_pending_per_job:]:
             receipts.pop(key, None)
 
 
@@ -852,7 +906,19 @@ def cron_diagnostics(profile_home: Path) -> dict[str, Any]:
     receipts = read_json_object(cron_delivery_receipts_path(profile_home))
     schedules = read_json_object(profile_home / "cron" / "azure-schedules.json")
     system_receipts = read_json_object(system_schedule_receipts_path(profile_home))
+    unresolved = [
+        receipt for receipt in receipts.values()
+        if isinstance(receipt, dict) and not receipt.get("delivered")
+    ]
     return {
+        "unresolvedDeliveryCount": len(unresolved),
+        "oldestUnresolvedDeliveryAgeSeconds": max(
+            (
+                max(0, time.time() - float(receipt["startedAtEpoch"]))
+                for receipt in unresolved if receipt.get("startedAtEpoch")
+            ),
+            default=0,
+        ),
         "jobs": list_cron_jobs(profile_home, include_system=True),
         "bindings": [
             {
@@ -895,6 +961,11 @@ def cron_diagnostics(profile_home: Path) -> dict[str, Any]:
                     receipt.get("hasOutput") or receipt.get("output")
                 ),
                 "lastStatus": receipt.get("lastStatus"),
+                "executionId": receipt.get("executionId"),
+                "nativeExecutionId": receipt.get("nativeExecutionId"),
+                "hasBoundNativeOutput": bool(
+                    receipt.get("nativeOutputPath") and receipt.get("nativeOutputSha256")
+                ),
                 "startedAtEpoch": receipt.get("startedAtEpoch"),
                 "deliveredAt": receipt.get("deliveredAt"),
                 "hasDeliveryActivityId": bool(
@@ -923,6 +994,8 @@ def cron_diagnostics(profile_home: Path) -> dict[str, Any]:
                     or key.rpartition(":")[2]
                 ),
                 "state": str(receipt.get("state") or ""),
+                "operationKind": receipt.get("operationKind"),
+                "phase": receipt.get("phase"),
                 "success": receipt.get("success"),
                 "startedAtEpoch": receipt.get("startedAtEpoch"),
                 "completedAt": receipt.get("completedAt"),

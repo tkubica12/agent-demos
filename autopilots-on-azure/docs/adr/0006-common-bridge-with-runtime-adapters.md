@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Updated 2026-09-06 for the service-role Sandbox architecture; application parity is still being validated.
 
 ## Context
 
@@ -27,7 +27,9 @@ Move runtime-specific protocol details behind bridge-side runtime adapters:
 - `OpenClawRuntimeAdapter` wakes ACA Sandbox and calls the OpenClaw Gateway websocket protocol.
 - `HermesRuntimeAdapter` wakes ACA Sandbox and calls the Hermes API server over HTTP.
 
-The bridge owns transport behavior, Teams UX, prompt envelope construction, response shaping, and Agent 365 ingress. The selected runtime owns semantic reasoning, whether to answer, and what response text to return. Teams reactions are not part of the current Agent 365 path because agentic applications do not use Bot Framework app-only outbound tokens.
+The bridge owns transport behavior, Teams UX, prompt envelope construction, response shaping, and Agent 365 ingress. The selected runtime owns semantic reasoning, whether to answer, response text, and the semantic reaction decision. The bridge both adds and removes temporary eyes, then executes an agent-selected semantic reaction through the supported Agent User path; live permission and delivery evidence must be checked separately.
+
+The bridge itself runs in the Worker's dedicated `gateway` Sandbox Group with a distinct user-assigned managed identity. Auto-suspend is disabled to preserve detached post-ACK processing and continuous Service Bus receive. Runtime services retain independent OnDemand lifecycles. Office behavior policy belongs in runtime skills, not an expanding bridge prompt.
 
 Hermes native Teams support is deferred as an optional future mode for pure-Hermes deployments. It is not the initial integration path.
 

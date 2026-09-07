@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-07-26
 
+September 6, 2026, 21:46 CEST recheck: the user found Hermes in public group `@` mention discovery but not under `/`. No private content was sent. Targeted Agent User inbound availability remains unobserved for this deployment; this does not establish universal platform incompatibility or a pure UI bug. Shared group transcripts remain unchanged; the conditional private-transcript requirement below is not approval to switch the current group model. See ADR 0017 for the memory-isolation boundary. Never fall back from private input to a public reply.
+
 ## Context
 
 Hermes has native gateway slash commands, but Autopilots invokes Hermes through its API-server surface. The API server does not execute `gateway/slash_commands.py`; unhandled slash text is sent to the model as ordinary conversation content.
@@ -12,7 +14,7 @@ The bridge currently implements `/learn` itself. `/new`, `/reset`, `/compress`, 
 Teams also has multiple command-discovery surfaces:
 
 - in personal chats, prompt starters are always available through the **View Prompts** flyout; only their initial cards disappear after the first message;
-- custom agent slash autocomplete is a public-preview targeted-messaging feature for channels, group chats, and meeting chats;
+- custom agent slash autocomplete uses targeted messaging in channels, group chats, and meeting chats;
 - manifest configuration only inserts command text into the compose box; the application must still parse and implement the command;
 - command changes require manifest versioning, republishing, and package update.
 
@@ -43,7 +45,7 @@ Selected for A15, but only after the bridge provides a private per-user transcri
 3. Reject `/new` and `/reset` outside `teams_personal`; never pass them to the model.
 4. Do not implement or advertise `/compress`, `/status`, `/model`, `/usage`, or other Hermes gateway commands until a real API-server operation exists.
 5. Do not add personal prompt starters now. Document `/learn` and `/new` in the Teams welcome/help experience and demo guide.
-6. Defer A15 until Agent 365 exposes a supported Agent User targeted-message capability; do not add a companion bot package.
+6. Defer A15 until a supported targeted receive/send path is verified for this Agent User package and SDK; do not add a companion bot package.
 7. In A15, expose `/learn` as a named targeted-private command only after:
    - inbound `recipient.isTargeted` is verified;
    - the targeted transcript is isolated by authenticated user and group conversation;
@@ -54,7 +56,11 @@ Selected for A15, but only after the bridge provides a private per-user transcri
 
 ## Deferral trigger and recheck
 
-As of 2026-07-28, Teams targeted messaging is a public developer preview configured through `bots[].supportsTargetedMessages`. Agent 365 AI teammate packages instead contain `agenticUserTemplates`. Microsoft 365 Agent Registry accepts those packages but does not surface `/WorkerName`; Teams app-store upload rejects them with `Agentic apps are not supported for uploading from Teams/Teams Admin Center`. The test account's Teams preview policy was `Global / Forced`, so client preview eligibility was not the blocker.
+The current generated package is version **1.1.7**, schema **devPreview**, with **`agenticUserTemplates` only and no `bots[]`**. Refreshed official Learn still says receive eligibility requires `bots[].supportsTargetedMessages=true`; it separately describes explicit recipient targeting for outbound Teams SDK/REST messages. Those receive/send contracts must not be conflated.
+
+Installed **`microsoft-agents-hosting-core` 1.1.0** `TurnContext` has no `send_targeted_activity`, and plain `send_activity` does not set targeting. This is the installed SDK's observed surface, not proof that Teams universally cannot send targeted messages. The actual UI observation is narrower: public `@` discovery works, `/` discovery for Hermes was absent. No private payload was sent or fallback attempted.
+
+In the July 28 test, the `agenticUserTemplates` package was accepted through Microsoft 365 Agent Registry but `/WorkerName` was not observed. Teams app-store upload returned `Agentic apps are not supported for uploading from Teams/Teams Admin Center`. The account's preview policy was `Global / Forced`. These historical package/policy observations did not establish a universal cause; the September UI recheck remains scoped to the current account, client, and package.
 
 Re-evaluate A15 only when Microsoft documents or ships a supported Agent 365 Agent User path that:
 
@@ -69,7 +75,7 @@ To check availability, review the Agent 365 CLI release notes and generated AI t
 
 - Personal users must know `/learn` and `/new`; Teams does not provide custom personal `/` autocomplete.
 - The command set remains intentionally small and truthful.
-- Group command discovery remains unavailable for Agent Users until the deferred platform contract exists.
+- Targeted group command discovery was absent in this deployment's UI recheck. Do not generalize the observation to every Agent User or diagnose a UI-only defect without more evidence.
 - Targeted messages appear in the group flow but are visible only to one user and the Worker, expire from clients after 24 hours, and do not support reactions, replies, or forwarding.
 - Agent 365 remains the identity and Activity Protocol layer; the Teams app manifest owns command discoverability.
 

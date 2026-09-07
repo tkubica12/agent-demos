@@ -2,11 +2,21 @@
 
 This guide is a repeatable classroom path for identity, tools, memory, learning, Dreaming, and Collective Learning Review. Deployment belongs in [DEPLOYMENT.md](DEPLOYMENT.md).
 
+**Readiness, 2026-09-06 22:33 CEST:** model, MCP, resume, schedule, no-change Dream, and bounded evaluation proofs stand. All 49 reviewed native parents resolve; 105 audited spans contain metadata only. A local control preserved its supplied parent, while fresh uninstrumented `urllib` inside the gateway Sandbox changed it: the native Sandbox-origin egress path limits the waterfall, not TraceId correlation. Exact proxy implementation remains unidentified. Teams public `@` discovery is observed, targeted `/` is not; automatic eight-hour idle behavior remains unverified.
+
+When explaining image authentication, distinguish classic ACA's native MI pulls from historical Sandbox conversion with the ACR admin password. MI conversion still fails with SDK 0.1.0b4; the approved deployment-time transient Entra-token path works and MCP workloads are now live. Runtime/gateway use preconverted IDs, with no ACR credentials, conversion, or token-renewal service in their execution path. MCP health is not the full Worker classroom run; see [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md).
+
+Show the four-image preparation gate before workload creation, not a gateway image-pull workaround. The gateway gets `AGENT_RUNTIME_DISK_IMAGE_ID`; workload identities have no ACR roles. Direct runtime CLI startup takes `--disk-image-id`, not the removed `--registry-managed-identity-resource-id` option.
+
 ## Before the session
+
+The ACR/MCP demonstration has concrete results: public unauthenticated requests return `401`; private external connections reset, not HTTP `403`, and the probe is cleaned up. Repeated live MCP deployment reused Sandbox IDs without registry login. All ten workload `AcrPull` assignments are removed and ACR admin is `false`. The subsequent first-Worker MCP scenario returned expected service IDs and shipment records, with both actual tools attributed in ingested native spans. Neither response assertions nor tool spans independently prove the network route.
+
+Use the existing-Worker modernization chain in [DEPLOYMENT.md](DEPLOYMENT.md). It preserves blueprint/AgentIdentity/AgentUser state; do not rerun `--run-setup`. A fresh Worker without those identities is not covered by a verified bootstrap sequence. Identity configuration success is not a successful live token exchange or authenticated tool call.
 
 ```powershell
 Set-Location .\autopilots-on-azure
-uv sync
+uv sync --frozen --index-url https://packagefeedproxy.microsoft.io/pypi/simple
 
 uv run python -m scripts.demo_ops status --runtime openclaw
 uv run python -m scripts.demo_ops status --runtime hermes --state-name hermes
@@ -24,7 +34,7 @@ Agent User and Teams license propagation can take 10-15 minutes and sometimes lo
 
 ## Suggested story
 
-1. One platform hosts different Worker runtimes.
+1. One Sandbox platform hosts separate service roles, each with its own Group and user-assigned identity.
 2. Each Worker has an autonomous Agent Identity and an Agent User presence.
 3. Tools authorize the Worker identity rather than the human caller.
 4. One Role Blueprint produces multiple isolated Workers.
@@ -32,6 +42,15 @@ Agent User and Teams license propagation can take 10-15 minutes and sometimes lo
 6. Only approved, privacy-safe Learning Packets enter Collective Learning Review.
 7. A reviewed Promotion creates a new Role Release.
 8. Worker Refresh adopts shared learning without replacing private state.
+9. Hermes 0.19.0 uses native Foundry Entra authentication; a valid signed proposal is still not proof of better behavior.
+
+The gateway remains running for post-ACK work and Service Bus receive. Demonstrate OnDemand runtime wake, not full-system scale-to-zero. Foundry external-agent registration is observability metadata, not Hosted Agent compute.
+
+When showing traces, use the exact morning MCP invocation: six successful model spans and three actual tool spans (`skill_view`, `mcp__private_incidents__list_services`, `mcp__public_shipments__list_demo_shipments`), all nine native children matching the runtime parent. The earlier last-four-hours query missed this invocation; it was not an ingestion blocker. Hermes 2 user cron has its own Service Bus-to-`/cron/fire`/native-chat/ACK trace. The separate ad-hoc Dream has seven native model spans and 31 tool-execution spans (18 propagated, 13 nested in-process), not 31 proven unique calls.
+
+Across the four full-day cases, all **49 native parents** are ingested. The latest privacy audit reviewed **105 spans**, with only allowed metadata, no raw identity fields or nonopaque IDs, no Data/Url/Message content, and no AppTraces/AppExceptions rows in scope. Two real read-only control requests now isolate parent rewriting to the **Sandbox-origin egress path**: local `urllib` preserved the supplied parent; fresh uninstrumented `urllib` inside the gateway Sandbox changed it while preserving TraceId. Platform intermediate parents are absent from AppInsights. Show correlated application execution, not a complete parent tree; do not add custom trace headers, fake parents, or an egress bypass. Exact probe IDs and UTC evidence are in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+The exact proxy implementation is unidentified. This privacy sample and successful MCP execution are not all-time privacy or independent VNet-route/MI-authentication proof. Explicit-session APIs and `/v1/responses` still differ; interrupted handoff sessions require Worker restart before reuse. The operator's terminal-`Failed` service-replacement fix passed 19 targeted tests; live private-MCP redeployment reused the healthy ID with health `200`. Unchanged matching `Stopped`/`Suspended` services retain their IDs. This operator-only fix needed no image or endpoint rollout.
 
 ## 1. Runtime and model proof
 
@@ -72,7 +91,13 @@ Point out:
 
 - the Teams presence belongs to the Agent User;
 - the Worker runtime authorizes autonomously with Agent Identity;
-- a channel mention is targeted delivery, not passive access to all channel traffic.
+- a channel mention is explicit public invocation, not passive access to all channel traffic or private targeted messaging.
+
+Do not confuse an explicit mention with private targeted messaging. The September 6 UI recheck found Hermes in public group `@` mention discovery but not under `/`. This is an observed discovery gap in this deployment, not proof that the platform is universally unsupported or that the cause is only the UI. No private content was sent.
+
+The generated 1.1.7 `devPreview` manifest contains `agenticUserTemplates`, not `bots[]`; refreshed Learn receive opt-in still uses `bots[].supportsTargetedMessages`. Installed `microsoft-agents-hosting-core` 1.1.0 `TurnContext` has no `send_targeted_activity`, and ordinary `send_activity` does not itself target a recipient. Do not improvise private sends, add a companion bot, or fall back publicly. [ADR 0018](docs/adr/0018-teams-command-surfaces.md) separates these findings from the unverified targeted inbound/outbound contract.
+
+The bridge adds and removes temporary `eyes`; the agent selects semantic reactions and the bridge executes them. Group transcripts remain shared. Per-user stable memory keys alone do not prove full private continuity isolation; see ADR 0017 before using private facts in a group demonstration.
 
 ## 3. Private and public MCP authorization
 
@@ -161,10 +186,12 @@ Expected:
 - the bridge runs one constrained Hermes invocation in one learning transaction;
 - Hermes calls native `skill_manage`;
 - `skills\candidates\dependency-handoff-contract\SKILL.md` exists;
-- `learning\records.jsonl` gains one schema-v2 record;
+- `learning\records.jsonl` gains one schema-3.0 record with synthetic agent-proposed scenarios and declarative `response.text` criteria;
 - the capability is immediately available to Hermes 2 but not Hermes.
 
 This divergence is intentional. It provides the second independent observation for Collective Learning Review.
+
+Governed artifacts are `SKILL.md` only. Auxiliary scripts and references cannot be smuggled into this Promotion lane. Later edits retain cumulative provenance from the release baseline; the latest matching hash alone is insufficient.
 
 ## 8. Controlled fresh-session and file inspection
 
@@ -287,7 +314,11 @@ uv run python -m scripts.servicebus_dream_smoke `
   --timeout 1800
 ```
 
-The system Dreaming message uses the same managed-identity Service Bus queue and KEDA bridge wake as user schedules. The dedicated ACA scheduled Job no longer exists.
+The system Dreaming message uses the same managed-identity Service Bus queue and continuous gateway receiver as user schedules. The dedicated ACA scheduled Job no longer exists. Require the Sandbox-compatible smoke: the gateway does not suspend and therefore cannot prove KEDA scale-from-zero.
+
+Inspect phase checkpoints as well as the final receipt. A completed response can be replayed through reconciliation without a second Dream. An ambiguous `dream_started` must stop for inspection. Operator run-now cannot consume the production occurrence, and external Teams delivery still has a send-to-receipt crash window.
+
+**Live bounded result, September 6:** Hermes 2's ad-hoc Dream completed at phase `prepared`, `success=true`, with `recordCount=0` and `packet=null`. Production cron remained unchanged, scheduled count stayed `1`, and DLQ was `0`. Present this as a successful no-change run—not a generated learning packet, learning improvement, or interruption-recovery test. Its separate user schedule delivered a receipt and SHA-verified output while runtime was already Running; that does not prove wake.
 
 ### Repeatable full-lifecycle demonstrations
 
@@ -358,6 +389,35 @@ uv run python -m scripts.collective_learning --state-name hermes2 export `
 ```
 
 Each export also writes a trusted Worker public-key mapping beside the packet.
+
+Packets use schema 2.0 and bind cumulative schema-3.0 provenance plus `agentProposedScenarios`. Review scenarios for synthetic input and scope just as carefully as skill text.
+
+If learning must be discarded rather than exported, inspect and sign a separate rejection:
+
+```powershell
+uv run python -m scripts.collective_learning --state-name hermes prepare-rejection
+uv run python -m scripts.collective_learning --state-name hermes reject `
+  --disposition-digest "<returned-state-bound-digest>" `
+  --rejected-by "<operator-alias>" `
+  --reason "<why this learning must not be promoted>"
+```
+
+This authorizes `reject_and_refresh`, not approval or export. The next normal Worker Refresh consumes the disposition.
+
+### Compare actual baseline and candidate behavior
+
+```powershell
+uv run python -m scripts.evaluate_learning `
+  --baseline-profile .local\evaluation\baseline `
+  --candidate-profile .local\evaluation\candidate `
+  --independent-suite .local\evaluation\holdout.json `
+  --hermes-python .local\hermes-evaluation\.venv\Scripts\python.exe `
+  --output .local\evaluation\result.json
+```
+
+Supply real prepared profile snapshots, an independent suite, and a Python environment containing Hermes 0.19.0; the command does not create fictitious inputs. Both arms use the same model/configuration and private state, differing only in governed skills. The runner makes real Hermes calls, checks literal response text, and disables tools, hooks, plugins, MCP, and background learning. It includes skills in the prompt, so it does not prove native discovery or tool-task quality. Report agent-proposed cases separately from independent regression/holdout results.
+
+**Completed classroom evidence:** `.artifacts\role-330-evaluation-verified.json` records real Hermes 0.19 CLI / `azure-foundry` / `gpt-5-6-terra` results for Role 3.2 versus 3.3: baseline **3/4**, candidate **4/4**, **zero regressions**. Four manually/operator-authored response-only cases are marked `independent_regression`, with `independence=operator_declared` and `packetDigest=null`. These are not agent-proposed packet tests. One fresh conversation per arm/case does not establish statistical generalization, tool-workflow quality, native discovery, or a general learning improvement. The initial isolated-profile auth failure was fixed by inheriting `AZURE_CONFIG_DIR`, not copying credentials.
 
 ## 12. Collective Learning Review
 
@@ -541,13 +601,13 @@ The thin loopback collaboration MCP downloads, publishes, and cleans up under th
 To demonstrate lock recovery, keep the shared document open in Word or Teams while asking Hermes to edit it. When Microsoft 365 returns `423 Locked`, Hermes should report that the validated edit is ready and post predefined suggested-action buttons for **Keep trying original** and **Send shared copy now**.
 
 - **Send shared copy now** creates the Agent User copy, grants the invoking user write access, returns the file in Teams, and records a delivery receipt.
-- **Keep trying original** schedules deterministic Service Bus retries without another model turn. Close the document and confirm a later proactive message links the updated original. For a forced-expiry test, set the operation deadline in the isolated test fixture and confirm the 24-hour path creates, shares, and delivers a copy exactly once.
+- **Keep trying original** schedules deterministic Service Bus retries without another model turn. Close the document and confirm a later proactive message links the updated original. For a forced-expiry test, set the operation deadline in the isolated test fixture and confirm the 24-hour path creates, shares, and delivers a copy without repetition in that run. This is not an exactly-once guarantee: a crash between Teams acceptance and receipt persistence can still duplicate external delivery.
 
 A changed original ETag must safely rebase a guarded Word patch or fall back to a copy; it must never overwrite a human edit.
 
-The initial "Document received" message is an Activity Protocol acknowledgement, not completion. The bridge remains available for the bounded Hermes turn through the KEDA cooldown and posts the final result proactively. If system logs show `KEDAScaleTargetDeactivated` before the final response, verify that `user_scheduling_scale_down_seconds` is at least 960 seconds; the supported default is 1200.
+The initial "Document received" message is an Activity Protocol acknowledgement, not completion. The gateway Sandbox has auto-suspend disabled so detached work can post the final result proactively. Verify the process survives the full turn; old KEDA cooldown settings are not the lifetime guarantee in this topology.
 
-Agent 365 configuration keeps one lightweight bridge replica ready. Do not expect the messaging endpoint itself to scale to zero: cold start can exceed the workload response window before acknowledgement. The Hermes Sandbox remains the expensive scale-to-zero boundary.
+The gateway Sandbox remains running to meet acknowledgement deadlines and preserve detached work. The Hermes runtime Sandbox has its own OnDemand lifecycle; neither a ready gateway nor a fast acknowledgement proves the later work completed.
 
 The Microsoft Open XML gate targets `FileFormatVersions.Microsoft365`; do not use the parameterless `OpenXmlValidator`, which defaults to Office 2007 and rejects valid modern Word attributes. A native session HTTP 5xx does not rerun document tools: the bridge polls the existing transcript for up to 120 seconds and delivers a newly persisted final answer when available.
 

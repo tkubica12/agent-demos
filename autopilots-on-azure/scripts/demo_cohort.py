@@ -9,14 +9,12 @@ from azure.containerapps.sandbox import SandboxGroupClient
 from azure.identity import DefaultAzureCredential
 
 from scripts.sandbox_runtime import endpoint_for_region
+from scripts.demo_ops import sandbox_items
 from scripts.setup_agent365 import load_json
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
 from scripts.tf_helpers import (
-    PLATFORM_DIR,
     REPO_ROOT,
-    output,
     resolve_executable,
-    terraform_output,
 )
 
 
@@ -77,20 +75,19 @@ def reset(args: argparse.Namespace) -> None:
         raise ValueError("Demo Worker is not pinned to the requested baseline commit.")
     if outputs.get("worker_id") != worker_id or outputs.get("runtime_data_volume_name") != volume_name:
         raise ValueError("Demo Worker outputs do not match the reset configuration.")
+    if outputs.get("terraform_workspace") != args.workspace:
+        raise ValueError("Captured Worker outputs do not match the requested Terraform workspace.")
 
-    platform = terraform_output(PLATFORM_DIR)
     client = SandboxGroupClient(
-        endpoint_for_region(str(platform["sandbox_location"])),
+        endpoint_for_region(str(outputs["sandbox_location"])),
         DefaultAzureCredential(),
-        subscription_id=output(
-            ["az", "account", "show", "--query", "id", "-o", "tsv"]
-        ),
-        resource_group=str(platform["resource_group_name"]),
-        sandbox_group=str(platform["sandbox_group_name"]),
+        subscription_id=str(outputs["subscription_id"]),
+        resource_group=str(outputs["resource_group_name"]),
+        sandbox_group=str(outputs["sandbox_groups"]["runtime"]["name"]),
     )
     sandboxes = client._dp_get(f"{client._group_path}/sandboxes")
     matches = matching_sandboxes(
-        sandboxes if isinstance(sandboxes, list) else [],
+        sandbox_items(sandboxes),
         worker_id=worker_id,
         volume_name=volume_name,
     )

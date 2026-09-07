@@ -34,8 +34,9 @@ Do not implement a shared multi-Worker bridge during the current Collective Lear
 Each Worker owns:
 
 - Agent 365 platform blueprint and service principal;
-- messaging endpoint and bridge Container App;
-- bridge managed identity and SDK credentials;
+- messaging endpoint and gateway Sandbox;
+- separate `runtime`, `gateway`, `private-mcp`, `public-mcp`, and `generated-apps` Sandbox Groups and user-assigned managed identities;
+- gateway SDK federation settings;
 - Agent Identity and Agent User;
 - Terraform workspace;
 - Sandbox Data Disk and Worker profile;
@@ -46,7 +47,7 @@ Workers can still share:
 
 - one Role Blueprint and Role Release;
 - Foundry project and model deployment;
-- Sandbox Group and platform networking;
+- platform networking, but not service Sandbox Groups or workload identities;
 - Azure Container Registry images;
 - private and public MCP application APIs;
 - Collective Learning Review tooling.
@@ -63,7 +64,7 @@ Workers can still share:
 ## Costs of per-Worker isolation
 
 - Repeated Agent 365 platform blueprints, service principals, credentials, permission inheritance, and consent.
-- Repeated bridge, managed identity, private MCP, and public MCP Container Apps in the current Terraform layout.
+- Repeated gateway/MCP service Sandboxes, per-role Groups, and user-assigned identities in the current Terraform layout.
 - More Terraform workspaces and local operator state.
 - Higher Azure and administrative overhead as Worker count grows.
 - Role Blueprint and Agent 365 platform blueprint terminology can be confused.
@@ -83,7 +84,7 @@ A shared bridge would receive activities for several Agent Users and resolve a W
 Potential benefits:
 
 - One Agent 365 platform blueprint, consent surface, and messaging endpoint for many Workers.
-- Fewer Container Apps and credentials.
+- Fewer service Sandboxes and identity configurations.
 - Centralized lifecycle, routing, observability, and policy.
 - Better alignment with Agent 365's blueprint-to-many-instances model.
 
@@ -103,7 +104,7 @@ Potential costs and risks:
 Reopen this decision when one or more are true:
 
 - more than a small number of Workers are operated continuously;
-- duplicated Container Apps or platform blueprints create meaningful cost or consent burden;
+- duplicated service Sandboxes or platform blueprints create meaningful cost or consent burden;
 - Agent 365 exposes supported per-instance endpoint or routing metadata;
 - a Worker registry and administration plane is required for other reasons;
 - centralized throttling, policy, or observability becomes more valuable than isolation;

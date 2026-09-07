@@ -5,7 +5,6 @@ import base64
 import json
 import re
 import secrets
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -56,28 +55,15 @@ def load_or_create_collective_approval_identity(path: Path) -> dict[str, str]:
     return payload
 
 
-def unprotect_windows_secret(protected_value: str) -> str:
-    script = (
-        "Add-Type -AssemblyName System.Security; "
-        f"$p=[Convert]::FromBase64String('{protected_value}'); "
-        "$b=[System.Security.Cryptography.ProtectedData]::Unprotect($p,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser); "
-        "[Console]::Out.Write([Text.Encoding]::UTF8.GetString($b))"
-    )
-    result = subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True, capture_output=True, text=True)
-    return result.stdout
-
-
 def load_agent365_auth(runtime: str, state_name: str = "") -> dict[str, str]:
     generated_path = REPO_ROOT / ".local" / (state_name or runtime) / "agent365" / "a365.generated.config.json"
     if not generated_path.exists():
         return {}
     generated = json.loads(generated_path.read_text(encoding="utf-8"))
     client_id = str(generated.get("agentBlueprintId", "")).strip()
-    protected_secret = str(generated.get("agentBlueprintClientSecret", "")).strip()
-    if not client_id or not protected_secret:
+    if not client_id:
         return {}
-    secret = unprotect_windows_secret(protected_secret) if generated.get("agentBlueprintClientSecretProtected") else protected_secret
-    return {"client_id": client_id, "client_secret": secret}
+    return {"client_id": client_id}
 
 
 def runtime_workspace(runtime: str, state_name: str = "") -> Path:
@@ -159,10 +145,12 @@ def build_tfvars(
     runtime_disk_source_image: str = "",
     runtime_disk_image_name: str = "",
     bridge_image: str = "",
+    bridge_disk_source_image: str = "",
     private_mcp_image: str = "",
+    private_mcp_disk_source_image: str = "",
     public_shipments_mcp_image: str = "",
+    public_shipments_mcp_disk_source_image: str = "",
     agent365_client_id: str = "",
-    agent365_client_secret: str = "",
     agent365_tenant_id: str = "",
     role_blueprint: str = "",
     role_blueprint_source: str = "",
@@ -174,8 +162,6 @@ def build_tfvars(
     user_scheduling_max_concurrent_calls: int | None = None,
     user_scheduling_max_delivery_count: int | None = None,
     user_scheduling_lock_renewal_seconds: int | None = None,
-    user_scheduling_keda_polling_seconds: int | None = None,
-    user_scheduling_scale_down_seconds: int | None = None,
     servicebus_dream_enabled: bool | None = None,
     servicebus_dream_cron_expression: str = "",
     scheduled_learning_enabled: bool | None = None,
@@ -214,16 +200,6 @@ def build_tfvars(
                 user_scheduling_lock_renewal_seconds
                 if user_scheduling_lock_renewal_seconds is not None
                 else int(previous.get("user_scheduling_lock_renewal_seconds", 1_800))
-            ),
-            "user_scheduling_keda_polling_seconds": (
-                user_scheduling_keda_polling_seconds
-                if user_scheduling_keda_polling_seconds is not None
-                else int(previous.get("user_scheduling_keda_polling_seconds", 15))
-            ),
-            "user_scheduling_scale_down_seconds": (
-                user_scheduling_scale_down_seconds
-                if user_scheduling_scale_down_seconds is not None
-                else int(previous.get("user_scheduling_scale_down_seconds", 900))
             ),
             "servicebus_dream_enabled": (
                 servicebus_dream_enabled
@@ -282,6 +258,9 @@ def build_tfvars(
         }
     )
     for obsolete in (
+        "agent365_client_secret",
+        "user_scheduling_keda_polling_seconds",
+        "user_scheduling_scale_down_seconds",
         "scheduled_learning_job_enabled",
         "scheduled_learning_job_cron_expression",
         "scheduled_learning_job_timeout_seconds",
@@ -301,12 +280,6 @@ def build_tfvars(
                 "openclaw_bridge_device_token": approved_device_token or previous.get("openclaw_bridge_device_token", ""),
             }
         )
-        if runtime_image:
-            tfvars["runtime_image"] = runtime_image
-        if runtime_disk_source_image:
-            tfvars["runtime_disk_source_image"] = (
-                runtime_disk_source_image
-            )
         if runtime_disk_image_name:
             tfvars["runtime_disk_image_name"] = runtime_disk_image_name
     elif runtime == "hermes":
@@ -339,12 +312,6 @@ def build_tfvars(
             and existing_api_server_key
             and api_server_key != existing_api_server_key
             else ""
-        )
-        tfvars["runtime_image"] = runtime_image or previous.get("runtime_image", "")
-        tfvars["runtime_disk_source_image"] = (
-            runtime_disk_source_image
-            or previous.get("runtime_disk_source_image", "")
-            or tfvars["runtime_image"]
         )
         tfvars["runtime_disk_image_name"] = runtime_disk_image_name or previous.get("runtime_disk_image_name", "hermes-api-server-image")
         tfvars["collective_learning_approval_private_key"] = (
@@ -386,26 +353,27 @@ def build_tfvars(
     else:
         raise ValueError(f"Unsupported runtime '{runtime}'.")
     resolved_agent365_client_id = agent365_client_id or previous.get("agent365_client_id", "")
-    resolved_agent365_client_secret = agent365_client_secret or previous.get("agent365_client_secret", "")
     resolved_agent365_tenant_id = agent365_tenant_id or previous.get("agent365_tenant_id", "")
     if resolved_agent365_client_id:
         tfvars["agent365_client_id"] = resolved_agent365_client_id
-    if resolved_agent365_client_secret:
-        tfvars["agent365_client_secret"] = resolved_agent365_client_secret
     if resolved_agent365_tenant_id:
         tfvars["agent365_tenant_id"] = resolved_agent365_tenant_id
-    resolved_bridge_image = bridge_image or previous.get("bridge_image", "")
-    resolved_private_mcp_image = private_mcp_image or previous.get("private_mcp_image", "")
-    resolved_public_shipments_mcp_image = (
-        public_shipments_mcp_image
-        or previous.get("public_shipments_mcp_image", "")
-    )
-    if resolved_bridge_image:
-        tfvars["bridge_image"] = resolved_bridge_image
-    if resolved_private_mcp_image:
-        tfvars["private_mcp_image"] = resolved_private_mcp_image
-    if resolved_public_shipments_mcp_image:
-        tfvars["public_shipments_mcp_image"] = resolved_public_shipments_mcp_image
+    for prefix, image, source in (
+        ("runtime", runtime_image, runtime_disk_source_image),
+        ("bridge", bridge_image, bridge_disk_source_image),
+        ("private_mcp", private_mcp_image, private_mcp_disk_source_image),
+        ("public_shipments_mcp", public_shipments_mcp_image, public_shipments_mcp_disk_source_image),
+    ):
+        image_key, source_key = f"{prefix}_image", f"{prefix}_disk_source_image"
+        old_image, old_source = previous.get(image_key, ""), previous.get(source_key, "")
+        if image and image != old_image and old_source and not source:
+            raise ValueError(f"A changed {image_key} requires its corresponding {source_key}; refusing a stale disk source.")
+        if source and source != old_source and old_image and not image:
+            raise ValueError(f"A changed {source_key} requires its corresponding {image_key}.")
+        if image or old_image:
+            tfvars[image_key] = image or old_image
+        if source or old_source:
+            tfvars[source_key] = source or old_source
     return tfvars
 
 
@@ -434,8 +402,6 @@ def main() -> None:
     parser.add_argument("--user-scheduling-max-concurrent-calls", type=int, default=None)
     parser.add_argument("--user-scheduling-max-delivery-count", type=int, default=None)
     parser.add_argument("--user-scheduling-lock-renewal-seconds", type=int, default=None)
-    parser.add_argument("--user-scheduling-keda-polling-seconds", type=int, default=None)
-    parser.add_argument("--user-scheduling-scale-down-seconds", type=int, default=None)
     parser.add_argument(
         "--servicebus-dream-enabled",
         action=argparse.BooleanOptionalAction,
@@ -476,15 +442,17 @@ def main() -> None:
     )
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
     parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
+    parser.add_argument("--bridge-disk-source-image", default="", help="Matching tagged bridge image for Sandbox disk conversion.")
     parser.add_argument("--private-mcp-image", default="", help="Private incidents MCP image digest.")
+    parser.add_argument("--private-mcp-disk-source-image", default="", help="Matching tagged private MCP image for Sandbox disk conversion.")
     parser.add_argument("--public-shipments-mcp-image", default="", help="Public shipments MCP image digest.")
+    parser.add_argument("--public-shipments-mcp-disk-source-image", default="", help="Matching tagged public MCP image for Sandbox disk conversion.")
     parser.add_argument("--agent365-client-id", default="", help="Agent 365 blueprint app ID for Microsoft Agents SDK auth.")
-    parser.add_argument("--agent365-client-secret", default="", help="Agent 365 blueprint client secret for Microsoft Agents SDK auth.")
     parser.add_argument("--agent365-tenant-id", default="", help="Tenant ID for Microsoft Agents SDK auth. Defaults to tenant if omitted by Terraform.")
     parser.add_argument(
         "--agent365-from-generated",
         action="store_true",
-        help="Load Agent 365 blueprint ID and protected client secret from .local/<runtime>/agent365/a365.generated.config.json.",
+        help="Load only the existing Agent 365 blueprint ID; workload authentication uses managed identity federation.",
     )
     parser.add_argument("--runtime-only", action="store_true", help="Only write .local/<runtime>/apps tfvars, not terraform/apps active tfvars.")
     args = parser.parse_args()
@@ -533,10 +501,12 @@ def main() -> None:
         runtime_disk_source_image=args.runtime_disk_source_image,
         runtime_disk_image_name=args.runtime_disk_image_name,
         bridge_image=args.bridge_image,
+        bridge_disk_source_image=args.bridge_disk_source_image,
         private_mcp_image=args.private_mcp_image,
+        private_mcp_disk_source_image=args.private_mcp_disk_source_image,
         public_shipments_mcp_image=args.public_shipments_mcp_image,
+        public_shipments_mcp_disk_source_image=args.public_shipments_mcp_disk_source_image,
         agent365_client_id=args.agent365_client_id or agent365_auth.get("client_id", ""),
-        agent365_client_secret=args.agent365_client_secret or agent365_auth.get("client_secret", ""),
         agent365_tenant_id=args.agent365_tenant_id,
         role_blueprint=args.role_blueprint,
         role_blueprint_source=args.role_blueprint_source,
@@ -548,8 +518,6 @@ def main() -> None:
         user_scheduling_max_concurrent_calls=args.user_scheduling_max_concurrent_calls,
         user_scheduling_max_delivery_count=args.user_scheduling_max_delivery_count,
         user_scheduling_lock_renewal_seconds=args.user_scheduling_lock_renewal_seconds,
-        user_scheduling_keda_polling_seconds=args.user_scheduling_keda_polling_seconds,
-        user_scheduling_scale_down_seconds=args.user_scheduling_scale_down_seconds,
         servicebus_dream_enabled=args.servicebus_dream_enabled,
         servicebus_dream_cron_expression=args.servicebus_dream_cron_expression,
         scheduled_learning_enabled=args.scheduled_learning_enabled,

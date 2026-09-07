@@ -3,6 +3,12 @@
 - Status: Accepted
 - Date: 2026-07-25
 
+## September 2026 modernization note
+
+The runtime is now locked to Hermes 0.19.0; historical 0.18 observations below explain the selected document toolchain, not a claim about current bundled skills. Office workflow policy remains in the runtime `office-collaboration` skill, while the bridge enforces transport, identity, bounds, and delivery rather than repeating a large Office policy prompt.
+
+The reviewed npm tree uses `pptxgenjs` 4.0.1 and `image-size` 2.0.2. `npm audit` currently reports two inherited high-severity `image-size` findings with no published fixed version. Keep the risk visible; do not claim a clean audit or force an older major version as a false fix. Live Office parity on the new application Sandboxes remains pending.
+
 ## Context
 
 The Worker must read, create, review, modify, and return Microsoft 365 documents while actions remain attributable to its Agent User. Required behaviors include same-item Word updates with version history, Word comments and replies, Excel collaboration, PowerPoint handling where practical, PDF processing, proactive Teams file delivery, and deletion of temporary local copies.

@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -17,8 +18,11 @@ from scripts.collective_review import (
     update_distribution_owned,
     validate_decision,
     validate_next_role_release,
+    build_review_manifest,
+    create_role_release_pull_request,
 )
 from scripts.collective_learning import attested_envelope
+from runtimes.hermes.learning import _artifact_hash
 
 
 class CollectiveReviewTests(unittest.TestCase):
@@ -31,7 +35,7 @@ class CollectiveReviewTests(unittest.TestCase):
     ).decode("ascii")
 
     def test_operator_export_removes_bridge_transport_metadata(self):
-        packet = {"packetVersion": "1.0"}
+        packet = {"packetVersion": "2.0"}
         receipt = {"approved": True}
 
         envelope = attested_envelope(
@@ -48,8 +52,8 @@ class CollectiveReviewTests(unittest.TestCase):
 
     def _packet(self, worker_id: str = "worker-1") -> dict:
         record_id = f"lr-{worker_id}"
-        return {
-            "packetVersion": "1.0",
+        packet = {
+            "packetVersion": "2.0",
             "createdAt": "2026-07-16T08:00:00Z",
             "roleRelease": {
                 "roleBlueprint": "junior-project-manager",
@@ -73,20 +77,52 @@ class CollectiveReviewTests(unittest.TestCase):
                             "description: Verify deadline evidence.\n---\n"
                         )
                     },
-                    "provenance": {
+                    "baselineFileHashes": {},
+                    "provenance": [{
+                        "schemaVersion": "3.0",
                         "recordId": record_id,
+                        "createdAt": "2026-07-16T08:00:00Z",
+                        "classification": "candidate_improvement",
+                        "artifactPath": "skills/candidates/deadline-verification",
                         "action": "create",
                         "title": "Verify deadline evidence",
-                    },
+                        "generalizedLearning": "Request a timezone before confirming a deadline.",
+                        "rationale": "Ambiguous dates need clarification.",
+                        "evidence": [{"sourceType": "private_session", "summary": "Several deadlines lacked timezone context."}],
+                        "confidence": 0.8,
+                        "sourceStage": "foreground",
+                        "agentProposedScenarios": [{
+                            "scenarioId": "missing-timezone",
+                            "input": "Confirm Friday as the deadline.",
+                            "setupAssumptions": ["The timezone is unknown."],
+                            "expectedObservableOutcomes": ["Ask for timezone confirmation."],
+                            "acceptanceCriteria": [{"observable": "response.text", "operator": "contains", "value": "timezone"}],
+                            "scope": "Deadline clarification.",
+                        }],
+                        "privacy": {"redactionStatus": "passed", "warnings": []},
+                    }],
                 }
             ],
             "privacy": {
                 "status": "ready_for_human_approval",
                 "excludedPaths": ["memories/", "skills/private/", "state.db"],
-                "approvedBy": "operator",
-                "approvedAt": "2026-07-16T08:01:00Z",
+            },
+            "evaluation": {
+                "agentProposedScenarios": "included_in_provenance",
+                "executionStatus": "not_run",
+                "independentHoldout": "not_supplied",
             },
         }
+        improvement = packet["improvements"][0]
+        record = improvement["provenance"][0]
+        record["artifact"] = {
+            "path": improvement["artifactPath"], "beforeHash": None,
+            "afterHash": _artifact_hash({key: value.encode("utf-8") for key, value in improvement["files"].items()}),
+            "changedFiles": list(improvement["files"]),
+        }
+        record["roleRelease"] = {key: packet["roleRelease"][key] for key in ("roleBlueprint", "release", "commit")}
+        record["worker"] = dict(packet["worker"])
+        return packet
 
     def _envelope(self, worker_id: str) -> dict:
         packet = self._packet(worker_id)
@@ -178,6 +214,13 @@ class CollectiveReviewTests(unittest.TestCase):
                 ).encode("utf-8")
             ).hexdigest()
             envelope["receipt"]["packetDigest"] = packet_digest
+            improvement = envelope["packet"]["improvements"][0]
+            improvement["provenance"][-1]["artifact"]["afterHash"] = _artifact_hash(
+                {key: value.encode("utf-8") for key, value in improvement["files"].items()}
+            )
+            envelope["receipt"]["packetDigest"] = hashlib.sha256(
+                json.dumps(envelope["packet"], sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+            ).hexdigest()
             unsigned = {
                 key: value
                 for key, value in envelope["receipt"].items()
@@ -250,11 +293,11 @@ class CollectiveReviewTests(unittest.TestCase):
         self.assertIn("concrete, non-overlapping progressive-disclosure trigger", prompt)
         self.assertIn("self-contained and executable when loaded alone", prompt)
 
-    def test_promotion_adds_proposed_role_skills_to_distribution(self):
+    def test_promotion_keeps_whole_role_tree_ownership(self):
         distribution = {
             "distribution_owned": [
                 "SOUL.md",
-                "skills/role/junior-project-manager",
+                "skills/role",
                 "schemas",
                 "distribution.yaml",
             ]
@@ -274,8 +317,7 @@ class CollectiveReviewTests(unittest.TestCase):
             distribution["distribution_owned"],
             [
                 "SOUL.md",
-                "skills/role/junior-project-manager",
-                "skills/role/delivery-commitment-control",
+                "skills/role",
                 "schemas",
                 "distribution.yaml",
             ],
@@ -319,6 +361,7 @@ class CollectiveReviewTests(unittest.TestCase):
             validate_decision(decision, packets=packets)
 
         decision["proposals"] = []
+        decision["rejected"] = [{"recordId": "lr-worker-1", "reason": "Unsupported."}]
         decision["summary"] = "Send the review to owner@example.com."
         with self.assertRaisesRegex(CollectiveReviewError, "decision privacy scan"):
             validate_decision(decision, packets=packets)

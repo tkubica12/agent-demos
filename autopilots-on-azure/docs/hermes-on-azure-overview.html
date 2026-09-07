@@ -1725,11 +1725,12 @@
         <span class="eyebrow">Autopilots on Azure</span>
         <h1>Digital Workers learn. <em>The role evolves.</em></h1>
         <p class="hero-lead">
-          <strong>Hermes</strong> gives each Worker durable memory and native skills.
-          <strong>Azure</strong> provides serverless hosting, networking, and model intelligence.
+          <strong>Hermes 0.19.0</strong> gives each Worker durable memory and native skills.
+          <strong>Azure</strong> provides Sandbox hosting, private networking, and native Foundry model authentication.
           <strong>Microsoft 365</strong> provides the user experience, enterprise identity, and security.
           <strong>GitHub</strong> turns selected local lessons into reviewed Role Releases.
         </p>
+        <div class="callout"><div><strong>Sandbox-origin egress changes the parent, not TraceId · 6 September 2026, 22:33 CEST</strong><p>Two real read-only requests isolate the native-platform waterfall limitation: local urllib preserved its supplied parent; fresh uninstrumented urllib inside the gateway Sandbox changed it, retaining TraceId. Platform intermediate parents are absent from AppInsights; the exact proxy is unidentified. All 49 reviewed native parents and the 105-span metadata audit remain valid. Both Workers are deployed. No custom trace headers, fake parents, or security bypass were added. Targeted inbound, automatic eight-hour idle behavior, and general learning quality remain unproven.</p></div></div>
         <div class="hero-pills" aria-label="Deep dive guides">
           <a class="icon-button" href="hermes-architecture-deep-dive.html" style="text-decoration:none;">Architecture deep dive →</a>
           <a class="icon-button" href="hermes-learning-deep-dive.html" style="text-decoration:none;">Memory &amp; learning deep dive →</a>
@@ -1803,8 +1804,8 @@
             <h2>Architecture at a glance</h2>
           </div>
           <p>
-            Start with four layers: Microsoft 365 at the edge, a per-Worker bridge and Service Bus
-            control plane, Hermes in a scale-to-zero Sandbox, and direct identity-aware data-plane connections.
+            Microsoft 365 reaches a non-suspending gateway Sandbox. Its Service Bus receiver wakes
+            OnDemand Hermes compute. Each Worker/service role has a separate Group and user-assigned identity.
             The full implementation detail lives in the dedicated architecture guide.
           </p>
         </div>
@@ -1822,21 +1823,21 @@
             </div>
             <div class="flow-node">
               <strong>Service Bus</strong>
-              <span>User schedules + Platform Dreaming wake the bridge through KEDA</span>
+              <span>User schedules and Dreaming reach the continuous gateway receiver</span>
             </div>
           </div>
           <div class="flow-arrow" aria-hidden="true">↓</div>
           <div class="flow-label">Per-Worker public control plane</div>
           <div class="flow-node accent">
-            <strong><span class="term" tabindex="0" data-tip="The per-Worker public control plane that handles messaging, authorization context, Sandbox lifecycle, and serialized learning.">Bridge Container App</span></strong>
-            <span>Messaging adapter · queue consumer · authorization boundary · Sandbox wake/reuse · proactive Teams continuation</span>
+            <strong><span class="term" tabindex="0" data-tip="The per-Worker gateway Sandbox uses native HTTPS ingress and Agent 365 SDK authentication; auto-suspend is disabled.">Gateway Sandbox</span></strong>
+            <span>SDK-authenticated ingress · detached post-ACK work · continuous queue receive · runtime wake · proactive continuation</span>
           </div>
           <div class="flow-arrow" aria-hidden="true">↓</div>
           <div class="flow-label">Stateful, serverless-style Worker runtime</div>
           <div class="sandbox-visual">
             <div class="sandbox-banner">
               <strong><span class="term" tabindex="0" data-tip="Strongly isolated Azure compute with explicit lifecycle, suspend/resume, scale to zero, ports, networking policy, and attached volumes.">Azure Container Apps Sandbox</span></strong>
-              <span>Strong isolation · auto-suspend · scale to zero · explicit resume · no CPU/memory charge while stopped</span>
+              <span>Runtime isolation · OnDemand activation · persistent Data Disk · gateway stays running separately</span>
             </div>
             <div class="sandbox-grid">
               <div class="sandbox-attachment">
@@ -1864,11 +1865,11 @@
           <div class="flow-row four">
             <div class="flow-node">
               <strong>Azure Foundry</strong>
-              <span>Managed-identity model inference</span>
+              <span>Native azure-foundry Entra callback; no model proxy</span>
             </div>
             <div class="flow-node">
               <strong>Private MCP</strong>
-              <span>VNet path + token from our local identity adapter</span>
+              <span>Sandbox + linked Express environment + Private Endpoint/DNS + Entra token</span>
             </div>
             <div class="flow-node">
               <strong>Public MCP</strong>
@@ -1890,15 +1891,19 @@
           </div>
           <div class="callout">
             <div>
-              <strong>Current compatibility layer</strong>
+              <strong>MCP federation remains; the model proxy does not</strong>
               <p>
-                Our loopback adapter adds Agent Identity or Agent User tokens because Hermes/OpenClaw
-                cannot yet use Agent 365 authentication natively. It should disappear when a supported
-                custom-runtime or Sandbox MCP attachment provides the same identity semantics.
+                The loopback tool adapter supplies Agent Identity or Agent User tokens, not human OBO.
+                Hermes 0.19.0 now authenticates model inference natively. Foundry external-agent
+                registration provides visibility only; Worker compute remains in ACA.
               </p>
             </div>
           </div>
         </div>
+        <div class="callout" style="margin-top: 18px;"><div><strong>Private ingress is a network boundary, not another workload</strong><p>Runtime, gateway, private MCP, public MCP, and generated apps have separate Groups and user-assigned identities. The private-MCP Group links irreversibly to an Express managed environment with Private Endpoint/private DNS; no classic MCP Container App is needed. Native anonymous gateway/MCP transport still requires SDK or application Entra authentication. Generated-app participant authentication remains distinct.</p></div></div>
+        <div class="callout" style="margin-top: 18px;"><div><strong>ACR/MCP lifecycle proved; token conversion accepted</strong><p>Repeated live MCP deployment reused Sandbox IDs without registry login, verified with a fail-if-called guard. All ten workload <code>AcrPull</code> assignments were removed; ACR admin is <code>false</code>. Public unauthenticated calls return <code>401</code>; private external connections reset, not <code>403</code>. Positive VNet access remains unproven. SDK b4 native MI conversion still fails; short-lived Entra credentials work for deployment-time conversion only. Runtime/gateway receive prepared IDs, never registry credentials. <a href="adr/0021-deployment-time-sandbox-image-authentication.md">Accepted ADR 0021 →</a></p></div></div>
+        <div class="callout" style="margin-top: 18px;"><div><strong>Correlated application spans, incomplete native-platform waterfall</strong><p>External registration remains metadata, not Hosted compute. Smoke, actual private/public MCP execution, user cron, and ad-hoc Dream are attributed; all 49 reviewed native parents resolve. Dream's 31 tool-execution spans include nesting, not 31 proven unique calls. Two controlled requests isolate changed parent IDs to Sandbox-origin egress, not ingress alone or exporter loss. TraceId/opaque-ID correlation survives; platform intermediate parents are absent from AppInsights. The exact proxy is unidentified. The 105-span privacy sample is not an all-time guarantee. No custom trace headers, fake parent spans, or egress bypass were added. <code>/v1/responses</code> and interrupted-session limitations remain. See <a href="../DEPLOYMENT.md">exact probe and trace evidence</a>.</p></div></div>
+        <div class="callout" style="margin-top: 18px;"><div><strong>Modernize existing Workers; do not invent a fresh bootstrap</strong><p>Keep the existing blueprint, AgentIdentity, AgentUser, and local state. Apply infrastructure only, reconcile identity, then apply those changed values before service deployment and update the real endpoint. Hermes retains scheduling/Dreaming <code>false/false</code>; Hermes 2 retains <code>true/true</code>. Fresh A365 bootstrap has an unresolved endpoint/identity dependency cycle. <a href="../DEPLOYMENT.md">Verified operator sequence →</a></p></div></div>
         <div class="grid-2" style="margin-top: 18px;">
           <article class="card accent-card">
             <span class="card-index">NATIVE INTERACTION</span>
@@ -1915,6 +1920,7 @@
       </section>
 
       <section id="teams">
+        <div class="callout"><div><strong>Transport status and memory privacy are separate contracts</strong><p>The bridge owns temporary eyes and executes Hermes-selected semantic reactions. Shared group transcripts remain unchanged; per-user memory keys do not prove private isolation under ADR 0017. The UI recheck found public <code>@</code> discovery, not targeted <code>/</code>, and sent no private content. Package 1.1.7 remains <code>agenticUserTemplates</code>-only; Learn receive opt-in uses <code>bots[].supportsTargetedMessages</code>. No universal-incompatibility or UI-only diagnosis follows, and no companion bot or public fallback is added. See <a href="adr/0018-teams-command-surfaces.md">ADR 0018</a>.</p></div></div>
         <div class="section-head">
           <div>
             <span class="section-number">03 / EXPERIENCE</span>
@@ -1960,12 +1966,12 @@
             <div class="mode-grid">
               <article class="mode-card">
                 <strong>1:1 chat</strong>
-                <p>The message is directly targeted to the Agent User, so a normal text prompt is enough.</p>
+                <p>The message is sent directly to the Agent User, so a normal text prompt is enough.</p>
                 <span class="mention">Hermes, summarize my risks</span>
               </article>
               <article class="mode-card">
                 <strong>Group chat or channel</strong>
-                <p>The Worker receives targeted activities. Explicitly mention it; do not assume it sees every unmentioned message.</p>
+                <p>Use the public <code>@</code> mention. The user observed Hermes there, not under <code>/</code>. Private targeted inbound remains unverified for this package; absent discovery does not identify a universal platform limitation or a UI-only cause.</p>
                 <span class="mention">@Hermes summarize this risk</span>
               </article>
             </div>
@@ -2168,7 +2174,7 @@
         <div class="callout" style="margin-bottom: 18px;">
           <div>
             <strong>Custom governance enhancements around Hermes</strong>
-            <p>Reserved private/role/candidate namespaces, serialized transactions, snapshots and rollback, provenance bound to file hashes, quarantine, privacy-scanned Learning Packets, owner approval, and forward-only Role Releases.</p>
+            <p>Reserved namespaces, transactions, snapshots/rollback, cumulative schema-3.0 provenance, schema-2.0 packets, signed agent-proposed scenarios, owner approval or explicit reject-and-refresh, and forward-only releases. Governed artifacts are SKILL.md only.</p>
             <a class="callout-link" href="hermes-learning-deep-dive.html">Open the source-guided memory and learning deep dive →</a>
           </div>
         </div>
@@ -2217,7 +2223,7 @@
         <p style="margin: 18px 0 0; color: var(--muted); font-size: 0.84rem;">
           <strong>A Candidate Improvement is the actual <code>SKILL.md</code> file—not a row in the journal.</strong>
           The matching <code>learning/records.jsonl</code> entry is its provenance: why it changed,
-          summarized evidence, confidence, hashes, Worker, and Role Release. Private Playbook and Personal
+          cumulative evidence, synthetic response-text test proposals, confidence, hashes, Worker, and Role Release. Private Playbook and Personal
           Memory changes do not create transferable provenance rows.
         </p>
 
@@ -2286,7 +2292,7 @@
           <article class="phase">
             <b>PHASE 1 · WORKER-LOCAL</b>
             <h3>Select and approve</h3>
-            <p>Eligible skill change + provenance → allowlist and privacy rules → exact digest reviewed by the Worker owner/operator → bridge attestation.</p>
+            <p>SKILL.md change plus cumulative provenance and agent-proposed scenarios passes privacy checks, exact-digest operator review, and bridge attestation.</p>
             <span class="artifact-chip">Artifact:&nbsp;<span class="term" tabindex="0" data-tip="A privacy-scanned, exact-digest-approved export of eligible skill changes plus provenance and attestation.">Learning Packet</span></span>
           </article>
           <article class="phase">
@@ -2342,6 +2348,7 @@
         </div>
 
         <h3 style="margin: 28px 0 14px;">The Promotion PR approval process</h3>
+        <div class="callout"><div><strong>Real comparison completed: baseline 3/4, candidate 4/4, zero regressions</strong><p>Hermes 0.19 CLI evaluated Role 3.2 versus 3.3 through <code>azure-foundry</code> / <code>gpt-5-6-terra</code>. The four manually/operator-authored cases are response-only: <code>independence=operator_declared</code>, <code>packetDigest=null</code>. They are not agent-proposed packet tests. Local evidence: <code>.artifacts\role-330-evaluation-verified.json</code> in the project. Tools are disabled and skills are injected; statistical generalization, tool workflows, native discovery, and general learning improvement are not measured. Hermes 2's completed Dream returned zero records and no packet—a legitimate no-change outcome.</p></div></div>
         <div class="gate-grid">
           <article class="gate">
             <span class="status">Triage</span>
@@ -2412,17 +2419,18 @@
             <strong>The implementation is intentionally robust</strong>
             <p>
               Before replacing anything, Refresh requires a strictly newer semantic release and—when local
-              governed learning exists—an approved packet bound to the exact Worker, release, signature, and
-              current state hash. The profile update uses a recoverable backup. If preflight or copy validation
+              governed learning exists—an approved packet or signed <code>reject_and_refresh</code> disposition
+              bound to exact state. Rejection authorizes discard, not export. The profile update uses a recoverable backup. If preflight or copy validation
               fails, the current Worker remains available.
             </p>
           </div>
         </div>
       </section>
 
+      <div class="callout"><div><strong>Pinned does not mean vulnerability-free</strong><p>Locks and weekly Dependabot track dependencies; two inherited high-severity <code>image-size</code> findings remain open without a published fix. Gateway idle cost and Teams send/receipt duplication remain explicit limits.</p></div></div>
       <footer class="footer">
         <span>Autopilots on Azure · Hermes learning path</span>
-        <span>Role Release 3.2.0 example · Updated 2026-07-24</span>
+        <span>Hermes 0.19.0 · Modernization status 2026-09-06 · Deployed; scoped platform gaps remain</span>
       </footer>
     </main>
   </div>

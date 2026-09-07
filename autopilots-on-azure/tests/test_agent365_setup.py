@@ -1,9 +1,10 @@
 import unittest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
+import scripts.setup_agent365 as agent365
 from scripts.setup_agent365 import (
     Agent365Branding,
     agent365_config_payload,
@@ -26,9 +27,165 @@ from scripts.setup_agent365 import (
     update_endpoint_command,
 )
 from scripts.setup_identity import ensure_federated_credential
+from scripts.provision_agent365_instance import GraphClient, GraphError
 
 
 class Agent365SetupTests(unittest.TestCase):
+    def test_endpoint_owner_preflight_resolves_application_object_and_checks_direct_owner(self):
+        graph = Mock()
+        graph.request.side_effect = [
+            {"id": "owner-id", "userPrincipalName": "owner@example.com"},
+            {"value": [{"id": "blueprint-object-id", "appId": "blueprint-client-id"}]},
+            {"value": [{"id": "OWNER-ID"}]},
+        ]
+        with (
+            patch.object(agent365, "load_json", return_value={"agentBlueprintId": "blueprint-client-id"}),
+            patch.object(GraphClient, "from_az_cli", return_value=graph),
+        ):
+            agent365.require_endpoint_update_owner(Path("worker"))
+        calls = graph.request.call_args_list
+        self.assertEqual(calls[0].args, ("GET", "/me?$select=id,userPrincipalName"))
+        self.assertIn("blueprint-client-id", calls[1].args[1])
+        self.assertEqual(
+            calls[2].args,
+            ("GET", "/applications/blueprint-object-id/microsoft.graph.agentIdentityBlueprint/owners?$select=id"),
+        )
+        self.assertTrue(all(call.args[0] == "GET" for call in calls))
+
+    def test_endpoint_owner_preflight_follows_owner_pages(self):
+        next_page = "https://graph.microsoft.com/v1.0/applications/blueprint-object-id/microsoft.graph.agentIdentityBlueprint/owners?$skiptoken=next"
+        graph = Mock()
+        graph.request.side_effect = [
+            {"id": "owner-id"},
+            {"value": [{"id": "blueprint-object-id"}]},
+            {"value": [{"id": "other-owner"}], "@odata.nextLink": next_page},
+            {"value": [{"id": "owner-id"}]},
+        ]
+        with (
+            patch.object(agent365, "load_json", return_value={"agentBlueprintId": "blueprint-client-id"}),
+            patch.object(GraphClient, "from_az_cli", return_value=graph),
+        ):
+            agent365.require_endpoint_update_owner(Path("worker"))
+        self.assertEqual(graph.request.call_args.args, ("GET", next_page))
+
+    def test_endpoint_owner_preflight_blocks_nonowner_actionably(self):
+        graph = Mock()
+        graph.request.side_effect = [
+            {"id": "operator-id", "userPrincipalName": "operator@example.com"},
+            {"value": [{"id": "blueprint-object-id"}]},
+            {"value": [{"id": "admin-owner-id"}]},
+        ]
+        with (
+            patch.object(agent365, "load_json", return_value={"agentBlueprintId": "blueprint-client-id"}),
+            patch.object(GraphClient, "from_az_cli", return_value=graph),
+        ):
+            with self.assertRaisesRegex(PermissionError, "operator@example.com.*not a direct owner") as error:
+                agent365.require_endpoint_update_owner(Path("worker"))
+        self.assertIn("isolated Azure CLI session", str(error.exception))
+        self.assertIn("No endpoint was changed", str(error.exception))
+        self.assertTrue(all(call.args[0] == "GET" for call in graph.request.call_args_list))
+
+    def test_endpoint_owner_preflight_fails_closed_on_graph_errors(self):
+        for replies in (
+            [GraphError("GET", "/me", 403, "Forbidden")],
+            [{"id": "owner-id"}, {"value": [{"id": "blueprint-object-id"}]},
+             GraphError("GET", "/owners", 403, "Forbidden")],
+            [{}],
+            [{"id": "owner-id"}, {"value": []}],
+        ):
+            with self.subTest(replies=replies):
+                graph = Mock()
+                graph.request.side_effect = replies
+                with (
+                    patch.object(agent365, "load_json", return_value={"agentBlueprintId": "blueprint-client-id"}),
+                    patch.object(GraphClient, "from_az_cli", return_value=graph),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "unable to verify direct Agent Blueprint ownership") as error:
+                        agent365.require_endpoint_update_owner(Path("worker"))
+                self.assertIn("a365 update was not invoked", str(error.exception))
+
+    def test_endpoint_owner_preflight_blocks_before_local_config_or_cli_changes(self):
+        with (
+            patch("sys.argv", ["setup_agent365", "--runtime", "hermes", "--tenant-id", "tenant",
+                               "--messaging-endpoint", "https://native.example", "--update-endpoint"]),
+            patch.object(agent365.Path, "mkdir"),
+            patch.object(agent365, "endpoint_update_config", return_value={"tenantId": "tenant"}),
+            patch.object(agent365, "require_endpoint_update_owner", side_effect=PermissionError("not an owner")) as preflight,
+            patch.object(agent365, "write_json") as write,
+            patch.object(agent365, "maybe_run") as run,
+        ):
+            with self.assertRaisesRegex(PermissionError, "not an owner"):
+                agent365.main()
+        preflight.assert_called_once_with(agent365_workspace("hermes"))
+        write.assert_not_called()
+        run.assert_not_called()
+
+    def test_endpoint_update_runs_only_after_owner_preflight_and_preview_does_not_check(self):
+        for update in (False, True):
+            with self.subTest(update=update):
+                events = []
+                argv = ["setup_agent365", "--runtime", "hermes", "--tenant-id", "tenant",
+                        "--messaging-endpoint", "https://native.example"]
+                if update:
+                    argv.append("--update-endpoint")
+                with (
+                    patch("sys.argv", argv),
+                    patch.object(agent365.Path, "mkdir"),
+                    patch.object(agent365.Path, "exists", return_value=False),
+                    patch.object(agent365, "endpoint_update_config", return_value={"tenantId": "tenant"}),
+                    patch.object(agent365, "require_endpoint_update_owner", side_effect=lambda _: events.append("owner")) as preflight,
+                    patch.object(agent365, "write_json", side_effect=lambda *_: events.append("write")),
+                    patch.object(agent365, "print_command"),
+                    patch.object(agent365, "maybe_run", side_effect=lambda command, **kwargs: events.append(command) if kwargs["enabled"] else None),
+                ):
+                    agent365.main()
+                if update:
+                    self.assertEqual(events, [
+                        "owner", "write",
+                        ["a365", "setup", "blueprint", "--update-endpoint", "https://native.example/api/messages"],
+                    ])
+                else:
+                    preflight.assert_not_called()
+                    self.assertEqual(events, ["write"])
+
+    def test_endpoint_update_preserves_existing_blueprint_and_agent_metadata(self):
+        config = {"tenantId": "tenant", "agentName": "Existing worker", "messagingEndpoint": "https://old.example/api/messages",
+                  "agentUserPrincipalName": "worker@example.com", "custom": "preserved"}
+        with patch.object(agent365, "load_json", side_effect=[config, {"agentBlueprintId": "blueprint"}]):
+            updated = agent365.endpoint_update_config(
+                Path("worker"), tenant_id="tenant", messaging_endpoint="https://native-sandbox.example")
+        self.assertEqual(updated, {**config, "messagingEndpoint": "https://native-sandbox.example/api/messages"})
+        self.assertEqual(config["messagingEndpoint"], "https://old.example/api/messages")
+
+    def test_endpoint_update_refuses_missing_blueprint_or_wrong_tenant(self):
+        for config, generated in (({"tenantId": "tenant"}, {}), ({"tenantId": "other"}, {"agentBlueprintId": "blueprint"})):
+            with patch.object(agent365, "load_json", side_effect=[config, generated]):
+                with self.assertRaises(ValueError):
+                    agent365.endpoint_update_config(Path("worker"), tenant_id="tenant", messaging_endpoint="https://native.example")
+
+    def test_dry_run_cannot_accidentally_execute_endpoint_update(self):
+        with (
+            patch("sys.argv", ["setup_agent365", "--runtime", "hermes", "--dry-run", "--update-endpoint"]),
+            patch.object(agent365, "maybe_run") as run,
+            patch("sys.stderr"),
+        ):
+            with self.assertRaises(SystemExit):
+                agent365.main()
+        run.assert_not_called()
+
+    def test_messaging_endpoint_rejects_non_deployment_urls(self):
+        for endpoint in ("http://example.com", "relative", "https://user:password@example.com", "https://example.com?q=x"):
+            with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
+                normalize_messaging_endpoint(endpoint)
+
+    def test_missing_worker_endpoint_never_uses_active_terraform_workspace(self):
+        with patch("scripts.setup_agent365.Path.exists", return_value=False):
+            with self.assertRaisesRegex(FileNotFoundError, "Sandbox services"):
+                resolve_messaging_endpoint(
+                    runtime_kind="hermes", state_name="worker-one",
+                    explicit_endpoint="", outputs_file="",
+                )
+
     def test_federated_credential_is_replaced_when_sandbox_identity_changes(self):
         calls = []
 

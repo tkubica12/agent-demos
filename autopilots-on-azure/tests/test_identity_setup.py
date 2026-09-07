@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import scripts.register_byo_mcp as byo
 import scripts.setup_identity as identity
@@ -22,6 +22,83 @@ class FakeGraph:
 
 
 class IdentitySetupTests(unittest.TestCase):
+    def test_identity_context_rejects_wrong_tenant_or_blueprint_before_graph_writes(self):
+        outputs = {"worker_id": "worker-one", "agent_runtime": "hermes", "tenant_id": "tenant",
+                   "sandbox_groups": {"gateway": {"identity_principal_id": "gateway"},
+                                      "runtime": {"identity_principal_id": "runtime"}}}
+        config = {"autopilot_name": "worker-one", "agent365_client_id": "blueprint"}
+        identity.validate_worker_identity_context(
+            outputs, config, runtime="hermes", tenant_id="tenant", blueprint_client_id="blueprint")
+        with self.assertRaisesRegex(ValueError, "CLI tenant"):
+            identity.validate_worker_identity_context(
+                outputs, config, runtime="hermes", tenant_id="other", blueprint_client_id="blueprint")
+        with self.assertRaisesRegex(ValueError, "blueprint IDs differ"):
+            identity.validate_worker_identity_context(
+                outputs, config, runtime="hermes", tenant_id="tenant", blueprint_client_id="other")
+
+    def test_identity_tfvars_preserve_existing_agent_ids_and_remove_stored_secret(self):
+        path = MagicMock()
+        path.exists.return_value = True
+        state = {"agentIdentityId": "agent-object", "agentIdentityAppId": "agent-client",
+                 "agentUserId": "agent-user", "agentUserPrincipalName": "agent@example.com"}
+        with (
+            patch.object(identity, "runtime_app_tfvars_path", return_value=path),
+            patch.object(identity, "load_json", return_value={"agent365_client_secret": "obsolete", "bridge_image": "pinned"}),
+            patch.object(identity, "write_tfvars") as write,
+        ):
+            config = identity.update_runtime_tfvars(
+                runtime="hermes", state_name="worker-one", identity_state=state,
+                api_state={"audience": "api://private"}, public_api_state={"audience": "api://public"},
+                tenant_id="tenant", blueprint_client_id="blueprint",
+            )
+        self.assertNotIn("agent365_client_secret", config)
+        self.assertEqual(config["agent365_client_id"], "blueprint")
+        self.assertEqual(config["agent365_agent_identity_client_id"], "agent-client")
+        self.assertEqual(config["agent365_agent_user_id"], "agent-user")
+        self.assertEqual(config["bridge_image"], "pinned")
+        self.assertEqual(write.call_count, 3)
+
+    def test_worker_federation_configures_gateway_and_runtime(self) -> None:
+        graph = FakeGraph({})
+        outputs = {"sandbox_groups": {
+            "gateway": {"identity_principal_id": "worker-gateway"},
+            "runtime": {"identity_principal_id": "worker-runtime"},
+        }}
+        with patch.object(identity, "ensure_federated_credential") as ensure:
+            principals = identity.configure_worker_federation(
+                graph, apps_outputs=outputs, blueprint_object_id="blueprint",
+                tenant_id="tenant", state_name="worker-one",
+            )
+        self.assertEqual(principals, {"gateway": "worker-gateway", "runtime": "worker-runtime"})
+        self.assertEqual([call.kwargs["name"] for call in ensure.call_args_list],
+                         ["identity-worker-one-gateway", "identity-worker-one-runtime"])
+        self.assertEqual([call.kwargs["managed_identity_principal_id"] for call in ensure.call_args_list],
+                         ["worker-gateway", "worker-runtime"])
+
+    def test_worker_federation_rejects_missing_or_shared_identity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "apps outputs"):
+            identity.worker_federation_principals({"sandbox_group_principal_id": "legacy-shared"})
+        with self.assertRaisesRegex(ValueError, "distinct"):
+            identity.worker_federation_principals({"sandbox_groups": {
+                "gateway": {"identity_principal_id": "shared"},
+                "runtime": {"identity_principal_id": "shared"},
+            }})
+
+    def test_worker_federation_removes_only_its_obsolete_shared_trust(self) -> None:
+        graph = FakeGraph({"value": [
+            {"id": "obsolete", "name": "identity-worker-one-sandbox"},
+            {"id": "other-worker", "name": "identity-worker-two-sandbox"},
+        ]})
+        with patch.object(identity, "ensure_federated_credential"):
+            identity.configure_worker_federation(
+                graph, apps_outputs={"sandbox_groups": {
+                    "gateway": {"identity_principal_id": "gateway"},
+                    "runtime": {"identity_principal_id": "runtime"},
+                }}, blueprint_object_id="blueprint", tenant_id="tenant", state_name="worker-one",
+            )
+        self.assertEqual(graph.paths[-1], "DELETE /applications/blueprint/federatedIdentityCredentials/obsolete")
+        self.assertEqual(len(graph.paths), 2)
+
     def test_named_worker_discovers_its_only_instance_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

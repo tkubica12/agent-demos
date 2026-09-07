@@ -4,6 +4,8 @@
 
 Accepted.
 
+Reviewed 2026-09-06 at 21:20 CEST. The contracts below are implemented/in validation. Real Hermes 0.19 CLI response-only evaluation of Role 3.2/3.3 completed: baseline 3/4, candidate 4/4, zero regressions across four manually/operator-authored cases. The local `.artifacts\role-330-evaluation-verified.json` records `independence=operator_declared` and `packetDigest=null`; this is not an agent-proposed packet or general learning-quality proof. Hermes 2's ad-hoc Dream legitimately completed with `recordCount=0` and `packet=null`, not a learning improvement.
+
 ## Context
 
 Hermes can self-improve locally by writing Personal Memory and creating or patching skills. Across Workers of one Role Release, that creates a useful but risky split:
@@ -40,6 +42,10 @@ For Role Skill improvements and Candidate Improvements, the Worker records prove
 
 Foreground learning and Dreaming may create or patch native Hermes skills. The provenance validator links eligible changes to evidence, confidence, hashes, and the originating stage.
 
+Provenance schema 3.0 also carries synthetic `agentProposedScenarios` with declarative `response.text` criteria. Learning Packet schema 2.0 retains the cumulative baseline-to-final provenance chain rather than selecting only the newest hash-matching record. The packet signature covers these proposals; signing does not make the proposals independent evidence.
+
+The governed artifact lane accepts only `SKILL.md`. References, scripts, binary payloads, and other files remain outside this Promotion contract. Private Playbooks have their own private boundary.
+
 Use two distinct local durability lanes:
 
 - Private adaptation: Personal Memory, Private Playbooks, and Work History. This survives every Worker Refresh and is excluded from Collective Learning Review.
@@ -60,6 +66,10 @@ Collective Learning Review does the following:
 9. Requires human expert review before Promotion.
 
 After Promotion publishes a new Role Release, each Worker Refresh archives previous-release provenance and Candidate Improvements, replaces Role Skills, and preserves Personal Memory, Private Playbooks, and Work History. Rejected or superseded Candidate Improvements are intentionally not carried forward.
+
+Discarding governed changes requires a distinct signed `reject_and_refresh` disposition bound to the current state, operator, and reason. It authorizes the next normal refresh, not export. A fake approved Learning Packet is explicitly rejected.
+
+Behavioral evaluation invokes actual Hermes 0.19.0 for baseline and candidate with the same configuration/private state and an exact governed delta. An independent regression or holdout suite is mandatory. The current runner checks literal response text and disables tools/MCP/hooks/background learning; it does not prove native skill discovery, tool workflows, repeated-trial quality, or suite authorship. Agent-proposed scenarios supplement independent tests; they never replace them.
 
 GitHub is the v1 governance surface. Use branch protection, rulesets, CODEOWNERS, checks, and pull requests. A future admin app may visualize and triage proposals, but it must write GitHub issues, branches, or pull requests rather than becoming a parallel blueprint source of truth.
 

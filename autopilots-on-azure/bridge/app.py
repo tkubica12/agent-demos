@@ -81,9 +81,12 @@ from bridge.scheduled_learning import (
     ScheduledLearningCoordinator,
     ScheduledLearningSettings,
 )
+from bridge.telemetry import configure_telemetry, flush_telemetry, operation_span
+from bridge.telemetry_http import TelemetryMiddleware
 
 
 app = FastAPI(title="Autopilot Azure Container Apps bridge")
+app.add_middleware(TelemetryMiddleware)
 
 
 def agent365_auth_configured() -> bool:
@@ -186,8 +189,15 @@ class CollectiveLearningApprovalRequest(BaseModel):
     approved_by: str = Field(alias="approvedBy", min_length=1, max_length=200)
 
 
+class CollectiveLearningRejectionRequest(BaseModel):
+    disposition_digest: str = Field(alias="dispositionDigest", pattern="^[0-9a-f]{64}$")
+    rejected_by: str = Field(alias="rejectedBy", min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 @app.on_event("startup")
 async def start_scheduled_learning() -> None:
+    configure_telemetry("bridge")
     await scheduled_learning.start()
     schedule_consumer.start(asyncio.get_running_loop())
 
@@ -196,6 +206,7 @@ async def start_scheduled_learning() -> None:
 async def stop_scheduled_learning() -> None:
     await asyncio.to_thread(schedule_consumer.stop)
     await scheduled_learning.stop()
+    await asyncio.to_thread(flush_telemetry)
 
 
 _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
@@ -938,13 +949,21 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
     worker_id = os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
     session_id = f"dream:{worker_id}:{uuid.uuid4().hex}"
     try:
-        result = await adapter.dream(
-            DreamRequest(
-                session_id=session_id,
-                focus=request.focus,
-                max_records=request.max_records,
+        with operation_span(
+            "invoke_agent",
+            session_id=session_id,
+            attributes={
+                "gen_ai.operation.name": "invoke_agent",
+                "autopilots.invocation.source": "dream",
+            },
+        ):
+            result = await adapter.dream(
+                DreamRequest(
+                    session_id=session_id,
+                    focus=request.focus,
+                    max_records=request.max_records,
+                )
             )
-        )
     except Exception as exc:
         detail = {"message": str(exc)}
         sandbox_id = getattr(exc, "sandbox_id", "")
@@ -974,6 +993,41 @@ async def prepare_collective_learning(http_request: Request) -> dict[str, Any]:
         return await adapter.prepare_collective_learning()
     except Exception as exc:
         raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+
+
+@app.get("/internal/collective-learning/pending")
+async def pending_collective_learning(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
+    return await adapter.pending_collective_learning()
+
+
+@app.post("/internal/collective-learning/prepare-rejection")
+async def prepare_refresh_rejection(http_request: Request) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
+    return await adapter.prepare_refresh_rejection()
+
+
+@app.post("/internal/collective-learning/reject")
+async def reject_and_refresh(
+    request: CollectiveLearningRejectionRequest,
+    http_request: Request,
+) -> dict[str, Any]:
+    require_operator_key(http_request)
+    adapter = runtime_adapter()
+    if adapter.runtime_kind != "hermes":
+        raise HTTPException(status_code=409, detail="Collective Learning Review is supported only by Hermes.")
+    try:
+        return await adapter.reject_and_refresh(
+            disposition_digest=request.disposition_digest, rejected_by=request.rejected_by, reason=request.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/internal/collective-learning/approve")
@@ -1360,15 +1414,21 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 occurrence_id=occurrence_id,
                 success=False,
                 error="Scheduled Dreaming was interrupted after execution began.",
+                owner_token=str(claim.get("ownerToken") or ""),
             )
             return {
-                "status": "failed",
+                "status": "uncertain",
                 "type": message_type,
                 "jobId": job_id,
                 "completion": completion,
+                "reason": (
+                    "Dream execution was interrupted with an unknown outcome. Inspect Worker "
+                    "diagnostics and explicitly start a new ad-hoc Dream if needed; this occurrence "
+                    "will not be rerun automatically."
+                ),
             }
         try:
-            result = await scheduled_learning.run_once()
+            result = await scheduled_learning.run_once(operation=claim)
         except Exception as exc:
             completion = await adapter.complete_system_schedule(
                 job_id=job_id,
@@ -1376,12 +1436,14 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 occurrence_id=occurrence_id,
                 success=False,
                 error=f"{exc.__class__.__name__}: {str(exc)[:1000]}",
+                owner_token=str(claim.get("ownerToken") or ""),
             )
             return {
-                "status": "failed",
+                "status": "uncertain" if getattr(exc, "status", None) == "uncertain" else "failed",
                 "type": message_type,
                 "jobId": job_id,
                 "completion": completion,
+                **({"reason": str(exc)} if getattr(exc, "status", None) == "uncertain" else {}),
             }
         summary = {
             "dream": result.get("dream"),
@@ -1393,6 +1455,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
             occurrence_id=occurrence_id,
             success=True,
             summary=summary,
+            owner_token=str(claim.get("ownerToken") or ""),
         )
         return {
             "status": "completed",
@@ -2974,7 +3037,15 @@ async def invoke_agent_runtime(
         auth=auth_context,
         on_delta=on_delta,
     )
-    return await runtime_adapter().invoke(request)
+    with operation_span(
+        "invoke_agent",
+        session_id=session_key,
+        attributes={
+            "gen_ai.operation.name": "invoke_agent",
+            "autopilots.invocation.source": source,
+        },
+    ):
+        return await runtime_adapter().invoke(request)
 
 
 def invoke_response_from_agent_response(conversation_id: str, response: AgentResponse) -> InvokeResponse:

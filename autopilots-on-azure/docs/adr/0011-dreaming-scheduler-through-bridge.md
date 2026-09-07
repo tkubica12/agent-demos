@@ -51,17 +51,17 @@ The first production path was an Azure Container Apps scheduled Job. It called t
 
 The scheduled Job used the existing per-Worker bridge managed identity and a dedicated Entra resource application exposing `ScheduledLearning.Run.All`. This surface was removed after queue-driven Dreaming reached parity.
 
-ADR 0015 selects a unified Service Bus trigger after the scheduled Job implementation proved the bridge/Sandbox Dreaming path. Service Bus does not directly wake an ACA Sandbox. Instead, a scheduled message becomes active and KEDA scales the existing per-Worker bridge:
+ADR 0015 selects a unified Service Bus trigger. In the approved September 2026 topology, Service Bus does not directly wake the gateway Sandbox: its auto-suspend is disabled and its receiver stays running.
 
 ```text
 Service Bus message
-  -> KEDA scales per-Worker bridge
+  -> non-suspending gateway receives due message
   -> bridge consumes and validates message
   -> bridge wakes or reuses ACA Sandbox
   -> Hermes Dreaming
 ```
 
-Queue-driven Dreaming proved scale-to-zero, retry ownership, Dreaming, packet preparation, and next-occurrence parity. The A11 Job and its dedicated authentication/client code are removed.
+The earlier queue-driven implementation proved the workflow and retired the A11 Job. On September 6, 2026, the all-Sandbox topology delivered a real user schedule and completed an ad-hoc Dream on Hermes 2, preserving the production occurrence with an empty DLQ. Dream had no transferable records and produced no packet; this is execution evidence, not learning improvement. Queue-driven wake from suspension and live crash recovery remain separate checks. Phase checkpoints/fencing allow completed-response replay, while an ambiguous `dream_started` stops rather than blindly rerunning. This is not a full-system scale-to-zero or exactly-once-delivery claim.
 
 ## Consequences
 

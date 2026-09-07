@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. The September 2026 modernization retains this state model with Hermes 0.19.0 and a dedicated runtime Sandbox Group/user-assigned identity. Historical validation below is not proof of the new deployment's parity.
 
 ## Context
 

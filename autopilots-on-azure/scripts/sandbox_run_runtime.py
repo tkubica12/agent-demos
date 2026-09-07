@@ -15,10 +15,10 @@ def main() -> None:
     parser.add_argument("--resource-group", default="")
     parser.add_argument("--sandbox-group", default="")
     parser.add_argument("--region", default="")
-    parser.add_argument("--image", help="ACR image, e.g. registry.azurecr.io/openclaw-runtime:latest")
-    parser.add_argument("--registry-username", default="")
-    parser.add_argument("--registry-password", default="")
-    parser.add_argument("--disk-image-id", default="", help="Existing ACA Sandbox disk image id to run.")
+    parser.add_argument("--image", help="Runtime image reference for labels and telemetry; conversion runs during deployment.")
+    parser.add_argument("--runtime-image-reference", default="", help="Immutable runtime image reference for telemetry.")
+    parser.add_argument("--managed-identity-client-id", default="")
+    parser.add_argument("--disk-image-id", default="", help="Prepared disk image ID; required for startup unless AGENT_RUNTIME_DISK_IMAGE_ID is set.")
     parser.add_argument("--foundry-openai-base-url", default="")
     parser.add_argument("--model-deployment", default="")
     parser.add_argument("--gateway-token", default="")
@@ -51,8 +51,8 @@ def main() -> None:
         region=args.region,
         runtime_kind=args.runtime,
         image_name=args.image,
-        registry_username=args.registry_username,
-        registry_password=args.registry_password,
+        runtime_image_reference=args.runtime_image_reference,
+        managed_identity_client_id=args.managed_identity_client_id,
         disk_image_id=args.disk_image_id,
         foundry_openai_base_url=args.foundry_openai_base_url,
         model_deployment=args.model_deployment,
@@ -84,8 +84,6 @@ def main() -> None:
 
     if config.disk_image_id:
         print(f"Using provided disk image id {config.disk_image_id}", flush=True)
-    elif config.image_name:
-        print(f"Ensuring sandbox disk image {config.disk_image_name} from {config.image_name}", flush=True)
 
     result = ensure_agent_sandbox(config)
     print(json.dumps(asdict(result), indent=2))

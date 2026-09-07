@@ -1,0 +1,9 @@
+{
+  "name": "autopilots-hermes-office-tools",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {
+    "docx": "9.7.1",
+    "pptxgenjs": "4.0.1"
+  }
+}

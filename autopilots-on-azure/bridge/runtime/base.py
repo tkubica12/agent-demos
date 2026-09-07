@@ -75,7 +75,9 @@ class AgentRuntimeAdapter(Protocol):
     async def invoke(self, request: AgentRequest) -> AgentResponse:
         ...
 
-    async def dream(self, request: DreamRequest) -> DreamResponse:
+    async def dream(
+        self, request: DreamRequest, *, operation: dict[str, Any] | None = None
+    ) -> DreamResponse:
         ...
 
     async def prepare_collective_learning(self) -> dict[str, Any]:
@@ -90,4 +92,15 @@ class AgentRuntimeAdapter(Protocol):
         ...
 
     async def export_collective_learning(self) -> dict[str, Any]:
+        ...
+
+    async def pending_collective_learning(self) -> dict[str, Any]:
+        ...
+
+    async def prepare_refresh_rejection(self) -> dict[str, Any]:
+        ...
+
+    async def reject_and_refresh(
+        self, *, disposition_digest: str, rejected_by: str, reason: str
+    ) -> dict[str, Any]:
         ...

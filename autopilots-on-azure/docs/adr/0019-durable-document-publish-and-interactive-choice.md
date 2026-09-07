@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-07-27
 
+September 2026 boundary: the Service Bus receiver now belongs to the non-suspending gateway Sandbox, not a KEDA-scaled Container App. Earlier live UI evidence below applies to the previous deployment. The new application deployment still needs its own document, interaction, and delivery validation.
+
 ## Context
 
 Hermes edits existing Word documents offline with reviewed Open XML tooling, then attempts an ETag-protected Graph `PUT /content` to the same drive item. This preserves the canonical sharing URL, comments, tracked revisions, version history, and Agent User attribution when Microsoft 365 accepts the replacement.
@@ -87,10 +89,10 @@ Review this ADR and ADR 0016 whenever Work IQ Word exposes a supported server-si
 
 - User interaction is one click rather than a typed command.
 - WOPI lock duration no longer consumes an agent session.
-- Background retries reuse the proven Service Bus/KEDA wake path.
+- Background retries use the continuous Service Bus receiver in the gateway Sandbox. Runtime work wakes independently; gateway scale-to-zero is not claimed.
 - Private document bytes remain on the Worker Data Disk and never enter queue messages, learning, or diagnostics.
 - The bridge and runtime gain a small deterministic document state machine.
-- External Teams delivery cannot be made transactionally atomic with local storage. The delivery lease closes normal retry races and makes the rare send/ack crash window explicit instead of silently duplicating.
+- External Teams delivery cannot be made transactionally atomic with local storage. The delivery lease reduces normal retry races, but a send accepted before its receipt is persisted can still be repeated after a crash. Delivery is not exactly-once.
 - Teams receives native suggested-action buttons. Word comments use a review-first text fallback that preserves the proposed work even when body publication fails.
 - A live Agent 365 proactive-delivery probe preserved text but stripped an Adaptive Card attachment. Suggested actions are therefore the proven narrow A14 surface; Adaptive Cards and MCP Apps remain A16 research.
 - The card is intentionally predefined. Broader agent-authored or MCP-rendered UI remains an A16 decision.

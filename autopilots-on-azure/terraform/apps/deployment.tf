@@ -1,0 +1,69 @@
+output "deployment_config" {
+  sensitive = true
+  value = {
+    agent_runtime                            = var.agent_runtime
+    autopilot_name                           = var.autopilot_name
+    runtime_image                            = var.runtime_image != "" ? var.runtime_image : var.openclaw_image
+    runtime_disk_source_image                = var.runtime_disk_source_image
+    runtime_disk_image_name                  = local.runtime_disk_image_name
+    runtime_data_volume_name                 = local.runtime_data_volume_name
+    bridge_image                             = var.bridge_image
+    bridge_disk_source_image                 = var.bridge_disk_source_image
+    private_mcp_image                        = var.private_mcp_image
+    private_mcp_disk_source_image            = var.private_mcp_disk_source_image
+    public_shipments_mcp_image               = var.public_shipments_mcp_image
+    public_shipments_mcp_disk_source_image   = var.public_shipments_mcp_disk_source_image
+    private_mcp_api_audience                 = var.private_mcp_api_audience
+    public_shipments_mcp_api_audience        = var.public_shipments_mcp_api_audience
+    api_server_key                           = var.api_server_key
+    previous_api_server_key                  = var.previous_api_server_key
+    openclaw_gateway_token                   = var.openclaw_gateway_token
+    openclaw_bridge_device_token             = var.openclaw_bridge_device_token
+    openclaw_bridge_device_private_key_pem   = var.openclaw_bridge_device_private_key_pem
+    agent365_client_id                       = var.agent365_client_id
+    agent365_tenant_id                       = var.agent365_tenant_id
+    agent365_agent_identity_client_id        = var.agent365_agent_identity_client_id
+    agent365_agent_identity_object_id        = var.agent365_agent_identity_object_id
+    agent365_agent_user_id                   = var.agent365_agent_user_id
+    agent365_agent_user_principal_name       = var.agent365_agent_user_principal_name
+    hermes_role_blueprint                    = var.hermes_role_blueprint
+    hermes_role_blueprint_source             = var.hermes_role_blueprint_source
+    hermes_role_blueprint_path               = var.hermes_role_blueprint_path
+    hermes_role_release                      = var.hermes_role_release
+    hermes_role_release_commit               = var.hermes_role_release_commit
+    worker_assignment_scope                  = var.worker_assignment_scope
+    collective_learning_approval_private_key = var.collective_learning_approval_private_key
+    collective_learning_approval_public_key  = var.collective_learning_approval_public_key
+    user_scheduling_enabled                  = var.agent_runtime == "hermes" && var.user_scheduling_enabled
+    document_retry_enabled                   = local.document_retry_active
+    user_scheduling_max_concurrent_calls     = var.user_scheduling_max_concurrent_calls
+    user_scheduling_max_delivery_count       = var.user_scheduling_max_delivery_count
+    user_scheduling_lock_renewal_seconds     = var.user_scheduling_lock_renewal_seconds
+    servicebus_dream_enabled                 = var.agent_runtime == "hermes" && var.servicebus_dream_enabled
+    servicebus_dream_cron_expression         = var.servicebus_dream_cron_expression
+    scheduled_learning_enabled               = var.agent_runtime == "hermes" && var.scheduled_learning_enabled
+    scheduled_learning_initial_delay_seconds = var.scheduled_learning_initial_delay_seconds
+    scheduled_learning_interval_seconds      = var.scheduled_learning_interval_seconds
+    scheduled_learning_focus                 = var.scheduled_learning_focus
+    scheduled_learning_max_records           = var.scheduled_learning_max_records
+    scheduled_learning_retry_limit           = var.scheduled_learning_retry_limit
+    scheduled_learning_retry_backoff_seconds = var.scheduled_learning_retry_backoff_seconds
+    scheduled_learning_prepare_packet        = var.scheduled_learning_prepare_packet
+    workiq_mail_mcp_url                      = var.workiq_mail_mcp_url
+    workiq_mail_mcp_scope                    = var.workiq_mail_mcp_scope
+    workiq_word_mcp_url                      = var.workiq_word_mcp_url
+    workiq_word_mcp_scope                    = var.workiq_word_mcp_scope
+    workiq_teams_mcp_url                     = var.workiq_teams_mcp_url
+    workiq_teams_mcp_scope                   = var.workiq_teams_mcp_scope
+    workiq_calendar_mcp_url                  = var.workiq_calendar_mcp_url
+    workiq_calendar_mcp_scope                = var.workiq_calendar_mcp_scope
+    workiq_onedrive_mcp_url                  = var.workiq_onedrive_mcp_url
+    workiq_onedrive_mcp_scope                = var.workiq_onedrive_mcp_scope
+    workiq_sharepoint_mcp_url                = var.workiq_sharepoint_mcp_url
+    workiq_sharepoint_mcp_scope              = var.workiq_sharepoint_mcp_scope
+    workiq_excel_mcp_url                     = var.workiq_excel_mcp_url
+    workiq_excel_mcp_scope                   = var.workiq_excel_mcp_scope
+    workiq_copilot_mcp_url                   = var.workiq_copilot_mcp_url
+    workiq_copilot_mcp_scope                 = var.workiq_copilot_mcp_scope
+  }
+}

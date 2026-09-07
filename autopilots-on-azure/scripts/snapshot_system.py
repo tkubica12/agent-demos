@@ -13,12 +13,17 @@ from typing import Any
 
 from scripts.setup_agent365 import agent365_workspace, load_json
 from scripts.setup_app_tfvars import runtime_outputs_path
+from scripts.demo_ops import SANDBOX_API_VERSION, SANDBOX_RESOURCE, SANDBOX_ROLES, sandbox_group_url
 from scripts.tf_helpers import REPO_ROOT, resolve_executable
 
 
 SNAPSHOT_ROOT = REPO_ROOT / ".local" / "snapshots"
 GRAPH_BASE = "https://graph.microsoft.com"
-SECRET_KEY_PARTS = ("secret", "password", "token", "credential", "privatekey", "private_key", "apikey", "api_key")
+SECRET_KEY_PARTS = (
+    "secret", "password", "token", "credential", "privatekey", "private_key",
+    "apikey", "api_key", "api_server_key", "connectionstring", "connection_string",
+    "authorization", "environment",
+)
 
 
 def now_stamp() -> str:
@@ -118,15 +123,16 @@ def read_local_json(path: Path) -> Any:
     return load_json(path)
 
 
-def capture_local_state(root: Path, runtimes: list[str]) -> None:
+def capture_local_state(root: Path, runtimes: list[str], state_name: str = "") -> None:
     for runtime in runtimes:
-        runtime_dir = root / "local" / runtime
-        write_json(runtime_dir / "apps.terraform-outputs.json", read_local_json(runtime_outputs_path(runtime)))
-        workspace = agent365_workspace(runtime)
+        worker = state_name or runtime
+        runtime_dir = root / "local" / worker
+        write_json(runtime_dir / "apps.terraform-outputs.json", read_local_json(runtime_outputs_path(runtime, state_name)))
+        workspace = agent365_workspace(worker)
         for name in (
             "a365.config.json",
             "a365.generated.config.json",
-            f"{runtime}-agent365-identifiers.json",
+            f"{worker}-agent365-identifiers.json",
         ):
             write_json(runtime_dir / name, read_local_json(workspace / name))
         for instance_path in sorted(workspace.glob("instance.*.json")):
@@ -143,44 +149,46 @@ def capture_local_state(root: Path, runtimes: list[str]) -> None:
             write_json(root / "local" / name, read_local_json(path))
 
 
-def capture_azure(root: Path, runtimes: list[str]) -> None:
+def capture_azure(root: Path, runtimes: list[str], state_name: str = "") -> None:
     azure_dir = root / "azure"
     account = run_json(["az", "account", "show", "-o", "json"])
     write_json(azure_dir / "account.json", account)
     write_json(azure_dir / "resource-groups.json", run_json(["az", "group", "list", "-o", "json"]))
 
     for runtime in runtimes:
-        outputs = read_local_json(runtime_outputs_path(runtime))
+        outputs = read_local_json(runtime_outputs_path(runtime, state_name))
         if not isinstance(outputs, dict):
+            raise ValueError(f"{runtime} apps outputs are not a JSON object.")
+        worker_dir = azure_dir / (state_name or runtime)
+        groups = outputs.get("sandbox_groups") or {}
+        if any(role not in groups for role in SANDBOX_ROLES):
+            write_json(worker_dir / "sandbox.lookup-error.json", {"ok": False, "error": "Per-Worker Sandbox Group outputs are missing."})
             continue
-        for app_key in ("bridge_app_name", "private_mcp_app_name"):
-            app_name = outputs.get(app_key)
-            if not app_name:
-                continue
-            resources = run_json(["az", "resource", "list", "--name", str(app_name), "-o", "json"])
-            resource_group = ""
-            if isinstance(resources, list) and resources:
-                resource_group = str(resources[0].get("resourceGroup", ""))
-            app_dir = azure_dir / runtime / safe_name(str(app_name))
-            write_json(app_dir / "resource.lookup.json", resources)
-            if not resource_group:
-                write_json(app_dir / "containerapp.lookup-error.json", {"error": "resource group not found", "appName": app_name})
-                continue
+        for role in SANDBOX_ROLES:
+            group = groups[role]
+            app_dir = worker_dir / role
             write_json(
-                app_dir / "containerapp.show.json",
-                run_json(["az", "containerapp", "show", "--name", str(app_name), "--resource-group", resource_group, "-o", "json"]),
+                app_dir / "sandbox-group.json",
+                run_json(["az", "resource", "show", "--ids", str(group["id"]), "--api-version", SANDBOX_API_VERSION, "-o", "json"]),
             )
             write_json(
-                app_dir / "containerapp.revisions.json",
-                run_json(["az", "containerapp", "revision", "list", "--name", str(app_name), "--resource-group", resource_group, "-o", "json"]),
+                app_dir / "managed-identity.json",
+                run_json(["az", "identity", "show", "--ids", str(group["identity_resource_id"]), "-o", "json"]),
             )
+            for resource in ("sandboxes", "volumes", "diskimages"):
+                write_json(
+                    app_dir / f"{resource}.json",
+                    run_json(["az", "rest", "--method", "GET", "--resource", SANDBOX_RESOURCE,
+                              "--url", f"{sandbox_group_url(outputs, role)}/{resource}?api-version={SANDBOX_API_VERSION}", "-o", "json"]),
+                )
 
 
-def capture_graph_runtime(root: Path, runtime: str) -> None:
-    graph_dir = root / "graph" / runtime
-    workspace = agent365_workspace(runtime)
+def capture_graph_runtime(root: Path, runtime: str, state_name: str = "") -> None:
+    worker = state_name or runtime
+    graph_dir = root / "graph" / worker
+    workspace = agent365_workspace(worker)
     generated = read_local_json(workspace / "a365.generated.config.json")
-    metadata = read_local_json(workspace / f"{runtime}-agent365-identifiers.json")
+    metadata = read_local_json(workspace / f"{worker}-agent365-identifiers.json")
     state_files = sorted(workspace.glob("instance.*.json"))
 
     blueprint_id = generated.get("agentBlueprintObjectId") if isinstance(generated, dict) else ""
@@ -188,6 +196,7 @@ def capture_graph_runtime(root: Path, runtime: str) -> None:
     blueprint_sp_id = generated.get("agentBlueprintServicePrincipalObjectId") if isinstance(generated, dict) else ""
     if blueprint_id:
         write_json(graph_dir / "blueprint.application.json", az_rest(graph_url(f"/applications/{blueprint_id}?$select=id,appId,displayName,identifierUris,signInAudience,api,requiredResourceAccess,passwordCredentials,keyCredentials")))
+        write_json(graph_dir / "blueprint.federation.json", az_rest(graph_url(f"/applications/{blueprint_id}/federatedIdentityCredentials")))
     if blueprint_sp_id:
         write_json(graph_dir / "blueprint.service-principal.json", az_rest(graph_url(f"/servicePrincipals/{blueprint_sp_id}?$select=id,appId,displayName,servicePrincipalNames,appRoles,oauth2PermissionScopes,appRoleAssignments")))
     if blueprint_app_id:
@@ -216,12 +225,12 @@ def capture_graph_runtime(root: Path, runtime: str) -> None:
             )
 
 
-def capture_graph(root: Path, runtimes: list[str]) -> None:
+def capture_graph(root: Path, runtimes: list[str], state_name: str = "") -> None:
     graph_dir = root / "graph"
     write_json(graph_dir / "domains.json", az_rest(graph_url("/domains?$select=id,isDefault,isInitial,isVerified,supportedServices")))
     write_json(graph_dir / "subscribed-skus.json", az_rest(graph_url("/subscribedSkus?$select=skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus")))
     for runtime in runtimes:
-        capture_graph_runtime(root, runtime)
+        capture_graph_runtime(root, runtime, state_name)
 
 
 def capture_summary(root: Path, runtimes: list[str]) -> None:
@@ -242,19 +251,22 @@ def capture_summary(root: Path, runtimes: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Capture a redacted diagnostic snapshot of Autopilots Azure/Graph/Agent 365 state.")
     parser.add_argument("--runtime", choices=["openclaw", "hermes"], action="append", help="Runtime to capture. Repeatable. Defaults to both.")
+    parser.add_argument("--state-name", default="", help="Named Worker to capture; requires exactly one --runtime.")
     parser.add_argument("--output-dir", default="", help="Snapshot output directory. Defaults to .local/snapshots/<utc timestamp>.")
     parser.add_argument("--skip-azure", action="store_true")
     parser.add_argument("--skip-graph", action="store_true")
     args = parser.parse_args()
 
     runtimes = args.runtime or ["openclaw", "hermes"]
+    if args.state_name and len(runtimes) != 1:
+        parser.error("--state-name requires exactly one --runtime.")
     root = Path(args.output_dir) if args.output_dir else SNAPSHOT_ROOT / now_stamp()
     capture_summary(root, runtimes)
-    capture_local_state(root, runtimes)
+    capture_local_state(root, runtimes, args.state_name)
     if not args.skip_azure:
-        capture_azure(root, runtimes)
+        capture_azure(root, runtimes, args.state_name)
     if not args.skip_graph:
-        capture_graph(root, runtimes)
+        capture_graph(root, runtimes, args.state_name)
     print(json.dumps({"snapshotDir": str(root)}, indent=2), flush=True)
 
 

@@ -1,5 +1,8 @@
 import asyncio
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,24 +13,30 @@ from bridge.scheduled_learning import (
     ScheduledLearningSettings,
 )
 
+RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
+sys.path.insert(0, str(RUNTIME_DIR))
+import cron_runtime
+
 
 class ScheduledLearningTests(unittest.TestCase):
     def test_system_dream_message_claims_runs_and_completes_schedule(self):
         calls = []
+        runs = []
 
         class Adapter:
             runtime_kind = "hermes"
 
             async def claim_system_schedule(self, **kwargs):
                 calls.append(("claim", kwargs))
-                return {"status": "claimed"}
+                return {"status": "claimed", "ownerToken": "owner-1", "sessionId": "stable-session"}
 
             async def complete_system_schedule(self, **kwargs):
                 calls.append(("complete", kwargs))
                 return {"status": "completed", "nextRunAt": "tomorrow"}
 
         class Coordinator:
-            async def run_once(self):
+            async def run_once(self, **kwargs):
+                runs.append(kwargs)
                 return {
                     "dream": {"recordCount": 1},
                     "packet": {"approvalRequired": True},
@@ -48,6 +57,8 @@ class ScheduledLearningTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "claim")
         self.assertEqual(calls[1][0], "complete")
         self.assertTrue(calls[1][1]["success"])
+        self.assertEqual(calls[1][1]["owner_token"], "owner-1")
+        self.assertEqual(runs[0]["operation"]["sessionId"], "stable-session")
 
     def test_system_dream_records_nonretryable_failure_and_rearms(self):
         calls = []
@@ -63,7 +74,7 @@ class ScheduledLearningTests(unittest.TestCase):
                 return {"status": "completed", "nextRunAt": "tomorrow"}
 
         class Coordinator:
-            async def run_once(self):
+            async def run_once(self, **kwargs):
                 raise ValueError("invalid Dreaming result")
 
         with (
@@ -95,7 +106,7 @@ class ScheduledLearningTests(unittest.TestCase):
                 return {"status": "completed", "nextRunAt": "tomorrow"}
 
         class Coordinator:
-            async def run_once(self):
+            async def run_once(self, **kwargs):
                 raise AssertionError("interrupted Dreaming must not rerun")
 
         with (
@@ -109,9 +120,10 @@ class ScheduledLearningTests(unittest.TestCase):
                 "occurrenceId": "manual-1",
             }))
 
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "uncertain")
         self.assertFalse(calls[0]["success"])
         self.assertIn("interrupted", calls[0]["error"].lower())
+        self.assertIn("will not be rerun automatically", result["reason"])
     def test_dream_prepares_packet_when_records_exist(self):
         class Adapter:
             runtime_kind = "hermes"
@@ -196,9 +208,10 @@ class ScheduledLearningTests(unittest.TestCase):
         self.assertIsNone(result["packet"])
         self.assertEqual(coordinator.status()["lastDream"]["recordCount"], 0)
 
-    def test_retryable_failure_uses_backoff(self):
+    def test_uncheckpointed_failure_does_not_blindly_repeat_inference(self):
         attempts = 0
         delays = []
+        sessions = []
 
         class Adapter:
             runtime_kind = "hermes"
@@ -206,6 +219,7 @@ class ScheduledLearningTests(unittest.TestCase):
             async def dream(self, request):
                 nonlocal attempts
                 attempts += 1
+                sessions.append(request.session_id)
                 if attempts == 1:
                     raise RuntimeError("temporary")
                 return DreamResponse(
@@ -236,10 +250,109 @@ class ScheduledLearningTests(unittest.TestCase):
             sleep=sleep,
         )
 
-        asyncio.run(coordinator.run_once())
+        with self.assertRaisesRegex(RuntimeError, "unknown outcome"):
+            asyncio.run(coordinator.run_once())
 
-        self.assertEqual(attempts, 2)
+        self.assertEqual(attempts, 1)
         self.assertEqual(delays, [7])
+        self.assertEqual(len(set(sessions)), 1)
+
+    def test_prepare_retry_does_not_repeat_successful_dream(self):
+        calls = {"dream": 0, "prepare": 0}
+
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def dream(self, request):
+                calls["dream"] += 1
+                return DreamResponse(
+                    agent=AgentResponse(text="done", raw={}),
+                    learning_status={"records": [{"recordId": "one"}]},
+                )
+
+            async def prepare_collective_learning(self):
+                calls["prepare"] += 1
+                if calls["prepare"] == 1:
+                    raise RuntimeError("prepare unavailable")
+                return {"packetDigest": "digest", "approvalRequired": True}
+
+        coordinator = ScheduledLearningCoordinator(
+            adapter_factory=Adapter, worker_id="worker",
+            settings=ScheduledLearningSettings(True, 0, 300, "review", 2, 1, 1, True),
+            sleep=lambda _: asyncio.sleep(0),
+        )
+        result = asyncio.run(coordinator.run_once())
+        self.assertEqual(calls, {"dream": 1, "prepare": 2})
+        self.assertEqual(result["packet"]["packetDigest"], "digest")
+
+    def test_durable_phase_survives_status_failure_and_coordinator_restart(self):
+        calls = {"model": 0, "status": 0, "prepare": 0}
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            receipt = cron_runtime._new_system_operation(
+                {"id": "dream-job"}, "revision", "occurrence", "adhoc"
+            )
+            receipt["state"] = "running"
+            cron_runtime.atomic_write_json(cron_runtime.system_schedule_receipts_path(profile), {
+                "dream-job:occurrence": receipt
+            })
+            operation = cron_runtime._system_operation(receipt, "dream-job")
+
+            class Adapter:
+                runtime_kind = "hermes"
+
+                async def get_system_schedule_checkpoint(self, **kwargs):
+                    return cron_runtime.get_system_schedule_checkpoint(profile, **kwargs)
+
+                async def checkpoint_system_schedule(self, **kwargs):
+                    return cron_runtime.checkpoint_system_schedule(profile, **kwargs)
+
+                async def dream(self, request, *, operation):
+                    identity = {
+                        "job_id": operation["jobId"], "revision": operation["revision"],
+                        "occurrence_id": operation["occurrenceId"],
+                    }
+                    current = await self.get_system_schedule_checkpoint(**identity)
+                    if current["phase"] == "pending":
+                        await self.checkpoint_system_schedule(
+                            **identity, owner_token=operation["ownerToken"],
+                            expected_phase="pending", phase="dream_started", payload={},
+                        )
+                        calls["model"] += 1
+                        await self.checkpoint_system_schedule(
+                            **identity, owner_token=operation["ownerToken"],
+                            expected_phase="dream_started", phase="dream_completed",
+                            payload={"agent": {"text": "done", "raw": {}}},
+                        )
+                    calls["status"] += 1
+                    if calls["status"] == 1:
+                        raise RuntimeError("status unavailable after model checkpoint")
+                    return DreamResponse(
+                        agent=AgentResponse(text="done", raw={}),
+                        learning_status={"records": [{"recordId": "one"}]},
+                    )
+
+                async def prepare_collective_learning(self):
+                    calls["prepare"] += 1
+                    if calls["prepare"] == 1:
+                        raise RuntimeError("prepare unavailable")
+                    return {"packetDigest": "digest", "approvalRequired": True}
+
+            def coordinator():
+                return ScheduledLearningCoordinator(
+                    adapter_factory=Adapter, worker_id="worker",
+                    settings=ScheduledLearningSettings(True, 0, 300, "review", 2, 0, 1, True),
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "status unavailable"):
+                asyncio.run(coordinator().run_once(operation=operation))
+            with self.assertRaisesRegex(RuntimeError, "prepare unavailable"):
+                asyncio.run(coordinator().run_once(operation=operation))
+            result = asyncio.run(coordinator().run_once(operation=operation))
+            replay = asyncio.run(coordinator().run_once(operation=operation))
+        self.assertEqual(calls, {"model": 1, "status": 2, "prepare": 2})
+        self.assertEqual(result["packet"], replay["packet"])
+        self.assertEqual(result["dream"]["sessionId"], operation["sessionId"])
 
 
 if __name__ == "__main__":

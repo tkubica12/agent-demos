@@ -20,19 +20,21 @@ Neither OpenClaw nor Hermes natively implements the Agent 365 managed-identity t
 
 ## Decision
 
-1. Use the Sandbox Group managed identity as a secretless workload credential.
-2. Add one federated identity credential to each Agent 365 blueprint, with the Sandbox Group principal as subject.
+1. Use the Worker's runtime Sandbox Group user-assigned managed identity as a secretless workload credential; keep gateway and MCP service-role identities distinct.
+2. Add separate federated identity credentials to each Agent 365 blueprint for that Worker's runtime and gateway user-assigned identity principals. Remove obsolete shared-Group federation; do not grant every service role the same business trust.
 3. Exchange the managed-identity token through the blueprint into:
    - an Agent Identity token for autonomous custom MCP access;
    - an Agent User token for worker-owned Microsoft 365 access.
 4. Run one loopback MCP identity adapter inside each Sandbox. Both runtimes connect to `127.0.0.1`; the adapter acquires short-lived tokens and streams requests directly to the configured upstream MCP server.
-5. Reach the private incidents MCP directly through the Sandbox VNet connection. The server validates tenant, issuer, audience, Agent Identity, and the `Incidents.Read.All` application role.
+5. Reach the private incidents MCP Sandbox through VNet routing, private DNS, and the Private Endpoint of its linked Express managed environment. The server validates tenant, issuer, audience, Agent Identity, and the `Incidents.Read.All` application role.
 6. Configure Work IQ Mail through `ToolingManifest.json`, Agent 365 blueprint consent, and a principal-scoped `Tools.ListInvoke.All` grant for the Agent User.
-7. Deploy the public shipments MCP with Entra OAuth and scale-to-zero. Grant Agent Identities `Shipments.Read.All` for direct runtime access and expose delegated `Shipments.Read` for Agent 365 BYO clients.
+7. Deploy public shipments as a Sandbox with native HTTPS ingress and application Entra OAuth validation. Grant Agent Identities `Shipments.Read.All` for direct runtime access and expose delegated `Shipments.Read` for Agent 365 BYO clients.
 8. Register the public shipments endpoint as Agent 365 BYO MCP. Treat BYO invocation from OpenClaw/Hermes as unsupported until Microsoft adds custom runtime support.
-9. Remove the bridge MCP relay, shared MCP keys, direct Graph mail tool, bridge VNet integration, and human-bound Sandbox Connector Gateway connection.
+9. Keep the bridge MCP relay, shared MCP keys, direct Graph mail tool, and human-bound Sandbox Connector Gateway connection removed. The new gateway Group has its own VNet connection for required operations; that does not make the bridge an MCP traffic relay.
 
 ## Operational evidence
+
+The detailed identity observations below predate the September 2026 all-Sandbox modernization. The September 6 deployment separately verified native model inference for both Workers, healthy MCP services, and real private/public MCP calls with attributed tool spans on Hermes. Those execution results do not independently re-establish every earlier token-claim or private-routing observation. Native `azure-foundry` removes the model proxy only. It does not implement Agent Identity/Agent User MCP federation and does not remove this adapter or introduce human OBO.
 
 - ACA Sandbox workloads expose `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`; `DefaultAzureCredential` successfully obtains the Sandbox Group managed-identity token.
 - The managed-identity token federates through both runtime blueprints into Agent Identity tokens containing `Incidents.Read.All` and `Shipments.Read.All`.
@@ -48,7 +50,7 @@ Neither OpenClaw nor Hermes natively implements the Agent 365 managed-identity t
 - Agent User mailbox actions are attributable to the Agent User and do not borrow the invoking human's identity.
 - The public bridge only handles Agent 365 messaging and Sandbox lifecycle; it does not proxy MCP traffic.
 - Private MCP traffic stays inside the VNet.
-- Microsoft 365 access uses the Agent 365 catalog and permission model rather than custom Graph wrappers.
+- Microsoft 365 access prefers the Agent 365 catalog and permission model. Reviewed Agent User Graph collaboration tools cover explicit gaps such as ETag-protected file publication; they do not replace available Work IQ capabilities.
 - A small runtime-local adapter remains necessary because the selected runtimes do not implement Agent 365 client-assertion authentication natively.
 - An approved BYO endpoint can authenticate and initialize through Agent 365, but raw MCP clients do not receive its tools without the supported-client connection/OAuth handshake.
 - Human OBO remains a separate, per-turn flow and is not used for autonomous or shared-conversation work.

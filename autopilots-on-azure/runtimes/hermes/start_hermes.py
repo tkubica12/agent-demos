@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import subprocess
 import shutil
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,14 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from bridge.hermes_telemetry import (
+    GatewayTraceConflictError,
+    PLUGIN_NAME as TELEMETRY_PLUGIN_NAME,
+    gateway_trace_context,
+    install_gateway_telemetry,
+)
+from bridge.telemetry import configure_telemetry, flush_telemetry, runtime_trace_headers
+from bridge.telemetry_http import TelemetryMiddleware
 from autopilots_identity.document_operations import (
     acknowledge_delivery as acknowledge_document_delivery,
     claim_delivery as claim_document_delivery,
@@ -40,8 +50,11 @@ from collective_learning import (
     CollectiveLearningError,
     approved_learning_packet,
     attest_learning_packet,
+    attest_refresh_rejection,
     pending_learning_packet,
+    pending_refresh_rejection,
     prepare_learning_packet,
+    prepare_refresh_rejection,
     worker_refresh_readiness,
 )
 from learning import (
@@ -58,12 +71,14 @@ from cron_runtime import (
     acknowledge_cron_delivery,
     bind_cron_delivery,
     bind_cron_local,
+    checkpoint_system_schedule,
     claim_system_schedule,
     complete_system_schedule,
     cron_diagnostics,
     cron_delivery_receipt_status,
     fire_cron_job,
     get_delivery_reference,
+    get_system_schedule_checkpoint,
     ensure_system_dream_schedule,
     enqueue_system_dream_now,
     list_cron_jobs,
@@ -85,7 +100,6 @@ WORKIQ_MCP_ENVIRONMENTS = {
 
 DEFAULT_HERMES_HOME = "/data/hermes"
 DEFAULT_GATEWAY_PORT = 9119
-DEFAULT_FOUNDRY_PROXY_PORT = 18080
 DEFAULT_AGENT_MCP_PROXY_PORT = 18081
 DEFAULT_M365_COLLABORATION_MCP_PORT = 18082
 
@@ -177,8 +191,11 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
-            "name": os.getenv("HERMES_MODEL", os.getenv("OPENCLAW_MODEL_ID", "gpt-5-6-terra")),
+            "default": os.getenv("HERMES_MODEL", os.getenv("OPENCLAW_MODEL_ID", "gpt-5-6-terra")),
         },
+        "memory": {"nudge_interval": 0},
+        "skills": {"creation_nudge_interval": 0},
+        "curator": {"enabled": False},
         "gateway": {
             "platforms": {
                 "api_server": {
@@ -194,6 +211,21 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
             "workspace": str(home / "workspace"),
         },
     }
+    foundry_url = os.getenv("FOUNDRY_OPENAI_BASE_URL", "").strip()
+    if foundry_url:
+        runtime_config["model"].update(
+            {
+                "provider": "azure-foundry",
+                "base_url": foundry_url.rstrip("/"),
+                "auth_mode": "entra_id",
+                "entra": {
+                    "scope": os.getenv(
+                        "FOUNDRY_TOKEN_SCOPE",
+                        "https://cognitiveservices.azure.com/.default",
+                    )
+                },
+            }
+        )
     mcp_servers: dict[str, Any] = {}
     private_mcp_url = os.getenv("PRIVATE_INCIDENTS_MCP_URL", "").strip()
     public_shipments_mcp_url = os.getenv("PUBLIC_SHIPMENTS_MCP_URL", "").strip()
@@ -223,6 +255,15 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
             "mirror_delivery": False,
         }
     config = _deep_merge(base or {}, runtime_config)
+    plugins = dict(config.get("plugins") or {})
+    if TELEMETRY_PLUGIN_NAME in (plugins.get("disabled") or []):
+        raise ValueError("Hermes native telemetry plugin must not be disabled.")
+    enabled_plugins = plugins.get("enabled") or []
+    if not isinstance(enabled_plugins, list):
+        raise ValueError("Hermes plugins.enabled must be a list.")
+    plugins["enabled"] = list(dict.fromkeys([*enabled_plugins, TELEMETRY_PLUGIN_NAME]))
+    config["plugins"] = plugins
+    config["model"].pop("name", None)
     configured_servers = config.get("mcp_servers")
     if isinstance(configured_servers, dict):
         for name in (
@@ -253,42 +294,17 @@ def install_runtime_plugins(profile_home: Path) -> None:
             )
 
 
-def foundry_proxy_port() -> int:
-    return int(os.getenv("FOUNDRY_PROXY_PORT", str(DEFAULT_FOUNDRY_PROXY_PORT)))
-
-
 def configure_model_environment() -> None:
-    if os.getenv("FOUNDRY_OPENAI_BASE_URL"):
-        proxy_url = f"http://127.0.0.1:{foundry_proxy_port()}/v1"
-        os.environ.setdefault("OPENAI_BASE_URL", proxy_url)
-        os.environ.setdefault("OPENAI_API_KEY", "unused-managed-identity-token-proxy")
-        os.environ.setdefault("AZURE_FOUNDRY_BASE_URL", proxy_url)
-        os.environ.setdefault("AZURE_FOUNDRY_API_KEY", "unused-managed-identity-token-proxy")
-        os.environ.setdefault("HERMES_MODEL_PROVIDER", "azure-foundry")
+    foundry_url = os.getenv("FOUNDRY_OPENAI_BASE_URL", "").strip()
+    if foundry_url:
+        os.environ["OPENAI_BASE_URL"] = foundry_url.rstrip("/")
+        os.environ["AZURE_FOUNDRY_BASE_URL"] = foundry_url.rstrip("/")
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("AZURE_FOUNDRY_API_KEY", None)
+        os.environ["HERMES_MODEL_PROVIDER"] = "azure-foundry"
         model = os.getenv("HERMES_MODEL") or os.getenv("OPENCLAW_MODEL_ID") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-5-6-terra"
         os.environ.setdefault("HERMES_MODEL", model)
         os.environ.setdefault("HERMES_INFERENCE_MODEL", model)
-
-
-def start_foundry_proxy() -> subprocess.Popen | None:
-    if not os.getenv("FOUNDRY_OPENAI_BASE_URL"):
-        print("FOUNDRY_OPENAI_BASE_URL is not set; Foundry proxy is disabled.", flush=True)
-        return None
-    port = str(foundry_proxy_port())
-    print(f"Starting Foundry managed-identity proxy on 127.0.0.1:{port}", flush=True)
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "uvicorn",
-            "foundry_token_proxy:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            port,
-        ],
-        env=os.environ.copy(),
-    )
 
 
 def start_agent_mcp_proxy() -> subprocess.Popen | None:
@@ -377,6 +393,8 @@ def create_health_app(
     gateway: subprocess.Popen | None,
 ) -> FastAPI:
     app = FastAPI(title="Hermes ACA Sandbox runtime")
+    app.add_middleware(TelemetryMiddleware, runtime=True)
+    app.router.add_event_handler("shutdown", flush_telemetry)
     role_release_health = None
     if role_release:
         role_release_health = {
@@ -387,9 +405,10 @@ def create_health_app(
         }
 
     @app.get("/health")
-    def health() -> dict[str, Any]:
-        return {
-            "status": "ok" if gateway is None or gateway.poll() is None else "gateway-exited",
+    def health() -> JSONResponse:
+        running = gateway is not None and gateway.poll() is None
+        payload = {
+            "status": "ok" if running else "gateway-unavailable",
             "runtime": "hermes",
             "hermesHome": str(home),
             "profileHome": str(profile_home),
@@ -401,9 +420,10 @@ def create_health_app(
             "apiServerPort": api_server_port(),
             "gatewayPid": gateway.pid if gateway and gateway.poll() is None else None,
         }
+        return JSONResponse(payload, status_code=200 if running else 503)
 
     @app.get("/health/detailed")
-    def health_detailed() -> dict[str, Any]:
+    def health_detailed() -> JSONResponse:
         return health()
 
     def require_internal_key(request: Request) -> None:
@@ -672,6 +692,34 @@ def create_health_app(
         except CollectiveLearningError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/internal/collective-learning/prepare-rejection")
+    def prepare_rejection(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return prepare_refresh_rejection(profile_home)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/internal/collective-learning/pending-rejection")
+    def pending_rejection(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        try:
+            return pending_refresh_rejection(profile_home)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/collective-learning/attest-rejection")
+    async def attest_rejection(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        receipt = payload.get("receipt") if isinstance(payload, dict) else None
+        if not isinstance(receipt, dict):
+            raise HTTPException(status_code=400, detail="receipt must be one JSON object.")
+        try:
+            return attest_refresh_rejection(profile_home, receipt=receipt)
+        except CollectiveLearningError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/internal/collective-learning/refresh-ready")
     def refresh_ready(request: Request) -> dict[str, Any]:
         require_internal_key(request)
@@ -833,6 +881,46 @@ def create_health_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/internal/cron/system/checkpoint/read")
+    async def cron_system_checkpoint_read(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Checkpoint request must be an object.")
+        try:
+            return await asyncio.to_thread(
+                get_system_schedule_checkpoint,
+                profile_home,
+                job_id=str(payload.get("jobId") or ""),
+                revision=str(payload.get("revision") or ""),
+                occurrence_id=str(payload.get("occurrenceId") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/internal/cron/system/checkpoint")
+    async def cron_system_checkpoint(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        payload = await request.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("payload"), dict):
+            raise HTTPException(status_code=400, detail="Checkpoint payload must be an object.")
+        try:
+            return await asyncio.to_thread(
+                checkpoint_system_schedule,
+                profile_home,
+                job_id=str(payload.get("jobId") or ""),
+                revision=str(payload.get("revision") or ""),
+                occurrence_id=str(payload.get("occurrenceId") or ""),
+                owner_token=str(payload.get("ownerToken") or ""),
+                expected_phase=str(payload.get("expectedPhase") or ""),
+                phase=str(payload.get("phase") or ""),
+                payload=payload["payload"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/internal/cron/system/complete")
     async def cron_system_complete(request: Request) -> dict[str, Any]:
         require_internal_key(request)
@@ -853,9 +941,12 @@ def create_health_app(
                 summary=payload.get("summary")
                 if isinstance(payload.get("summary"), dict)
                 else {},
+                owner_token=str(payload.get("ownerToken") or ""),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/internal/cron/ack-delivery")
     async def cron_ack_delivery(request: Request) -> dict[str, Any]:
@@ -891,13 +982,47 @@ def create_health_app(
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
-        async with httpx.AsyncClient(timeout=60) as client:
-            response = await client.request(
-                request.method,
-                target,
-                content=await request.body(),
-                headers={key: value for key, value in request.headers.items() if key.lower() != "host"},
-            )
+        native_session = re.fullmatch(r"api/sessions/([^/]+)/chat", path)
+        native_turn = request.method == "POST" and native_session is not None
+        trace_context = (
+            gateway_trace_context(native_session.group(1), profile_home=profile_home)
+            if native_turn
+            else nullcontext()
+        )
+        timeout = httpx.Timeout(
+            float(os.getenv("HERMES_BRIDGE_TIMEOUT_SECONDS", "600")),
+            connect=10,
+        )
+        body = await request.body()
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                with trace_context:
+                    response = await client.request(
+                        request.method,
+                        target,
+                        content=body,
+                        headers={
+                            **{
+                                key: value
+                                for key, value in request.headers.items()
+                                if key.lower() not in {
+                                    "host",
+                                    "traceparent",
+                                    "tracestate",
+                                    "baggage",
+                                    "x-autopilot-otel-session",
+                                    "x-autopilot-otel-operation",
+                                }
+                            },
+                            **runtime_trace_headers(),
+                        },
+                    )
+                    if native_turn and response.status_code >= 500:
+                        response.raise_for_status()
+        except GatewayTraceConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
         if response.headers.get("content-type", "").startswith("application/json"):
             return JSONResponse(content=response.json(), status_code=response.status_code)
         raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -906,6 +1031,7 @@ def create_health_app(
 
 
 def main() -> None:
+    configure_telemetry("hermes-runtime")
     home = hermes_home()
     configure_model_environment()
     home.mkdir(parents=True, exist_ok=True)
@@ -924,6 +1050,7 @@ def main() -> None:
         )
     profile_home.mkdir(parents=True, exist_ok=True)
     install_runtime_plugins(profile_home)
+    install_gateway_telemetry(profile_home)
     os.environ["HERMES_HOME"] = str(profile_home)
     (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
     if role_release:
@@ -947,27 +1074,22 @@ def main() -> None:
     print(f"Hermes config: {config_path}", flush=True)
     print(f"System Dreaming schedule: {system_dream_schedule}", flush=True)
 
-    foundry_proxy = start_foundry_proxy()
-    mcp_proxy = start_agent_mcp_proxy()
-    collaboration_mcp = start_m365_collaboration_mcp()
-    if foundry_proxy or mcp_proxy or collaboration_mcp:
-        time.sleep(2)
+    mcp_proxy = None
+    collaboration_mcp = None
     gateway = None
-    if bool_env("HERMES_START_GATEWAY", True):
-        try:
+    try:
+        mcp_proxy = start_agent_mcp_proxy()
+        collaboration_mcp = start_m365_collaboration_mcp()
+        if mcp_proxy or collaboration_mcp:
+            time.sleep(2)
+        if bool_env("HERMES_START_GATEWAY", True):
             gateway = start_gateway(profile_home)
             print(f"Started Hermes gateway pid={gateway.pid}", flush=True)
             time.sleep(3)
-        except Exception as exc:
-            print(f"Failed to start Hermes gateway: {exc}", file=sys.stderr, flush=True)
+            if gateway.poll() is not None:
+                raise RuntimeError(f"Hermes gateway exited during startup with code {gateway.returncode}.")
 
-    try:
-        if bool_env("HERMES_HEALTH_WRAPPER", False):
-            app = create_health_app(home, profile_home, role_release, gateway)
-            uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
-            return
-
-        if gateway is None:
+        if bool_env("HERMES_HEALTH_WRAPPER", False) or gateway is None:
             app = create_health_app(home, profile_home, role_release, gateway)
             uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
             return
@@ -975,12 +1097,17 @@ def main() -> None:
         raise SystemExit(gateway.wait())
     finally:
         for process in (
+            gateway,
             collaboration_mcp,
             mcp_proxy,
-            foundry_proxy,
         ):
             if process and process.poll() is None:
                 process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
 
 
 if __name__ == "__main__":

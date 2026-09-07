@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Last reviewed 2026-07-22.
+Accepted. Last reviewed 2026-09-06 at 21:46 CEST. The user's current Teams UI recheck found Hermes in public group `@` mention discovery, not `/`; no private content was sent. Targeted inbound availability remains unobserved for this package/deployment, not universally unsupported or a proven UI-only defect. Earlier message-delivery results below belong to the pre-modernization topology unless explicitly dated otherwise.
 
 ## Context
 
@@ -24,7 +24,8 @@ The Agent 365 Notifications SDK is also not a subscription system for Teams conv
 | --- | --- | --- |
 | Teams 1:1 message | Verified | Hermes and OpenClaw live tests |
 | Explicit channel mention | Verified | Hermes and OpenClaw live tests |
-| Targeted private message in a group conversation | Deferred for Agent User packages; no supported targeted receive capability | Teams requires `bots[].supportsTargetedMessages`, while Agent 365 AI teammate packages use `agenticUserTemplates` |
+| Public group mention discovery | Observed September 6 UI recheck | Hermes is available under `@`; this observation alone is not a new message-delivery test |
+| Targeted private message in a group conversation | Availability not observed; implementation deferred | Hermes absent under `/`; current 1.1.7 `devPreview` manifest has `agenticUserTemplates`, no `bots[]`; refreshed Learn receive opt-in uses `bots[].supportsTargetedMessages` |
 | Unmentioned channel message | Not delivered | Live bridge logs and Team/RSC inspection |
 | Unmentioned reply in a thread where the agent already replied | Not delivered | Live test showed no bridge activity |
 | Full thread history | Not pushed | Requires a separate Graph/MCP read; bridge currently keeps only delivered activities in local memory |
@@ -34,6 +35,8 @@ The Agent 365 Notifications SDK is also not a subscription system for Teams conv
 | Agent 365 Notifications package | Email, Office comments, lifecycle only | Package 1.0.0 source and Agent 365 notification documentation |
 
 No public Microsoft documentation, SDK changelog, or roadmap item found in the 2026-07-09 review commits to an Agent User mode that receives all unmentioned Teams messages, follows a thread after one mention, or creates RSC grants from `agenticUserTemplates`.
+
+The installed `microsoft-agents-hosting-core` 1.1.0 `TurnContext` lacks `send_targeted_activity`; ordinary `send_activity` does not set targeting. The refreshed Teams documentation describes explicit targeted sending through Teams SDK/REST separately from receive opt-in. Missing convenience API and absent `/` discovery do not prove a universal transport prohibition. No private content was sent in the UI recheck, and neither a companion bot nor a public fallback is approved.
 
 ## Decision
 
@@ -56,7 +59,7 @@ Eligible delivered events:
 | --- | --- | --- |
 | 1:1 message | Yes | Direct conversation |
 | Explicit mention | Yes | Direct invocation |
-| Targeted private message | Yes | Direct private invocation |
+| Targeted private message | Only if genuinely delivered through a supported Agent User contract | Inbound support remains unverified; ordinary bot schema support is insufficient |
 | Delivered reply in an active thread | Yes | Preserve continuity if the platform delivers it |
 | Public unmentioned message or reply | Not currently delivered | Agent User packages create no Teams app installation or RSC grant |
 | Reaction to an agent-authored message | Yes | Feedback/context when delivered |

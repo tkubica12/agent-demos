@@ -3,6 +3,12 @@
 - Status: Accepted
 - Date: 2026-07-28
 
+## September 2026 modernization note
+
+Hermes is pinned to 0.19.0. The earlier 0.18 UI assessment below is not proof that the new client supports MCP Apps; that feature remains deferred until the native client/host contract is verified. All service compute now uses ACA Sandboxes. Each Worker has its own generated-app Group and user-assigned identity, separate from runtime, gateway, and MCP Groups. Express is accepted as the managed-environment boundary for private MCP ingress, not as a replacement generated-app workload.
+
+Generated-app Entra-authenticated participant ports remain distinct from gateway/MCP native anonymous transport with application authentication. The gateway identity manages generated-app lifecycle. Existing July UI validation must be repeated after the new application deployment.
+
 ## Context
 
 Hermes needs interactions richer than text. Three technologies address different problems:
@@ -17,9 +23,9 @@ Teams sends an Adaptive Card as an Activity attachment with content type `applic
 
 MCP Apps is a stable MCP extension identified by `io.modelcontextprotocol/ui`. A tool declares `_meta.ui.resourceUri`; the host reads self-contained HTML from the MCP server with `resources/read` on a `ui://` URI and renders it in a sandboxed iframe. Microsoft 365 Copilot supports this for declarative agents with remote MCP plugins. VS Code GitHub Copilot also supports it.
 
-The current Hermes 0.18 MCP client does not negotiate the UI extension, preserve MCP Apps metadata for a host, read `ui://` resources, or render widgets. Agent 365 AI teammates packaged with `agenticUserTemplates` are Teams teammate identities, not selectable Microsoft 365 Copilot declarative agents. Creating a parallel declarative agent would demonstrate the MCP server but would not make the widget part of the Hermes AI teammate experience.
+The earlier Hermes 0.18 assessment found no UI-extension negotiation, preservation of MCP Apps metadata for a host, `ui://` resource rendering, or widget host. Hermes 0.19.0 requires a new compatibility check rather than inheriting that verdict automatically. Agent 365 AI teammates packaged with `agenticUserTemplates` are Teams teammate identities, not selectable Microsoft 365 Copilot declarative agents. Creating a parallel declarative agent would demonstrate the MCP server but would not make the widget part of the Hermes AI teammate experience.
 
-Rich generated applications are broader than either chat surface. Hermes can write a complete web app, but serving it from the Worker process would mix user workloads with agent state and lifecycle. Azure Container Apps Express is agent-oriented but currently lacks required Entra authentication, managed identity, secrets, networking, regions, and other enterprise controls. Azure Container Apps Sandboxes already provide isolated execution, authenticated ports, principal allowlists, egress policy, secrets, auto-suspend, snapshots, and lifecycle operations.
+Rich generated applications are broader than either chat surface. Hermes can write a complete web app, but serving it from the Worker process would mix user workloads with agent state and lifecycle. The accepted generated-app host is ACA Sandbox, with isolated execution, authenticated ports, principal allowlists, egress policy, auto-suspend, and native lifecycle operations. Express now serves a different purpose: the linked private-MCP ingress environment, not generated-app compute. The earlier direct-Express limitations must not be generalized to that accepted use.
 
 ## Options considered
 
@@ -61,7 +67,7 @@ Selected for A17. Microsoft publishes an MIT `aca-sandboxes` skill with web-app,
 6. Direct reply and proactive delivery are separate capabilities. A16 live-validated direct card rendering, replacement, and Hermes continuation. Proactive delivery previously stripped card attachments, so that path retains suggested-action/text fallback until independently proven.
 7. A17 covers Hermes-generated web applications.
 8. Hermes creates and iterates source in its private workspace. A governed deployment wrapper creates a child sandbox, transfers the reviewed artifact, runs tests, starts the app, and exposes an Entra-authenticated port to explicit participant email addresses supported by the current Sandbox SDK.
-9. Generated applications run in a dedicated Sandbox Group. The Worker Agent Identity receives only Sandbox Group Data Owner on that group. Deny-default egress, quotas, owner labels, five-minute auto-suspend, native 24-hour post-suspension retention by default, explicit 1/6/24/72-hour renewal, and deterministic deletion are mandatory.
+9. Generated applications run in a dedicated per-Worker Sandbox Group with its own user-assigned identity. The gateway identity receives Sandbox Group Data Owner on that group for lifecycle management. Deny-default egress, quotas, owner labels, five-minute auto-suspend, native 24-hour post-suspension retention by default, explicit 1/6/24/72-hour renewal, and deterministic deletion are mandatory.
 10. Generated-app ports use `activationMode: OnDemand`. The Sandbox ADC proxy performs Entra authentication, resumes idle compute, and forwards the request. The URL is the native Sandbox URL; the bridge manages lifecycle but never hosts or proxies application traffic.
 11. Ephemeral generated apps remain distinct from maintained applications. Promotion requires source review and deployment to standard ACA with Easy Auth, managed identity, durable observability, and operations.
 12. Do not create an A18 MCP Apps milestone. Keep MCP Apps as a strategic watch item.

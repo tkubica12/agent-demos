@@ -3,6 +3,12 @@
 - Status: Accepted
 - Date: 2026-07-25
 
+## 2026-09-06 clarification: transcript sharing is unchanged
+
+The approved modernization does not introduce per-user group transcripts. Current transcript IDs are conversation/thread scoped and time-bucketed; stable memory keys include the authenticated user. A key is a segmentation input, not evidence that every native memory or recall path enforces private isolation.
+
+Decision item 10 below remains an intended privacy boundary, not a proven end-to-end guarantee. Shared group transcripts, Worker-wide Personal Memory/Private Playbooks, and Work History create a design tension that requires explicit tests and a separately approved resolution. Do not claim full private memory isolation, silently change the conversation contract, or copy targeted/private input into public context.
+
 ## Context
 
 Teams personal chats reuse one `conversation.id` for the lifetime of the installation. Teams channels and group chats also provide stable conversation identifiers, with a thread root only when users reply in a real thread. Slack classic messaging is similar unless an application explicitly keys by `thread_ts`; only Slack's Assistant surface creates a natural new AI thread.
