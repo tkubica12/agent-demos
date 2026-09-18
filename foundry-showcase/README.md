@@ -2,7 +2,7 @@
 
 This project demonstrates Microsoft Foundry agent capabilities through one inspectable support-operations scenario. [PLAN.md](PLAN.md) defines the complete five-phase target.
 
-[demo/demo-guide.html](demo/demo-guide.html) is the presenter's guide: how to walk the portal in front of a room, in six chapters and twenty-eight stops, with twenty-two captured screens. The same file is the slide deck — open it with `?view=slides`. Screens are recaptured with `demo/capture`; see [demo/capture/shots.toml](demo/capture/shots.toml) for the shot list.
+[demo/demo-guide.html](demo/demo-guide.html) is the presenter's guide: how to walk the portal in front of a room, in six chapters and thirty-one stops, with twenty-two captured screens and a live dedicated-gateway demonstration. The same file is the slide deck — open it with `?view=slides`. Screens are recaptured with `demo/capture`; see [demo/capture/shots.toml](demo/capture/shots.toml) for the shot list.
 
 ## Deployed status
 
@@ -16,6 +16,7 @@ This project demonstrates Microsoft Foundry agent capabilities through one inspe
 | Portal experiences | Complete with explicit preview boundaries | Stored Completions, persistent Memory, PII and Task Adherence guardrails, rich Foundry IQ content, workflows, monitoring, and fine-tuning are live; trace curation, continuous session retrieval, and secretless Work IQ are blocked upstream |
 | Session scaling | Complete | Sandbox identity probe, three-mode load lab, measured shared, pooled, and isolated results, and verified session stop and resume |
 | Human feedback loop | Complete | In-app thumbs up/down, business reviewer app outside the Foundry portal, flagged answers rebuilt into a pinned evaluation set |
+| Dedicated AI Gateway | Deployed and live; separate governance path | Actual `AIGateway` SKU, isolated GPT-5.4-mini through managed identity, rate rejection, per-key cost-budget rejection, MCP selection/blocking, and native OTLP logs/traces/token/cost metrics. Existing agents still call shared Foundry directly. See [ADR 0001](adr/0001-dedicated-ai-gateway.md). |
 
 Current immutable assets:
 
@@ -68,6 +69,95 @@ Agent 365 / Teams --------> Activity bridge (tenant approval pending)
 Toolbox reads and proposal creation do not require approval. `case-write___apply_case_update` always requires the Responses approval exchange. Live validation proved that the write does not run before approval, resumes from `previous_response_id`, updates Table Storage once, and can be restored through a second approved write.
 
 The `resolve_support_case` MAF workflow retrieves the case, delegates an exact sanitized policy payload through authenticated A2A, rejects contradictions before proposal creation, branches on deterministic risk, checkpoints confirmation state, and resumes the governed write in the same Hosted Agent session. The `process_invoice` workflow demonstrates deterministic sequential prepare, validate, and route stages with `auto_post`, `finance_review`, and `rejected` outcomes. The primary and helper spans share one W3C operation ID.
+
+## Dedicated AI Gateway
+
+This is a **separate governance path**, not the gateway for existing hosted-agent
+traffic. The existing agents retain the shared Foundry account and project.
+The new gateway has its own `fshow-aigw-models-si4ons` backend in the showcase
+resource group: one `showcase-chat` deployment of GPT-5.4-mini, limited to 10
+requests and 10,000 tokens per minute. Backend authentication uses the gateway's
+managed identity; local Foundry keys are disabled.
+
+The new dedicated tier is an APIM resource with SKU **`AIGateway`**, plus a
+`Microsoft.Web/connectorGateways` companion. It is not Basic v2 or another
+conventional APIM SKU. No general retirement of APIM AI functionality was
+established. [ADR 0001](adr/0001-dedicated-ai-gateway.md) records the alternatives,
+current authentication boundary, public evidence, and demonstration criteria.
+
+```text
+Operator CLI -> dedicated AIGateway -> isolated showcase-chat model (managed identity)
+                                  -> governed public Microsoft Learn MCP
+                                  -> native Azure Monitor OTLP (managed identity)
+```
+
+**Authentication boundary:** the operator signs into Azure CLI with Entra, but
+the dedicated runtime still requires a gateway-wide `api-key`. The CLI retrieves
+the existing key through ARM, uses it only in process memory, and never prints
+or persists it. This is not secretless application access. No application secret
+configuration, key-distribution service, or authentication relay is introduced.
+
+From the repository root, with the existing main-agent environment prepared and
+Azure CLI signed into the configured tenant. The operator needs management
+access including gateway key retrieval; `budget-demo` also needs key and policy
+write access. Telemetry requires read/query access to the monitoring resources.
+
+```powershell
+uv run --project foundry-showcase\main-agent --no-sync python foundry-showcase\scripts\ai_gateway.py
+uv run --project foundry-showcase\main-agent --no-sync python foundry-showcase\scripts\ai_gateway.py budget-demo --approve
+uv run --project foundry-showcase\main-agent --no-sync python foundry-showcase\scripts\ai_gateway.py telemetry
+uv run --project foundry-showcase\main-agent --no-sync python foundry-showcase\scripts\ai_gateway.py status
+uv run --project foundry-showcase\main-agent --no-sync python foundry-showcase\scripts\ai_gateway.py plan
+uv run --project foundry-showcase\main-agent --no-sync python foundry-showcase\scripts\ai_gateway.py apply --approve
+uv run --project foundry-showcase\main-agent --no-sync python -m unittest discover -s foundry-showcase\scripts\tests -p test_ai_gateway.py
+```
+
+The **no-argument command is the live demo**, not a configuration-only check:
+it makes real Responses and Chat Completions calls, triggers the model's request
+rate limit, searches Microsoft Learn through MCP, and verifies both negative
+tool outcomes. It prints a trace ID and safe evidence headers. Run probes
+serially; an existing rate window can cause an explicit 61-second cooldown.
+
+| Capability | Configuration and observed result |
+|---|---|
+| Request rate | 5 requests/minute per runtime key; bounded burst produces gateway HTTP 429 with `Retry-After`. Distributed enforcement is approximate, not an exact sixth-request cutoff. |
+| Token limit | 5,000 tokens/minute per key; configured and visible in real policy spans. A separate token-threshold rejection has not been tested. |
+| Estimated-cost budget | $0.05 per calendar day per key. `budget-demo --approve` creates one temporary key, applies a $0.000001 override, and verifies HTTP 403 `LLM cost quota is exceeded` with at most four Chat Completions calls. |
+| MCP selection | Only `microsoft_docs_search` and `microsoft_docs_fetch` are published. Search succeeds; unselected `microsoft_code_sample_search` is rejected with HTTP 404. |
+| MCP blocking | Fetch remains discoverable but its call returns HTTP 200 with MCP `isError: true` and gateway denial code `ToolNotAvailable`. HTTP success alone is not tool success. |
+| Native monitoring | `appi-fshow-aigw-si4ons` receives OTLP logs, policy/MCP traces, and actual token/estimated-cost metric samples. Gateway MI is scoped to its ingestion DCR; local auth and payload capture are disabled. |
+
+The budget probe restores only its own policy override using ETag concurrency,
+revokes the temporary key, and verifies deletion even when a probe fails.
+New-key propagation has a bounded wait. Neither the normal budget nor other
+keys' overrides are reset. Budgets are estimated governance controls, not hard
+Azure spending caps: accounting delay and concurrency allow overshoot, and
+infrastructure/monitoring charges are separate. Enforcement is verified on
+**Chat Completions**; Responses transport succeeds, but its cost-budget
+accounting/enforcement is not yet established.
+
+`telemetry --trace-id <32-hex-id>` correlates recent `OTelSpans` and `OTelLogs`
+with a demo run. Token/cost metrics are explicitly gateway-wide recent sample
+aggregates, not trace totals or an Azure bill. Allow for ingestion delay.
+Application Insights provisioned its native managed Log Analytics workspace,
+Azure Monitor workspace, DCR, and DCE; no custom collector or relay is needed.
+
+`status` checks live infrastructure and configuration. `plan` and `apply` use
+[ai-gateway.toml](ai-gateway.toml) and the dedicated Terraform root, rejecting
+resource deletions/replacements. Model publication, policies, MCP, and telemetry
+use verified native ARM resources. No additional Python dependencies are
+required; Terraform uses the committed AzAPI 2.11.0 lock.
+
+For a new environment, update the non-secret TOML settings, create the dedicated
+gateway in the native portal with system identity enabled, then run
+`ai_gateway.py adopt` once before `plan`/`apply`. Native bootstrap, Terraform
+adoption, in-place updates, and isolated backend creation are verified. A full
+from-empty automated gateway bootstrap is not yet verified.
+
+Do not import the shared Foundry account or expose case-write tools through an
+alternate, unapproved path. Moving hosted-agent traffic remains gated on released
+inbound Entra support and verified native Memory, Toolbox, A2A, and approval
+continuation compatibility. Generic Responses compatibility is insufficient.
 
 ## Human feedback loop
 

@@ -74,8 +74,8 @@
   <header class="doc-header">
     <p class="eyebrow">Demo guide</p>
     <h1>Demoing Microsoft Foundry</h1>
-    <p class="subtitle">Six sections of the Foundry showcase, in order. Each stop states the claim it supports and what is on screen when you make it. Every screen is one live project; every score, trace and alert is a real run.</p>
-    <p class="meta"><time datetime="2026-08-04">4 August 2026</time></p>
+    <p class="subtitle">Six sections of the Foundry showcase, in order. Each stop states the claim it supports and what is on screen when you make it. The hosted agents share one live project; the dedicated AI Gateway has a separate, isolated model backend. Scores, traces and alerts come from real runs.</p>
+    <p class="meta">Portal captures: <time datetime="2026-08-04">4 August 2026</time>. AI Gateway demonstration: <time datetime="2026-09-16">16 September 2026</time>.</p>
   </header>
 
   <nav class="toc" aria-label="Contents">
@@ -777,6 +777,66 @@
         </div>
       </article>
 
+      <article class="card" id="card-ai-gateway">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">The dedicated AI Gateway governs a separate traffic path</span>
+              <span class="card-sub">Real AIGateway SKU, not a renamed Basic v2 gateway.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Open <a href="https://ai.gateway.azure.com">AI Gateway</a> and select <code>fshow-aigw-si4ons</code> in Sweden Central. Show one published model, <code>showcase-chat</code>, and Microsoft Learn MCP. The model backend and native telemetry use the gateway's managed identity.</p>
+          <p>The hosted agents still call Foundry directly. Memory, Toolbox, A2A and approved case writes are unchanged. Inbound gateway runtime access still needs a key; the operator CLI retrieves it into memory through Entra-authenticated ARM.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the live runbook and ownership boundary</button>
+            <div class="reveal-body">
+              <p>From the repository root, with the main-agent environment prepared and Azure CLI signed in:</p>
+              <div class="code"><pre><code>Set-Location foundry-showcase
+uv run --project main-agent --no-sync python scripts\ai_gateway.py
+uv run --project main-agent --no-sync python scripts\ai_gateway.py budget-demo --approve
+uv run --project main-agent --no-sync python scripts\ai_gateway.py telemetry</code></pre></div>
+              <p>The isolated <code>fshow-aigw-models-si4ons</code> account contains one low-capacity GPT-5.4-mini deployment. No shared-account deployments or case-write tools are published. The gateway-wide key is neither printed nor persisted; this is an administrative demo, not secretless application integration.</p>
+              <p>Terraform manages publication, policies, MCP, and native OTLP. Native first creation followed by Terraform adoption is verified; a full from-empty gateway bootstrap is not. See the <a href="../README.md#dedicated-ai-gateway">operating commands</a> and <a href="../adr/0001-dedicated-ai-gateway.md">architecture decision</a>.</p>
+              <p>No general retirement of conventional APIM AI functionality was established. Do not present the new tier as proof of that claim or of native Foundry feature compatibility.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="card" id="card-gateway-governance">
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">Prove governance with rejected calls and their traces</span>
+              <span class="card-sub">A configured policy is not evidence of enforcement.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <ul>
+            <li>Model requests succeed, then a bounded burst returns rate-limit <strong>429</strong>. A tiny per-key Chat Completions budget returns <strong>403</strong>.</li>
+            <li>Learn search works. Blocked fetch returns HTTP 200 with MCP <code>isError</code>; unpublished code search returns <strong>404</strong>.</li>
+            <li>Native monitoring shows policy and tool spans, logs, and actual token and estimated-cost metric samples. Payload capture is off.</li>
+          </ul>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the limits and evidence to explain</button>
+            <div class="reveal-body">
+              <p>Model policies are 5 requests/minute, 5,000 tokens/minute, and $0.05/calendar day per runtime key. Rate enforcement is approximate. The token policy appears in real spans, but its threshold rejection has not been separately tested.</p>
+              <p>The budget command temporarily overrides only its disposable key to $0.000001, makes at most four Chat Completions calls, restores its override, and revokes the key. Delayed accounting can overshoot the limit. Responses transport works; equivalent cost-budget enforcement is not yet established. Neither these estimates nor the low model capacity are hard Azure spending caps.</p>
+              <p>Fetch stays in the published tool list but returns gateway denial code <code>ToolNotAvailable</code>. Check MCP semantics, not just HTTP success. Code search is excluded from the published list and its direct call is rejected with HTTP 404.</p>
+              <p>Copy the run's trace ID into <code>telemetry --trace-id &lt;32-hex-id&gt;</code>. Logs and spans correlate to that run; token/cost metrics remain gateway-wide recent sample aggregates, not trace totals or an Azure bill. Allow ingestion delay and run probes serially; a previous rate window can require a 61-second cooldown.</p>
+              <p>Current public capabilities: <a href="https://ai.gateway.azure.com/docs/releases/2026-08-28">native OTLP and cost budgets</a>, then <a href="https://ai.gateway.azure.com/docs/releases/2026-09-10">per-key overrides and MCP selection/blocking</a>.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
       <article class="card" id="card-isolation">
         <h3 class="card-head">
           <button type="button" class="card-toggle" aria-expanded="false">
@@ -820,7 +880,7 @@
   <p class="takeaway">Foundry's argument is not that it can run an agent. It is that it can tell you, in a number with a trace behind it, whether the agent got better.</p>
 
   <footer class="doc-footer">
-    <span>Captured from the Foundry showcase project on 4 August 2026.</span>
+    <span>Portal captures: 4 August 2026. Dedicated gateway live evidence: 16 September 2026.</span>
     <span>Screenshots reproduced with <code>demo/capture/capture.py</code>.</span>
   </footer>
 

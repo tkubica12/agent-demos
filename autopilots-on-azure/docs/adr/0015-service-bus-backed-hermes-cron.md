@@ -1,4 +1,4 @@
-# ADR 0015: Native Hermes cron with Service Bus delivery
+`# ADR 0015: Native Hermes cron with Service Bus delivery
 
 ## Decision
 

@@ -1,0 +1,16 @@
+[azure]
+subscription_id = "673af34d-6b28-41dc-bc7b-f507418045e6"
+tenant_id = "6ce4f237-667f-43f5-aafd-cbef954adf97"
+resource_group_name = "rg-foundry-showcase-si4ons"
+location = "swedencentral"
+
+[gateway]
+name = "fshow-aigw-si4ons"
+publisher_name = "TomasOnlineNet"
+publisher_email = "tomas@tomasonline.net"
+
+[foundry]
+name = "fshow-aigw-models-si4ons"
+model_name = "gpt-5.4-mini"
+model_version = "2026-03-17"
+model_capacity = 10
