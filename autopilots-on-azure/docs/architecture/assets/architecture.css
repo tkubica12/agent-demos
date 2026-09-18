@@ -1,0 +1,562 @@
+.overview-grid,
+.payload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 22px 0;
+}
+
+.overview-item,
+.payload-grid > * {
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.overview-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 0.73rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scope-note {
+  margin: 20px 0;
+  padding: 16px 20px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  margin: 20px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.architecture-table,
+.source-matrix {
+  margin: 0;
+  font-size: 0.87rem;
+}
+
+.architecture-table th,
+.source-matrix th {
+  background: var(--surface-2);
+}
+
+.architecture-table td,
+.source-matrix td {
+  min-width: 9rem;
+  overflow-wrap: anywhere;
+}
+
+.architecture-table tr:last-child td,
+.source-matrix tr:last-child td {
+  border-bottom: 0;
+}
+
+.source-list {
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.source-list li + li { margin-top: 12px; }
+
+.walkthrough {
+  padding-left: 1.5em;
+}
+
+.walkthrough > li {
+  padding: 0 0 16px 8px;
+}
+
+.walkthrough > li::marker {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.flow-caption {
+  color: var(--text-muted);
+  font-size: 0.91rem;
+}
+
+.architecture-figure {
+  min-width: 0;
+  max-width: 100%;
+  margin: 28px 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.diagram-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.diagram-label {
+  color: var(--text);
+  font-size: 0.81rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.diagram-focus,
+.diagram-popup-close {
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  cursor: pointer;
+  -webkit-tap-highlight-color: var(--accent-soft);
+}
+
+.diagram-focus { display: none; }
+html[data-architecture-ready] .diagram-focus { display: inline-flex; }
+
+.diagram-focus:hover,
+.diagram-popup-close:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.diagram-focus[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.diagram-scroll {
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior-x: contain;
+}
+
+.architecture-svg {
+  display: block;
+  width: 100%;
+  min-width: 1000px;
+  height: auto;
+  font-family: var(--font-sans);
+  background: var(--surface);
+}
+
+.architecture-svg text {
+  fill: var(--text);
+  stroke: none;
+}
+
+.architecture-svg .zone {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+  rx: 14px;
+}
+
+.architecture-svg .zone-inner {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-dasharray: 6 4;
+}
+
+.architecture-svg .zone-label {
+  fill: var(--text-muted);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.8px;
+}
+
+.architecture-svg .small-label,
+.architecture-svg .svg-note {
+  fill: var(--text-muted);
+  font-size: 13px;
+}
+
+.architecture-svg .arch-node {
+  cursor: pointer;
+  text-decoration: none;
+  -webkit-tap-highlight-color: var(--accent-soft);
+}
+
+.architecture-svg .arch-node > rect {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  rx: 9px;
+}
+
+.architecture-svg .optional-node > rect {
+  stroke-dasharray: 6 4;
+}
+
+.architecture-svg .arch-node:hover > rect,
+.architecture-svg .arch-node:focus > rect,
+.architecture-svg .arch-node.is-active > rect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+}
+
+.architecture-svg .arch-node:focus { outline: none; }
+
+.architecture-svg .arch-node:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+.architecture-svg .node-title {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.architecture-svg .node-sub {
+  fill: var(--text-muted);
+  font-size: 13px;
+}
+
+.architecture-svg .node-meta {
+  fill: var(--text-muted);
+  font-size: 12px;
+}
+
+.architecture-svg .edge {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+
+.architecture-svg .optional-edge { stroke-dasharray: 7 5; }
+.architecture-svg .edge.is-active { opacity: 1; }
+
+.architecture-svg .edge-label {
+  fill: var(--text-muted);
+  font-size: 12px;
+  paint-order: stroke fill;
+  stroke: var(--surface);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+
+.architecture-svg .lane-line {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 5;
+}
+
+.architecture-svg .sequence-step {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.architecture-svg text.sequence-step {
+  fill: var(--text);
+  stroke: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.architecture-svg .step-circle {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.architecture-svg .step-number {
+  fill: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.architecture-svg .note-box {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 1;
+  rx: 8px;
+}
+
+.architecture-svg .badge {
+  fill: var(--accent-soft);
+  stroke: var(--accent-border);
+  stroke-width: 1;
+  rx: 5px;
+}
+
+.architecture-svg text.badge {
+  fill: var(--accent);
+  stroke: none;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.architecture-svg .code-label {
+  fill: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.architecture-figure > figcaption {
+  padding: 13px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.diagram-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 14px 0;
+  color: var(--text-muted);
+  font-size: 0.81rem;
+}
+
+.legend-solid,
+.legend-dashed {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-solid::before,
+.legend-dashed::before {
+  content: "";
+  width: 28px;
+  border-top: 2px solid var(--accent);
+}
+
+.legend-dashed::before { border-top-style: dashed; }
+
+.component-reference {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 20px 0;
+}
+
+html[data-architecture-ready] .component-reference[data-popup-reference] {
+  display: none;
+}
+
+.component-detail {
+  min-width: 0;
+  align-self: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  scroll-margin-top: 76px;
+}
+
+.component-detail > summary {
+  padding: 12px 16px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.component-detail > summary::marker { color: var(--accent); }
+.component-detail[open] > summary { border-bottom: 1px solid var(--border); }
+.component-detail:target { border-color: var(--accent); }
+
+.component-copy {
+  padding: 16px;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.detail-status {
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+
+body.architecture-focus-open { overflow: hidden; }
+
+.architecture-figure.is-focused {
+  position: fixed;
+  inset: 12px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  max-width: none;
+  margin: 0;
+  box-shadow: var(--shadow-2);
+}
+
+.architecture-figure.is-focused > .diagram-toolbar,
+.architecture-figure.is-focused > figcaption { flex: 0 0 auto; }
+
+.architecture-figure.is-focused > .diagram-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--surface);
+  overscroll-behavior: contain;
+}
+
+.architecture-figure.is-focused .architecture-svg { min-width: 1100px; }
+.architecture-figure.is-focused > figcaption { max-height: 20vh; overflow: auto; }
+
+.diagram-popup {
+  position: fixed;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  width: 390px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-2);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+}
+
+.diagram-popup[hidden],
+.diagram-popup [hidden] { display: none !important; }
+
+.diagram-popup-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diagram-popup-title {
+  min-width: 0;
+  margin: 2px 0;
+  font-size: 1rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.diagram-popup-close { flex-shrink: 0; }
+
+.diagram-popup-content {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.diagram-popup .component-copy {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+@media (pointer: coarse) {
+  .diagram-focus,
+  .diagram-popup-close { min-height: 44px; }
+}
+
+@media (max-width: 760px) {
+  .overview-grid,
+  .payload-grid,
+  .component-reference { grid-template-columns: minmax(0, 1fr); }
+  .architecture-figure { margin: 22px 0; }
+  .diagram-toolbar { padding: 10px 12px; }
+  .architecture-figure.is-focused { inset: 6px; }
+  .architecture-figure.is-focused > figcaption { font-size: 0.76rem; }
+}
+
+@page {
+  size: A3 portrait;
+  margin: 14mm 14mm 16mm;
+  @bottom-right {
+    content: counter(page);
+    font-family: Arial, sans-serif;
+    font-size: 9pt;
+  }
+}
+
+@media print {
+  body {
+    padding: 0;
+    background: var(--surface);
+    font-size: 11pt;
+    line-height: 1.4;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .doc { max-width: none; }
+  .doc-header { padding: 0 0 6mm; }
+  .doc-header h1 { font-size: 30pt; margin: 0 0 5mm; }
+  .subtitle { max-width: none; font-size: 12pt; }
+  .toc,
+  .scope-note,
+  .diagram-focus,
+  .diagram-popup,
+  .component-reference[data-popup-reference] { display: none !important; }
+  .chapter { margin: 0; }
+  .chapter-label { margin: 0 0 5mm; }
+  #ch-infrastructure,
+  #ch-application,
+  #ch-flows,
+  #card-queue,
+  #card-document { break-before: page; }
+  #card-identities { margin-top: 10mm; }
+  .card,
+  .card[data-open] {
+    margin: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .card-head { border: 0; }
+  .card-toggle { padding: 0; background: transparent; }
+  .card-body { padding: 4mm 0 0 !important; }
+  .card-title { font-size: 17pt; }
+  .card-sub { font-size: 10pt; }
+  h2, h3, h4 { break-after: avoid; }
+  p, li { orphans: 3; widows: 3; }
+  .overview-grid { gap: 3mm; margin: 5mm 0; }
+  .overview-item { padding: 4mm; font-size: 10pt; }
+  .architecture-figure,
+  .component-detail { break-inside: avoid; box-shadow: none; }
+  .architecture-figure { margin: 5mm 0; }
+  .diagram-toolbar { padding: 3mm 4mm; background: transparent; }
+  .architecture-figure.is-focused { position: static; display: block; }
+  .diagram-scroll,
+  .table-scroll { overflow: visible; }
+  .table-scroll { margin: 5mm 0; border: 0; }
+  .architecture-table { font-size: 10pt; }
+  .architecture-table th,
+  .architecture-table td { padding: 2.5mm; }
+  tr { break-inside: avoid; }
+  thead { display: table-header-group; }
+  .architecture-svg,
+  .architecture-figure.is-focused .architecture-svg { min-width: 0; width: 100%; }
+  .architecture-svg .edge { opacity: 1; }
+  .component-reference { display: block; }
+  .component-detail { margin-bottom: 10px; }
+  .component-detail::details-content { display: block; content-visibility: visible; }
+  .component-detail > .component-copy { display: block !important; }
+}

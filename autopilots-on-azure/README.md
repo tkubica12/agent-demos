@@ -39,8 +39,16 @@ The no-argument command checks `hermes`; use `status --state-name hermes2` for t
 | [Specification](SPEC.md) | Domain, identity, lifecycle, learning, and current limitations |
 | [Identity runbook](docs/runbooks/identity-mcp.md) | Consent, federation, and MCP troubleshooting |
 | [Architecture decisions](docs/adr) | Current choices and rejected alternatives |
+| [Interactive architecture atlas](docs/architecture/autopilots-architecture.standalone.html) | Four English architecture diagrams with component popovers; offline-ready. [Editable source](docs/architecture/autopilots-architecture.html) and [print PDF](docs/architecture/autopilots-architecture.pdf). |
 | [Visual overview](docs/hermes-on-azure-overview.html) | Architecture and learning overview |
 | [Architecture deep dive](docs/hermes-architecture-deep-dive.html) | Hosting, identity, and lifecycle |
 | [Learning deep dive](docs/hermes-learning-deep-dive.html) | Memory, provenance, review, and refresh |
+
+The atlas prints on A3 portrait pages to keep diagram labels readable, with light backgrounds and no interactive controls. Rebuild the HTML and PDF from this directory (PDF export uses an existing Playwright and Chromium/Edge installation):
+
+```powershell
+node docs\architecture\assets\bundle.js docs\architecture\autopilots-architecture.html
+node docs\architecture\assets\print-pdf.cjs docs\architecture\autopilots-architecture.standalone.html
+```
 
 **Boundaries:** the gateway stays awake; runtime compute is OnDemand. Foundry registers an external agent, not Hosted Agent compute. The supported deployment path updates existing Workers; fresh Agent 365 bootstrap is unresolved. Shared group conversations are not private storage. See the specification for the consolidated limitations.
