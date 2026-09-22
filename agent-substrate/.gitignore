@@ -1,0 +1,14 @@
+.artifacts/
+.local/
+.venv/
+__pycache__/
+*.py[cod]
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+.env
+.env.*
+!.env.example

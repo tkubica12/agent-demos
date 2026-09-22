@@ -1,0 +1,13 @@
+[project]
+name = "agent-substrate-mvp"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[[tool.uv.index]]
+name = "approved"
+url = "https://packagefeedproxy.microsoft.io/pypi/simple/"
+default = true
