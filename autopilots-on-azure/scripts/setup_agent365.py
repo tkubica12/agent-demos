@@ -175,11 +175,12 @@ def agent365_config_payload(
         "agentIdentityDisplayName": f"{agent_name} Agent",
         "agentBlueprintDisplayName": f"{agent_name} Blueprint",
         "tenantId": tenant_id,
-        "messagingEndpoint": messaging_endpoint,
         "needDeployment": False,
         "deploymentProjectPath": ".",
         "aiteammate": ai_teammate,
     }
+    if messaging_endpoint:
+        payload["messagingEndpoint"] = messaging_endpoint
     if manager_email:
         payload["managerEmail"] = manager_email
     if agent_user_principal_name:
@@ -259,55 +260,6 @@ def developer_portal_url(agent_blueprint_id: str) -> str:
     return f"https://dev.teams.microsoft.com/tools/agent-blueprint/{agent_blueprint_id}/configuration"
 
 
-def setup_command(
-    *,
-    agent_name: str,
-    tenant_id: str,
-    messaging_endpoint: str,
-    ai_teammate: bool,
-    authmode: str,
-    dry_run: bool = False,
-    skip_requirements: bool = False,
-    skip_sp_provisioning: bool = False,
-) -> list[str]:
-    if ai_teammate:
-        command = [
-            "a365",
-            "setup",
-            "all",
-            "--agent-name",
-            agent_name,
-            "--tenant-id",
-            tenant_id,
-            "--aiteammate",
-            "--m365",
-            "--messaging-endpoint",
-            messaging_endpoint,
-        ]
-    else:
-        command = [
-            "a365",
-            "setup",
-            "all",
-            "--agent-name",
-            agent_name,
-            "--tenant-id",
-            tenant_id,
-            "--m365",
-            "--messaging-endpoint",
-            messaging_endpoint,
-            "--authmode",
-            authmode,
-        ]
-    if dry_run:
-        command.append("--dry-run")
-    if skip_requirements:
-        command.append("--skip-requirements")
-    if skip_sp_provisioning:
-        command.append("--skip-sp-provisioning")
-    return command
-
-
 def publish_command(*, agent_name: str, ai_teammate: bool) -> list[str]:
     if ai_teammate:
         return ["a365", "publish", "--agent-name", agent_name, "--aiteammate"]
@@ -384,7 +336,10 @@ def maybe_run(command: list[str], *, cwd: Path, enabled: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare and optionally run Agent 365 registration for an Autopilots on Azure bridge endpoint."
+        description=(
+            "Update the endpoint, publish the package, or capture identifiers of an existing Agent 365 Worker. "
+            "Create fresh Workers with scripts.worker_lifecycle bootstrap."
+        )
     )
     parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
     parser.add_argument("--autopilot-name", default="")
@@ -406,19 +361,10 @@ def main() -> None:
     )
     parser.add_argument("--manager-email", default="", help="Optional manager email for AI teammate setup.")
     parser.add_argument("--agent-user-principal-name", default="", help="Optional desired AI teammate user principal name.")
-    parser.add_argument("--authmode", choices=["obo", "s2s", "both"], default="obo")
     parser.add_argument(
         "--blueprint-agent",
         action="store_true",
         help="Use blueprint-agent mode instead of the AI teammate flow. AI teammate is the default.",
-    )
-    parser.add_argument("--run-setup", action="store_true", help="Run `a365 setup all` after preparing the local workspace.")
-    parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to `a365 setup all`.")
-    parser.add_argument("--skip-requirements", action="store_true", help="Pass --skip-requirements to `a365 setup all`.")
-    parser.add_argument(
-        "--skip-sp-provisioning",
-        action="store_true",
-        help="Pass --skip-sp-provisioning to `a365 setup all`.",
     )
     parser.add_argument("--update-endpoint", action="store_true", help="Run `a365 setup blueprint --update-endpoint`.")
     parser.add_argument(
@@ -428,10 +374,6 @@ def main() -> None:
     )
     parser.add_argument("--capture", action="store_true", help="Write non-secret Agent 365 identifiers from generated config.")
     args = parser.parse_args()
-    if args.update_endpoint and args.run_setup:
-        parser.error("Update the existing endpoint separately from --run-setup.")
-    if args.dry_run and (args.update_endpoint or args.publish):
-        parser.error("--dry-run applies only to setup; omit --update-endpoint and --publish to preview their commands.")
 
     branding_defaults = default_branding(args.autopilot_name or args.state_name)
     branding = Agent365Branding(
@@ -473,24 +415,12 @@ def main() -> None:
         config = merge_config(load_json(config_path), config)
     write_json(config_path, config)
 
-    setup = setup_command(
-        agent_name=branding.agent_name,
-        tenant_id=tenant_id,
-        messaging_endpoint=messaging_endpoint,
-        ai_teammate=ai_teammate,
-        authmode=args.authmode,
-        dry_run=args.dry_run,
-        skip_requirements=args.skip_requirements,
-        skip_sp_provisioning=args.skip_sp_provisioning,
-    )
     endpoint_update = update_endpoint_command(messaging_endpoint)
     publish = publish_command(agent_name=branding.agent_name, ai_teammate=ai_teammate)
 
-    print_command("Setup command", setup, cwd=workspace)
     print_command("Endpoint update command", endpoint_update, cwd=workspace)
     print_command("Publish command", publish, cwd=workspace)
 
-    maybe_run(setup, cwd=workspace, enabled=args.run_setup)
     maybe_run(endpoint_update, cwd=workspace, enabled=args.update_endpoint)
     if args.publish:
         missing_permissions = missing_tooling_permissions(workspace)

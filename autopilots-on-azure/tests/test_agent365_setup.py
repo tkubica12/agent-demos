@@ -23,7 +23,6 @@ from scripts.setup_agent365 import (
     publish_command,
     remove_unsupported_agentic_bot_capability,
     resolve_messaging_endpoint,
-    setup_command,
     update_endpoint_command,
 )
 from scripts.setup_identity import ensure_federated_credential
@@ -241,6 +240,18 @@ class Agent365SetupTests(unittest.TestCase):
         self.assertEqual(payload["managerEmail"], "manager@example.com")
         self.assertEqual(payload["agentUserPrincipalName"], "hermes@example.com")
 
+    def test_config_payload_omits_unregistered_endpoint(self):
+        payload = agent365_config_payload(
+            autopilot_name="worker",
+            runtime_kind="hermes",
+            agent_name="Worker",
+            tenant_id="tenant-1",
+            messaging_endpoint="",
+            ai_teammate=True,
+        )
+
+        self.assertNotIn("messagingEndpoint", payload)
+
     def test_generated_metadata_excludes_secrets(self):
         generated = {
             "agentBlueprintId": "blueprint-1",
@@ -288,59 +299,11 @@ class Agent365SetupTests(unittest.TestCase):
     def test_commands_use_existing_bridge_endpoint(self):
         endpoint = "https://bridge.example/api/messages"
 
-        self.assertEqual(
-            setup_command(agent_name="Hermes", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=True, authmode="obo"),
-            [
-                "a365",
-                "setup",
-                "all",
-                "--agent-name",
-                "Hermes",
-                "--tenant-id",
-                "tenant-1",
-                "--aiteammate",
-                "--m365",
-                "--messaging-endpoint",
-                endpoint,
-            ],
-        )
-        self.assertEqual(
-            setup_command(agent_name="Hermes", tenant_id="tenant-1", messaging_endpoint=endpoint, ai_teammate=False, authmode="both"),
-            [
-                "a365",
-                "setup",
-                "all",
-                "--agent-name",
-                "Hermes",
-                "--tenant-id",
-                "tenant-1",
-                "--m365",
-                "--messaging-endpoint",
-                endpoint,
-                "--authmode",
-                "both",
-            ],
-        )
         self.assertEqual(update_endpoint_command(endpoint), ["a365", "setup", "blueprint", "--update-endpoint", endpoint])
         self.assertEqual(publish_command(agent_name="Hermes", ai_teammate=True), ["a365", "publish", "--agent-name", "Hermes", "--aiteammate"])
         self.assertEqual(
             publish_command(agent_name="Hermes", ai_teammate=False),
             ["a365", "publish", "--agent-name", "Hermes", "--use-blueprint"],
-        )
-
-    def test_setup_command_supports_safe_execution_flags(self):
-        self.assertEqual(
-            setup_command(
-                agent_name="Hermes",
-                tenant_id="tenant-1",
-                messaging_endpoint="https://bridge.example/api/messages",
-                ai_teammate=False,
-                authmode="obo",
-                dry_run=True,
-                skip_requirements=True,
-                skip_sp_provisioning=True,
-            )[-3:],
-            ["--dry-run", "--skip-requirements", "--skip-sp-provisioning"],
         )
 
     def test_messaging_endpoint_normalization_accepts_bridge_base_url(self):

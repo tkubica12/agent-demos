@@ -1,6 +1,6 @@
 # Hermes on Azure
 
-A Junior Project Manager digital Worker: Hermes 0.19.0 in Azure Container Apps Sandboxes, Microsoft Agent 365 for Teams and Microsoft 365, and Foundry for Entra-authenticated inference.
+A Junior Project Manager digital Worker: Hermes 0.19.0 in Azure Container Apps Sandboxes, Microsoft Agent 365 for Teams and Microsoft 365, and Foundry `gpt-6.1-sol` with Entra-authenticated inference.
 
 Each Worker owns its identity, persistent state, memory, and skills. Local learning becomes shared behavior only through signed Learning Packets, human-reviewed Git Promotion, and Worker Refresh.
 
@@ -34,7 +34,7 @@ The no-argument command checks `hermes`; use `status --state-name hermes2` for t
 
 | Document | Contents |
 | --- | --- |
-| [Deployment](DEPLOYMENT.md) | Existing-Worker updates, authentication, validation, diagnostics, cleanup |
+| [Deployment](DEPLOYMENT.md) | Worker updates, fresh Worker bootstrap, validation, diagnostics, teardown |
 | [Demo](DEMO.md) | Prompts and observable results |
 | [Specification](SPEC.md) | Domain, identity, lifecycle, learning, and current limitations |
 | [Identity runbook](docs/runbooks/identity-mcp.md) | Consent, federation, and MCP troubleshooting |
@@ -51,4 +51,4 @@ node docs\architecture\assets\bundle.js docs\architecture\autopilots-architectur
 node docs\architecture\assets\print-pdf.cjs docs\architecture\autopilots-architecture.standalone.html
 ```
 
-**Boundaries:** the gateway stays awake; runtime compute is OnDemand. Foundry registers an external agent, not Hosted Agent compute. The supported deployment path updates existing Workers; fresh Agent 365 bootstrap is unresolved. Shared group conversations are not private storage. See the specification for the consolidated limitations.
+**Boundaries:** the gateway stays awake; runtime compute suspends when idle. Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` creates and removes whole Workers; the Teams package upload stays manual. Shared group conversations are not private storage. See the specification for the consolidated limitations.

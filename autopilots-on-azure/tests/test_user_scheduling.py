@@ -241,11 +241,30 @@ class UserSchedulingTests(unittest.TestCase):
                 due_at_unix=time.time() + 60,
             )
             sender.cancel_scheduled(result["sequenceNumber"])
+            sender.schedule_document_retry(
+                operation_id="a" * 24,
+                attempt=2000,
+                due_at_unix=time.time() + 60,
+                delivery_activity_id="activity-1",
+                delivery_attempt_id="attempt-1",
+            )
 
         body = json.loads(
             b"".join(
                 bytes(part) for part in scheduled[0][0].body
             )
+        )
+        ack_body = json.loads(
+            b"".join(
+                bytes(part) for part in scheduled[1][0].body
+            )
+        )
+        self.assertNotIn("deliveryActivityId", body)
+        self.assertEqual(ack_body["deliveryActivityId"], "activity-1")
+        self.assertEqual(ack_body["deliveryAttemptId"], "attempt-1")
+        self.assertEqual(
+            scheduled[1][0].message_id,
+            f"hermes2:document:{'a' * 24}:2000",
         )
         self.assertEqual(
             body["type"],
@@ -377,6 +396,163 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(result["status"], "scheduled")
         self.assertEqual(adapter.operation_id, "a" * 24)
         schedule.assert_called_once()
+
+    def test_scheduled_document_source_change_rearms_retry(self):
+        class Adapter:
+            runtime_kind = "hermes"
+
+            async def process_document_background(self, operation_id):
+                return {
+                    "status": "source_changed",
+                    "operationId": operation_id,
+                    "attempt": 3,
+                    "nextAttemptUnix": time.time() + 60,
+                }
+
+        with (
+            patch.object(
+                bridge_app,
+                "runtime_adapter",
+                return_value=Adapter(),
+            ),
+            patch.object(
+                bridge_app.schedule_sender,
+                "schedule_document_retry",
+                return_value={"sequenceNumber": 43},
+            ) as schedule,
+        ):
+            result = asyncio.run(
+                bridge_app.process_scheduled_message(
+                    {
+                        "type": "document.publish.retry",
+                        "operationId": "a" * 24,
+                        "attempt": 2,
+                    }
+                )
+            )
+
+        self.assertEqual(result["status"], "scheduled")
+        self.assertEqual(schedule.call_args.kwargs["attempt"], 3)
+
+    def test_unacknowledged_document_delivery_schedules_ack_without_resend(self):
+        sent = []
+
+        class Adapter:
+            async def claim_document_delivery(self, operation_id):
+                return {"status": "ready", "deliveryAttemptId": "attempt-1"}
+
+            async def acknowledge_document_delivery(self, **kwargs):
+                raise RuntimeError("worker unavailable")
+
+            async def fail_document_delivery(self, **kwargs):
+                raise AssertionError("A sent activity must not be failed.")
+
+        async def send_activity(activity):
+            sent.append(activity)
+            return {"id": "activity-1"}
+
+        with (
+            patch.object(bridge_app.asyncio, "sleep", return_value=None),
+            patch.object(
+                bridge_app.schedule_sender,
+                "schedule_document_retry",
+                return_value={"sequenceNumber": 44},
+            ) as schedule,
+        ):
+            result = asyncio.run(
+                bridge_app.deliver_or_schedule_reconciliation(
+                    adapter=Adapter(),
+                    operation_id="a" * 24,
+                    result={
+                        "status": "completed",
+                        "driveItem": {"webUrl": "https://contoso/doc"},
+                    },
+                    send_activity=send_activity,
+                )
+            )
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(
+            result,
+            {
+                "status": "delivered",
+                "activityId": "activity-1",
+                "acknowledged": False,
+            },
+        )
+        kwargs = schedule.call_args.kwargs
+        self.assertEqual(kwargs["attempt"], bridge_app.DOCUMENT_ACK_FIRST_ATTEMPT)
+        self.assertEqual(kwargs["delivery_activity_id"], "activity-1")
+        self.assertEqual(kwargs["delivery_attempt_id"], "attempt-1")
+
+    def test_scheduled_ack_reconciliation_never_resends_teams_result(self):
+        class Adapter:
+            runtime_kind = "hermes"
+
+            def __init__(self, failures):
+                self.failures = failures
+                self.acknowledged = []
+
+            async def process_document_background(self, operation_id):
+                raise AssertionError("Ack reconciliation must not reprocess.")
+
+            async def acknowledge_document_delivery(self, **kwargs):
+                if self.failures:
+                    self.failures -= 1
+                    raise RuntimeError("worker unavailable")
+                self.acknowledged.append(kwargs)
+                return {"status": "completed"}
+
+        def payload(attempt):
+            return {
+                "type": "document.publish.retry",
+                "operationId": "a" * 24,
+                "attempt": attempt,
+                "deliveryActivityId": "activity-1",
+                "deliveryAttemptId": "attempt-1",
+            }
+
+        recovering = Adapter(failures=0)
+        failing = Adapter(failures=2)
+        with (
+            patch.object(
+                bridge_app,
+                "send_proactive_activity",
+                side_effect=AssertionError("Teams result was resent."),
+            ),
+            patch.object(
+                bridge_app.schedule_sender,
+                "schedule_document_retry",
+                return_value={"sequenceNumber": 45},
+            ) as schedule,
+        ):
+            with patch.object(
+                bridge_app, "runtime_adapter", return_value=recovering
+            ):
+                completed = asyncio.run(
+                    bridge_app.process_scheduled_message(payload(2000))
+                )
+            with patch.object(
+                bridge_app, "runtime_adapter", return_value=failing
+            ):
+                rescheduled = asyncio.run(
+                    bridge_app.process_scheduled_message(payload(2000))
+                )
+                with self.assertRaises(RuntimeError):
+                    asyncio.run(
+                        bridge_app.process_scheduled_message(
+                            payload(bridge_app.DOCUMENT_ACK_LAST_ATTEMPT)
+                        )
+                    )
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(
+            recovering.acknowledged[0]["delivery_attempt_id"],
+            "attempt-1",
+        )
+        self.assertEqual(rescheduled["status"], "ack_scheduled")
+        schedule.assert_called_once()
+        self.assertEqual(schedule.call_args.kwargs["attempt"], 2001)
 
     def test_proactive_delivery_uses_app_id_when_claims_are_empty(self):
         fake_conversation = SimpleNamespace(

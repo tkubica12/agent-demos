@@ -34,7 +34,7 @@ Each Worker has a separate Terraform workspace, Agent 365 platform blueprint, Ag
 
 The gateway does not proxy model inference, MCP traffic, or generated-app traffic. An Agent 365 HTTP acknowledgement can precede completion of detached work; gateway availability must cover that work and queue receive. Runtime and generated-app suspension are independent.
 
-Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. Terminal `Failed` instances are replaced. Image/configuration changes may require replacement; the runtime Data Disk remains separate. A profile is single-writer because it contains SQLite and transactional skill state.
+Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. The runtime suspends to Disk after 30 idle minutes; resume restarts the process, keeps the Data Disk, and mints fresh identity tokens. Terminal `Failed` instances are replaced. An image change replaces gateway and MCP Sandboxes, which changes their native URLs; the runtime Data Disk remains separate. A profile is single-writer because it contains SQLite and transactional skill state.
 
 Deployment explicitly separates Terraform resources, identity reconciliation, image conversion, service creation, and endpoint capture. It does not use Terraform `local-exec`. Linking a Group to the private-ingress environment is irreversible.
 
@@ -57,7 +57,7 @@ Private network access and authorization are independent. Runtime VNet attachmen
 
 Sandbox egress inspection remains enabled. Python clients trust the system certificate store through `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`; disabling TLS checks is not an authentication remedy.
 
-Registry conversion is deployment-only: the deployer obtains a short-lived Entra-derived ACR token, prepares runtime/gateway/private-MCP/public-MCP disk images, and passes ready image IDs to workloads. Gateway runtime startup uses `AGENT_RUNTIME_DISK_IMAGE_ID`. Workloads have no ACR credentials, conversion code path, or registry RBAC. ACR admin stays disabled. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records this credential exception.
+Registry conversion is deployment-only: the deployer submits native-v2 disk-image conversions that the runtime/gateway/private-MCP/public-MCP Sandbox Groups authenticate with their own managed identities (`AcrPull`), then passes ready image IDs to workloads. Gateway runtime startup uses `AGENT_RUNTIME_DISK_IMAGE_ID`. No registry token or admin credential exists; workloads have no conversion code path. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records the decision.
 
 ## Messaging, events, and sessions
 
@@ -69,7 +69,7 @@ Registry conversion is deployment-only: the deployer obtains a short-lived Entra
 - Hermes transcript IDs rotate hourly by default. `HERMES_API_SESSION_ROTATION_HOURS` supports 1–24 hours; `HERMES_API_SESSION_RESET_HOUR_UTC` aligns buckets.
 - Stable `X-Hermes-Session-Key` includes Worker, source, authenticated user, and conversation/thread hash. `X-Hermes-Session-Id` is conversation/thread-based and time-bucketed. Group transcripts are shared despite user-specific memory keys.
 - `/new` and `/reset` create a distinct native session generation; native inventory preserves that selection across gateway restarts. Personal Memory and Work History remain on disk.
-- Email and Word/Excel/PowerPoint comment notifications use `/api/messages` and reply through the originating workload, not an arbitrary Teams channel.
+- Email and Word/Excel/PowerPoint comment notifications use `/api/messages` and reply through the originating workload, not an arbitrary Teams channel. An email gets exactly one reply: Hermes either sends it with Mail tools and returns `NO_RESPONSE`, or returns only the body that the bridge sends.
 
 ## Persistent state
 
@@ -136,14 +136,15 @@ Dreaming can prepare but cannot approve, export, promote, or merge. `hermes2` en
 
 - Teams ingestion accepts up to 20 DOCX/UTF-8 TXT files, 50 MiB each, 300 MiB per turn, and 1,000,000 extracted characters. Connector credentials remain on the original connector origin; inaccessible or unsupported content fails explicitly.
 - Attachment turns use private context and transactionally restore memory, private playbooks, and governed skills. Raw bytes/excerpts never enter learning exports.
-- Work IQ supplies discovery, creation, semantic reads, comments, replies, sharing, Mail, Teams, and Calendar. Graph under Agent User supplies deterministic access, ETags, same-item publication, attribution, and Excel range writes.
+- Work IQ supplies discovery, creation, comments, replies, sharing, Mail, Teams, and Calendar through its per-server MCP servers. Graph under Agent User supplies deterministic reads, ETags, same-item publication, attribution, and Excel range writes. Do not read a file that may be edited through Work IQ Word: it can hold an Office lock for about 30 minutes that blocks every later save, including the owner's.
 - Reviewed, image-pinned MiniMax Office tooling performs local package edits. The loopback collaboration MCP wraps tools rather than implementing a second Office editor.
 - Download privately, inspect, apply the requested edit, verify semantics, validate Open XML against Microsoft 365, then publish with the source ETag. Existing validation defects form a private baseline; new defects block publication. Cleanup follows completion.
+- Word edits are anchored to paragraph content, not only indexes. If another user saves first, nothing is overwritten: the result is `source_changed`, and a retry reapplies the retained edit to the latest version or fails closed when the target text changed. A 24-hour patch receipt stops a repeated request from applying the same edit twice.
 - Retained locked publishes are private, conversation-scoped operations. Staging TTL defaults to one hour; configuration is bounded to 5 minutes–24 hours. Internal IDs never become user-visible content or learning.
 - Persistent locks offer **Keep trying original** or **Send shared copy now**. Authenticated encrypted action tokens bind Worker, user, conversation, operation, and expiry.
 - Choosing background retry starts a 24-hour retry deadline and extends staged-file expiry to one hour beyond that deadline for completion/cleanup. Deterministic `document.publish.retry` queue work uses no repeated model turns. Guarded edits may rebase; opaque transformations fail closed on changed sources.
 - At the deadline or a terminal rebase conflict, the background choice produces an explicitly shared copy. Copy delivery verifies a user-specific write permission and removes an unshareable copy. A copy has independent comments/sharing/history.
-- Mutation receipts retained seven days, delivery leases, and persisted Teams activity IDs handle redelivery; they do not make external sends exactly-once.
+- Mutation receipts retained seven days, delivery leases, and persisted Teams activity IDs handle redelivery. When Teams accepts a result but its receipt cannot be written, the receipt is reconciled later without resending. External sends are still not exactly-once.
 - Word comment requests stay in the comment thread. Failed body publication returns the exact proposed text, rationale, not-applied status, and a fresh-mention retry instruction.
 
 ### Cards and generated apps
@@ -162,15 +163,17 @@ Native `llm_execution` and `tool_execution` callbacks are instrumented. A local 
 
 | Area | Boundary |
 | --- | --- |
-| Fresh Worker bootstrap | Endpoint creation requires identity state while identity setup requires Agent 365 state. Existing-Worker updates work; fresh provisioning is not turnkey. |
-| Registry conversion | SDK 0.1.0b4 managed-identity conversion returns `401 RegistryAuthFailed`; [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) defines the deployment-only token workaround. |
+| Fresh Worker bootstrap | `scripts.worker_lifecycle bootstrap` needs a tenant administrator, interactive admin consent, available licenses, and a manual package upload in Microsoft 365 admin center. |
+| Gateway endpoint | A gateway image change replaces its Sandbox and URL; Agent 365 keeps sending to the old URL until a direct blueprint owner updates the endpoint ([DEPLOYMENT.md](DEPLOYMENT.md) step 6). |
+| Registry conversion | SDK 0.1.0b4 does not expose the native-v2 disk-image endpoint, so the deployer calls it through the SDK client pipeline ([ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). The four workload identities can pull from the demo registry. |
+| Hermes version | Hermes 0.19.0 is the newest release on PyPI and the approved feed; 0.20+ ships only as GitHub releases, which this environment must not install. |
+| Work IQ routes | Only the per-server Work IQ MCP servers are used. The unified Work IQ MCP, A2A, and REST routes reject the Agent User under the current tenant billing and Copilot licensing. |
 | Teams privacy | Public group `@` discovery is available; Hermes `/` discovery is absent in this Agent User package. `agenticUserTemplates` has no `bots[]`; targeted private handling and human OBO are not implemented. Do not put private facts in shared group context. |
 | Teams routing | Do not assume unmentioned channel messages, thread subscriptions, full history, or every supported SDK event reaches the Agent User. |
-| Native tracing | `/v1/responses` creates its own session and is marked `autopilots.trace.correlation=missing`. Sandbox-origin egress preserves W3C TraceId but rewrites the parent through platform hops absent from Application Insights. |
-| Runtime idle policy | Same-ID/Data-Disk resume works; automatic eight-hour idle suspension has not been independently validated. |
+| Native tracing | `/v1/responses` creates its own session and is marked `autopilots.trace.correlation=missing`. Sandbox-origin egress preserves W3C TraceId but rewrites the parent through platform hops absent from Application Insights. Proactive Teams sends and Graph document uploads have no spans. |
 | Office | Work IQ Word lacks arbitrary existing-body editing; the reviewed local/Graph path supplies it. Direct PDF/image/XLSX/PPTX attachment ingestion is absent. Shared PowerPoint supports bounded text reads, not creation/body editing. |
 | UI hosts | MCP Apps is not implemented in the Hermes Agent User conversation. Proactive card attachments and generated-app action replacement rendering have host limitations; use text/suggested actions and request fresh app inventory. |
 | BYO MCP | Agent 365 registration/approval requires a supported client's connection/OAuth flow; raw generic MCP initialization is insufficient. |
-| Evaluation | Response-only assertions do not measure native skill discovery, tool workflows, repeated-trial variance, or general learning quality. |
+| Evaluation | `scripts.evaluate_learning` checks response text only; it does not measure native skill discovery, tool workflows, or repeated-trial variance. Judge packets on owner-authored holdout cases, not agent-proposed ones. |
 
 No swarms, direct Worker writes to shared Role Blueprints, automatic Promotion, or parallel central memory store.

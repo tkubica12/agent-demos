@@ -45,7 +45,7 @@ class HermesBootstrapTests(unittest.TestCase):
             os.environ,
             {
                 "FOUNDRY_OPENAI_BASE_URL": "https://example.services.ai.azure.com/openai/v1/",
-                "HERMES_MODEL": "gpt-5-6-terra",
+                "HERMES_MODEL": "gpt-6-1-sol",
                 "OPENAI_BASE_URL": "http://127.0.0.1:18080/v1",
                 "OPENAI_API_KEY": "obsolete-placeholder",
                 "AZURE_FOUNDRY_API_KEY": "obsolete-placeholder",
@@ -69,7 +69,8 @@ class HermesBootstrapTests(unittest.TestCase):
             start_hermes.write_env_file(home)
             model = config["model"]
             self.assertEqual(model["auth_mode"], "entra_id")
-            self.assertEqual(model["default"], "gpt-5-6-terra")
+            self.assertEqual(model["default"], "gpt-6-1-sol")
+            self.assertEqual(model["api_mode"], "codex_responses")
             self.assertNotIn("name", model)
             self.assertEqual(model["base_url"], "https://example.services.ai.azure.com/openai/v1")
             self.assertEqual(model["entra"]["scope"], "https://cognitiveservices.azure.com/.default")

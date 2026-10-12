@@ -191,7 +191,8 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
-            "default": os.getenv("HERMES_MODEL", "gpt-5-6-terra"),
+            "default": os.getenv("HERMES_MODEL", "gpt-6-1-sol"),
+            "api_mode": "codex_responses",
         },
         "memory": {"nudge_interval": 0},
         "skills": {"creation_nudge_interval": 0},
@@ -302,7 +303,7 @@ def configure_model_environment() -> None:
         os.environ.pop("OPENAI_API_KEY", None)
         os.environ.pop("AZURE_FOUNDRY_API_KEY", None)
         os.environ["HERMES_MODEL_PROVIDER"] = "azure-foundry"
-        model = os.getenv("HERMES_MODEL") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-5-6-terra"
+        model = os.getenv("HERMES_MODEL") or os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME") or "gpt-6-1-sol"
         os.environ.setdefault("HERMES_MODEL", model)
         os.environ.setdefault("HERMES_INFERENCE_MODEL", model)
 

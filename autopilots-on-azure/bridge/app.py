@@ -215,6 +215,9 @@ _SUPPORTED_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat", "channel", "team
 _CHANNEL_TEAMS_CONVERSATION_TYPES = {"channel", "team"}
 _TYPING_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat"}
 _NO_RESPONSE = "NO_RESPONSE"
+DOCUMENT_ACK_FIRST_ATTEMPT = 2000
+DOCUMENT_ACK_LAST_ATTEMPT = DOCUMENT_ACK_FIRST_ATTEMPT + 120
+DOCUMENT_ACK_RETRY_SECONDS = 60
 _TEAMS_REACTION_PREFIX = "TEAMS_REACTION:"
 _TEAMS_REACTION_ALIASES = {
     "eyes": "1f440_eyes",
@@ -1283,15 +1286,69 @@ async def document_retry_transport_smoke(
     }
 
 
+async def reconcile_document_delivery_ack(
+    *,
+    adapter: Any,
+    payload: dict[str, Any],
+    operation_id: str,
+    activity_id: str,
+) -> dict[str, Any]:
+    """Record an already-sent Teams result without sending it again."""
+    attempt = int(payload.get("attempt") or DOCUMENT_ACK_FIRST_ATTEMPT)
+    attempt_id = str(payload.get("deliveryAttemptId") or "")
+    try:
+        acknowledged = await adapter.acknowledge_document_delivery(
+            operation_id=operation_id,
+            delivery_activity_id=activity_id,
+            delivery_attempt_id=attempt_id,
+        )
+    except Exception:
+        if attempt >= DOCUMENT_ACK_LAST_ATTEMPT:
+            raise
+        scheduled = await asyncio.to_thread(
+            schedule_sender.schedule_document_retry,
+            operation_id=operation_id,
+            attempt=attempt + 1,
+            due_at_unix=time.time() + DOCUMENT_ACK_RETRY_SECONDS,
+            delivery_activity_id=activity_id,
+            delivery_attempt_id=attempt_id,
+        )
+        return {
+            "status": "ack_scheduled",
+            "operationId": operation_id,
+            "deliveryActivityId": activity_id,
+            "scheduled": scheduled,
+        }
+    return {
+        "status": (
+            "duplicate"
+            if acknowledged.get("status") == "duplicate"
+            else "completed"
+        ),
+        "operationId": operation_id,
+        "deliveryActivityId": activity_id,
+    }
+
+
 async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
     message_type = str(payload.get("type") or "")
     if message_type == "document.publish.retry":
         adapter = runtime_adapter()
         operation_id = str(payload.get("operationId") or "")
+        delivered_activity_id = str(
+            payload.get("deliveryActivityId") or ""
+        )
+        if delivered_activity_id:
+            return await reconcile_document_delivery_ack(
+                adapter=adapter,
+                payload=payload,
+                operation_id=operation_id,
+                activity_id=delivered_activity_id,
+            )
         result = await adapter.process_document_background(
             operation_id
         )
-        if result.get("status") == "locked":
+        if result.get("status") in {"locked", "source_changed"}:
             scheduled = await asyncio.to_thread(
                 schedule_sender.schedule_document_retry,
                 operation_id=operation_id,
@@ -1561,6 +1618,13 @@ def notification_prompt(
             "after closing the document. Never claim that an unpublished edit "
             "was applied."
         )
+    if workload == "email":
+        prompt += (
+            "\nSend exactly one email reply. If you reply with Mail tools, "
+            f"return exactly {_NO_RESPONSE} and nothing else afterwards. "
+            "Otherwise return only the reply body; the bridge sends it as "
+            "the email response."
+        )
     return identifier, prompt
 
 
@@ -1612,6 +1676,8 @@ async def handle_email_notification(
         notification,
         "email",
     )
+    if response_should_be_suppressed(result.text):
+        return
     body = "<p>" + html.escape(result.text).replace("\n", "<br>") + "</p>"
     await ctx.send_activity(
         EmailResponse.create_email_response_activity(body)
@@ -1744,10 +1810,29 @@ async def deliver_document_result(
             last_error = exc
             if ack_attempt < 4:
                 await asyncio.sleep(2)
-    raise RuntimeError(
-        "Teams accepted the document result, but its delivery "
-        f"receipt could not be recorded: {last_error}"
+    raise DocumentDeliveryUnacknowledged(
+        activity_id=activity_id,
+        attempt_id=attempt_id,
+        error=last_error,
     )
+
+
+class DocumentDeliveryUnacknowledged(RuntimeError):
+    """Teams accepted the result, but the Worker receipt was not updated."""
+
+    def __init__(
+        self,
+        *,
+        activity_id: str,
+        attempt_id: str,
+        error: Exception | None,
+    ) -> None:
+        super().__init__(
+            "Teams accepted the document result, but its delivery "
+            f"receipt could not be recorded: {error}"
+        )
+        self.activity_id = activity_id
+        self.attempt_id = attempt_id
 
 
 async def deliver_or_schedule_reconciliation(
@@ -1764,6 +1849,20 @@ async def deliver_or_schedule_reconciliation(
             result=result,
             send_activity=send_activity,
         )
+    except DocumentDeliveryUnacknowledged as exc:
+        await asyncio.to_thread(
+            schedule_sender.schedule_document_retry,
+            operation_id=operation_id,
+            attempt=DOCUMENT_ACK_FIRST_ATTEMPT,
+            due_at_unix=time.time() + DOCUMENT_ACK_RETRY_SECONDS,
+            delivery_activity_id=exc.activity_id,
+            delivery_attempt_id=exc.attempt_id,
+        )
+        return {
+            "status": "delivered",
+            "activityId": exc.activity_id,
+            "acknowledged": False,
+        }
     except Exception:
         await asyncio.to_thread(
             schedule_sender.schedule_document_retry,

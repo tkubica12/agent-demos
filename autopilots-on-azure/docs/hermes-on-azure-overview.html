@@ -177,14 +177,14 @@
       </article>
 
       <article class="card" id="card-operation">
-        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Run the demo from its operator commands.</span><span class="card-sub">The supported deployment path updates an existing Worker.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Run the demo from its operator commands.</span><span class="card-sub">One command creates or removes a whole Worker.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
         <div class="card-body">
           <div class="summary-grid">
             <div class="summary-item"><span class="summary-label">Start</span><a href="../README.md">README</a> names prerequisites and the main entrypoint.</div>
             <div class="summary-item"><span class="summary-label">Deploy</span><a href="../DEPLOYMENT.md">Deployment</a> contains the infrastructure, image, identity, and endpoint sequence.</div>
             <div class="summary-item"><span class="summary-label">Demonstrate</span><a href="../DEMO.md">Demo prompts</a> exercise tools, continuity, scheduling, and learning.</div>
           </div>
-          <p>Fresh Worker creation still has an Agent 365 endpoint/identity bootstrap dependency. Do not treat the existing-Worker update path as a clean, no-identity installation.</p>
+          <p><code>scripts.worker_lifecycle bootstrap</code> creates a new Worker with its Agent 365 identity, infrastructure, and endpoint; <code>teardown</code> removes it. A tenant administrator and a manual Teams package upload are still required.</p>
         </div>
       </article>
     </section>

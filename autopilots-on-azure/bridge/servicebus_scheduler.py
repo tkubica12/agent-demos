@@ -71,6 +71,8 @@ class ServiceBusScheduleSender:
         operation_id: str,
         attempt: int,
         due_at_unix: float,
+        delivery_activity_id: str = "",
+        delivery_attempt_id: str = "",
     ) -> dict[str, Any]:
         with operation_span(
             "servicebus.schedule",
@@ -79,11 +81,21 @@ class ServiceBusScheduleSender:
             attributes={"messaging.system": "servicebus", "messaging.operation.type": "send"},
         ):
             return self._schedule_document_retry(
-                operation_id=operation_id, attempt=attempt, due_at_unix=due_at_unix,
+                operation_id=operation_id,
+                attempt=attempt,
+                due_at_unix=due_at_unix,
+                delivery_activity_id=delivery_activity_id,
+                delivery_attempt_id=delivery_attempt_id,
             )
 
     def _schedule_document_retry(
-        self, *, operation_id: str, attempt: int, due_at_unix: float
+        self,
+        *,
+        operation_id: str,
+        attempt: int,
+        due_at_unix: float,
+        delivery_activity_id: str,
+        delivery_attempt_id: str,
     ) -> dict[str, Any]:
         worker_id = os.environ["WORKER_ID"]
         body = {
@@ -97,6 +109,9 @@ class ServiceBusScheduleSender:
                 UTC,
             ).isoformat(),
         }
+        if delivery_activity_id:
+            body["deliveryActivityId"] = delivery_activity_id
+            body["deliveryAttemptId"] = delivery_attempt_id
         message_id = (
             f"{worker_id}:document:{operation_id}:{attempt}"
         )

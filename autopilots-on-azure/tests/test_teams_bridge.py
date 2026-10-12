@@ -573,6 +573,41 @@ class TeamsBridgeTests(unittest.TestCase):
             captured["message"],
         )
 
+    def test_email_notification_sends_one_reply(self):
+        activity = Activity(
+            type="message",
+            id="activity-1",
+            text="Can you confirm?",
+            channel_id=ChannelId(channel="agents", sub_channel="email"),
+            from_property=ChannelAccount(id="user-1", name="Adele"),
+            entities=[
+                Entity(
+                    type="emailNotification",
+                    id="message-1",
+                    conversationId="mail-conversation-1",
+                    htmlBody="<p>Can you confirm?</p>",
+                )
+            ],
+        )
+        notification = AgentNotificationActivity(activity)
+
+        identifier, prompt = notification_prompt(notification, "email")
+        self.assertEqual(identifier, "message-1")
+        self.assertIn("Send exactly one email reply", prompt)
+        self.assertIn("NO_RESPONSE", prompt)
+
+        for text, expected_sends in (("NO_RESPONSE", 0), ("Confirmed.", 1)):
+            ctx = SimpleNamespace(activity=activity, send_activity=AsyncMock())
+            with patch.object(
+                bridge_app,
+                "handle_agent_notification",
+                AsyncMock(return_value=AgentResponse(text=text, raw={})),
+            ):
+                asyncio.run(
+                    bridge_app.handle_email_notification(ctx, None)
+                )
+            self.assertEqual(ctx.send_activity.await_count, expected_sends)
+
     def test_operator_invoke_propagates_persistence_disabled_boundary(self):
         request = InvokeRequest.model_validate(
             {

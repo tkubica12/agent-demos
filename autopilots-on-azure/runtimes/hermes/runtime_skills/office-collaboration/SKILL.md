@@ -17,7 +17,8 @@ For Word operations, use the fixed `m365-collaboration.minimax_docx_*` tools ins
 
 ## Identity and file lifecycle
 
-1. Keep Work IQ Word for Word creation, semantic reads, comments, and replies.
+1. Keep Work IQ Word for Word creation, comments, and replies, and for semantic reads of documents Hermes will not edit.
+   Work IQ Word `GetDocumentContent` opens the file through an Office session that can hold a lock for about 30 minutes. During that window every save fails with `423 locked`, including Hermes's own publish and the owner's edits. For any document Hermes may edit, read it with `download_office_file`, `read_local_office_file`, or `inspect_word_structure` instead.
    After creating a document, call `m365-collaboration.share_office_file_with_user` for every intended participant with the required role, verify the permission result, and only then deliver the URL through Teams.
 2. Keep Graph workbook range tools for collaborative Excel reads and writes.
 3. For local Word, PowerPoint, or PDF work, call `m365-collaboration.download_office_file` with the Microsoft 365 sharing URL.
@@ -36,7 +37,7 @@ For Word operations, use the fixed `m365-collaboration.minimax_docx_*` tools ins
    pdftoppm -jpeg -r 100 "<rendered.pdf>" "<workdir>/page"
    ```
 
-9. Upload only through `m365-collaboration.upload_office_file` using the original sharing URL, local path, and returned `expectedETag`. An ETag conflict means another human changed the document; never overwrite it.
+9. Upload only through `m365-collaboration.upload_office_file` using the original sharing URL, local path, and returned `expectedETag`. A `status=source_changed` result means another human changed the document; it was not overwritten. Download the latest version and repeat the edit, or cancel.
 10. After success, validation failure, or a non-retryable upload failure, call `m365-collaboration.delete_local_office_file`. Do not delete a file retained by a structured `locked` result; the pending publish operation owns its bounded cleanup.
 11. Report the returned `lastModifiedBy`, `eTag`, and `webUrl`. Use Work IQ Teams file tools when the user wants the result delivered in Teams.
 12. For long Teams workflows, send concise milestone updates with Work IQ Teams to the current conversation. Do not expose reasoning, document contents, operation IDs, or private paths.
@@ -48,14 +49,14 @@ The original remains the default because same-item publishing preserves its shar
 When an upload returns `status=locked`, the validated edit is retained privately for the returned bounded expiry:
 
 1. Tell the user that the edit is ready but Microsoft 365 is locking the original. Suggest closing the document in Teams and Word, but do not imply that this guarantees immediate release. WOPI/coauthoring locks automatically expire after 30 minutes and clients or services can refresh that timer. Teams preview, Word Online, synchronization, or post-upload processing can therefore keep a file locked even when no desktop application is open. Keep the operation ID and private path internal.
-2. Call `retry_pending_office_publish` with the private `operationId` up to three times. Each call performs only bounded upload retries. Stable Word text-node patches are reapplied and revalidated against a newer source ETag; generic edits fail closed when the source changed.
+2. Call `retry_pending_office_publish` with the private `operationId` up to three times. Each call performs only bounded upload retries. Stable Word text-node patches are reapplied to a newer source by exact paragraph content, never by index, and revalidated; they fail closed when the target paragraph changed. Generic edits fail closed when the source changed.
 3. Send at most one concise progress update per minute. Do not rerun the complete edit while a pending operation exists.
 4. If the lock persists, explain the two outcomes but do not require the user to type a command. The bridge renders a predefined Adaptive Card:
    - keep retrying the shared original in the background for up to 24 hours, then share a copy automatically;
    - send an explicitly shared editable copy now.
 5. For a copy, call `publish_pending_office_copy` only after explicit user choice and pass the invoking user's Entra ID as `recipient_identifier`. The tool must confirm a user-specific write permission before returning the Agent User drive item. Then send that URL through Work IQ Teams. `SendFileToUser(fileUrl=...)` does not grant access to an existing Agent User file. Explain that the copy has a separate version/comment history. If the original changed after a generic edit, also explain that the copy is based on the earlier source.
 6. For cancellation, call `cancel_pending_office_publish`.
-7. Before repeating an edit after `status=source_changed`, cancel the pending operation so its older bytes cannot be reused accidentally.
+7. `patch_word_text` returns a retryable `status=source_changed` when another user saved the original during publish. Nothing was overwritten and the edit is retained; handle it like a lock and call `retry_pending_office_publish`. A non-retryable `source_changed` means the target paragraph itself changed. Before repeating an edit after it, cancel the pending operation so its older bytes cannot be reused accidentally.
 8. If a later turn crosses a native transcript rotation and no longer contains the operation ID, call `find_pending_office_publishes` with the same private conversation scope. Use the matching pending operation without exposing its ID.
 
 Never use Graph checkout as lock recovery: checkout intentionally blocks coauthors. Upload sessions improve large-transfer reliability but do not bypass an Office lock.
@@ -68,7 +69,9 @@ Publish body changes before adding comments or mentions because comment activity
 
 Use `minimax_docx_replace_text`, `minimax_docx_insert_paragraph`, or `minimax_docx_fill_placeholders` for ordinary existing-file edits. Use `word_append_tracked` or `word_replace_tracked` only when the user explicitly requires Word tracked changes; these narrow adapters cover operations not exposed by the current MiniMax CLI. All tools execute reviewed Microsoft Open XML SDK code without arbitrary shell access.
 
-For forms and other documents without named placeholders, first use `m365-collaboration.inspect_word_structure`. It returns stable paragraph and text-node indexes plus exact source text. Then call `m365-collaboration.patch_word_text` with typed edits containing `paragraphIndex`, `textNodeIndex`, `searchText`, and `replacementText`. The patch tool enforces the expected source text, verifies the requested replacements, validates, publishes the same item, and cleans up. This is the universal fallback for literal blanks, labels, or text embedded inside ordinary Word runs. Do not infer selectors from escaped Markdown and do not fall back to creating a new document or asking for an email address when the original is editable.
+For forms and other documents without named placeholders, first use `m365-collaboration.inspect_word_structure`. It returns stable paragraph and text-node indexes plus exact source text. Then call `m365-collaboration.patch_word_text` with typed edits containing `paragraphIndex`, `textNodeIndex`, `searchText`, and `replacementText`; also pass the inspected paragraph `Text` as `paragraphText` so the edit fails closed if the paragraph moved. The patch tool enforces the expected source text, verifies the requested replacements, validates, publishes the same item, and cleans up. This is the universal fallback for literal blanks, labels, or text embedded inside ordinary Word runs. Do not infer selectors from escaped Markdown and do not fall back to creating a new document or asking for an email address when the original is editable.
+
+If a `patch_word_text` call timed out or its outcome is unknown, it is safe to repeat the same call: the tool records the intended result before upload and returns `status=duplicate` without writing when the original already contains it.
 
 Both commands preserve the original package and generate Word tracked-change markup. Exact replacement intentionally fails unless one text run matches; never guess across split runs. Use Work IQ Word rather than local XML for comments and replies.
 

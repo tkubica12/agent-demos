@@ -10,6 +10,7 @@ from unittest.mock import patch
 import httpx
 
 from autopilots_identity.collaboration_mcp import (
+    SourceChangedError,
     baseline_openxml_path,
     bind_pending_publish_scope,
     cancel_pending_office_publish,
@@ -32,6 +33,80 @@ from autopilots_identity.collaboration_mcp import (
     upload_office_file,
     validate_sharing_url,
 )
+
+
+WORD_ITEM = {
+    "id": "item-1",
+    "name": "form.docx",
+    "eTag": "etag-1",
+    "parentReference": {"driveId": "drive-1"},
+}
+
+ANCHORED_EDIT = {
+    "paragraphIndex": 1,
+    "textNodeIndex": 2,
+    "searchText": "______",
+    "replacementText": "Poděbradská",
+    "paragraphText": "Bytem ______",
+    "textNodeText": "______",
+}
+
+
+def word_structure(*paragraphs: str) -> dict:
+    return {
+        "Paragraphs": [
+            {
+                "ParagraphIndex": index,
+                "Text": text,
+                "TextNodes": [
+                    {"TextNodeIndex": 0, "Text": text[:6]},
+                    {"TextNodeIndex": 1, "Text": " "},
+                    {"TextNodeIndex": 2, "Text": text[6:]},
+                ],
+            }
+            for index, text in enumerate(paragraphs)
+        ]
+    }
+
+
+BEFORE_PATCH = word_structure("Jméno Tomáš", "Bytem ______")
+AFTER_PATCH = word_structure("Jméno Tomáš", "Bytem Poděbradská")
+
+
+class FakeWordTool:
+    """Dispatch office-collaboration helper commands over a scripted document."""
+
+    def __init__(self, before: dict, after: dict):
+        self.before = before
+        self.after = after
+        self.patched = False
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str], **_: object) -> dict:
+        self.commands.append(command)
+        action = command[1]
+        if action == "word-inspect-structure":
+            return self.after if self.patched else self.before
+        if action == "word-patch-text-nodes":
+            self.patched = True
+            return {"Success": True, "Applied": len(json.loads(command[3]))}
+        return {"Valid": True, "ErrorCount": 0, "Errors": []}
+
+    def actions(self) -> list[str]:
+        return [command[1] for command in self.commands]
+
+    def patch_command(self) -> list[str]:
+        return next(
+            command
+            for command in self.commands
+            if command[1] == "word-patch-text-nodes"
+        )
+
+
+def anchor_conflict_tool(command: list[str], **_: object) -> dict:
+    if command[1] == "word-patch-text-nodes":
+        raise RuntimeError("Expected one match for edit 0.")
+    return {"Valid": True, "ErrorCount": 0, "Errors": []}
 
 
 class CollaborationMcpTests(unittest.TestCase):
@@ -435,6 +510,8 @@ class CollaborationMcpTests(unittest.TestCase):
                     "textNodeIndex": 2,
                     "searchText": "______",
                     "replacementText": "Poděbradská",
+                    "paragraphText": "Bytem ______",
+                    "textNodeText": "______",
                 }
             ]
             old_item = {
@@ -475,7 +552,7 @@ class CollaborationMcpTests(unittest.TestCase):
                     patch(
                         "autopilots_identity.collaboration_mcp.run_local_tool",
                         return_value={"Success": True, "Applied": 1},
-                    ),
+                    ) as local_tool,
                     patch(
                         "autopilots_identity.collaboration_mcp.read_local_markdown",
                         return_value="bytem Poděbradská",
@@ -503,6 +580,127 @@ class CollaborationMcpTests(unittest.TestCase):
         self.assertTrue(result["rebased"])
         self.assertEqual(upload.call_args.args[2], "etag-2")
         self.assertFalse(operation_directory.exists())
+        command = local_tool.call_args.args[0]
+        self.assertEqual(command[1], "word-patch-text-nodes")
+        self.assertEqual(command[-1], "anchor")
+
+    def test_pending_word_patch_without_anchors_fails_closed_on_rebase(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            operation_directory = workspace / ("9" * 24)
+            operation_directory.mkdir()
+            target = operation_directory / "form.docx"
+            target.write_bytes(b"edited-old")
+            item = {
+                "id": "item-1",
+                "name": "form.docx",
+                "eTag": "etag-1",
+                "parentReference": {"driveId": "drive-1"},
+            }
+            with (
+                patch.dict(
+                    os.environ,
+                    {"M365_COLLABORATION_WORKSPACE": str(workspace)},
+                ),
+                patch(
+                    "autopilots_identity.collaboration_mcp.drive_item",
+                    return_value={**item, "eTag": "etag-2"},
+                ),
+                patch(
+                    "autopilots_identity.collaboration_mcp.run_local_tool",
+                ) as local_tool,
+                patch(
+                    "autopilots_identity.collaboration_mcp.upload_drive_item",
+                ) as upload,
+            ):
+                stage_pending_publish(
+                    target=target,
+                    item=item,
+                    sharing_url="https://contoso.sharepoint.com/form.docx",
+                    publish_kind="word-text-node-patch",
+                    edits=[
+                        {
+                            "paragraphIndex": 1,
+                            "textNodeIndex": 2,
+                            "searchText": "______",
+                            "replacementText": "Poděbradská",
+                        }
+                    ],
+                )
+                result = asyncio.run(
+                    retry_pending_office_publish("9" * 24, "scope-1")
+                )
+                retained = target.read_bytes()
+
+        self.assertEqual(result["status"], "source_changed")
+        self.assertFalse(result["retryable"])
+        self.assertIn("repeat_edit", result["choices"])
+        self.assertEqual(retained, b"edited-old")
+        local_tool.assert_not_called()
+        upload.assert_not_called()
+
+    def test_pending_word_patch_fails_closed_when_target_paragraph_changed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            operation_directory = workspace / ("8" * 24)
+            operation_directory.mkdir()
+            target = operation_directory / "form.docx"
+            target.write_bytes(b"edited-old")
+            item = {
+                "id": "item-1",
+                "name": "form.docx",
+                "eTag": "etag-1",
+                "parentReference": {"driveId": "drive-1"},
+            }
+            with (
+                patch.dict(
+                    os.environ,
+                    {"M365_COLLABORATION_WORKSPACE": str(workspace)},
+                ),
+                patch(
+                    "autopilots_identity.collaboration_mcp.drive_item",
+                    return_value={**item, "eTag": "etag-2"},
+                ),
+                patch(
+                    "autopilots_identity.collaboration_mcp.download_drive_item",
+                    return_value=b"coauthored-source",
+                ),
+                patch(
+                    "autopilots_identity.collaboration_mcp.run_local_tool",
+                    side_effect=anchor_conflict_tool,
+                ),
+                patch(
+                    "autopilots_identity.collaboration_mcp.upload_drive_item",
+                ) as upload,
+            ):
+                stage_pending_publish(
+                    target=target,
+                    item=item,
+                    sharing_url="https://contoso.sharepoint.com/form.docx",
+                    publish_kind="word-text-node-patch",
+                    edits=[ANCHORED_EDIT],
+                )
+                result = asyncio.run(
+                    retry_pending_office_publish("8" * 24, "scope-1")
+                )
+                retained = target.read_bytes()
+                manifest = json.loads(
+                    (
+                        operation_directory / "pending-publish.json"
+                    ).read_text(encoding="utf-8")
+                )
+
+        self.assertEqual(result["status"], "source_changed")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(
+            result["choices"],
+            ["send_copy", "cancel", "repeat_edit"],
+        )
+        self.assertEqual(retained, b"edited-old")
+        self.assertEqual(manifest["latestETag"], "etag-2")
+        upload.assert_not_called()
 
     def test_pending_generic_edit_fails_closed_after_source_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -610,14 +808,7 @@ class CollaborationMcpTests(unittest.TestCase):
                         "https://contoso.sharepoint.com/form.docx"
                     ),
                     publish_kind="word-text-node-patch",
-                    edits=[
-                        {
-                            "paragraphIndex": 1,
-                            "textNodeIndex": 2,
-                            "searchText": "______",
-                            "replacementText": "Poděbradská",
-                        }
-                    ],
+                    edits=[ANCHORED_EDIT],
                     operation_scope="scope-1",
                 )
                 result = asyncio.run(
@@ -964,10 +1155,232 @@ class CollaborationMcpTests(unittest.TestCase):
         self.assertIn("word-inspect-structure", command)
         self.assertFalse(any(workspace.rglob("*.docx")))
 
+    def run_word_patch(
+        self,
+        workspace: Path,
+        tool: FakeWordTool,
+        *,
+        item: dict | None = None,
+        edits: list[dict] | None = None,
+        upload_effect: object = None,
+    ):
+        upload_kwargs = (
+            {"side_effect": upload_effect}
+            if upload_effect is not None
+            else {"return_value": {"id": "item-1", "eTag": "etag-2"}}
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"M365_COLLABORATION_WORKSPACE": str(workspace)},
+            ),
+            patch(
+                "autopilots_identity.collaboration_mcp.drive_item",
+                return_value=item or WORD_ITEM,
+            ),
+            patch(
+                "autopilots_identity.collaboration_mcp.download_drive_item",
+                return_value=b"docx",
+            ),
+            patch(
+                "autopilots_identity.collaboration_mcp.run_local_tool",
+                side_effect=tool,
+            ),
+            patch(
+                "autopilots_identity.collaboration_mcp.read_local_markdown",
+                return_value="Bytem Poděbradská",
+            ),
+            patch(
+                "autopilots_identity.collaboration_mcp.minimax_docx_validate",
+                return_value={"isValid": True},
+            ),
+            patch(
+                "autopilots_identity.collaboration_mcp.upload_drive_item",
+                **upload_kwargs,
+            ) as upload,
+        ):
+            result = asyncio.run(
+                patch_word_text(
+                    "https://contoso.sharepoint.com/form.docx",
+                    edits
+                    or [
+                        {
+                            "paragraphIndex": 1,
+                            "textNodeIndex": 2,
+                            "searchText": "______",
+                            "replacementText": "Poděbradská",
+                        }
+                    ],
+                    "scope-1",
+                )
+            )
+        return result, upload
+
     def test_universal_word_patch_verifies_and_cleans_up(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspace"
             workspace.mkdir()
+            tool = FakeWordTool(BEFORE_PATCH, AFTER_PATCH)
+            result, upload = self.run_word_patch(workspace, tool)
+            leftovers = any(workspace.rglob("*.docx"))
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["applied"], 1)
+        command = tool.patch_command()
+        self.assertEqual(command[-1], "index")
+        self.assertEqual(
+            json.loads(command[3]),
+            [ANCHORED_EDIT],
+        )
+        self.assertEqual(upload.call_args.args[2], "etag-1")
+        self.assertFalse(leftovers)
+
+    def test_word_patch_rejects_paragraph_that_moved_since_inspection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            tool = FakeWordTool(
+                word_structure("Bytem ______", "Jméno ______"),
+                AFTER_PATCH,
+            )
+            with self.assertRaisesRegex(ValueError, "changed since"):
+                self.run_word_patch(
+                    workspace,
+                    tool,
+                    edits=[
+                        {
+                            "paragraphIndex": 1,
+                            "textNodeIndex": 2,
+                            "searchText": "______",
+                            "replacementText": "Poděbradská",
+                            "paragraphText": "Bytem ______",
+                        }
+                    ],
+                )
+
+        self.assertNotIn("word-patch-text-nodes", tool.actions())
+
+    def test_repeated_word_patch_after_unknown_outcome_is_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            with self.assertRaises(httpx.ReadTimeout):
+                self.run_word_patch(
+                    workspace,
+                    FakeWordTool(BEFORE_PATCH, AFTER_PATCH),
+                    upload_effect=httpx.ReadTimeout("upload timed out"),
+                )
+            repeat_tool = FakeWordTool(AFTER_PATCH, AFTER_PATCH)
+            result, upload = self.run_word_patch(
+                workspace,
+                repeat_tool,
+                item={**WORD_ITEM, "eTag": "etag-2"},
+            )
+
+        self.assertEqual(result["status"], "duplicate")
+        self.assertEqual(result["applied"], 0)
+        self.assertNotIn("word-patch-text-nodes", repeat_tool.actions())
+        upload.assert_not_called()
+
+    def test_repeated_word_patch_runs_again_when_first_upload_did_not_land(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            with self.assertRaises(httpx.ReadTimeout):
+                self.run_word_patch(
+                    workspace,
+                    FakeWordTool(BEFORE_PATCH, AFTER_PATCH),
+                    upload_effect=httpx.ReadTimeout("upload timed out"),
+                )
+            result, upload = self.run_word_patch(
+                workspace,
+                FakeWordTool(BEFORE_PATCH, AFTER_PATCH),
+            )
+
+        self.assertEqual(result["status"], "completed")
+        upload.assert_called_once()
+
+    def test_completed_word_patch_is_not_repeated_on_same_version(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            first, _ = self.run_word_patch(
+                workspace,
+                FakeWordTool(BEFORE_PATCH, AFTER_PATCH),
+            )
+            second, upload = self.run_word_patch(
+                workspace,
+                FakeWordTool(AFTER_PATCH, AFTER_PATCH),
+                item={**WORD_ITEM, "eTag": "etag-2"},
+            )
+
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["status"], "duplicate")
+        self.assertEqual(second["driveItem"]["eTag"], "etag-2")
+        upload.assert_not_called()
+
+    def test_word_patch_retains_edit_when_coauthor_saves_during_upload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            result, _ = self.run_word_patch(
+                workspace,
+                FakeWordTool(BEFORE_PATCH, AFTER_PATCH),
+                upload_effect=SourceChangedError("saved during upload"),
+            )
+            manifest = json.loads(
+                (
+                    workspace
+                    / result["operationId"]
+                    / "pending-publish.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(result["status"], "source_changed")
+        self.assertTrue(result["retryable"])
+        self.assertEqual(result["graphError"]["statusCode"], 412)
+        self.assertEqual(manifest["edits"], [ANCHORED_EDIT])
+        self.assertRegex(manifest["receiptKey"], r"^[0-9a-f]{64}$")
+
+    def test_upload_reports_source_changed_on_precondition_failure(self):
+        request = httpx.Request(
+            "PUT",
+            "https://graph.microsoft.com/content",
+        )
+        failed = httpx.Response(
+            412,
+            request=request,
+            json={"error": {"code": "resourceModified"}},
+        )
+        item = {**WORD_ITEM, "file": {"mimeType": "application/octet-stream"}}
+
+        async def run():
+            with patch(
+                "autopilots_identity.collaboration_mcp.graph_request",
+                side_effect=httpx.HTTPStatusError(
+                    "precondition failed",
+                    request=request,
+                    response=failed,
+                ),
+            ) as graph:
+                with self.assertRaises(SourceChangedError) as raised:
+                    await upload_drive_item(item, b"content", "etag-1")
+                with self.assertRaises(SourceChangedError):
+                    await upload_drive_item(item, b"content", "etag-0")
+            return raised.exception, graph
+
+        error, graph = asyncio.run(run())
+
+        self.assertEqual(error.graph_error["statusCode"], 412)
+        self.assertEqual(graph.call_count, 1)
+
+    def test_generic_upload_returns_structured_source_changed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            local = workspace / "edit" / "document.docx"
+            local.parent.mkdir()
+            local.write_bytes(b"edited")
             with (
                 patch.dict(
                     os.environ,
@@ -975,53 +1388,21 @@ class CollaborationMcpTests(unittest.TestCase):
                 ),
                 patch(
                     "autopilots_identity.collaboration_mcp.drive_item",
-                    return_value={
-                        "id": "item-1",
-                        "name": "form.docx",
-                        "eTag": "etag-1",
-                        "parentReference": {"driveId": "drive-1"},
-                    },
-                ),
-                patch(
-                    "autopilots_identity.collaboration_mcp.download_drive_item",
-                    return_value=b"docx",
-                ),
-                patch(
-                    "autopilots_identity.collaboration_mcp.run_local_tool",
-                    return_value={"Success": True, "Applied": 1},
-                ) as local_tool,
-                patch(
-                    "autopilots_identity.collaboration_mcp.read_local_markdown",
-                    return_value="bytem Poděbradská",
-                ),
-                patch(
-                    "autopilots_identity.collaboration_mcp.minimax_docx_validate",
-                    return_value={"isValid": True},
-                ),
-                patch(
-                    "autopilots_identity.collaboration_mcp.upload_drive_item",
-                    return_value={"id": "item-1", "eTag": "etag-2"},
+                    return_value={**WORD_ITEM, "eTag": "etag-2"},
                 ),
             ):
                 result = asyncio.run(
-                    patch_word_text(
-                        "https://contoso.sharepoint.com/form.docx",
-                        [
-                            {
-                                "paragraphIndex": 1,
-                                "textNodeIndex": 2,
-                                "searchText": "______",
-                                "replacementText": "Poděbradská",
-                            }
-                        ],
+                    upload_office_file(
+                        "https://contoso.sharepoint.com/document.docx",
+                        str(local),
+                        "etag-1",
                         "scope-1",
                     )
                 )
 
-        self.assertEqual(result["applied"], 1)
-        command = local_tool.call_args.args[0]
-        self.assertIn("word-patch-text-nodes", command)
-        self.assertFalse(any(workspace.rglob("*.docx")))
+        self.assertEqual(result["status"], "source_changed")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["choices"], ["repeat_edit", "cancel"])
 
 
 if __name__ == "__main__":

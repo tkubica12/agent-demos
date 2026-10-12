@@ -696,7 +696,7 @@ def main() -> None:
         required=True,
         help="Local JSON object mapping trusted Worker IDs to Ed25519 approval public keys. Repeat per Worker.",
     )
-    parser.add_argument("--model", default="gpt-5-6-terra")
+    parser.add_argument("--model", default="gpt-6-1-sol")
     parser.add_argument("--decision-output", type=Path, required=True)
     parser.add_argument("--create-pr", action="store_true")
     parser.add_argument("--ready", action="store_true", help="Create a ready PR instead of a draft.")

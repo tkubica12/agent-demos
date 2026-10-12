@@ -210,8 +210,8 @@
             <li><span class="seq-title">Build and convert</span><span class="seq-note">Pins dependencies and converts each service image once.</span></li>
             <li><span class="seq-title">Deploy services</span><span class="seq-note">Uses disk-image IDs, then records healthy endpoints.</span></li>
           </ol>
-          <p>ACR conversion uses a short-lived token from <code>az acr login --expose-token</code> because the current managed-identity conversion path fails. ACR admin is disabled. Reusing a prepared image does not acquire another registry token.</p>
-          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="adr/0021-deployment-time-sandbox-image-authentication.md">Decision and SDK issue</a> · <a href="../scripts/sandbox_services.py">Conversion implementation</a> · <a href="../DEPLOYMENT.md">Commands and owner preflight</a></p></aside>
+          <p>ACR conversion runs through the native-v2 disk-image API and authenticates with each Sandbox Group's managed identity, which holds <code>AcrPull</code>. No registry token or admin credential exists. Reusing a prepared image skips conversion.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="adr/0021-deployment-time-sandbox-image-authentication.md">Conversion identity decision</a> · <a href="../scripts/sandbox_services.py">Conversion implementation</a> · <a href="../DEPLOYMENT.md">Commands and owner preflight</a></p></aside>
         </div>
       </article>
 

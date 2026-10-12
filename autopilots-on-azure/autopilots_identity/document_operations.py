@@ -367,46 +367,66 @@ async def process_background_retry(
             target.read_bytes(),
             expected_etag,
         )
+    except collaboration.SourceChangedError as exc:
+        concurrent = read_receipt(operation_id)
+        if concurrent:
+            return terminal_result(concurrent)
+        background["lastGraphError"] = exc.graph_error
+        if manifest.get("publishKind") != "word-text-node-patch":
+            return await complete_copy(manifest, target)
+        return schedule_next_background_attempt(
+            manifest,
+            target,
+            background,
+            status="source_changed",
+        ) or await complete_copy(manifest, target)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code != 423:
             raise
-        background["attempt"] = int(
-            background.get("attempt") or 0
-        ) + 1
         background["lastGraphError"] = (
             collaboration.graph_error_summary(exc.response)
         )
-        if time.time() >= float(
-            background.get("deadlineUnix") or 0
-        ):
-            return await complete_copy(manifest, target)
-        delay = next_retry_delay(background["attempt"])
-        next_attempt = time.time() + delay
-        background["status"] = "scheduled"
-        background["nextAttemptUnix"] = next_attempt
-        background["nextAttemptAt"] = (
-            collaboration.utc_timestamp(next_attempt)
-        )
-        collaboration.write_pending_publish_manifest(
-            target.parent,
+        return schedule_next_background_attempt(
             manifest,
-        )
-        return {
-            "status": "locked",
-            "operationId": operation_id,
-            "attempt": background["attempt"],
-            "nextAttemptAt": background["nextAttemptAt"],
-            "nextAttemptUnix": next_attempt,
-            "deadlineAt": background["deadlineAt"],
-            "graphError": background["lastGraphError"],
-        }
+            target,
+            background,
+            status="locked",
+        ) or await complete_copy(manifest, target)
 
+    collaboration.complete_pending_word_patch_receipt(manifest, uploaded)
     return write_terminal_receipt(
         manifest,
         target,
         status="completed",
         drive_item=uploaded,
     )
+
+
+def schedule_next_background_attempt(
+    manifest: dict[str, Any],
+    target: Path,
+    background: dict[str, Any],
+    *,
+    status: str,
+) -> dict[str, Any] | None:
+    """Persist the next retry, or return None once the deadline has passed."""
+    background["attempt"] = int(background.get("attempt") or 0) + 1
+    if time.time() >= float(background.get("deadlineUnix") or 0):
+        return None
+    next_attempt = time.time() + next_retry_delay(background["attempt"])
+    background["status"] = "scheduled"
+    background["nextAttemptUnix"] = next_attempt
+    background["nextAttemptAt"] = collaboration.utc_timestamp(next_attempt)
+    collaboration.write_pending_publish_manifest(target.parent, manifest)
+    return {
+        "status": status,
+        "operationId": manifest["operationId"],
+        "attempt": background["attempt"],
+        "nextAttemptAt": background["nextAttemptAt"],
+        "nextAttemptUnix": next_attempt,
+        "deadlineAt": background["deadlineAt"],
+        "graphError": background["lastGraphError"],
+    }
 
 
 def acknowledge_delivery(

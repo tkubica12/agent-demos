@@ -702,7 +702,7 @@ def format_attachment_context(
         )
         if attachment.sharing_url:
             parts.append(
-                "Microsoft 365 sharing URL for Work IQ Word: "
+                "Microsoft 365 sharing URL: "
                 f"{attachment.sharing_url}"
             )
         if attachment.text:
@@ -721,7 +721,12 @@ def format_attachment_context(
             )
         if not attachment.text and attachment.sharing_url:
             parts.append(
-                "The file was not downloaded. Use Work IQ Word "
-                "WordGetDocumentContent with the sharing URL."
+                "The file was not downloaded. Read it with "
+                "m365-collaboration download_office_file and "
+                "read_local_office_file (or inspect_word_structure "
+                "before a Word edit). Avoid Work IQ Word "
+                "WordGetDocumentContent on a file that may be edited: "
+                "it can hold an Office lock for about 30 minutes that "
+                "blocks every later save, including the owner's."
             )
     return "\n".join(parts)

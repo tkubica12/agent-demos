@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 import time
 from dataclasses import dataclass
@@ -9,12 +10,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
-from azure.containerapps.sandbox._models import RegistryCredentials
 from azure.core.exceptions import AzureError, ResourceNotFoundError
+from azure.core.rest import HttpRequest
 from azure.identity import DefaultAzureCredential
 
 from scripts.sandbox_runtime import existing_named, run_text
 
+
+DISK_IMAGE_AUDIENCE = "https://management.azuredevcompute.io/.default"
 
 SERVICE_CONFIG_PATH = "/app/.sandbox-service.json"
 BOOTSTRAP = """
@@ -47,8 +50,44 @@ class SandboxService:
     disk_source_image: str = ""
 
 
+def disk_image_request(source: str, name: str, identity_client_id: str) -> dict:
+    """Native-v2 registry conversion authenticated by the Sandbox Group's managed identity."""
+    return {
+        "source": {"kind": "registry", "imageUrl": source, "managedIdentityClientId": identity_client_id},
+        "labels": {"name": name},
+    }
+
+
+def convert_disk_image(client: Any, body: dict, *, timeout_seconds: int = 900, poll_seconds: int = 5) -> str:
+    submitted = client._send_request(HttpRequest(
+        "PUT", f"{client._endpoint}{client._group_path}/diskimages/v2/async", json=body,
+    )).json()
+    operation_id = str(submitted.get("operationId") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", operation_id):
+        raise RuntimeError("Disk image conversion did not return an operation ID.")
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        result = client._send_request(HttpRequest(
+            "GET", f"{client._endpoint}{client._group_path}/diskimages/operations/{operation_id}",
+        )).json()
+        status = result.get("status")
+        if status == "Succeeded":
+            disk_id = str((result.get("diskImage") or {}).get("id") or "")
+            if not disk_id:
+                raise RuntimeError(f"Disk image conversion {operation_id} succeeded without a disk image ID.")
+            return disk_id
+        if status == "Failed":
+            raise RuntimeError(
+                f"Disk image conversion {operation_id} failed: {result.get('errorMessage') or 'no detail'}. "
+                "The Sandbox Group identity needs AcrPull on the registry; a new assignment can take minutes to apply."
+            )
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Disk image conversion {operation_id} is still {status}; inspect it before retrying.")
+        time.sleep(poll_seconds)
+
+
 def prepare_disk_image(client: Any, *, role: str, image: str, source: str, acr_name: str,
-                       subscription_id: str) -> str:
+                       subscription_id: str, identity_client_id: str) -> str:
     name = f"{role}-{hashlib.sha256(image.encode()).hexdigest()[:20]}"
     disk = existing_named(client.list_disk_images(), name)
     if disk is None:
@@ -65,17 +104,7 @@ def prepare_disk_image(client: Any, *, role: str, image: str, source: str, acr_n
         ])
         if actual_digest != expected_digest:
             raise ValueError(f"{role} conversion source does not match the deployed image digest.")
-        token = run_text([
-            "az", "acr", "login", "--name", acr_name, "--subscription", subscription_id,
-            "--expose-token", "--query", "accessToken", "--output", "tsv", "--only-show-errors",
-        ])
-        if not token:
-            raise RuntimeError("ACR login returned an empty token.")
-        disk = client.begin_create_disk_image(
-            source, name=name,
-            registry_credentials=RegistryCredentials("00000000-0000-0000-0000-000000000000", token),
-            polling_timeout=900,
-        ).result()
+        disk = client.get_disk_image(convert_disk_image(client, disk_image_request(source, name, identity_client_id)))
     if disk.status.state not in {"Ready", "Succeeded"}:
         raise RuntimeError(f"{role} disk image {disk.id} is not ready: {disk.status.state}")
     return disk.id
@@ -355,10 +384,12 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                 endpoint_for_region(infrastructure["sandbox_location"]), credential,
                 subscription_id=infrastructure["subscription_id"],
                 resource_group=infrastructure["resource_group_name"], sandbox_group=groups[role]["name"],
+                audience=DISK_IMAGE_AUDIENCE,
             ) as client:
                 disks[role] = prepare_disk_image(
                     client, role=role, image=config[prefix + "_image"], source=config[prefix + "_disk_source_image"],
                     acr_name=platform["acr_name"], subscription_id=infrastructure["subscription_id"],
+                    identity_client_id=groups[role]["identity_client_id"],
                 )
         endpoints["runtime_disk_image_id"] = disks["runtime"]
         for role in ("private-mcp", "public-mcp", "gateway"):

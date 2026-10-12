@@ -1,21 +1,19 @@
-# ADR 0021: Deployment-only ACR token for Sandbox image conversion
+# ADR 0021: Managed-identity Sandbox image conversion
 
 ## Decision
 
-Use an explicitly approved short-lived Entra-derived ACR token for deployment-time OCI-to-disk conversion while SDK 0.1.0b4 managed-identity conversion returns `401 RegistryAuthFailed`. The related upstream issue is [microsoft/azure-container-apps#1768](https://github.com/microsoft/azure-container-apps/issues/1768).
+Convert private ACR images to Sandbox disk images at deployment time with the **native-v2 registry conversion**, authenticated by the target Sandbox Group's single user-assigned managed identity. No registry token, password, or admin credential exists anywhere in the flow.
 
-The deployer obtains the credential through `az acr login --expose-token`. The conversion SDK receives it in `RegistryCredentials`; this is an explicit bearer credential, not native managed-identity conversion.
+The deployer submits `PUT {group}/diskimages/v2/async` with `source.kind = registry`, the digest-verified ACR tag in `imageUrl`, and the group identity's client ID in `managedIdentityClientId`, then polls `GET {group}/diskimages/operations/{operationId}`. The client uses the `https://management.azuredevcompute.io/.default` audience. SDK 0.1.0b4 does not expose this endpoint, so `scripts/sandbox_services.py` sends the request through the SDK client pipeline; its older typed `begin_create_disk_image` managed-identity path returned `401 RegistryAuthFailed` ([microsoft/azure-container-apps#1768](https://github.com/microsoft/azure-container-apps/issues/1768)).
 
-Before creating workloads, prepare **all four** ready disk images: runtime, gateway, private MCP, public MCP. Pass only their IDs onward; gateway runtime startup uses `AGENT_RUNTIME_DISK_IMAGE_ID`. Direct runtime launch requires a prepared `--disk-image-id`.
+Terraform grants `AcrPull` on the platform registry to the runtime, gateway, private-MCP, and public-MCP group identities. Before creating workloads, prepare **all four** ready disk images and pass only their IDs onward; gateway runtime startup uses `AGENT_RUNTIME_DISK_IMAGE_ID`. Direct runtime launch requires a prepared `--disk-image-id`.
 
 ## Alternatives and rationale
 
 | Alternative | Decision |
 | --- | --- |
-| Native managed-identity conversion | Preferred when the real conversion path succeeds; currently blocked. |
-| Deployer's short-lived registry token | Selected: bounded credential lifetime and no workload credential dependency. |
+| Native-v2 conversion with the group managed identity | Selected: real managed-identity conversion succeeded for the private images; no credential leaves Entra. |
+| Deployer's short-lived token from `az acr login --expose-token` | Rejected: an explicit bearer-credential exception that is no longer needed. |
 | Registry admin credentials or token broker/cache | Rejected: standing credentials or another privileged service. |
 
-ACR admin remains disabled. Runtime/gateway neither acquire credentials nor convert images, and workload identities receive no registry roles. Keep token values out of logs, command arguments, files, Terraform state, and workload settings. Reuse matching ready disk images; new image content requires another deployment-time conversion, not token renewal in a running service.
-
-Reconsider after a native managed-identity conversion succeeds for the actual private images. Until then, do not silently fall back or describe this path as credential-free.
+The tradeoff is that the four workload identities can now pull from the demo registry. That registry holds only this demo's images, and pull is read-only. ACR admin stays disabled. Failures stay explicit: a conversion that reports `Failed` (including a role assignment that has not propagated yet) stops the deployment with the service error and no credential fallback. Reuse matching ready disk images; new image content requires another deployment-time conversion.

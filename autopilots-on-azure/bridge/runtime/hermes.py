@@ -1493,7 +1493,7 @@ class HermesRuntimeAdapter:
                     "id": transcript_id,
                     "model": _env_optional(
                         "HERMES_MODEL",
-                        default="gpt-5-6-terra",
+                        default="gpt-6-1-sol",
                     ),
                 },
             )

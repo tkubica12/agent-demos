@@ -142,57 +142,147 @@ static object InspectWordStructure(string path)
     };
 }
 
+static string ParagraphText(W.Paragraph paragraph) =>
+    string.Concat(
+        paragraph.Descendants<W.Text>().Select(text => text.Text));
+
+static string? OptionalString(JsonElement edit, string name) =>
+    edit.TryGetProperty(name, out var value)
+    && value.ValueKind == JsonValueKind.String
+        ? value.GetString()
+        : null;
+
+static W.Text ResolveIndexedTarget(
+    List<W.Paragraph> paragraphs,
+    JsonElement edit)
+{
+    var paragraphIndex = edit.GetProperty(
+        "paragraphIndex").GetInt32();
+    var textNodeIndex = edit.GetProperty(
+        "textNodeIndex").GetInt32();
+    if (
+        paragraphIndex < 0
+        || paragraphIndex >= paragraphs.Count)
+    {
+        throw new ArgumentOutOfRangeException(
+            "paragraphIndex");
+    }
+    var paragraph = paragraphs[paragraphIndex];
+    var paragraphText = OptionalString(edit, "paragraphText");
+    if (
+        paragraphText is not null
+        && ParagraphText(paragraph) != paragraphText)
+    {
+        throw new InvalidOperationException(
+            $"Paragraph {paragraphIndex} no longer has the expected text.");
+    }
+    var textNodes = paragraph.Descendants<W.Text>().ToList();
+    if (
+        textNodeIndex < 0
+        || textNodeIndex >= textNodes.Count)
+    {
+        throw new ArgumentOutOfRangeException(
+            "textNodeIndex");
+    }
+    var target = textNodes[textNodeIndex];
+    var textNodeText = OptionalString(edit, "textNodeText");
+    if (textNodeText is not null && target.Text != textNodeText)
+    {
+        throw new InvalidOperationException(
+            $"Text node {textNodeIndex} in paragraph {paragraphIndex} "
+            + "no longer has the expected text.");
+    }
+    return target;
+}
+
+static W.Text ResolveAnchoredTarget(
+    List<W.Paragraph> paragraphs,
+    JsonElement edit)
+{
+    var paragraphText = OptionalString(edit, "paragraphText")
+        ?? throw new ArgumentException(
+            "Anchored edits require paragraphText.");
+    var textNodeText = OptionalString(edit, "textNodeText")
+        ?? throw new ArgumentException(
+            "Anchored edits require textNodeText.");
+    var matches = paragraphs
+        .Where(paragraph => ParagraphText(paragraph) == paragraphText)
+        .ToList();
+    if (matches.Count != 1)
+    {
+        throw new InvalidOperationException(
+            $"Expected one paragraph with the anchored text; found {matches.Count}.");
+    }
+    var textNodes = matches[0].Descendants<W.Text>().ToList();
+    var textNodeIndex = edit.TryGetProperty(
+        "textNodeIndex",
+        out var indexValue)
+        && indexValue.ValueKind == JsonValueKind.Number
+            ? indexValue.GetInt32()
+            : -1;
+    if (
+        textNodeIndex >= 0
+        && textNodeIndex < textNodes.Count
+        && textNodes[textNodeIndex].Text == textNodeText)
+    {
+        return textNodes[textNodeIndex];
+    }
+    var nodeMatches = textNodes
+        .Where(text => text.Text == textNodeText)
+        .ToList();
+    if (nodeMatches.Count != 1)
+    {
+        throw new InvalidOperationException(
+            $"Expected one anchored text node; found {nodeMatches.Count}.");
+    }
+    return nodeMatches[0];
+}
+
 static object PatchWordTextNodes(
     string path,
-    string editsJson)
+    string editsJson,
+    string mode)
 {
+    if (mode is not ("index" or "anchor"))
+    {
+        throw new ArgumentException(
+            "Word patch mode must be 'index' or 'anchor'.");
+    }
     using var edits = JsonDocument.Parse(editsJson);
     if (edits.RootElement.ValueKind != JsonValueKind.Array)
     {
         throw new ArgumentException("edits must be a JSON array.");
     }
-    using var document = WordprocessingDocument.Open(path, true);
+    using var document = WordprocessingDocument.Open(
+        path,
+        true,
+        new OpenSettings { AutoSave = false });
     var main = document.MainDocumentPart?.Document
         ?? throw new InvalidDataException("Word document has no main part.");
     var paragraphs = main.Body?.Descendants<W.Paragraph>().ToList()
         ?? throw new InvalidDataException("Word document has no body.");
+    var resolved = edits.RootElement
+        .EnumerateArray()
+        .Select(edit => (
+            Edit: edit,
+            Target: mode == "anchor"
+                ? ResolveAnchoredTarget(paragraphs, edit)
+                : ResolveIndexedTarget(paragraphs, edit)))
+        .ToList();
     var applied = 0;
-    foreach (var edit in edits.RootElement.EnumerateArray())
+    foreach (var (edit, target) in resolved)
     {
-        var paragraphIndex = edit.GetProperty(
-            "paragraphIndex").GetInt32();
-        var textNodeIndex = edit.GetProperty(
-            "textNodeIndex").GetInt32();
         var searchText = edit.GetProperty(
             "searchText").GetString() ?? "";
         var replacementText = edit.GetProperty(
             "replacementText").GetString() ?? "";
-        if (
-            paragraphIndex < 0
-            || paragraphIndex >= paragraphs.Count)
-        {
-            throw new ArgumentOutOfRangeException(
-                "paragraphIndex");
-        }
-        var textNodes = paragraphs[paragraphIndex]
-            .Descendants<W.Text>()
-            .ToList();
-        if (
-            textNodeIndex < 0
-            || textNodeIndex >= textNodes.Count)
-        {
-            throw new ArgumentOutOfRangeException(
-                "textNodeIndex");
-        }
-        var target = textNodes[textNodeIndex];
         var count = Regex.Matches(
             target.Text ?? "",
             Regex.Escape(searchText)).Count;
         if (count != 1)
         {
             throw new InvalidOperationException(
-                $"Expected one match in paragraph {paragraphIndex}, "
-                + $"text node {textNodeIndex}; found {count}.");
+                $"Expected one match for edit {applied}; found {count}.");
         }
         target.Text = (target.Text ?? "").Replace(
             searchText,
@@ -288,7 +378,8 @@ try
             Require(args, 1, "path")),
         "word-patch-text-nodes" => PatchWordTextNodes(
             Require(args, 1, "path"),
-            Require(args, 2, "edits JSON")),
+            Require(args, 2, "edits JSON"),
+            args.Length > 3 ? args[3] : "index"),
         "powerpoint-replace-text" => Run(() => ReplacePowerPointText(
             Require(args, 1, "path"),
             Require(args, 2, "old text"),

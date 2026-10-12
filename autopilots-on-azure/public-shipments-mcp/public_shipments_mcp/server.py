@@ -50,11 +50,13 @@ def authorize_shipments(ctx: AuthContext) -> bool:
     raise AuthorizationError("Token is missing an approved shipment scope or application role.")
 
 
+auth_provider = create_auth_provider()
+
 mcp = FastMCP(
     name="public-shipments",
     instructions="Public mock shipment tracking tools for Agent 365 BYO MCP governance demonstrations.",
-    auth=create_auth_provider(),
-    middleware=[AuthMiddleware(authorize_shipments)],
+    auth=auth_provider,
+    middleware=[AuthMiddleware(authorize_shipments)] if auth_provider else None,
 )
 
 

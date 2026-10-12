@@ -430,8 +430,8 @@ def hermes_runtime_environment(
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
         environment["HERMES_MODEL_PROVIDER"] = "azure-foundry"
-        environment["HERMES_MODEL"] = model_deployment or "gpt-5-6-terra"
-        environment["HERMES_INFERENCE_MODEL"] = model_deployment or "gpt-5-6-terra"
+        environment["HERMES_MODEL"] = model_deployment or "gpt-6-1-sol"
+        environment["HERMES_INFERENCE_MODEL"] = model_deployment or "gpt-6-1-sol"
     if api_server_key:
         environment["API_SERVER_KEY"] = api_server_key
     return {key: value for key, value in environment.items() if value}
@@ -757,7 +757,7 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
     return hermes_sandbox_config(
         **common,
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
-        model_deployment=overrides.get("model_deployment") or get_config("HERMES_MODEL", "gpt-5-6-terra"),
+        model_deployment=overrides.get("model_deployment") or get_config("HERMES_MODEL", "gpt-6-1-sol"),
         api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
         role_blueprint=overrides.get("role_blueprint") or get_config("HERMES_ROLE_BLUEPRINT"),
         role_blueprint_source=overrides.get("role_blueprint_source") or get_config("HERMES_ROLE_BLUEPRINT_SOURCE"),

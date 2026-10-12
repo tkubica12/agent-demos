@@ -11,6 +11,7 @@ from scripts.sandbox_services import (
     BOOTSTRAP,
     SERVICE_CONFIG_PATH,
     SandboxService,
+    convert_disk_image,
     deploy_service,
     deploy_sandbox_services,
     gateway_environment,
@@ -279,26 +280,53 @@ class SandboxServicesTests(unittest.TestCase):
                 sandbox.write_file.assert_not_called()
                 client._dp_put.assert_not_called()
 
-    def test_conversion_passes_transient_token_only_to_sdk(self):
+    def test_conversion_uses_group_managed_identity_without_registry_credentials(self):
         client = Mock()
+        client._endpoint = "https://adc"
+        client._group_path = "/groups/runtime"
         client.list_disk_images.return_value = []
-        client.begin_create_disk_image.return_value.result.return_value = SimpleNamespace(
-            id="disk", status=SimpleNamespace(state="Ready")
-        )
-        with patch("scripts.sandbox_services.run_text", side_effect=["sha256:123", "short-lived-token"]) as run:
+        client._send_request.return_value.json.side_effect = [
+            {"operationId": "op-1"},
+            {"status": "Running"},
+            {"status": "Succeeded", "diskImage": {"id": "disk"}},
+        ]
+        client.get_disk_image.return_value = SimpleNamespace(id="disk", status=SimpleNamespace(state="Ready"))
+        with (
+            patch("scripts.sandbox_services.run_text", return_value="sha256:123") as run,
+            patch("scripts.sandbox_services.time.sleep"),
+        ):
             result = prepare_disk_image(
                 client, role="runtime", image="registry.azurecr.io/runtime@sha256:123",
                 source="registry.azurecr.io/runtime:build123", acr_name="registry", subscription_id="sub",
+                identity_client_id="runtime-client",
             )
         self.assertEqual(result, "disk")
-        self.assertIn("--expose-token", run.call_args.args[0])
-        credentials = client.begin_create_disk_image.call_args.kwargs["registry_credentials"]
-        self.assertEqual(credentials.username, "00000000-0000-0000-0000-000000000000")
-        self.assertEqual(credentials.token, "short-lived-token")
-        self.assertNotIn("short-lived-token", str(run.call_args_list))
-        self.assertNotIn("managed_identity_resource_id", client.begin_create_disk_image.call_args.kwargs)
+        self.assertEqual(run.call_count, 1)
+        self.assertNotIn("--expose-token", run.call_args.args[0])
+        requests = [call.args[0] for call in client._send_request.call_args_list]
+        self.assertEqual((requests[0].method, requests[0].url), ("PUT", "https://adc/groups/runtime/diskimages/v2/async"))
+        name = "runtime-" + hashlib.sha256(b"registry.azurecr.io/runtime@sha256:123").hexdigest()[:20]
+        self.assertEqual(json.loads(requests[0].content), {
+            "source": {"kind": "registry", "imageUrl": "registry.azurecr.io/runtime:build123",
+                       "managedIdentityClientId": "runtime-client"},
+            "labels": {"name": name},
+        })
+        self.assertEqual(requests[1].url, "https://adc/groups/runtime/diskimages/operations/op-1")
+        self.assertTrue(all("api-version" not in request.url for request in requests))
+        client.begin_create_disk_image.assert_not_called()
 
-    def test_existing_ready_disk_needs_no_registry_login(self):
+    def test_failed_conversion_reports_service_error(self):
+        client = Mock()
+        client._endpoint = "https://adc"
+        client._group_path = "/groups/runtime"
+        client._send_request.return_value.json.side_effect = [
+            {"operationId": "op-1"},
+            {"status": "Failed", "errorMessage": "UNAUTHORIZED: authentication required"},
+        ]
+        with self.assertRaisesRegex(RuntimeError, "UNAUTHORIZED.*AcrPull"):
+            convert_disk_image(client, {"source": {}})
+
+    def test_existing_ready_disk_needs_no_registry_access(self):
         client = Mock()
         image = "registry.azurecr.io/runtime@sha256:123"
         name = "runtime-" + hashlib.sha256(image.encode()).hexdigest()[:20]
@@ -308,13 +336,13 @@ class SandboxServicesTests(unittest.TestCase):
         with patch("scripts.sandbox_services.run_text") as run:
             result = prepare_disk_image(
                 client, role="runtime", image=image, source="registry.azurecr.io/runtime:build123",
-                acr_name="registry", subscription_id="sub",
+                acr_name="registry", subscription_id="sub", identity_client_id="runtime-client",
             )
         self.assertEqual(result, "disk")
         run.assert_not_called()
-        client.begin_create_disk_image.assert_not_called()
+        client._send_request.assert_not_called()
 
-    def test_conversion_rejects_retagged_source_before_requesting_token(self):
+    def test_conversion_rejects_retagged_source_before_converting(self):
         client = Mock()
         client.list_disk_images.return_value = []
         with patch("scripts.sandbox_services.run_text", return_value="sha256:unexpected") as run:
@@ -322,9 +350,10 @@ class SandboxServicesTests(unittest.TestCase):
                 prepare_disk_image(
                     client, role="runtime", image="registry.azurecr.io/runtime@sha256:123",
                     source="registry.azurecr.io/runtime:build123", acr_name="registry", subscription_id="sub",
+                    identity_client_id="runtime-client",
                 )
         self.assertEqual(run.call_count, 1)
-        client.begin_create_disk_image.assert_not_called()
+        client._send_request.assert_not_called()
 
     def test_missing_runtime_disk_fails_before_lifecycle_changes(self):
         config = AgentSandboxConfig("sub", "rg", "group", "region", "image")

@@ -240,7 +240,7 @@ Change only the stated handoff deadline to Friday 15:00 Europe/Prague.
 Preserve the same document and comments; verify the edit before publishing.
 ```
 
-Expect validated, ETag-protected same-item publication. If locked, choose **Keep trying original** or **Send shared copy now**. The copy must be explicitly accessible to the invoking user; it has independent sharing/history. A Word-comment request receives its result or exact not-applied proposal in that comment thread.
+Expect validated, ETag-protected same-item publication. If another user saves the document first, nothing is overwritten and the edit is reapplied to the latest version. If locked, choose **Keep trying original** or **Send shared copy now**. The copy must be explicitly accessible to the invoking user; it has independent sharing/history. A Word-comment request receives its result or exact not-applied proposal in that comment thread.
 
 For Excel, request a specific shared-workbook range write/read-back. For notification handling, send an email or mention the Agent User in an accessible Word/Excel/PowerPoint comment; expect the originating workload response, not a new arbitrary Teams message.
 

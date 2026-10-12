@@ -17,6 +17,7 @@ Agent 365 BYO registration is a separate public-endpoint governance/client path,
 | --- | --- |
 | Authorize business tools as the Sandbox identity | Represents infrastructure rather than the digital Worker's business identity. |
 | Human-bound connector as ambient authority | Gives autonomous work an operator's data access. |
+| Sandbox egress token injection or Sandbox connectors | Verified 2026-10-12: `managedIdentityRef` injects an app-only managed-identity token (Graph `/me` fails), and connectors need a human connection owner. Neither carries Agent User authority; an egress webhook would only relocate this adapter. |
 | Gateway MCP relay or shared API keys | Adds an unnecessary data-plane hop and credential store. |
 | Treat a private network as authorization | Reachability does not identify or authorize the caller. |
 

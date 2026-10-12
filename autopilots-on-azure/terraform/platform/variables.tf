@@ -15,17 +15,17 @@ variable "apps_location" {
 
 variable "model_deployment_name" {
   type    = string
-  default = "gpt-5-6-terra"
+  default = "gpt-6-1-sol"
 }
 
 variable "model_name" {
   type    = string
-  default = "gpt-5.6-terra"
+  default = "gpt-6.1-sol"
 }
 
 variable "model_version" {
   type    = string
-  default = "2026-07-09"
+  default = "2026-09-29"
 }
 
 variable "model_sku_name" {

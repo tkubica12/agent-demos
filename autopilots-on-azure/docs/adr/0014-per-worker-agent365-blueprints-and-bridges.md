@@ -6,8 +6,8 @@ Each Worker owns its Agent 365 platform blueprint, messaging endpoint/gateway, A
 
 Workers may share the Git Role Blueprint, Role Release, images, Foundry deployment, networking, and MCP resource applications—not profile state or workload identities. Collective review groups evidence by role/release/commit, not platform blueprint.
 
-On 2026-10-09, retain this mapping for the current demo/hackathon and defer the
-[shared-Gateway experiment G05](../goals/05-shared-gateway.md). Sharing is not
+On 2026-10-09, retain this mapping for the current demo/hackathon and defer a
+shared Gateway. Sharing is not
 rejected as a long-term architecture. Blueprint, channel registration, Gateway,
 Worker and learning-cohort mappings remain a decision point to revisit, not an
 approved migration.

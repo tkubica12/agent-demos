@@ -33,6 +33,8 @@ PENDING_PUBLISH_MANIFEST = "pending-publish.json"
 PENDING_PUBLISH_ID_PATTERN = re.compile(r"^[0-9a-f]{24}$")
 AGENT_RESULTS_FOLDER = "Hermes Results"
 BASELINE_OPENXML_FILE = ".baseline-openxml.json"
+WORD_PATCH_RECEIPTS_FOLDER = "_word-patch-receipts"
+WORD_PATCH_RECEIPT_SECONDS = 24 * 60 * 60
 MICROSOFT_FILE_HOST_SUFFIXES = (
     ".sharepoint.com",
     ".sharepoint-df.com",
@@ -44,6 +46,24 @@ MICROSOFT_FILE_HOSTS = {"1drv.ms", "onedrive.live.com"}
 logger = logging.getLogger(__name__)
 GENERATED_APP_MAX_FILES = 80
 GENERATED_APP_MAX_BYTES = 2 * 1024 * 1024
+
+
+class SourceChangedError(ValueError):
+    """The Microsoft 365 original changed after Hermes downloaded it."""
+
+    def __init__(
+        self,
+        message: str,
+        graph_error: dict | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.graph_error = graph_error or {
+            "statusCode": 412,
+            "code": "sourceChanged",
+            "message": message,
+            "retryAfter": "",
+            "requestId": "",
+        }
 
 
 @cache
@@ -373,6 +393,7 @@ def stage_pending_publish(
     publish_kind: str,
     edits: list[dict[str, object]] | None = None,
     operation_scope: str = "",
+    receipt_key: str = "",
 ) -> dict:
     operation_id = target.parent.name
     if (
@@ -404,6 +425,8 @@ def stage_pending_publish(
         manifest["operationScopeHash"] = scope_hash
     if edits is not None:
         manifest["edits"] = edits
+    if receipt_key:
+        manifest["receiptKey"] = receipt_key
     write_pending_publish_manifest(target.parent, manifest)
     return manifest
 
@@ -507,6 +530,7 @@ def cleanup_expired_pending_publishes() -> int:
         if expires_at <= now:
             remove_private_workdir(directory)
             removed += 1
+    cleanup_expired_word_patch_receipts()
     return removed
 
 
@@ -617,7 +641,7 @@ async def upload_drive_item(
         )
     current_etag = str(item.get("eTag") or "")
     if not expected_etag or current_etag != expected_etag:
-        raise ValueError(
+        raise SourceChangedError(
             "The Microsoft 365 file changed after download; refresh before uploading."
         )
     drive_id, item_id = drive_coordinates(item)
@@ -642,6 +666,11 @@ async def upload_drive_item(
             )
             break
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 412:
+                raise SourceChangedError(
+                    "Another user saved the Microsoft 365 file during upload.",
+                    graph_error_summary(exc.response),
+                ) from exc
             if (
                 exc.response.status_code not in {423, 429, 503}
                 or attempt == 3
@@ -692,9 +721,252 @@ def graph_error_summary(response: httpx.Response) -> dict:
     }
 
 
+WORD_EDIT_FIELDS = (
+    "paragraphIndex",
+    "textNodeIndex",
+    "searchText",
+    "replacementText",
+    "paragraphText",
+    "textNodeText",
+)
+
+
+def inspect_local_word(path: Path) -> dict:
+    return run_local_tool(
+        [
+            "office-collaboration",
+            "word-inspect-structure",
+            str(path),
+        ]
+    )
+
+
+def word_paragraphs(structure: dict) -> list[dict]:
+    paragraphs = structure.get("Paragraphs")
+    if not isinstance(paragraphs, list):
+        raise RuntimeError("Word inspection returned no paragraphs.")
+    return [
+        paragraph
+        for paragraph in paragraphs
+        if isinstance(paragraph, dict)
+    ]
+
+
+def anchor_word_edits(
+    structure: dict,
+    edits: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Bind index selectors to the paragraph and text-node content they target."""
+    paragraphs = {
+        int(paragraph.get("ParagraphIndex", -1)): paragraph
+        for paragraph in word_paragraphs(structure)
+    }
+    anchored = []
+    for edit in edits:
+        paragraph_index = int(edit["paragraphIndex"])
+        text_node_index = int(edit["textNodeIndex"])
+        paragraph = paragraphs.get(paragraph_index)
+        nodes = (
+            paragraph.get("TextNodes")
+            if isinstance(paragraph, dict)
+            else None
+        )
+        if not isinstance(nodes, list) or not (
+            0 <= text_node_index < len(nodes)
+        ):
+            raise ValueError(
+                f"Paragraph {paragraph_index}, text node {text_node_index} "
+                "is not in the inspected Word structure."
+            )
+        paragraph_text = str(paragraph.get("Text") or "")
+        expected = edit.get("paragraphText")
+        if expected is not None and str(expected) != paragraph_text:
+            raise ValueError(
+                f"Paragraph {paragraph_index} changed since inspection; run "
+                "inspect_word_structure again before editing."
+            )
+        anchored.append(
+            {
+                "paragraphIndex": paragraph_index,
+                "textNodeIndex": text_node_index,
+                "searchText": str(edit["searchText"]),
+                "replacementText": str(edit["replacementText"]),
+                "paragraphText": paragraph_text,
+                "textNodeText": str(
+                    nodes[text_node_index].get("Text") or ""
+                ),
+            }
+        )
+    return anchored
+
+
+def word_patch_receipt_key(
+    item: dict,
+    edits: list[dict[str, object]],
+) -> str:
+    drive_id, item_id = drive_coordinates(item)
+    canonical = json.dumps(
+        {
+            "driveId": drive_id,
+            "itemId": item_id,
+            "edits": [
+                [str(edit["searchText"]), str(edit["replacementText"])]
+                for edit in edits
+            ],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def word_patch_receipt_path(key: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{64}", key):
+        raise ValueError("Invalid Word patch receipt key.")
+    return (
+        collaboration_workspace()
+        / WORD_PATCH_RECEIPTS_FOLDER
+        / f"{key}.json"
+    )
+
+
+def read_word_patch_receipt(key: str) -> dict | None:
+    path = word_patch_receipt_path(key)
+    if not path.is_file():
+        return None
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(receipt, dict) or float(
+        receipt.get("expiresAtUnix") or 0
+    ) <= time.time():
+        return None
+    return receipt
+
+
+def write_word_patch_receipt(key: str, receipt: dict) -> None:
+    path = word_patch_receipt_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(receipt, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def record_word_patch_attempt(
+    key: str,
+    edits: list[dict[str, object]],
+    patched_structure: dict,
+) -> None:
+    """Record intended post-edit paragraphs before an uncertain upload."""
+    paragraphs = {
+        int(paragraph.get("ParagraphIndex", -1)): str(
+            paragraph.get("Text") or ""
+        )
+        for paragraph in word_paragraphs(patched_structure)
+    }
+    now = time.time()
+    write_word_patch_receipt(
+        key,
+        {
+            "version": 1,
+            "status": "attempted",
+            "createdAtUnix": now,
+            "expiresAtUnix": now + WORD_PATCH_RECEIPT_SECONDS,
+            "paragraphs": [
+                {
+                    "before": str(edit["paragraphText"]),
+                    "after": paragraphs.get(
+                        int(edit["paragraphIndex"]),
+                        "",
+                    ),
+                }
+                for edit in edits
+            ],
+            "resultETag": "",
+            "driveItem": None,
+        },
+    )
+
+
+def complete_word_patch_receipt(key: str, uploaded: dict) -> None:
+    receipt = read_word_patch_receipt(key)
+    if receipt is None:
+        return
+    receipt["status"] = "completed"
+    receipt["resultETag"] = str(uploaded.get("eTag") or "")
+    receipt["driveItem"] = {
+        name: uploaded.get(name)
+        for name in ("id", "name", "webUrl", "eTag")
+        if uploaded.get(name) is not None
+    }
+    write_word_patch_receipt(key, receipt)
+
+
+def complete_pending_word_patch_receipt(
+    manifest: dict,
+    uploaded: dict,
+) -> None:
+    key = str(manifest.get("receiptKey") or "")
+    if key:
+        complete_word_patch_receipt(key, uploaded)
+
+
+def word_patch_already_applied(
+    receipt: dict,
+    item: dict,
+    structure: dict,
+) -> bool:
+    result_etag = str(receipt.get("resultETag") or "")
+    if result_etag and result_etag == str(item.get("eTag") or ""):
+        return True
+    targets = receipt.get("paragraphs")
+    if not isinstance(targets, list) or not targets:
+        return False
+    texts = Counter(
+        str(paragraph.get("Text") or "")
+        for paragraph in word_paragraphs(structure)
+    )
+    return all(
+        isinstance(target, dict)
+        and str(target.get("after") or "")
+        and texts[str(target.get("after"))] >= 1
+        and texts[str(target.get("before") or "")] == 0
+        for target in targets
+    )
+
+
+def cleanup_expired_word_patch_receipts() -> int:
+    root = collaboration_workspace() / WORD_PATCH_RECEIPTS_FOLDER
+    if not root.is_dir():
+        return 0
+    removed = 0
+    now = time.time()
+    for path in root.glob("*.json"):
+        try:
+            expires_at = float(
+                json.loads(path.read_text(encoding="utf-8")).get(
+                    "expiresAtUnix"
+                )
+                or 0
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            expires_at = 0
+        if expires_at <= now:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 async def apply_word_text_node_edits(
     target: Path,
     edits: list[dict[str, object]],
+    *,
+    mode: str = "index",
 ) -> tuple[dict, dict]:
     patch_result = run_local_tool(
         [
@@ -702,6 +974,7 @@ async def apply_word_text_node_edits(
             "word-patch-text-nodes",
             str(target),
             json.dumps(edits, ensure_ascii=False),
+            mode,
         ]
     )
     extracted = normalize_markdown_text(read_local_markdown(target))
@@ -750,14 +1023,75 @@ def locked_publish_result(
     return result
 
 
+def source_changed_publish_result(
+    manifest: dict,
+    *,
+    graph_error: dict | None = None,
+) -> dict:
+    """Describe a retained Word patch whose source changed during publish."""
+    result = {
+        "status": "source_changed",
+        "retryable": True,
+        "operationId": manifest["operationId"],
+        "expiresAt": manifest["expiresAt"],
+        "choices": ["retry_original", "send_copy", "cancel"],
+        "message": (
+            "Another user saved the original while Hermes was publishing. "
+            "Nothing was overwritten. The validated edit is retained "
+            "privately; retry_pending_office_publish reapplies it to the "
+            "latest version by paragraph content and fails closed if the "
+            "target text changed."
+        ),
+    }
+    if graph_error is not None:
+        result["graphError"] = graph_error
+    return result
+
+
+def superseded_source_result(
+    manifest: dict,
+    target: Path,
+    *,
+    latest_etag: str,
+    reason: str,
+) -> dict:
+    manifest["sourceChangedAt"] = utc_timestamp(time.time())
+    manifest["latestETag"] = latest_etag
+    write_pending_publish_manifest(target.parent, manifest)
+    return {
+        "status": "source_changed",
+        "retryable": False,
+        "operationId": manifest["operationId"],
+        "choices": ["send_copy", "cancel", "repeat_edit"],
+        "cleanupRequiredBeforeRepeatEdit": True,
+        "copyBasedOnSupersededSource": True,
+        "message": (
+            f"{reason} The original was not overwritten; repeat the edit "
+            "against the latest version or explicitly publish the retained "
+            "result as a copy based on the earlier source."
+        ),
+    }
+
+
 async def rebase_pending_word_patch(
     manifest: dict,
     target: Path,
     item: dict,
 ) -> tuple[dict, dict]:
     edits = manifest.get("edits")
-    if not isinstance(edits, list) or not edits:
-        raise ValueError("The pending Word patch has no reusable edit intent.")
+    if (
+        not isinstance(edits, list)
+        or not edits
+        or any(
+            not isinstance(edit, dict)
+            or "paragraphText" not in edit
+            or "textNodeText" not in edit
+            for edit in edits
+        )
+    ):
+        raise ValueError(
+            "The pending Word patch has no content-anchored edit intent."
+        )
     fresh_path = target.with_name(f".fresh-{target.name}")
     fresh_path.write_bytes(await download_drive_item(item))
     try:
@@ -765,6 +1099,7 @@ async def rebase_pending_word_patch(
         patch_result, validation = await apply_word_text_node_edits(
             fresh_path,
             edits,
+            mode="anchor",
         )
         fresh_path.replace(target)
     finally:
@@ -1056,6 +1391,18 @@ async def upload_office_file(
     item = await drive_item(sharing_url)
     try:
         return await upload_drive_item(item, data, expected_etag)
+    except SourceChangedError as exc:
+        return {
+            "status": "source_changed",
+            "retryable": False,
+            "choices": ["repeat_edit", "cancel"],
+            "graphError": exc.graph_error,
+            "message": (
+                "Another user changed the original after it was downloaded. "
+                "Nothing was overwritten. Download the latest version and "
+                "repeat the edit, or cancel."
+            ),
+        }
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code != 423:
             raise
@@ -1086,13 +1433,7 @@ async def inspect_word_structure(sharing_url: str) -> dict:
     target.parent.mkdir(parents=True, exist_ok=False)
     target.write_bytes(data)
     try:
-        return run_local_tool(
-            [
-                "office-collaboration",
-                "word-inspect-structure",
-                str(target),
-            ]
-        )
+        return inspect_local_word(target)
     finally:
         target.unlink(missing_ok=True)
         try:
@@ -1110,7 +1451,10 @@ async def patch_word_text(
     """Apply stable Word text-node edits, validate, and publish the same item.
 
     Each edit requires paragraphIndex, textNodeIndex, searchText, and
-    replacementText values obtained from inspect_word_structure.
+    replacementText values obtained from inspect_word_structure. An optional
+    paragraphText from the same inspection makes the edit fail closed if the
+    paragraph moved. Repeating an edit that already reached the original
+    returns status "duplicate" without writing again.
     """
     if not edits:
         raise ValueError("edits must not be empty.")
@@ -1140,16 +1484,55 @@ async def patch_word_text(
     target.write_bytes(data)
     retained = False
     try:
+        structure = inspect_local_word(target)
+        anchored = anchor_word_edits(structure, edits)
+        receipt_key = word_patch_receipt_key(item, anchored)
+        receipt = read_word_patch_receipt(receipt_key)
+        if receipt and word_patch_already_applied(
+            receipt,
+            item,
+            structure,
+        ):
+            return {
+                "status": "duplicate",
+                "applied": 0,
+                "driveItem": receipt.get("driveItem"),
+                "message": (
+                    "This edit already reached the original document; it "
+                    "was not applied again."
+                ),
+            }
         write_openxml_baseline(target)
         patch_result, validation = await apply_word_text_node_edits(
             target,
-            edits,
+            anchored,
+        )
+        record_word_patch_attempt(
+            receipt_key,
+            anchored,
+            inspect_local_word(target),
         )
         try:
             uploaded = await upload_drive_item(
                 item,
                 target.read_bytes(),
                 str(item.get("eTag") or ""),
+            )
+        except SourceChangedError as exc:
+            cleanup_expired_pending_publishes()
+            manifest = stage_pending_publish(
+                target=target,
+                item=item,
+                sharing_url=sharing_url,
+                publish_kind="word-text-node-patch",
+                edits=anchored,
+                operation_scope=operation_scope,
+                receipt_key=receipt_key,
+            )
+            retained = True
+            return source_changed_publish_result(
+                manifest,
+                graph_error=exc.graph_error,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code != 423:
@@ -1160,8 +1543,9 @@ async def patch_word_text(
                 item=item,
                 sharing_url=sharing_url,
                 publish_kind="word-text-node-patch",
-                edits=edits,
+                edits=anchored,
                 operation_scope=operation_scope,
+                receipt_key=receipt_key,
             )
             retained = True
             return locked_publish_result(
@@ -1170,6 +1554,7 @@ async def patch_word_text(
                 validation=validation,
                 graph_error=graph_error_summary(exc.response),
             )
+        complete_word_patch_receipt(receipt_key, uploaded)
         return {
             "status": "completed",
             "applied": patch_result.get("Applied"),
@@ -1188,8 +1573,9 @@ async def retry_pending_office_publish(
 ) -> dict:
     """Retry a retained same-item Office publish without repeating the edit.
 
-    Stable Word text-node patches are reapplied to the latest source when its
-    ETag changed. Other local edits fail closed on an ETag change.
+    Stable Word text-node patches are reapplied by paragraph content to the
+    latest source when its ETag changed, and fail closed when the target
+    paragraph changed. Other local edits fail closed on an ETag change.
     """
     cleanup_expired_pending_publishes()
     manifest, target = load_pending_publish(
@@ -1199,33 +1585,34 @@ async def retry_pending_office_publish(
     item = await drive_item(str(manifest["sharingUrl"]))
     current_etag = str(item.get("eTag") or "")
     expected_etag = str(manifest.get("expectedETag") or "")
+    is_word_patch = manifest.get("publishKind") == "word-text-node-patch"
     rebased = False
     patch_result = None
     validation = None
     if current_etag != expected_etag:
-        if manifest.get("publishKind") != "word-text-node-patch":
-            manifest["sourceChangedAt"] = utc_timestamp(time.time())
-            manifest["latestETag"] = current_etag
-            write_pending_publish_manifest(target.parent, manifest)
-            return {
-                "status": "source_changed",
-                "retryable": False,
-                "operationId": operation_id,
-                "choices": ["send_copy", "cancel", "repeat_edit"],
-                "cleanupRequiredBeforeRepeatEdit": True,
-                "copyBasedOnSupersededSource": True,
-                "message": (
-                    "The original changed after the local edit. It was not "
-                    "overwritten; repeat the edit against the latest version "
-                    "or explicitly publish the retained result as a copy "
-                    "based on the earlier source."
+        if not is_word_patch:
+            return superseded_source_result(
+                manifest,
+                target,
+                latest_etag=current_etag,
+                reason="The original changed after the local edit.",
+            )
+        try:
+            patch_result, validation = await rebase_pending_word_patch(
+                manifest,
+                target,
+                item,
+            )
+        except (RuntimeError, ValueError):
+            return superseded_source_result(
+                manifest,
+                target,
+                latest_etag=current_etag,
+                reason=(
+                    "Another user changed the paragraph Hermes was editing, "
+                    "so the edit could not be reapplied safely."
                 ),
-            }
-        patch_result, validation = await rebase_pending_word_patch(
-            manifest,
-            target,
-            item,
-        )
+            )
         expected_etag = str(manifest["expectedETag"])
         rebased = True
     try:
@@ -1233,6 +1620,18 @@ async def retry_pending_office_publish(
             item,
             target.read_bytes(),
             expected_etag,
+        )
+    except SourceChangedError as exc:
+        if not is_word_patch:
+            return superseded_source_result(
+                manifest,
+                target,
+                latest_etag=current_etag,
+                reason="The original changed during upload.",
+            )
+        return source_changed_publish_result(
+            manifest,
+            graph_error=exc.graph_error,
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code != 423:
@@ -1247,6 +1646,7 @@ async def retry_pending_office_publish(
             validation=validation,
             graph_error=graph_error_summary(exc.response),
         )
+    complete_pending_word_patch_receipt(manifest, uploaded)
     remove_private_workdir(target.parent)
     return {
         "status": "completed",

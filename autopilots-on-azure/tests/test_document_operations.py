@@ -10,6 +10,7 @@ from unittest.mock import patch
 import httpx
 
 from autopilots_identity.collaboration_mcp import (
+    SourceChangedError,
     stage_pending_publish,
 )
 from autopilots_identity.document_operations import (
@@ -37,6 +38,9 @@ class DocumentOperationTests(unittest.TestCase):
         self,
         workspace: Path,
         operation_id: str,
+        *,
+        publish_kind: str = "generic-local-edit",
+        edits: list[dict] | None = None,
     ) -> Path:
         directory = workspace / operation_id
         directory.mkdir()
@@ -48,7 +52,8 @@ class DocumentOperationTests(unittest.TestCase):
             sharing_url=(
                 "https://contoso.sharepoint.com/document.docx"
             ),
-            publish_kind="generic-local-edit",
+            publish_kind=publish_kind,
+            edits=edits,
             operation_scope="scope-1",
         )
         return target
@@ -271,6 +276,111 @@ class DocumentOperationTests(unittest.TestCase):
                     patch(
                         "autopilots_identity.document_operations.collaboration.upload_agent_results_copy",
                         return_value=copied_item,
+                    ),
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.invite_drive_item_user",
+                        return_value={
+                            "recipient": "user-1",
+                            "role": "write",
+                            "permissions": [{"id": "permission-1"}],
+                        },
+                    ),
+                ):
+                    result = asyncio.run(
+                        process_background_retry(operation_id)
+                    )
+
+        self.assertEqual(result["status"], "completed_copy")
+
+    def test_word_patch_retry_reschedules_when_coauthor_saves_during_upload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            operation_id = "e" * 24
+            with patch.dict(
+                os.environ,
+                {"M365_COLLABORATION_WORKSPACE": str(workspace)},
+            ):
+                target = self.stage(
+                    workspace,
+                    operation_id,
+                    publish_kind="word-text-node-patch",
+                    edits=[
+                        {
+                            "paragraphIndex": 0,
+                            "textNodeIndex": 0,
+                            "searchText": "______",
+                            "replacementText": "Tomáš",
+                            "paragraphText": "Jméno ______",
+                            "textNodeText": "______",
+                        }
+                    ],
+                )
+                configure_background_retry(
+                    operation_id,
+                    "scope-1",
+                    "user-1",
+                    {"boundary": "one_to_one", "conversation": {}},
+                )
+                self.make_due(target)
+                with (
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.drive_item",
+                        return_value=source_item(),
+                    ),
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.upload_drive_item",
+                        side_effect=SourceChangedError("saved"),
+                    ),
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.upload_agent_results_copy",
+                    ) as copy_upload,
+                ):
+                    result = asyncio.run(
+                        process_background_retry(operation_id)
+                    )
+                retained = target.is_file()
+
+        self.assertEqual(result["status"], "source_changed")
+        self.assertEqual(result["attempt"], 1)
+        self.assertEqual(result["graphError"]["statusCode"], 412)
+        self.assertTrue(retained)
+        copy_upload.assert_not_called()
+
+    def test_generic_retry_falls_back_to_copy_when_source_changes_during_upload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspace"
+            workspace.mkdir()
+            operation_id = "f" * 24
+            with patch.dict(
+                os.environ,
+                {"M365_COLLABORATION_WORKSPACE": str(workspace)},
+            ):
+                target = self.stage(workspace, operation_id)
+                configure_background_retry(
+                    operation_id,
+                    "scope-1",
+                    "user-1",
+                    {"boundary": "one_to_one", "conversation": {}},
+                )
+                self.make_due(target)
+                with (
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.drive_item",
+                        return_value=source_item(),
+                    ),
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.upload_drive_item",
+                        side_effect=SourceChangedError("saved"),
+                    ),
+                    patch(
+                        "autopilots_identity.document_operations.collaboration.upload_agent_results_copy",
+                        return_value={
+                            "id": "copy-item",
+                            "name": "document - Hermes edit.docx",
+                            "webUrl": "https://contoso/copy",
+                            "parentReference": {"driveId": "agent-drive"},
+                        },
                     ),
                     patch(
                         "autopilots_identity.document_operations.collaboration.invite_drive_item_user",

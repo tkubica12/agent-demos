@@ -118,6 +118,14 @@ resource "azurerm_role_assignment" "runtime_foundry_user" {
   principal_type       = "ServicePrincipal"
 }
 
+resource "azurerm_role_assignment" "disk_image_acr_pull" {
+  for_each             = toset(["runtime", "gateway", "private-mcp", "public-mcp"])
+  scope                = local.platform.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.workload[each.key].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 resource "azurerm_servicebus_queue" "worker_schedule" {
   count                                   = local.scheduler_transport_enabled ? 1 : 0
   name                                    = "worker-${var.autopilot_name}"

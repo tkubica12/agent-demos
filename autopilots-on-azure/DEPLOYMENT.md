@@ -1,6 +1,6 @@
 # Deployment and operations
 
-These commands update **existing Workers**, preserving their Agent 365 blueprint, Agent Identity, Agent User, grants, and Data Disk. Fresh-Worker bootstrap has an unresolved identity/endpoint dependency; do not substitute placeholder endpoints or copied identities. Other current limitations are in [SPEC.md](SPEC.md).
+Most commands below update **existing Workers**, preserving their Agent 365 blueprint, Agent Identity, Agent User, grants, and Data Disk. Create new Workers only with [Fresh Worker bootstrap](#fresh-worker-bootstrap); do not substitute placeholder endpoints or copied identities. Other current limitations are in [SPEC.md](SPEC.md).
 
 ## Prerequisites
 
@@ -58,7 +58,7 @@ uv run python -m scripts.build_images --state-name hermes --state-name hermes2
 
 The selected states must already exist. The command builds Hermes, gateway, private MCP, and public MCP and writes digest pins plus matching tagged OCI conversion sources.
 
-Sandbox conversion uses a deployer-held short-lived ACR token, as defined in [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md). The helper prepares all four ready disk images before creating services. ACR admin is disabled; runtime/gateway receive prepared IDs, not registry credentials or roles. Reuse matching prepared images without another registry login.
+Each Sandbox Group converts its image with its own managed identity (`AcrPull`, [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)); no registry token exists. A brand-new role assignment can take a few minutes; a failed conversion stops the deployment with the service error. All four disk images are ready before any service is created, and matching prepared images are reused.
 
 ### 3. Apply infrastructure without services
 
@@ -96,6 +96,8 @@ Capture actual native endpoints, `sandbox_services`, and prepared image IDs. Gat
 
 ### 6. Update the Agent 365 endpoint as its direct owner
 
+Required whenever step 5 replaced the gateway Sandbox (any gateway image change): its native URL changes, and Teams and email silently go to the old URL until this step runs. Compare `bridge_url` in `.local\<worker>\apps\terraform-outputs.json` with `messagingEndpoint` in `.local\<worker>\agent365\<worker>-agent365-identifiers.json`.
+
 `a365` endpoint update is destructive **DELETE → POST**. The wrapper first resolves the signed-in Graph user and all direct blueprint owners; unreadable ownership or a nonowner fails before local mutation or `a365` invocation. Administrative privileges alone do not satisfy that check.
 
 Use a separate Azure CLI cache for the explicitly authorized owner. Keep Terraform on the original operator identity:
@@ -120,7 +122,7 @@ finally {
 }
 ```
 
-Do not use `--run-setup` or provision replacement identities for an existing-Worker update. If deletion succeeded but replacement failed, repair the registered endpoint with the direct owner before resuming Teams validation.
+Do not provision replacement identities for an existing-Worker update. If deletion succeeded but replacement failed, repair the registered endpoint with the direct owner before resuming Teams validation.
 
 ### 7. Publish the Agent User package
 
@@ -132,6 +134,30 @@ uv run python -m scripts.setup_agent365 `
 Publishing rejects missing manifest consents. Upload `.local\<worker>\agent365\manifest\manifest.zip` through **Microsoft 365 admin center → Agents → All agents → Upload custom agent**, not the Teams app store.
 
 Assign each Agent User only licenses required by its scenario: Teams/Agent 365 for presence and management; applicable Microsoft 365 services for mailbox/files/calendar; Copilot for relevant Work IQ capabilities. Resource provisioning and package/permission propagation may take time.
+
+## Fresh Worker bootstrap
+
+A new Worker is created blueprint-first, deployed, and only then given its real messaging endpoint:
+
+```powershell
+$admin = Join-Path (Get-Location) ".local\admin-login"
+$env:AZURE_CONFIG_DIR = $admin; az login --use-device-code; Remove-Item Env:AZURE_CONFIG_DIR
+uv run python -m scripts.worker_lifecycle bootstrap `
+  --state-name worker3 --pins-from hermes2 --admin-config-dir $admin
+```
+
+The operator login runs Terraform and Sandbox deployment; `--admin-config-dir` holds a tenant administrator login for Agent 365, Graph, and consent. The command:
+
+1. writes `a365.config.json` without an endpoint and runs `a365 setup all --aiteammate --m365` (admin consent opens in a browser);
+2. requires complete inheritable permissions and deletes every CLI-created blueprint client secret;
+3. provisions the Agent Identity and Agent User (default licenses: Agent 365, Teams, Microsoft 365 E3, Power Automate Free);
+4. writes Worker settings with release/image pins copied from `--pins-from`, scheduling and learning disabled;
+5. applies infrastructure, reconciles federation and grants, deploys services, and invokes the Worker;
+6. registers the deployed bridge endpoint once, rechecks that the blueprint has zero client secrets, and publishes the package.
+
+Rerunning resumes: an existing live blueprint, Worker settings, and an already registered identical endpoint are kept; a different registered endpoint stops the run. Finally upload `.local\<worker>\agent365\manifest\manifest.zip` in Microsoft 365 admin center as in step 7.
+
+`deploy_apps_runtime` activates the new Worker's Terraform inputs. Before operating another Worker, run its own `deploy_apps_runtime` command.
 
 ## Validation
 
@@ -233,21 +259,14 @@ Add `--apply` only to reconcile registration. After a real explicit-session turn
 
 ## Cleanup
 
-For a deliberately deleted Worker, remove its Agent 365 instance separately from Azure infrastructure:
+Remove a whole Worker with one command. It previews by default:
 
 ```powershell
-uv run python -m scripts.provision_agent365_instance cleanup `
-  --state-name $worker `
-  --mail-nickname $worker `
-  --state-file ".local\$worker\agent365\instance.$worker.json" `
-  --remove-state
-
-uv run python -m scripts.deploy_apps_runtime `
-  --state-name $worker --workspace $workspace
-terraform -chdir=terraform\apps workspace select $workspace
-terraform -chdir=terraform\apps destroy
+uv run python -m scripts.worker_lifecycle teardown --state-name worker3
+uv run python -m scripts.worker_lifecycle teardown --state-name worker3 `
+  --execute --admin-config-dir $admin --restore-state hermes2
 ```
 
-Review the exact targets first; place `--dry-run` before `cleanup` to preview Graph writes. The helper deletes only the recorded Agent User and Agent Identity, not the blueprint or package. Retained Data Disks and shared platform resources need separate intentional cleanup. Generated apps use owner-bound delete actions or native post-suspension deletion.
+Review the printed inventory before `--execute`. It deletes the Worker's Sandboxes, volumes, and disk images (Sandbox Groups not named for the Worker are refused), destroys its Terraform workspace, deletes its Agent User, Agent Identity, and blueprint, reactivates `--restore-state`, and removes `.local\<worker>\`. Shared platform resources are untouched. Generated apps use owner-bound delete actions or native post-suspension deletion.
 
 `scripts.demo_cohort reset` is reserved for already provisioned disposable `demo-*` Workers/workspaces/volumes; preview first and supply their reviewed baseline release/commit. Never reset long-lived Workers backward or rewrite shared Role Release history to replay a classroom exercise.
