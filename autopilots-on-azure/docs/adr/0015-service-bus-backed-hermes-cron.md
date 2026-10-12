@@ -4,11 +4,7 @@
 
 Keep native Hermes cron and its execution ledger on the Worker Data Disk. An Azure `CronScheduler` plugin arms only the next occurrence in a per-Worker Service Bus queue. The non-suspending gateway receives it and wakes/reuses runtime compute.
 
-```text
-native cron mutation → next-occurrence message → gateway PeekLock
-  → runtime claim/execution receipt → bound Teams delivery/receipt
-  → next-occurrence reconciliation → queue completion
-```
+![Scheduling flow: Hermes cron arms the next occurrence in Service Bus; the gateway receives it, the runtime runs it, Teams delivers the result, and the next occurrence is armed.](../assets/scheduling-flow.svg)
 
 Messages contain only type, Worker/job ID, revision, and due time. Private prompts, skills, results, and delivery credentials stay on disk. Native cron sends as Agent Identity federated from runtime identity. The gateway receives and sends document retries as its own managed identity, without Agent Identity exchange. No SAS connection string is used.
 

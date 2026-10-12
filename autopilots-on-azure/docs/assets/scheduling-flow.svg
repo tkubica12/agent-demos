@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="260" viewBox="0 0 800 260" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <title>Service Bus backed Hermes cron</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#505050"/>
+    </marker>
+  </defs>
+  <rect width="800" height="260" fill="#ffffff"/>
+
+  <g stroke="#505050" stroke-width="1.6" fill="none" marker-end="url(#arrow)">
+    <path d="M240,75 H288"/>
+    <path d="M510,75 H558"/>
+    <path d="M670,110 V168"/>
+    <path d="M560,205 H512"/>
+    <path d="M290,205 H242"/>
+  </g>
+
+  <g text-anchor="middle">
+    <rect x="20" y="40" width="220" height="70" rx="8" fill="#fff4e5" stroke="#c25e00" stroke-width="1.5"/>
+    <text x="130" y="70" font-size="14" font-weight="600" fill="#202020">1. Hermes cron changes</text>
+    <text x="130" y="90" font-size="12" fill="#404040">state stays on the Data Disk</text>
+
+    <rect x="290" y="40" width="220" height="70" rx="8" fill="#fff4e5" stroke="#c25e00" stroke-width="1.5"/>
+    <text x="400" y="70" font-size="14" font-weight="600" fill="#202020">2. Next occurrence queued</text>
+    <text x="400" y="90" font-size="12" fill="#404040">type, job, revision, due time</text>
+
+    <rect x="560" y="40" width="220" height="70" rx="8" fill="#e8f1fb" stroke="#0f6cbd" stroke-width="1.5"/>
+    <text x="670" y="70" font-size="14" font-weight="600" fill="#202020">3. gateway receives</text>
+    <text x="670" y="90" font-size="12" fill="#404040">PeekLock, lock renewal</text>
+
+    <rect x="560" y="170" width="220" height="70" rx="8" fill="#e8f1fb" stroke="#0f6cbd" stroke-width="1.5"/>
+    <text x="670" y="200" font-size="14" font-weight="600" fill="#202020">4. runtime claims and runs</text>
+    <text x="670" y="220" font-size="12" fill="#404040">execution receipt</text>
+
+    <rect x="290" y="170" width="220" height="70" rx="8" fill="#f1ebfa" stroke="#6b3fa0" stroke-width="1.5"/>
+    <text x="400" y="200" font-size="14" font-weight="600" fill="#202020">5. Teams delivery</text>
+    <text x="400" y="220" font-size="12" fill="#404040">bound delivery receipt</text>
+
+    <rect x="20" y="170" width="220" height="70" rx="8" fill="#fff4e5" stroke="#c25e00" stroke-width="1.5"/>
+    <text x="130" y="200" font-size="14" font-weight="600" fill="#202020">6. Next occurrence armed</text>
+    <text x="130" y="220" font-size="12" fill="#404040">queue message completed</text>
+  </g>
+</svg>

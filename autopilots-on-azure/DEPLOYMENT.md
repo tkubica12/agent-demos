@@ -15,15 +15,15 @@ From the repository root:
 ```powershell
 az login --use-device-code
 Set-Location .\autopilots-on-azure
-uv sync --frozen --index-url https://packagefeedproxy.microsoft.io/pypi/simple
+uv sync --frozen
 terraform -version
 $worker = "hermes2"
 $workspace = "autopilot-hermes2"
 ```
 
-For `hermes`, use workspace `autopilot-hermes`. Keep workspace selection explicit. Login must complete in the intended tenant; resolve reported login problems or restart an expired device-code attempt before continuing.
+For `hermes`, use workspace `autopilot-hermes`. Keep workspace selection explicit. Login must complete in the intended tenant; resolve reported login problems or restart an expired device-code attempt before continuing. Apply commands below prompt for Terraform approval; add `--auto-approve` only in a non-interactive shell.
 
-The corporate Python feed is required in this environment. Keep frozen Python/npm locks and use an approved build-reachable feed; do not embed feed credentials or change versions to bypass a resolution failure.
+`pyproject.toml` pins the approved corporate Python feed. Keep frozen Python/npm locks; do not embed feed credentials or change versions to bypass a resolution failure.
 
 ## State
 
