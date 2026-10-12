@@ -14,3 +14,4 @@ terraform/**/.terraform/
 terraform/**/*.tfstate
 terraform/**/*.tfstate.*
 terraform/**/generated.*.auto.tfvars.json
+terraform/**/tfplan
