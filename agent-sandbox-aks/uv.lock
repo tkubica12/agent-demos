@@ -3,6 +3,6 @@ revision = 3
 requires-python = ">=3.13"
 
 [[package]]
-name = "agent-substrate-mvp"
+name = "agent-sandbox-aks"
 version = "0.1.0"
 source = { virtual = "." }

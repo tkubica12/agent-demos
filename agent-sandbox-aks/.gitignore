@@ -11,4 +11,3 @@ __pycache__/
 *.tfvars.json
 .env
 .env.*
-!.env.example
