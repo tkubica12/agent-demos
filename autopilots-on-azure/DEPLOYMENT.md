@@ -5,8 +5,9 @@ Most commands below update **existing Workers**, preserving their Agent 365 blue
 ## Prerequisites
 
 - Azure CLI, Terraform, `uv`, and Agent 365 CLI (`a365`).
-- Correct subscription/tenant and permissions for the affected Azure resources.
-- An existing direct blueprint owner for endpoint updates; consent/Agent User licensing rights where needed.
+- Operator login with permissions for the affected Azure resources; it runs Terraform and Sandbox deployment.
+- A separate tenant-administrator login that is a **direct owner** of the Worker's blueprint; it runs Graph federation, consent, endpoint, and publishing steps. Operator rights are not sufficient for blueprint federation.
+- Agent User licensing rights where needed.
 - Existing `.local\<worker>\apps\` and `.local\<worker>\agent365\` state.
 - GitHub CLI for Promotion; `gh aw` only when operating its review workflows.
 
@@ -16,12 +17,21 @@ From the repository root:
 az login --use-device-code
 Set-Location .\autopilots-on-azure
 uv sync --frozen
-terraform -version
 $worker = "hermes2"
-$workspace = "autopilot-hermes2"
+$workspace = "autopilot-$worker"
+$tenant = az account show --query tenantId -o tsv
+$admin = Join-Path (Get-Location) ".local\admin-login"
+function Invoke-AsAdmin([scriptblock]$Command) {
+    $operatorConfig = $env:AZURE_CONFIG_DIR
+    $env:AZURE_CONFIG_DIR = $admin
+    try { & $Command } finally { $env:AZURE_CONFIG_DIR = $operatorConfig }
+}
+Invoke-AsAdmin { az login --use-device-code --tenant $tenant }
 ```
 
-For `hermes`, use workspace `autopilot-hermes`. Keep workspace selection explicit. Login must complete in the intended tenant; resolve reported login problems or restart an expired device-code attempt before continuing. Apply commands below prompt for Terraform approval; add `--auto-approve` only in a non-interactive shell.
+Both logins must complete in the same tenant; `setup_identity` rejects a tenant that differs from the captured `tenant_id`. Resolve reported login problems or restart an expired device-code attempt before continuing. When finished, run `Invoke-AsAdmin { az logout }` and delete `.local\admin-login`.
+
+`deploy_apps_runtime` selects or creates `--workspace` (default `autopilot-<worker>`) and activates that Worker's tfvars on every run. `--apply` without `--auto-approve` waits for Terraform confirmation and fails with EOF in a non-interactive shell; omit `--auto-approve` below to review the plan interactively.
 
 `pyproject.toml` pins the approved corporate Python feed. Keep frozen Python/npm locks; do not embed feed credentials or change versions to bypass a resolution failure.
 
@@ -48,105 +58,97 @@ terraform -chdir=terraform\platform init
 terraform -chdir=terraform\platform apply
 ```
 
-The platform supplies Foundry, ACR, networking, private DNS/Express ingress, Service Bus namespace, and monitoring. Per-Worker application state owns its service Groups, identities, and queue. Verify the private-ingress environment before linking a Group: the link is irreversible.
+The platform (default Terraform workspace) supplies Foundry, ACR, networking, private DNS/Express ingress, the Service Bus namespace, and monitoring. Each Worker's apps workspace owns its Sandbox Groups, identities, and Service Bus queue. Verify the private-ingress environment before linking a Group: the link is irreversible.
 
-### 2. Build images
+### 2. Apply infrastructure without services
+
+```powershell
+uv run python -m scripts.deploy_apps_runtime `
+  --state-name $worker --workspace $workspace `
+  --apply --auto-approve --infrastructure-only --capture
+```
+
+This reconciles ARM resources and captures Group/identity metadata without deploying Sandbox services or changing the gateway endpoint.
+
+### 3. Reconcile federation and consent
+
+```powershell
+Invoke-AsAdmin { uv run python -m scripts.setup_identity --state-name $worker }
+Push-Location ".local\$worker\agent365"
+try { Invoke-AsAdmin { a365 query-entra inheritance } } finally { Pop-Location }
+```
+
+`setup_identity` writes the blueprint federated credentials for the gateway and runtime identities (removing the obsolete `sandbox` credential), requests missing permissions without recreating identities, and writes and activates the Worker's identity tfvars. Every resource in the inheritance query must have effective inheritance. If Graph CAE requests reauthentication, repeat the admin device-code login before retrying.
+
+Reconcile every affected Worker after a `ToolingManifest.json` change before deploying or publishing. See the [identity runbook](docs/runbooks/identity-mcp.md).
+
+### 4. Build images
 
 ```powershell
 uv run python -m scripts.build_images --state-name hermes --state-name hermes2
 ```
 
-The selected states must already exist. The command builds Hermes, gateway, private MCP, and public MCP and writes digest pins plus matching tagged OCI conversion sources.
+The selected states must already exist. This builds the Hermes runtime, gateway, private MCP, and public MCP images in ACR and writes their digest pins and matching tagged disk-conversion sources into each `.local\<worker>\apps\generated.app.auto.tfvars.json`; step 5 activates them.
 
-Each Sandbox Group converts its image with its own managed identity (`AcrPull`, [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)); no registry token exists. A brand-new role assignment can take a few minutes; a failed conversion stops the deployment with the service error. All four disk images are ready before any service is created, and matching prepared images are reused.
-
-### 3. Apply infrastructure without services
+### 5. Apply and deploy services
 
 ```powershell
 uv run python -m scripts.deploy_apps_runtime `
   --state-name $worker --workspace $workspace `
-  --apply --infrastructure-only --capture
+  --apply --auto-approve --capture
 ```
 
-This creates/reconciles ARM resources and captures Group/identity metadata; it does not invent a gateway endpoint.
+`--apply` implies `--deploy-services` and `--capture` unless `--infrastructure-only` is set. The apply propagates reconciled identity values into Terraform's `deployment_config`; `--deploy-services` without `--apply` reuses that output and is valid only when it is current.
 
-### 4. Reconcile federation and consent
+Each Sandbox Group converts images with its own managed identity (`AcrPull`, [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). A new role assignment can take minutes to propagate; a failed conversion stops the deployment. All four disk images are prepared before any service is created, and unchanged images are reused. The capture records native endpoints, `sandbox_services`, and disk image IDs.
 
-```powershell
-uv run python -m scripts.setup_identity --state-name $worker
-Push-Location ".local\$worker\agent365"
-try { a365 query-entra inheritance } finally { Pop-Location }
-```
-
-Identity reconciliation updates runtime/gateway federation and writes current identity settings into Worker tfvars. Every resource in the inheritance query must have effective inheritance. If Graph CAE requests reauthentication, complete a new device-code login before retrying.
-
-For a changed `ToolingManifest.json`, reconcile every affected Worker before deployment/publishing. The helper requests missing permissions rather than recreating identities. See the [identity runbook](docs/runbooks/identity-mcp.md).
-
-### 5. Apply reconciled settings and deploy
-
-```powershell
-uv run python -m scripts.deploy_apps_runtime `
-  --state-name $worker --workspace $workspace `
-  --apply --deploy-services --capture
-```
-
-This apply propagates reconciled identity values into Terraform's `deployment_config`, which the service helper consumes. A bare `--deploy-services` is valid only when that output is already current.
-
-Capture actual native endpoints, `sandbox_services`, and prepared image IDs. Gateway/MCP ingress uses native HTTPS transport with application authentication. Gateway auto-suspend remains disabled for post-ACK work and Service Bus receive; runtime is OnDemand with a persistent Data Disk.
+A changed image creates new gateway and MCP Sandboxes with new URLs; an environment-only change updates them in place. The gateway never auto-suspends (post-ACK work, Service Bus receive). MCPs and the gateway-created runtime suspend to Disk after 1800 s idle; the runtime keeps its persistent Data Disk.
 
 ### 6. Update the Agent 365 endpoint as its direct owner
 
-Required whenever step 5 replaced the gateway Sandbox (any gateway image change): its native URL changes, and Teams and email silently go to the old URL until this step runs. Compare `bridge_url` in `.local\<worker>\apps\terraform-outputs.json` with `messagingEndpoint` in `.local\<worker>\agent365\<worker>-agent365-identifiers.json`.
-
-`a365` endpoint update is destructive **DELETE → POST**. The wrapper first resolves the signed-in Graph user and all direct blueprint owners; unreadable ownership or a nonowner fails before local mutation or `a365` invocation. Administrative privileges alone do not satisfy that check.
-
-Use a separate Azure CLI cache for the explicitly authorized owner. Keep Terraform on the original operator identity:
+Required whenever step 5 replaced the gateway Sandbox (any gateway image change): its native URL changes, and Teams and email silently go to the old URL until this step runs. Check whether the registered endpoint is current:
 
 ```powershell
-$tenant = az account show --query tenantId -o tsv
-$operatorConfig = $env:AZURE_CONFIG_DIR
-$ownerConfig = Join-Path (Get-Location) (".local\owner-login-" + [guid]::NewGuid())
-New-Item -ItemType Directory $ownerConfig | Out-Null
-try {
-    $env:AZURE_CONFIG_DIR = $ownerConfig
-    az login --use-device-code --tenant $tenant
-    if ($LASTEXITCODE -ne 0) { throw "Owner login did not complete." }
+$bridge = (Get-Content ".local\$worker\apps\terraform-outputs.json" | ConvertFrom-Json).bridge_url
+$registered = (Get-Content ".local\$worker\agent365\$worker-agent365-identifiers.json" | ConvertFrom-Json).messagingEndpoint
+"$bridge/api/messages" -eq $registered
+```
+
+`a365` endpoint update is destructive **DELETE → POST**. The wrapper first requires the signed-in Graph user to be a direct blueprint owner; unreadable ownership or a nonowner fails before local mutation or `a365` invocation. Administrative roles alone do not satisfy that check. Terraform stays on the operator login:
+
+```powershell
+Invoke-AsAdmin {
     uv run python -m scripts.setup_agent365 `
       --state-name $worker --update-endpoint --capture
-    if ($LASTEXITCODE -ne 0) { throw "Endpoint update failed; inspect before retrying." }
-}
-finally {
-    az logout
-    $env:AZURE_CONFIG_DIR = $operatorConfig
-    Remove-Item -LiteralPath $ownerConfig -Recurse -Force
 }
 ```
 
-Do not provision replacement identities for an existing-Worker update. If deletion succeeded but replacement failed, repair the registered endpoint with the direct owner before resuming Teams validation.
+This registers `<bridge_url>/api/messages` and refreshes the identifiers file. Do not provision replacement identities for an existing-Worker update. If deletion succeeded but registration failed, repair the endpoint as the direct owner before resuming Teams validation.
 
 ### 7. Publish the Agent User package
 
 ```powershell
-uv run python -m scripts.setup_agent365 `
-  --state-name $worker --agent-name $worker --publish
+$agentName = (Get-Content ".local\$worker\agent365\a365.config.json" | ConvertFrom-Json).agentName
+Invoke-AsAdmin {
+    uv run python -m scripts.setup_agent365 `
+      --state-name $worker --agent-name $agentName --publish --capture
+}
 ```
 
-Publishing rejects missing manifest consents. Upload `.local\<worker>\agent365\manifest\manifest.zip` through **Microsoft 365 admin center → Agents → All agents → Upload custom agent**, not the Teams app store.
+`--agent-name` overwrites the configured agent and blueprint display names (default `Hermes Autopilot`), so pass the existing name. Publishing rejects missing `ToolingManifest.json` consents and bumps the manifest version. Upload `.local\<worker>\agent365\manifest\manifest.zip` through **Microsoft 365 admin center → Agents → All agents → Upload custom agent**, not the Teams app store.
 
 Assign each Agent User only licenses required by its scenario: Teams/Agent 365 for presence and management; applicable Microsoft 365 services for mailbox/files/calendar; Copilot for relevant Work IQ capabilities. Resource provisioning and package/permission propagation may take time.
 
 ## Fresh Worker bootstrap
 
-A new Worker is created blueprint-first, deployed, and only then given its real messaging endpoint:
+A new Worker is created blueprint-first, deployed, and only then given its real messaging endpoint. With the operator and `$admin` logins from [Prerequisites](#prerequisites):
 
 ```powershell
-$admin = Join-Path (Get-Location) ".local\admin-login"
-$env:AZURE_CONFIG_DIR = $admin; az login --use-device-code; Remove-Item Env:AZURE_CONFIG_DIR
 uv run python -m scripts.worker_lifecycle bootstrap `
   --state-name worker3 --pins-from hermes2 --admin-config-dir $admin
 ```
 
-The operator login runs Terraform and Sandbox deployment; `--admin-config-dir` holds a tenant administrator login for Agent 365, Graph, and consent. The command:
+The operator login runs Terraform and Sandbox deployment; `--admin-config-dir` runs Agent 365, Graph, and consent. The command:
 
 1. writes `a365.config.json` without an endpoint and runs `a365 setup all --aiteammate --m365` (admin consent opens in a browser);
 2. requires complete inheritable permissions and deletes every CLI-created blueprint client secret;
@@ -157,7 +159,7 @@ The operator login runs Terraform and Sandbox deployment; `--admin-config-dir` h
 
 Rerunning resumes: an existing live blueprint, Worker settings, and an already registered identical endpoint are kept; a different registered endpoint stops the run. Finally upload `.local\<worker>\agent365\manifest\manifest.zip` in Microsoft 365 admin center as in step 7.
 
-`deploy_apps_runtime` activates the new Worker's Terraform inputs. Before operating another Worker, run its own `deploy_apps_runtime` command.
+`deploy_apps_runtime` leaves the new Worker's tfvars active. Other Workers' `deploy_apps_runtime` runs reactivate their own; before raw `terraform` commands, run `demo_ops activate --state-name <worker>` and select the workspace it prints.
 
 ## Validation
 
@@ -171,8 +173,7 @@ uv run python -m unittest discover -s tests
 
 ```powershell
 uv run python -m scripts.demo_ops status --state-name $worker --invoke
-uv run python -m scripts.demo_ops smoke --state-name $worker `
-  --message "Reply exactly: Hermes ready" --timeout 600
+uv run python -m scripts.demo_ops smoke --state-name $worker --timeout 600
 uv run python -m scripts.demo_ops smoke --state-name $worker `
   --message "Use private incidents to list services, then public shipments to list demo shipments." `
   --timeout 600
@@ -180,7 +181,7 @@ uv run python -m scripts.deploy_apps_runtime `
   --state-name $worker --workspace $workspace --plan
 ```
 
-Require a real model response, actual tool results, correct Worker/release health metadata, and a converged Terraform plan. Unauthenticated public MCP/operator requests must fail authentication; private MCP must not become publicly reachable. Health alone does not check tool authorization.
+`status` requires a Running gateway with auto-suspend disabled and a healthy `/health`; `--invoke` adds the default smoke. The default smoke checks its reply marker; a custom `--message` is not checked automatically. Require a real model response, actual tool results, correct Worker/release health metadata, and a converged Terraform plan. Unauthenticated public MCP/operator requests must fail authentication; private MCP must not become publicly reachable. Health alone does not check tool authorization.
 
 Feature-specific live checks:
 
@@ -213,10 +214,10 @@ uv run python -m scripts.setup_app_tfvars `
   --user-scheduling-enabled --servicebus-dream-enabled `
   --servicebus-dream-cron-expression "0 2 * * *" --runtime-only
 uv run python -m scripts.deploy_apps_runtime `
-  --state-name $worker --workspace $workspace --apply --capture
+  --state-name $worker --workspace $workspace --apply --auto-approve --capture
 ```
 
-The bridge-owned interval timer and Service Bus Dreaming are mutually exclusive. Manual Dreaming uses `scripts.demo_ops dream`; the configured interval timer has separate `scheduled-run`/`scheduled-status` commands.
+`setup_app_tfvars` preserves unspecified settings; `--apply` redeploys services from the updated settings. The bridge-owned interval timer and Service Bus Dreaming are mutually exclusive, and Service Bus Dreaming requires user scheduling. Manual Dreaming uses `scripts.demo_ops dream`; the interval timer has separate `scheduled-run`/`scheduled-status` commands.
 
 Before a Role Release change, approve/export governed changes or sign their explicit rejection as shown in [DEMO.md](DEMO.md). Then set the reviewed newer release and its full commit:
 
@@ -227,7 +228,7 @@ uv run python -m scripts.setup_app_tfvars `
   --state-name $worker --autopilot-name $worker `
   --role-release $release --role-release-commit $commit --runtime-only
 uv run python -m scripts.deploy_apps_runtime `
-  --state-name $worker --workspace $workspace --apply --capture
+  --state-name $worker --workspace $workspace --apply --auto-approve --capture
 uv run python -m scripts.demo_ops status --state-name $worker --invoke
 ```
 
@@ -241,21 +242,20 @@ uv run python -m scripts.demo_ops logs `
 uv run python -m scripts.demo_ops reset-sandbox --state-name $worker
 ```
 
-`reset-sandbox` previews deletion of runtime compute while retaining its Data Disk; add `--execute` only for intentional replacement. Do not reset healthy `Stopped` compute to perform a resume test.
+`logs` prints the target unless `--execute` is given; `--app` is `gateway` (alias `bridge`), `runtime` (requires `--path`), `private-mcp`, or `public-mcp`, and the Sandbox must be running. `reset-sandbox` previews deletion of runtime compute while retaining its Data Disk; add `--execute` only for intentional replacement. Do not reset healthy suspended or `Stopped` compute to perform a resume test.
 
-Trace interrupted-session `409` requires stopping the uncertain native executor: restart **runtime wrapper and native gateway**, not only the public gateway. Do not delete a lease to permit overlapping work. Ambiguous Dream `dream_started` also requires inspection rather than blind replay.
+For trace-interrupted-session `409` and ambiguous `dream_started` receipts, follow [SPEC.md](SPEC.md#observability) and [Scheduling and Dreaming](SPEC.md#scheduling-and-dreaming): restart the runtime wrapper and native gateway, never delete a lease, and inspect before replaying.
 
 Foundry external registration can be inspected with captured deployment values:
 
 ```powershell
-$projectEndpoint = Read-Host "Foundry project endpoint"
+$outputs = Get-Content ".local\$worker\apps\terraform-outputs.json" | ConvertFrom-Json
 uv run python -m scripts.register_foundry_external_agent `
-  --project-endpoint $projectEndpoint `
-  --agent-name "autopilots-$worker" --otel-agent-id "autopilots-$worker" `
-  --auth azure-cli
+  --project-endpoint $outputs.foundry_project_endpoint `
+  --agent-name $outputs.foundry_agent_name --auth azure-cli
 ```
 
-Add `--apply` only to reconcile registration. After a real explicit-session turn, inspect Foundry traces for model/tool callbacks, timings/usage, opaque identifiers, and absent payload content. Registration is metadata; tracing and runtime operation are separate.
+Both Workers report as `autopilots-hermes`; the OTel agent ID defaults to the agent name. Add `--apply` only to reconcile registration. After a real explicit-session turn, inspect Foundry traces for model/tool callbacks, timings/usage, opaque identifiers, and absent payload content.
 
 ## Cleanup
 
@@ -267,6 +267,6 @@ uv run python -m scripts.worker_lifecycle teardown --state-name worker3 `
   --execute --admin-config-dir $admin --restore-state hermes2
 ```
 
-Review the printed inventory before `--execute`. It deletes the Worker's Sandboxes, volumes, and disk images (Sandbox Groups not named for the Worker are refused), destroys its Terraform workspace, deletes its Agent User, Agent Identity, and blueprint, reactivates `--restore-state`, and removes `.local\<worker>\`. Shared platform resources are untouched. Generated apps use owner-bound delete actions or native post-suspension deletion.
+Review the printed inventory before `--execute`. It deletes the Worker's Sandboxes, volumes, and disk images (only in Sandbox Groups named for the Worker), destroys and deletes Terraform workspace `autopilot-<worker>`, deletes its Agent User, Agent Identity, and blueprint with the admin login, reactivates `--restore-state` (default `hermes2`), and removes `.local\<worker>\`. Shared platform resources are untouched.
 
 `scripts.demo_cohort reset` is reserved for already provisioned disposable `demo-*` Workers/workspaces/volumes; preview first and supply their reviewed baseline release/commit. Never reset long-lived Workers backward or rewrite shared Role Release history to replay a classroom exercise.

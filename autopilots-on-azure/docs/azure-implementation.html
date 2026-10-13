@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en" data-default-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azure implementation</title>
+<meta name="description" content="Which Azure resources, identities, and lifecycle rules run the Autopilots reference deployment.">
+<meta name="doc-id" content="autopilots-azure-implementation">
+<script data-doc-bootstrap>
+/* Inline in the head before styles with sync-head.js. No deferred bootstrap. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const params = new URLSearchParams(location.search);
+  const id = document.querySelector('meta[name="doc-id"]')?.content ||
+    location.pathname.replace(/\.standalone(?=\.html$)/i, "");
+  const prefix = "html-docs:" + id + ":";
+  const choices = { theme: ["light", "dark"], accent: ["blue", "red", "green", "yellow"] };
+  const read = (name) => {
+    try { return localStorage.getItem(prefix + name); }
+    catch { return null; /* Storage may be unavailable for local files. */ }
+  };
+  const write = (name, value) => {
+    try { localStorage.setItem(prefix + name, value); }
+    catch { /* The current view still works without persistence. */ }
+  };
+  function refresh() {
+    for (const name of Object.keys(choices)) {
+      const current = root.getAttribute("data-" + name);
+      const next = choices[name][(choices[name].indexOf(current) + 1) % choices[name].length];
+      document.querySelectorAll('[data-action="toggle-' + name + '"]').forEach(button => {
+        button.textContent = name === "theme" ? (next === "dark" ? "Dark" : "Light") :
+          "Accent: " + current[0].toUpperCase() + current.slice(1);
+        button.setAttribute("aria-label", name === "theme" ? "Switch to " + next + " theme" :
+          "Accent: " + current + ". Switch to " + next);
+      });
+    }
+  }
+  for (const [name, values] of Object.entries(choices)) {
+    const fallback = name === "theme" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : values[0];
+    const value = [params.get(name), read(name), root.getAttribute("data-default-" + name), fallback]
+      .map(candidate => name === "accent" && candidate === "orange" ? "red" : candidate)
+      .find(candidate => values.includes(candidate));
+    root.setAttribute("data-" + name, value);
+  }
+  root.classList.add("js");
+  if (["slides", "sheet"].includes(params.get("view"))) root.setAttribute("data-view", params.get("view"));
+
+  // Print what is on screen. data-print selects the matching print stylesheet.
+  const printTarget = () => {
+    if (document.querySelector(".deck-stage")) return "slides";
+    const view = root.getAttribute("data-view");
+    if (view === "slides" || (view === "sheet" && document.querySelector(".sheet"))) return view;
+    return document.querySelector(".doc") || !document.querySelector(".sheet") ? "read" : "sheet";
+  };
+  let printing = null;
+  addEventListener("beforeprint", () => {
+    if (root.hasAttribute("data-print")) return; // Set by an automated export.
+    const target = printTarget();
+    printing = document.title;
+    root.setAttribute("data-print", target);
+    // The browser proposes the title as the PDF file name.
+    if (target !== "read" && document.querySelector(".doc")) {
+      document.title += target === "slides" ? " - Slides" : " - Sheet";
+    }
+  });
+  addEventListener("afterprint", () => {
+    if (printing === null) return;
+    root.removeAttribute("data-print");
+    document.title = printing;
+    printing = null;
+  });
+
+  // Keep the display awake while presenting, like presentation software does.
+  let lock = null;
+  let awake = false;
+  async function holdScreen() {
+    if (!awake || lock || document.visibilityState !== "visible" || !navigator.wakeLock) return;
+    try {
+      const sentinel = await navigator.wakeLock.request("screen");
+      if (!awake || lock) { sentinel.release(); return; }
+      lock = sentinel;
+      root.setAttribute("data-awake", "");
+      sentinel.addEventListener("release", () => {
+        if (lock !== sentinel) return;
+        lock = null;
+        root.removeAttribute("data-awake");
+      });
+    } catch { /* Denied by battery saver or an embedding policy; retried on input. */ }
+  }
+  function keepAwake(on) {
+    awake = !!on;
+    if (awake) holdScreen();
+    else if (lock) lock.release();
+  }
+  // The browser drops the lock when the tab is hidden; some require a gesture.
+  document.addEventListener("visibilitychange", holdScreen);
+  document.addEventListener("pointerdown", holdScreen);
+  document.addEventListener("keydown", holdScreen);
+
+  window.HtmlDocs = { read, write, refresh, keepAwake };
+  document.addEventListener("DOMContentLoaded", refresh);
+  document.addEventListener("click", event => {
+    if (event.target.closest('[data-action="print"]')) window.print();
+  });
+  document.addEventListener("click", event => {
+    const button = event.target.closest('[data-action="toggle-theme"], [data-action="toggle-accent"]');
+    if (!button) return;
+    const name = button.getAttribute("data-action").slice(7);
+    const values = choices[name];
+    const next = values[(values.indexOf(root.getAttribute("data-" + name)) + 1) % values.length];
+    root.setAttribute("data-" + name, next);
+    write(name, next);
+    // Replace a URL override too, so reloading preserves a deliberate change.
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.set(name, next);
+      history.replaceState(null, "", url.href);
+    }
+    refresh();
+  });
+})();
+</script>
+<style data-doc-tokens>
+/* Canonical tokens. Inline with sync-head.js; one accent family at a time. */
+:root {
+  color-scheme: light;
+  --bg: #fafafa; --surface: #ffffff; --surface-2: #f2f2f2; --surface-3: #e8e8e8;
+  --border: #dedede; --border-strong: #b8b8b8;
+  --text: #161616; --text-muted: #565656; --text-faint: #686868;
+  --accent-light: #006da0; --accent-dark: #00a4ef;
+  --accent: var(--accent-light);
+  --accent-strong: var(--accent);
+  --accent-quiet: var(--accent);
+  --accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  --accent-border: color-mix(in srgb, var(--accent) 36%, var(--bg));
+  --warn: var(--accent); --warn-soft: var(--accent-soft); --warn-border: var(--accent-border);
+  --code-bg: var(--surface-2); --code-border: var(--border);
+  --focus: var(--accent);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.04), 0 12px 28px rgba(0,0,0,.06);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+/* Screen only: every PDF and printout uses the light palette. */
+@media screen {
+  [data-theme="dark"], :root:not([data-theme])[data-default-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101010; --surface: #191919; --surface-2: #232323; --surface-3: #2c2c2c;
+    --border: #363636; --border-strong: #595959;
+    --text: #f2f2f2; --text-muted: #b5b5b5; --text-faint: #a0a0a0;
+    --accent: var(--accent-dark);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-2: 0 2px 4px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.4);
+  }
+}
+[data-accent="red"], :root:not([data-accent])[data-default-accent="red"],
+[data-accent="orange"], :root:not([data-accent])[data-default-accent="orange"] {
+  --accent-light: #bc3a16; --accent-dark: #f25022;
+}
+[data-accent="green"], :root:not([data-accent])[data-default-accent="green"] {
+  --accent-light: #4c7100; --accent-dark: #7fba00;
+}
+[data-accent="yellow"], :root:not([data-accent])[data-default-accent="yellow"] {
+  --accent-light: #805b00; --accent-dark: #ffb900;
+}
+</style>
+<link rel="stylesheet" href="assets/article.css">
+<link rel="stylesheet" href="assets/diagrams.css">
+<script src="assets/article.js" defer></script>
+<script src="assets/diagrams.js" defer></script>
+</head>
+
+<body>
+
+<div class="controls" role="group" aria-label="Article controls">
+  <button type="button" class="ctrl" data-action="expand-all">Expand all</button>
+  <button type="button" class="ctrl" data-action="collapse-all">Collapse all</button>
+  <button type="button" class="ctrl" data-action="print" aria-label="Save the current view as PDF or print it">PDF</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+  <button type="button" class="ctrl" data-action="toggle-accent">Accent: Blue</button>
+</div>
+
+<div class="doc">
+
+  <header class="doc-header" id="opening">
+    <p class="eyebrow">Autopilots on Azure / 3 of 3</p>
+    <h1>Azure implementation</h1>
+    <p class="subtitle">Which Azure resources, identities, and lifecycle rules run the reference deployment, and what changes for production.</p>
+  </header>
+
+  <nav class="doc-nav" aria-label="Architecture documents">
+    <a href="architecture.html">Architecture</a>
+    <a href="collective-learning.html">Collective learning</a>
+    <a href="azure-implementation.html" aria-current="page">Azure implementation</a>
+  </nav>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-label">Contents</p>
+    <ol>
+      <li><a href="#ch-topology">Deployed topology</a></li>
+      <li><a href="#ch-access">Identity and access</a></li>
+      <li><a href="#ch-lifecycle">Deployment and lifecycle</a></li>
+      <li><a href="#ch-observability">Observability</a></li>
+      <li><a href="#ch-hardening">Production hardening</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section class="chapter" id="ch-topology">
+      <h2 class="chapter-label">Deployed topology</h2>
+      <article class="card card--lead" id="card-deployment" data-open>
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Each Worker gets five Sandbox Groups; shared services stay in one resource group.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>The reference deployment runs two Workers, <code>hermes</code> and <code>hermes2</code>, in one resource group. Sandbox Groups, Foundry, and monitoring run in Sweden Central; Service Bus, Container Registry, and the workload VNet run in North Europe.</p>
+          <p class="scope-note">Hover or focus a component to inspect it. Click, tap, or press Enter to pin its explanation; Escape dismisses it. Use <strong>Focus diagram</strong> for a larger view. The PDF lists every explanation in a component reference after the takeaway.</p>
+          <div class="diagram-legend"><span class="legend-solid">Solid: connection in use</span><span class="legend-dashed">Dashed: optional connection or component</span></div>
+          <figure class="architecture-figure" data-diagram id="diagram-azure">
+            <div class="diagram-toolbar"><span class="diagram-label">01 / Deployed Azure topology</span><button class="diagram-focus" type="button">Focus diagram</button></div>
+            <div class="diagram-scroll">
+              <svg class="architecture-svg" viewBox="0 0 1100 720" role="group" aria-labelledby="azure-title azure-desc">
+                <title id="azure-title">Deployed Azure resources for two Workers</title>
+                <desc id="azure-desc">Agent 365 calls each Worker's gateway over public HTTPS. Each Worker has five Sandbox Groups: gateway, agent runtime, generated apps, public MCP, and private MCP. The gateway and runtime use a Standard Service Bus queue; the runtime calls Foundry with an Entra token. The runtime's VNet connection reaches the private MCP through VNet peering, a private endpoint, and an Express environment with public access disabled.</desc>
+                <defs><marker id="az-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="var(--accent)"/></marker></defs>
+                <rect class="zone" x="10" y="120" width="1080" height="590" rx="18"/><text class="zone-label" x="690" y="148">RESOURCE GROUP rg-autopilots-&lt;suffix&gt;</text>
+                <rect class="zone zone-inner" x="30" y="160" width="1040" height="170" rx="12"/><text class="small-label" x="682" y="322">PER WORKER × 2: FIVE SANDBOX GROUPS</text>
+                <rect class="zone zone-inner" x="30" y="370" width="530" height="330" rx="12"/><text class="small-label" x="50" y="688">SHARED SERVICES</text>
+                <rect class="zone zone-inner" x="580" y="370" width="490" height="330" rx="12"/><text class="small-label" x="600" y="688">NETWORK</text>
+                <path class="edge" data-from="az-teams" data-to="az-agent365" d="M290 55H240" marker-end="url(#az-arrow)"/>
+                <path class="edge" data-from="az-agent365" data-to="az-gateway" d="M130 90V205" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="140" y="140">public HTTPS /api/messages</text>
+                <path class="edge" data-from="az-gateway" data-to="az-runtime" d="M230 255H260" marker-end="url(#az-arrow)"/>
+                <path class="edge" data-from="az-runtime" data-to="az-public-mcp" d="M350 205V182H770V205" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="530" y="176">public HTTPS</text>
+                <path class="edge" data-from="az-gateway" data-to="az-servicebus" d="M110 305V410" marker-start="url(#az-arrow)" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="118" y="352">receive, retry send</text>
+                <path class="edge" data-from="az-runtime" data-to="az-servicebus" d="M285 305V385H230V410" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="293" y="345">cron send</text>
+                <path class="edge" data-from="az-runtime" data-to="az-foundry" d="M400 305V410" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="408" y="395">Entra token</text>
+                <path class="edge" data-from="az-runtime" data-to="az-vnet-sandbox" d="M440 285H455V345H575V607H600" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="462" y="338">VNet connection</text>
+                <path class="edge" data-from="az-vnet-sandbox" data-to="az-vnet" d="M700 560V505" marker-start="url(#az-arrow)" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="710" y="537">peering</text>
+                <path class="edge" data-from="az-vnet" data-to="az-express" d="M800 457H850" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="806" y="447">PE</text>
+                <path class="edge" data-from="az-express" data-to="az-private-mcp" d="M970 410V305" marker-end="url(#az-arrow)"/>
+                <text class="edge-label" x="978" y="362">linked group</text>
+                <a class="arch-node" href="#az-agent365" data-detail="az-agent365" aria-label="Agent 365: details"><rect x="20" y="20" width="220" height="70" rx="10"/><text class="node-title" x="36" y="50">Agent 365</text><text class="node-sub" x="36" y="74">Agent Identity + Agent User</text></a>
+                <a class="arch-node" href="#az-teams" data-detail="az-teams" aria-label="Teams / Microsoft 365: details"><rect x="290" y="20" width="220" height="70" rx="10"/><text class="node-title" x="306" y="50">Teams / Microsoft 365</text><text class="node-sub" x="306" y="74">Users and documents</text></a>
+                <a class="arch-node" href="#az-gateway" data-detail="az-gateway" aria-label="Gateway: details"><rect x="50" y="205" width="180" height="100" rx="10"/><text class="node-title" x="66" y="237">Gateway</text><text class="node-sub" x="66" y="263">Activities + queue</text><text class="node-meta" x="66" y="285">Always awake</text></a>
+                <a class="arch-node" href="#az-runtime" data-detail="az-runtime" aria-label="Agent runtime: details"><rect x="260" y="205" width="180" height="100" rx="10"/><text class="node-title" x="276" y="237">Agent runtime</text><text class="node-sub" x="276" y="263">Hermes + Data Disk</text><text class="node-meta" x="276" y="285">Suspends when idle</text></a>
+                <a class="arch-node" href="#az-apps" data-detail="az-apps" aria-label="Generated apps: details"><rect x="470" y="205" width="180" height="100" rx="10"/><text class="node-title" x="486" y="237">Generated apps</text><text class="node-sub" x="486" y="263">One Sandbox per app</text><text class="node-meta" x="486" y="285">Entra-only ports</text></a>
+                <a class="arch-node" href="#az-public-mcp" data-detail="az-public-mcp" aria-label="Public MCP: details"><rect x="680" y="205" width="180" height="100" rx="10"/><text class="node-title" x="696" y="237">Public MCP</text><text class="node-sub" x="696" y="263">Shipments server</text><text class="node-meta" x="696" y="285">Public HTTPS + Entra</text></a>
+                <a class="arch-node" href="#az-private-mcp" data-detail="az-private-mcp" aria-label="Private MCP: details"><rect x="890" y="205" width="160" height="100" rx="10"/><text class="node-title" x="906" y="237">Private MCP</text><text class="node-sub" x="906" y="263">Incidents server</text><text class="node-meta" x="906" y="285">Private ingress</text></a>
+                <a class="arch-node" href="#az-servicebus" data-detail="az-servicebus" aria-label="Service Bus: details"><rect x="50" y="410" width="220" height="95" rx="10"/><text class="node-title" x="66" y="442">Service Bus</text><text class="node-sub" x="66" y="468">Standard, queue per Worker</text><text class="node-meta" x="66" y="490">Entra only</text></a>
+                <a class="arch-node" href="#az-foundry" data-detail="az-foundry" aria-label="Foundry: details"><rect x="320" y="410" width="220" height="95" rx="10"/><text class="node-title" x="336" y="442">Foundry</text><text class="node-sub" x="336" y="468">S0 project, gpt-6.1-sol</text><text class="node-meta" x="336" y="490">Entra only, public</text></a>
+                <a class="arch-node" href="#az-acr" data-detail="az-acr" aria-label="Container Registry: details"><rect x="50" y="560" width="220" height="95" rx="10"/><text class="node-title" x="66" y="592">Container Registry</text><text class="node-sub" x="66" y="618">Basic, no admin user</text><text class="node-meta" x="66" y="640">Converted at deploy</text></a>
+                <a class="arch-node" href="#az-monitor" data-detail="az-monitor" aria-label="Azure Monitor: details"><rect x="320" y="560" width="220" height="95" rx="10"/><text class="node-title" x="336" y="592">Azure Monitor</text><text class="node-sub" x="336" y="618">Logs + App Insights</text><text class="node-meta" x="336" y="640">Entra-only ingestion</text></a>
+                <a class="arch-node" href="#az-vnet" data-detail="az-vnet" aria-label="vnet-autopilots: details"><rect x="600" y="410" width="200" height="95" rx="10"/><text class="node-title" x="616" y="442">vnet-autopilots</text><text class="node-sub" x="616" y="468">10.42.0.0/16, PE subnet</text><text class="node-meta" x="616" y="490">North Europe</text></a>
+                <a class="arch-node" href="#az-express" data-detail="az-express" aria-label="Express env: details"><rect x="850" y="410" width="200" height="95" rx="10"/><text class="node-title" x="866" y="442">Express env</text><text class="node-sub" x="866" y="468">apmcp, private ingress</text><text class="node-meta" x="866" y="490">Public access disabled</text></a>
+                <a class="arch-node" href="#az-vnet-sandbox" data-detail="az-vnet-sandbox" aria-label="vnet-sandbox: details"><rect x="600" y="560" width="200" height="95" rx="10"/><text class="node-title" x="616" y="592">vnet-sandbox</text><text class="node-sub" x="616" y="618">10.44.0.0/16, delegated</text><text class="node-meta" x="616" y="640">Sweden Central</text></a>
+                <a class="arch-node" href="#az-dns" data-detail="az-dns" aria-label="Private DNS: details"><rect x="850" y="560" width="200" height="95" rx="10"/><text class="node-title" x="866" y="592">Private DNS</text><text class="node-sub" x="866" y="618">privatelink zone</text><text class="node-meta" x="866" y="640">Linked to both VNets</text></a>
+              </svg>
+            </div>
+            <figcaption>Service Bus, Foundry, Container Registry, and Azure Monitor use Entra authentication on public endpoints. Only the private MCP path is private.</figcaption>
+          </figure>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../terraform/platform/">Platform layer</a> · <a href="../terraform/apps/main.tf">Worker layer</a> · <a href="../terraform/platform/networking.tf">Networking</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-access">
+      <h2 class="chapter-label">Identity and access</h2>
+      <article class="card" id="card-roles">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Grant each identity only the roles its service uses.</span><span class="card-sub">Terraform assigns every Azure role; no keys or registry tokens exist.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>Each Sandbox Group has its own user-assigned managed identity <code>id-&lt;worker&gt;-&lt;role&gt;-*</code>. Every data-plane service has local authentication disabled, so these assignments are the complete Azure access model.</p>
+          <div class="table-scroll"><table class="architecture-table"><thead><tr><th>Principal</th><th>Role</th><th>Scope</th></tr></thead><tbody><tr><td>Deployer</td><td>Sandbox Data Owner</td><td>All five Sandbox Groups of the Worker</td></tr><tr><td>Gateway managed identity</td><td>Sandbox Data Owner</td><td>Runtime and generated-apps Groups</td></tr><tr><td>Runtime managed identity</td><td>Cognitive Services OpenAI User</td><td>Foundry account</td></tr><tr><td>Runtime, gateway, private-MCP, and public-MCP identities</td><td>AcrPull</td><td>Container Registry</td></tr><tr><td>Gateway managed identity</td><td>Service Bus Data Receiver and Data Sender</td><td>Worker queue, when scheduling or document retry is enabled</td></tr><tr><td>Agent Identity</td><td>Service Bus Data Sender</td><td>Worker queue</td></tr><tr><td>Gateway and runtime identities</td><td>Monitoring Metrics Publisher</td><td>Application Insights</td></tr><tr><td>Foundry project and operator</td><td>Log Analytics Reader, Monitoring Reader</td><td>Monitoring resources</td></tr></tbody></table></div>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../terraform/apps/main.tf">Worker role assignments</a> · <a href="../terraform/apps/monitoring.tf">Monitoring roles</a></p></aside>
+        </div>
+      </article>
+      <article class="card" id="card-agent365">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Agent 365 objects come from scripts, not Terraform.</span><span class="card-sub">Blueprint, Agent Identity, and Agent User are Entra objects managed outside Terraform.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <ol class="steps">
+            <li><h4>Create identities</h4><p><code>worker_lifecycle bootstrap</code> creates the agent blueprint, Agent Identity, and licensed Agent User, and requests the delegated Microsoft 365 permissions.</p></li>
+            <li><h4>Federate the managed identities</h4><p><code>setup_identity</code> writes blueprint federated credentials for the gateway and runtime managed identities. It runs under a login that directly owns the blueprint.</p></li>
+            <li><h4>Register the endpoint</h4><p><code>setup_agent365</code> sets the messaging endpoint to the gateway URL plus <code>/api/messages</code> and publishes the Agent User package.</p></li>
+          </ol>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../DEPLOYMENT.md">Deployment</a> · <a href="../scripts/setup_agent365.py">Agent 365 setup</a> · <a href="../autopilots_identity/">Token exchange</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-lifecycle">
+      <h2 class="chapter-label">Deployment and lifecycle</h2>
+      <article class="card" id="card-layers">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Two Terraform layers; one workspace per Worker.</span><span class="card-sub">Infrastructure, images, and Sandboxes are separate, explicit steps.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <div class="summary-grid">
+            <div class="summary-item"><span class="summary-label">platform</span>Resource group, registry, Service Bus namespace, Foundry, monitoring, VNets, Express environment, private endpoint, and DNS.</div>
+            <div class="summary-item"><span class="summary-label">apps</span>Per-Worker identities, Sandbox Groups, VNet connections, queue, and role assignments. Workspaces <code>autopilot-hermes</code> and <code>autopilot-hermes2</code>.</div>
+          </div>
+          <p>Images are built and converted between the two applies, and the deployment script then creates the Sandboxes. <code>hermes2</code> enables user scheduling and the Service Bus Dream; <code>hermes</code> leaves them off.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../DEPLOYMENT.md">Deployment commands</a> · <a href="../scripts/sandbox_services.py">Service deployment</a> · <a href="../scripts/sandbox_runtime.py">Runtime deployment</a></p></aside>
+        </div>
+      </article>
+      <article class="card" id="card-images">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Registry conversion belongs to deployment.</span><span class="card-sub">Running workloads receive prepared disk-image IDs, not registry credentials.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <ol class="sequence">
+            <li><span class="seq-title">Terraform</span><span class="seq-note">Creates infrastructure, identities, networking, and configuration.</span></li>
+            <li><span class="seq-title">Build and convert</span><span class="seq-note">Pins dependencies and converts each service image once.</span></li>
+            <li><span class="seq-title">Deploy services</span><span class="seq-note">Uses disk-image IDs, then records healthy endpoints.</span></li>
+          </ol>
+          <p>ACR conversion runs through the native-v2 disk-image API and authenticates with each Sandbox Group's managed identity, which holds <code>AcrPull</code>. No registry token or admin credential exists. Reusing a prepared image skips conversion.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="adr/0021-deployment-time-sandbox-image-authentication.md">Conversion identity decision</a> · <a href="../scripts/sandbox_services.py">Conversion implementation</a> · <a href="../DEPLOYMENT.md">Commands and owner preflight</a></p></aside>
+        </div>
+      </article>
+      <article class="card" id="card-suspend">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Only the gateway stays awake.</span><span class="card-sub">Suspension saves cost; image changes create new Sandboxes.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <div class="table-scroll"><table class="architecture-table"><thead><tr><th>Service</th><th>Idle behavior</th><th>On image change</th></tr></thead><tbody><tr><td>Gateway</td><td>Never suspends</td><td>New Sandbox and URL; update the Agent 365 endpoint</td></tr><tr><td>Agent runtime</td><td>Suspends to Disk after 1,800 s; resume keeps the ID</td><td>New Sandbox on the same Data Disk</td></tr><tr><td>Public and private MCP</td><td>Suspend to Disk after 1,800 s</td><td>New Sandbox and URL, recorded by the capture</td></tr><tr><td>Generated apps</td><td>Suspend after 5 minutes</td><td>Created on demand; expire after 24 hours by default</td></tr></tbody></table></div>
+          <p>A failed Sandbox is replaced by a healthy one before the old one is deleted. An environment-only change updates a Sandbox in place.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../scripts/sandbox_services.py">Service lifecycle</a> · <a href="../bridge/generated_apps.py">Generated apps</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-observability">
+      <h2 class="chapter-label">Observability</h2>
+      <article class="card" id="card-telemetry">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Correlate application work without exporting its content.</span><span class="card-sub">W3C context crosses the bridge and wrapper; native callbacks expose model and tool execution.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>Application Insights receives metadata-only OpenTelemetry spans. Worker and session attribution connect the gateway request, runtime invocation, model calls, and tools. Prompts, responses, bearer tokens, and tool payloads do not belong in this trace stream.</p>
+          <p>The Foundry external-agent registration links this execution to its monitoring surface. Registration does not move the agent into Foundry hosting or establish evaluation quality.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Inspect correlation limits</button>
+            <div class="reveal-body"><p>The Sandbox-origin egress path preserves TraceId but can rewrite ParentId; its intermediate platform span is not available in application telemetry. Correlation is therefore useful without a complete platform-hop tree. The native <code>/v1/responses</code> path also lacks explicit session correlation.</p><p>An interrupted native handoff retains its lease to prevent misattributing later spans. Restart the affected wrapper/native runtime processes before reuse; do not fabricate a parent span or silently clear the fence.</p></div>
+          </div>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../bridge/telemetry.py">Telemetry policy</a> · <a href="../bridge/hermes_telemetry.py">Native handoff</a> · <a href="../scripts/register_foundry_external_agent.py">Foundry registration</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-hardening">
+      <h2 class="chapter-label">Production hardening</h2>
+      <article class="card" id="card-target">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Production adds private endpoints and an enterprise hub.</span><span class="card-sub">Network changes limit reachability; they do not replace identity checks.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>This is a target design, not the deployed state. Service Bus moves to Premium, and Service Bus and Foundry get private endpoints in the workload VNet. A peered enterprise hub provides DNS, firewall, controlled egress, and routes to existing private MCP services and backend APIs.</p>
+          <figure class="architecture-figure" data-diagram id="diagram-infrastructure">
+            <div class="diagram-toolbar"><span class="diagram-label">02 / Production target network</span><button class="diagram-focus" type="button">Focus diagram</button></div>
+            <div class="diagram-scroll">
+              <svg class="architecture-svg" viewBox="0 0 1100 890" role="group" aria-labelledby="infra-title infra-desc">
+                <title id="infra-title">A workload VNet connects compute, private endpoints, and three types of tools</title>
+                <desc id="infra-desc">Gateway and agent runtime attach to a central workload VNet. Service Bus Premium and Foundry connect through private endpoints. A peered hub reaches Microsoft-hosted tools over public HTTPS and existing private MCP services. An optional Custom MCP adapter has private ingress and reaches backend APIs through the workload VNet, peering, and enterprise hub. This is a target design, not a deployment change.</desc>
+                <defs><marker id="infra-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="var(--accent)"/></marker></defs>
+                <rect class="zone" x="20" y="175" width="755" height="500" rx="18"/>
+                <text class="zone-label" x="48" y="206">WORKLOAD SUBSCRIPTION / SPOKE</text>
+                <rect class="zone zone-inner" x="40" y="370" width="715" height="285" rx="12"/>
+                <rect class="zone" x="505" y="699" width="585" height="155" rx="12"/>
+                <text class="small-label" x="715" y="724">PRIVATE CUSTOMER SERVICES</text>
+                <text class="small-label" x="182" y="724">AZURE MANAGED SERVICES</text>
+
+                <path class="edge" data-from="detail-teams" data-to="detail-agent365" d="M270 70H345" marker-end="url(#infra-arrow)"/>
+                <path class="edge" data-from="detail-agent365" data-to="detail-gateway" d="M470 110V142H34V275H60" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="167" y="137">public HTTPS /api/messages</text>
+                <path class="edge" data-from="detail-gateway" data-to="detail-runtime" d="M290 275H415" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="329" y="260">invoke</text>
+                <path class="edge" data-from="detail-gateway" data-to="detail-vnet" d="M175 320V405" marker-end="url(#infra-arrow)"/>
+                <path class="edge" data-from="detail-runtime" data-to="detail-vnet" d="M560 320V405" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="191" y="355">VNet connection</text>
+                <text class="edge-label" x="576" y="355">VNet connection</text>
+                <path class="edge" data-from="detail-vnet" data-to="detail-servicebus-pe" d="M158 485V545" marker-end="url(#infra-arrow)"/>
+                <path class="edge" data-from="detail-vnet" data-to="detail-foundry-pe" d="M388 485V545" marker-end="url(#infra-arrow)"/>
+                <path class="edge optional-edge" data-from="detail-private-mcp" data-to="detail-vnet" d="M628 545V485" marker-start="url(#infra-arrow)" marker-end="url(#infra-arrow)"/>
+                <path class="edge" data-from="detail-servicebus-pe" data-to="detail-servicebus" d="M158 620V745" marker-end="url(#infra-arrow)"/>
+                <path class="edge" data-from="detail-foundry-pe" data-to="detail-foundry" d="M388 620V745" marker-end="url(#infra-arrow)"/>
+                <path class="edge" data-from="detail-hub" data-to="detail-corporate" d="M868 495V681H628V745" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="642" y="671">backend API via hub</text>
+                <path class="edge" data-from="detail-vnet" data-to="detail-hub" d="M735 445H825" marker-start="url(#infra-arrow)" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="756" y="431">peering</text>
+                <path class="edge" data-from="detail-hub" data-to="detail-microsoft-tools" d="M948 405V330" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="961" y="368">egress</text>
+                <path class="edge" data-from="detail-hub" data-to="detail-existing-mcp" d="M948 495V745" marker-end="url(#infra-arrow)"/>
+                <text class="edge-label" x="964" y="615">private route</text>
+
+                <a class="arch-node" href="#detail-teams" data-detail="detail-teams" aria-label="Teams and Microsoft 365 entry points: details"><rect x="40" y="30" width="230" height="80" rx="10"/><text class="node-title" x="58" y="61">Teams / Microsoft 365</text><text class="node-sub" x="58" y="86">User-facing conversation</text></a>
+                <a class="arch-node" href="#detail-agent365" data-detail="detail-agent365" aria-label="Agent 365 channel delivery: details"><rect x="345" y="30" width="250" height="80" rx="10"/><text class="node-title" x="363" y="61">Agent 365</text><text class="node-sub" x="363" y="86">Agent User + activity delivery</text></a>
+                <a class="arch-node" href="#detail-gateway" data-detail="detail-gateway" aria-label="Gateway Sandbox: details"><rect x="60" y="230" width="230" height="90" rx="10"/><text class="node-title" x="78" y="261">Gateway</text><text class="node-sub" x="78" y="286">ACA Sandbox / public ingress</text><text class="node-meta" x="78" y="306">Always awake</text></a>
+                <a class="arch-node" href="#detail-runtime" data-detail="detail-runtime" aria-label="Agent runtime Sandbox: details"><rect x="415" y="230" width="290" height="90" rx="10"/><text class="node-title" x="433" y="261">Agent runtime</text><text class="node-sub" x="433" y="286">ACA Sandbox / single writer</text><text class="node-meta" x="433" y="306">Suspend and resume</text></a>
+                <a class="arch-node" href="#detail-vnet" data-detail="detail-vnet" aria-label="Workload VNet connectivity: details"><rect x="60" y="405" width="675" height="80" rx="10"/><text class="node-title" x="80" y="438">Customer VNet</text><text class="node-sub" x="80" y="464">Workload connections / private endpoints / routing + DNS</text></a>
+                <a class="arch-node" href="#detail-servicebus-pe" data-detail="detail-servicebus-pe" aria-label="Service Bus private endpoint: details"><rect x="60" y="545" width="195" height="75" rx="10"/><text class="node-title" x="76" y="574">Service Bus PE</text><text class="node-sub" x="76" y="599">Private endpoint</text></a>
+                <a class="arch-node" href="#detail-foundry-pe" data-detail="detail-foundry-pe" aria-label="Foundry private endpoint: details"><rect x="290" y="545" width="195" height="75" rx="10"/><text class="node-title" x="306" y="574">Foundry PE</text><text class="node-sub" x="306" y="599">Private endpoint</text></a>
+                <a class="arch-node optional-node" href="#detail-private-mcp" data-detail="detail-private-mcp" aria-label="Custom MCP adapter: details"><rect x="520" y="545" width="215" height="95" rx="10"/><text class="node-title" x="536" y="574">Custom MCP</text><text class="node-sub" x="536" y="599">ACA Sandbox / Express</text><text class="node-meta" x="536" y="623">Private ingress only</text></a>
+                <a class="arch-node" href="#detail-servicebus" data-detail="detail-servicebus" aria-label="Private Service Bus Premium design: details"><rect x="60" y="745" width="195" height="90" rx="10"/><text class="node-title" x="76" y="776">Service Bus</text><text class="node-sub" x="76" y="800">Premium / per-Worker queue</text><text class="node-meta" x="76" y="822">Private access</text></a>
+                <a class="arch-node" href="#detail-foundry" data-detail="detail-foundry" aria-label="Foundry model API with private access: details"><rect x="290" y="745" width="195" height="90" rx="10"/><text class="node-title" x="306" y="776">Foundry</text><text class="node-sub" x="306" y="800">Model API / Entra identity</text><text class="node-meta" x="306" y="822">Private access</text></a>
+                <a class="arch-node" href="#detail-hub" data-detail="detail-hub" aria-label="Enterprise hub connectivity: details"><rect x="825" y="405" width="245" height="90" rx="10"/><text class="node-title" x="843" y="436">Enterprise hub</text><text class="node-sub" x="843" y="461">Firewall / DNS / private routes</text><text class="node-meta" x="843" y="482">Hub subscription</text></a>
+                <a class="arch-node" href="#detail-microsoft-tools" data-detail="detail-microsoft-tools" aria-label="Microsoft-hosted tools over public HTTPS: details"><rect x="825" y="230" width="245" height="100" rx="10"/><text class="node-title" x="843" y="260">Microsoft tools</text><text class="node-sub" x="843" y="285">Azure DevOps / M365 MCP</text><text class="node-meta" x="843" y="310">Public HTTPS + authorization</text></a>
+                <a class="arch-node" href="#detail-existing-mcp" data-detail="detail-existing-mcp" aria-label="Existing MCP in the customer network: details"><rect x="825" y="745" width="245" height="90" rx="10"/><text class="node-title" x="841" y="775">Existing private MCP</text><text class="node-sub" x="841" y="800">Already in customer network</text><text class="node-meta" x="841" y="822">Reach through private routes</text></a>
+                <a class="arch-node" href="#detail-corporate" data-detail="detail-corporate" aria-label="Backend systems reached by Custom MCP through the enterprise hub: details"><rect x="520" y="745" width="215" height="90" rx="10"/><text class="node-title" x="536" y="776">Backend systems</text><text class="node-sub" x="536" y="800">Customer APIs</text><text class="node-meta" x="536" y="822">Via enterprise hub</text></a>
+              </svg>
+            </div>
+            <figcaption>PE means private endpoint. Custom MCP reaches backend systems through the workload VNet, peering, and enterprise hub before entering the private customer network.</figcaption>
+          </figure>
+          <p>Tools fit three patterns: Microsoft-hosted MCP services on public HTTPS, existing MCP services in the customer network, or a custom MCP adapter deployed with the solution. Identity checks stay the same in every pattern.</p>
+        </div>
+      </article>
+    </section>
+
+  </main>
+
+  <section class="takeaway" id="closing">
+    <p>Terraform owns the infrastructure and every Azure role, scripts own the Agent 365 identities and images, and each Worker keeps its own Sandbox Groups and queue.</p>
+  </section>
+
+  <div class="component-reference" data-popup-reference>
+    <h2 class="chapter-label">Component reference</h2>
+    <details class="component-detail" id="az-agent365" open><summary>Agent 365</summary><div class="component-copy"><p class="detail-status">Entra and Microsoft 365 objects</p><p>Each Worker has an agent blueprint, an Agent Identity, and a licensed Agent User. Scripts create them and register the messaging endpoint as the gateway URL plus <code>/api/messages</code>. Terraform does not manage these objects.</p></div></details>
+    <details class="component-detail" id="az-teams" open><summary>Teams and Microsoft 365</summary><div class="component-copy"><p class="detail-status">User-facing workloads</p><p>Users mention the Agent User in Teams, mail it, or comment in Office documents. Work IQ and Graph calls from the runtime run as the Agent User.</p></div></details>
+    <details class="component-detail" id="az-gateway" open><summary>Gateway Sandbox Group</summary><div class="component-copy"><p class="detail-status">Auto-suspend disabled</p><p>Python bridge with public ingress. It validates Activity Protocol requests, wakes the runtime, receives Service Bus messages, and creates generated-app Sandboxes. Its managed identity has Sandbox Data Owner on the runtime and generated-apps Groups. It also has a VNet connection.</p></div></details>
+    <details class="component-detail" id="az-runtime" open><summary>Agent runtime Sandbox Group</summary><div class="component-copy"><p class="detail-status">Suspends to Disk after 1,800 s idle</p><p>Hermes with the wrapper and loopback MCP adapters. The Worker profile lives on a Data Disk; resume keeps the same Sandbox ID. Its VNet connection reaches the private MCP.</p></div></details>
+    <details class="component-detail" id="az-apps" open><summary>Generated apps Sandbox Group</summary><div class="component-copy"><p class="detail-status">One Sandbox per app</p><p>The gateway starts each Worker-created app in its own Sandbox with Entra-protected ports. Apps suspend after 5 idle minutes and expire after a lifetime of 24 hours by default (15 minutes to 7 days).</p></div></details>
+    <details class="component-detail" id="az-public-mcp" open><summary>Public shipments MCP</summary><div class="component-copy"><p class="detail-status">Public HTTPS</p><p>Demo MCP server on a public Sandbox port. It validates the Agent Identity token for tenant, issuer, audience, caller, and role, and suspends after 1,800 s idle.</p></div></details>
+    <details class="component-detail" id="az-private-mcp" open><summary>Private incidents MCP</summary><div class="component-copy"><p class="detail-status">Private ingress</p><p>Demo MCP server whose Sandbox Group is linked to the Express environment. The link is irreversible. It validates the same Entra claims as the public server.</p></div></details>
+    <details class="component-detail" id="az-servicebus" open><summary>Service Bus namespace</summary><div class="component-copy"><p class="detail-status">Standard, local auth disabled</p><p>Namespace <code>apschedule-*</code> in North Europe, TLS 1.2, public endpoint. One queue <code>worker-&lt;name&gt;</code> per Worker: lock 5 minutes, message TTL 14 days, duplicate detection 1 hour.</p></div></details>
+    <details class="component-detail" id="az-foundry" open><summary>Foundry</summary><div class="component-copy"><p class="detail-status">AIServices S0, local auth disabled</p><p>Project <code>autopilots-project</code> with deployment <code>gpt-6-1-sol</code> (model <code>gpt-6.1-sol</code>, GlobalStandard, capacity 100) in Sweden Central. The runtime managed identity has Cognitive Services OpenAI User. Foundry also holds the external-agent registration and an Application Insights connection.</p></div></details>
+    <details class="component-detail" id="az-acr" open><summary>Container Registry</summary><div class="component-copy"><p class="detail-status">Basic, admin user disabled</p><p>Images are built and pushed, then converted once to Sandbox disk images by the deployment script. Conversion authenticates with each Sandbox Group's managed identity, which holds AcrPull (ADR 0021).</p></div></details>
+    <details class="component-detail" id="az-monitor" open><summary>Azure Monitor</summary><div class="component-copy"><p class="detail-status">Log Analytics + Application Insights</p><p>Both have local authentication disabled. Gateway and runtime managed identities publish metadata-only OpenTelemetry spans with Monitoring Metrics Publisher.</p></div></details>
+    <details class="component-detail" id="az-vnet" open><summary>Workload VNet</summary><div class="component-copy"><p class="detail-status">10.42.0.0/16, North Europe</p><p>Holds subnet <code>snet-private-endpoints</code> (10.42.2.0/24) with the private endpoint <code>pe-apmcp-*</code> for the Express environment.</p></div></details>
+    <details class="component-detail" id="az-express" open><summary>Express managed environment</summary><div class="component-copy"><p class="detail-status">Public network access disabled</p><p>Environment <code>apmcp-*</code> in Sweden Central supplies private ingress for the linked private-MCP Sandbox Group.</p></div></details>
+    <details class="component-detail" id="az-vnet-sandbox" open><summary>Sandbox VNet</summary><div class="component-copy"><p class="detail-status">10.44.0.0/16, Sweden Central</p><p>Subnet <code>snet-sandbox</code> (10.44.0.0/24) is delegated to <code>Microsoft.App/environments</code>. Runtime and gateway Groups attach through VNet connections. Peered in both directions with the workload VNet.</p></div></details>
+    <details class="component-detail" id="az-dns" open><summary>Private DNS zone</summary><div class="component-copy"><p class="detail-status">privatelink.swedencentral.azurecontainerapps.io</p><p>Resolves the private MCP hostname to the private endpoint. Linked to both VNets.</p></div></details>
+    <details class="component-detail" id="detail-teams" open><summary>Teams and Microsoft 365 entry points</summary><div class="component-copy"><p class="detail-status">Reference implementation</p><p>Personal messages and explicit Agent User mentions are supported entry points. Delivered replies, selected reactions, Mail notifications, and Office comment events have workload-specific handling.</p><p>Shared groups are a shared audience. Private per-person delivery and human on-behalf-of identity are not implemented.</p></div></details>
+    <details class="component-detail" id="detail-agent365" open><summary>Agent 365 channel and identity binding</summary><div class="component-copy"><p class="detail-status">Channel identity</p><p>Each Worker has an Agent Identity and Agent User. Agent 365 binds its endpoint and permissions, then delivers Microsoft 365 activities to <code>/api/messages</code>. The Agents SDK authenticates incoming requests.</p></div></details>
+    <details class="component-detail" id="detail-gateway" open><summary>Gateway Sandbox</summary><div class="component-copy"><p class="detail-status">Always awake</p><p>The gateway authenticates activities, binds conversations, wakes the agent runtime, consumes Service Bus, and delivers replies. It stays awake for queued and post-acknowledgement work. Model calls and MCP traffic go directly from the runtime.</p></div></details>
+    <details class="component-detail" id="detail-runtime" open><summary>Agent runtime</summary><div class="component-copy"><p class="detail-status">ACA Sandbox</p><p>The gateway resumes or reuses agent compute; state survives on a separate Data Disk. One runtime writes the Worker profile at a time. It suspends to Disk after 30 idle minutes and resumes with the same ID.</p></div></details>
+    <details class="component-detail" id="detail-vnet" open><summary>Customer VNet</summary><div class="component-copy"><p class="detail-status">Workload connectivity</p><p>Gateway and runtime attach here. Private endpoints connect managed services; private MCP ingress joins the same network boundary. Peering reaches the enterprise hub. Routes and DNS provide reachability; identity still controls access.</p></div></details>
+    <details class="component-detail" id="detail-servicebus-pe" open><summary>Service Bus private endpoint</summary><div class="component-copy"><p class="detail-status">Target design</p><p>A private endpoint and DNS connect the workload VNet to Service Bus Premium. Clients still authenticate with Entra identities.</p></div></details>
+    <details class="component-detail" id="detail-foundry-pe" open><summary>Foundry private endpoint</summary><div class="component-copy"><p class="detail-status">Target design</p><p>The Foundry private endpoint connects model access to the workload VNet. Private DNS resolves the model endpoint to its private address; the runtime still authenticates with its managed identity.</p></div></details>
+    <details class="component-detail" id="detail-private-mcp" open><summary>Custom MCP</summary><div class="component-copy"><p class="detail-status">Optional adapter</p><p>Add an ACA-hosted adapter when a backend lacks MCP. It exposes a private MCP interface and reaches backend APIs through the workload VNet and enterprise hub. Use a supported private-ingress hosting configuration.</p></div></details>
+    <details class="component-detail" id="detail-servicebus" open><summary>Service Bus queue and dead-letter handling</summary><div class="component-copy"><p class="detail-status">Target design: Premium / private endpoint</p><p>The per-Worker queue carries cron, Dreaming, and document-retry triggers. The awake gateway uses PeekLock and explicit settlement. Runtime cron sends as Agent Identity; gateway receive and retry send use managed identity.</p></div></details>
+    <details class="component-detail" id="detail-foundry" open><summary>Foundry model inference</summary><div class="component-copy"><p class="detail-status">Target design: private endpoint</p><p>The agent runtime calls Foundry through the private endpoint. Runtime managed identity and RBAC authorize inference; private routing and DNS provide reachability. The model service remains outside the workload subnet.</p></div></details>
+    <details class="component-detail" id="detail-hub" open><summary>Enterprise hub</summary><div class="component-copy"><p class="detail-status">Shared network services</p><p>VNet peering connects the workload spoke to hub routing, DNS, and firewall services. The hub provides controlled public egress and private routes to existing customer services, including MCP endpoints.</p></div></details>
+    <details class="component-detail" id="detail-microsoft-tools" open><summary>Microsoft-hosted MCP tools</summary><div class="component-copy"><p class="detail-status">Public HTTPS</p><p>Use approved Microsoft-hosted tools, such as Azure DevOps and Microsoft 365 MCP integrations. Configure permissions for each service. Microsoft 365 operations use the approved Agent User flow; other services require their own supported connection.</p></div></details>
+    <details class="component-detail" id="detail-existing-mcp" open><summary>Existing private MCP</summary><div class="component-copy"><p class="detail-status">Customer-provided service</p><p>Connect to an MCP server already running in the customer network through private routing and DNS. Reuse its approved authentication and permissions; no new MCP host is needed in this solution.</p></div></details>
+    <details class="component-detail" id="detail-corporate" open><summary>Backend systems</summary><div class="component-copy"><p class="detail-status">Customer APIs</p><p>Custom MCP reaches these APIs through the workload VNet, peering, and enterprise hub into the private customer network. Backends keep their existing interfaces and permissions; they do not need to implement MCP.</p></div></details>
+  </div>
+
+  <footer class="doc-footer">
+    <a href="../DEPLOYMENT.md">Deployment</a>
+    <a href="adr/">Architecture decisions</a>
+    <a href="../SPEC.md">Implementation contract</a>
+  </footer>
+
+</div>
+
+</body>
+</html>

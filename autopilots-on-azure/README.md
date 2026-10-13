@@ -22,23 +22,32 @@ The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2
 
 ## Read next
 
+Three architecture documents, each an interactive HTML page (hover or pin any diagram component) with an offline copy and a printable PDF:
+
+| Document | Contents | Offline and print |
+| --- | --- | --- |
+| [Architecture](docs/architecture.html) | Operating model, conversation turns, identities, documents, state and recovery | [Standalone](docs/architecture.standalone.html), [PDF](docs/architecture.pdf) |
+| [Collective learning](docs/collective-learning.html) | Memory layers, local acceptance, signed packets, Git Promotion, Worker Refresh | [Standalone](docs/collective-learning.standalone.html), [PDF](docs/collective-learning.pdf) |
+| [Azure implementation](docs/azure-implementation.html) | Deployed topology, roles, Terraform layers, suspend behavior, telemetry, production network | [Standalone](docs/azure-implementation.standalone.html), [PDF](docs/azure-implementation.pdf) |
+
+Then:
+
 | Document | Contents |
 | --- | --- |
+| [Architecture decisions](docs/adr) | Current choices and rejected alternatives |
 | [Deployment](DEPLOYMENT.md) | Worker updates, fresh Worker bootstrap, validation, diagnostics, teardown |
 | [Demo](DEMO.md) | Prompts and observable results |
 | [Specification](SPEC.md) | Domain, identity, lifecycle, learning, and current limitations |
 | [Identity runbook](docs/runbooks/identity-mcp.md) | Consent, federation, and MCP troubleshooting |
-| [Architecture decisions](docs/adr) | Current choices and rejected alternatives |
-| [Architecture atlas](docs/architecture/autopilots-architecture.standalone.html) | Four interactive diagrams, offline-ready; [source](docs/architecture/autopilots-architecture.html) and [A3 PDF](docs/architecture/autopilots-architecture.pdf) |
-| [Visual overview](docs/hermes-on-azure-overview.html) | Architecture and learning overview |
-| [Architecture deep dive](docs/hermes-architecture-deep-dive.html) | Hosting, identity, and lifecycle |
-| [Learning deep dive](docs/hermes-learning-deep-dive.html) | Memory, provenance, review, and refresh |
 
-After editing the atlas source, rebuild its standalone HTML and PDF (needs Playwright with Chromium or Edge):
+After editing a document, refresh, validate, bundle, and print it from `docs` (needs Playwright with Chromium or Edge):
 
 ```powershell
-node docs\architecture\assets\bundle.js docs\architecture\autopilots-architecture.html
-node docs\architecture\assets\print-pdf.cjs docs\architecture\autopilots-architecture.standalone.html
+Set-Location docs
+node assets\sync-head.js architecture.html
+node assets\validate.js architecture.html
+node assets\bundle.js architecture.html
+node assets\export-pdf.js architecture.standalone.html
 ```
 
 ## Boundaries

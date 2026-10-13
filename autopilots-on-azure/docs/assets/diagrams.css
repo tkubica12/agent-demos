@@ -1,13 +1,11 @@
-.overview-grid,
-.payload-grid {
+.overview-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin: 22px 0;
 }
 
-.overview-item,
-.payload-grid > * {
+.overview-item {
   min-width: 0;
   padding: 18px 20px;
   border: 1px solid var(--border);
@@ -40,51 +38,22 @@
   border-radius: var(--radius-sm);
 }
 
-.architecture-table,
-.source-matrix {
+.architecture-table {
   margin: 0;
   font-size: 0.87rem;
 }
 
-.architecture-table th,
-.source-matrix th {
+.architecture-table th {
   background: var(--surface-2);
 }
 
-.architecture-table td,
-.source-matrix td {
+.architecture-table td {
   min-width: 9rem;
   overflow-wrap: anywhere;
 }
 
-.architecture-table tr:last-child td,
-.source-matrix tr:last-child td {
+.architecture-table tr:last-child td {
   border-bottom: 0;
-}
-
-.source-list {
-  font-size: 0.88rem;
-  overflow-wrap: anywhere;
-}
-
-.source-list li + li { margin-top: 12px; }
-
-.walkthrough {
-  padding-left: 1.5em;
-}
-
-.walkthrough > li {
-  padding: 0 0 16px 8px;
-}
-
-.walkthrough > li::marker {
-  color: var(--accent);
-  font-weight: 650;
-}
-
-.flow-caption {
-  color: var(--text-muted);
-  font-size: 0.91rem;
 }
 
 .architecture-figure {
@@ -479,7 +448,6 @@ body.architecture-focus-open { overflow: hidden; }
 
 @media (max-width: 760px) {
   .overview-grid,
-  .payload-grid,
   .component-reference { grid-template-columns: minmax(0, 1fr); }
   .architecture-figure { margin: 22px 0; }
   .diagram-toolbar { padding: 10px 12px; }
@@ -487,76 +455,48 @@ body.architecture-focus-open { overflow: hidden; }
   .architecture-figure.is-focused > figcaption { font-size: 0.76rem; }
 }
 
-@page {
-  size: A3 portrait;
-  margin: 14mm 14mm 16mm;
+.component-reference > .chapter-label {
+  grid-column: 1 / -1;
+  margin: 24px 0 4px;
+}
+
+@page diagram {
+  size: A4 landscape;
+  margin: 12mm 14mm 14mm;
   @bottom-right {
-    content: counter(page);
-    font-family: Arial, sans-serif;
-    font-size: 9pt;
+    content: counter(page) " / " counter(pages);
+    font: 8pt -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #686868;
   }
 }
 
 @media print {
-  body {
-    padding: 0;
-    background: var(--surface);
-    font-size: 11pt;
-    line-height: 1.4;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
+  .architecture-figure {
+    page: diagram;
+    margin: 0;
+    box-shadow: none;
+    break-inside: avoid;
   }
-  .doc { max-width: none; }
-  .doc-header { padding: 0 0 6mm; }
-  .doc-header h1 { font-size: 30pt; margin: 0 0 5mm; }
-  .subtitle { max-width: none; font-size: 12pt; }
-  .toc,
-  .scope-note,
+  .architecture-figure.is-focused { position: static; display: block; }
   .diagram-focus,
   .diagram-popup,
-  .component-reference[data-popup-reference] { display: none !important; }
-  .chapter { margin: 0; }
-  .chapter-label { margin: 0 0 5mm; }
-  #ch-infrastructure,
-  #ch-application,
-  #ch-flows,
-  #card-queue,
-  #card-document { break-before: page; }
-  #card-identities { margin-top: 10mm; }
-  .card,
-  .card[data-open] {
-    margin: 0;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-  .card-head { border: 0; }
-  .card-toggle { padding: 0; background: transparent; }
-  .card-body { padding: 4mm 0 0 !important; }
-  .card-title { font-size: 17pt; }
-  .card-sub { font-size: 10pt; }
-  h2, h3, h4 { break-after: avoid; }
-  p, li { orphans: 3; widows: 3; }
-  .overview-grid { gap: 3mm; margin: 5mm 0; }
-  .overview-item { padding: 4mm; font-size: 10pt; }
-  .architecture-figure,
-  .component-detail { break-inside: avoid; box-shadow: none; }
-  .architecture-figure { margin: 5mm 0; }
-  .diagram-toolbar { padding: 3mm 4mm; background: transparent; }
-  .architecture-figure.is-focused { position: static; display: block; }
+  .scope-note { display: none !important; }
+  .diagram-toolbar { background: transparent; }
   .diagram-scroll,
   .table-scroll { overflow: visible; }
-  .table-scroll { margin: 5mm 0; border: 0; }
-  .architecture-table { font-size: 10pt; }
-  .architecture-table th,
-  .architecture-table td { padding: 2.5mm; }
-  tr { break-inside: avoid; }
-  thead { display: table-header-group; }
+  .table-scroll { border: 0; }
   .architecture-svg,
-  .architecture-figure.is-focused .architecture-svg { min-width: 0; width: 100%; }
+  .architecture-figure.is-focused .architecture-svg {
+    min-width: 0;
+    width: 100%;
+    max-height: 150mm;
+  }
   .architecture-svg .edge { opacity: 1; }
-  .component-reference { display: block; }
-  .component-detail { margin-bottom: 10px; }
-  .component-detail::details-content { display: block; content-visibility: visible; }
+  thead { display: table-header-group; }
+  html[data-architecture-ready] .component-reference[data-popup-reference] {
+    display: grid;
+    break-before: page;
+  }
+  .component-detail { break-inside: avoid; }
   .component-detail > .component-copy { display: block !important; }
 }

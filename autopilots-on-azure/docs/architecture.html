@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en" data-default-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autopilots architecture</title>
+<meta name="description" content="How an Autopilots Worker receives work, reasons, uses identities and tools, edits documents, and keeps state.">
+<meta name="doc-id" content="autopilots-architecture">
+<script data-doc-bootstrap>
+/* Inline in the head before styles with sync-head.js. No deferred bootstrap. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const params = new URLSearchParams(location.search);
+  const id = document.querySelector('meta[name="doc-id"]')?.content ||
+    location.pathname.replace(/\.standalone(?=\.html$)/i, "");
+  const prefix = "html-docs:" + id + ":";
+  const choices = { theme: ["light", "dark"], accent: ["blue", "red", "green", "yellow"] };
+  const read = (name) => {
+    try { return localStorage.getItem(prefix + name); }
+    catch { return null; /* Storage may be unavailable for local files. */ }
+  };
+  const write = (name, value) => {
+    try { localStorage.setItem(prefix + name, value); }
+    catch { /* The current view still works without persistence. */ }
+  };
+  function refresh() {
+    for (const name of Object.keys(choices)) {
+      const current = root.getAttribute("data-" + name);
+      const next = choices[name][(choices[name].indexOf(current) + 1) % choices[name].length];
+      document.querySelectorAll('[data-action="toggle-' + name + '"]').forEach(button => {
+        button.textContent = name === "theme" ? (next === "dark" ? "Dark" : "Light") :
+          "Accent: " + current[0].toUpperCase() + current.slice(1);
+        button.setAttribute("aria-label", name === "theme" ? "Switch to " + next + " theme" :
+          "Accent: " + current + ". Switch to " + next);
+      });
+    }
+  }
+  for (const [name, values] of Object.entries(choices)) {
+    const fallback = name === "theme" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : values[0];
+    const value = [params.get(name), read(name), root.getAttribute("data-default-" + name), fallback]
+      .map(candidate => name === "accent" && candidate === "orange" ? "red" : candidate)
+      .find(candidate => values.includes(candidate));
+    root.setAttribute("data-" + name, value);
+  }
+  root.classList.add("js");
+  if (["slides", "sheet"].includes(params.get("view"))) root.setAttribute("data-view", params.get("view"));
+
+  // Print what is on screen. data-print selects the matching print stylesheet.
+  const printTarget = () => {
+    if (document.querySelector(".deck-stage")) return "slides";
+    const view = root.getAttribute("data-view");
+    if (view === "slides" || (view === "sheet" && document.querySelector(".sheet"))) return view;
+    return document.querySelector(".doc") || !document.querySelector(".sheet") ? "read" : "sheet";
+  };
+  let printing = null;
+  addEventListener("beforeprint", () => {
+    if (root.hasAttribute("data-print")) return; // Set by an automated export.
+    const target = printTarget();
+    printing = document.title;
+    root.setAttribute("data-print", target);
+    // The browser proposes the title as the PDF file name.
+    if (target !== "read" && document.querySelector(".doc")) {
+      document.title += target === "slides" ? " - Slides" : " - Sheet";
+    }
+  });
+  addEventListener("afterprint", () => {
+    if (printing === null) return;
+    root.removeAttribute("data-print");
+    document.title = printing;
+    printing = null;
+  });
+
+  // Keep the display awake while presenting, like presentation software does.
+  let lock = null;
+  let awake = false;
+  async function holdScreen() {
+    if (!awake || lock || document.visibilityState !== "visible" || !navigator.wakeLock) return;
+    try {
+      const sentinel = await navigator.wakeLock.request("screen");
+      if (!awake || lock) { sentinel.release(); return; }
+      lock = sentinel;
+      root.setAttribute("data-awake", "");
+      sentinel.addEventListener("release", () => {
+        if (lock !== sentinel) return;
+        lock = null;
+        root.removeAttribute("data-awake");
+      });
+    } catch { /* Denied by battery saver or an embedding policy; retried on input. */ }
+  }
+  function keepAwake(on) {
+    awake = !!on;
+    if (awake) holdScreen();
+    else if (lock) lock.release();
+  }
+  // The browser drops the lock when the tab is hidden; some require a gesture.
+  document.addEventListener("visibilitychange", holdScreen);
+  document.addEventListener("pointerdown", holdScreen);
+  document.addEventListener("keydown", holdScreen);
+
+  window.HtmlDocs = { read, write, refresh, keepAwake };
+  document.addEventListener("DOMContentLoaded", refresh);
+  document.addEventListener("click", event => {
+    if (event.target.closest('[data-action="print"]')) window.print();
+  });
+  document.addEventListener("click", event => {
+    const button = event.target.closest('[data-action="toggle-theme"], [data-action="toggle-accent"]');
+    if (!button) return;
+    const name = button.getAttribute("data-action").slice(7);
+    const values = choices[name];
+    const next = values[(values.indexOf(root.getAttribute("data-" + name)) + 1) % values.length];
+    root.setAttribute("data-" + name, next);
+    write(name, next);
+    // Replace a URL override too, so reloading preserves a deliberate change.
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.set(name, next);
+      history.replaceState(null, "", url.href);
+    }
+    refresh();
+  });
+})();
+</script>
+<style data-doc-tokens>
+/* Canonical tokens. Inline with sync-head.js; one accent family at a time. */
+:root {
+  color-scheme: light;
+  --bg: #fafafa; --surface: #ffffff; --surface-2: #f2f2f2; --surface-3: #e8e8e8;
+  --border: #dedede; --border-strong: #b8b8b8;
+  --text: #161616; --text-muted: #565656; --text-faint: #686868;
+  --accent-light: #006da0; --accent-dark: #00a4ef;
+  --accent: var(--accent-light);
+  --accent-strong: var(--accent);
+  --accent-quiet: var(--accent);
+  --accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  --accent-border: color-mix(in srgb, var(--accent) 36%, var(--bg));
+  --warn: var(--accent); --warn-soft: var(--accent-soft); --warn-border: var(--accent-border);
+  --code-bg: var(--surface-2); --code-border: var(--border);
+  --focus: var(--accent);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.04), 0 12px 28px rgba(0,0,0,.06);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+/* Screen only: every PDF and printout uses the light palette. */
+@media screen {
+  [data-theme="dark"], :root:not([data-theme])[data-default-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101010; --surface: #191919; --surface-2: #232323; --surface-3: #2c2c2c;
+    --border: #363636; --border-strong: #595959;
+    --text: #f2f2f2; --text-muted: #b5b5b5; --text-faint: #a0a0a0;
+    --accent: var(--accent-dark);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-2: 0 2px 4px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.4);
+  }
+}
+[data-accent="red"], :root:not([data-accent])[data-default-accent="red"],
+[data-accent="orange"], :root:not([data-accent])[data-default-accent="orange"] {
+  --accent-light: #bc3a16; --accent-dark: #f25022;
+}
+[data-accent="green"], :root:not([data-accent])[data-default-accent="green"] {
+  --accent-light: #4c7100; --accent-dark: #7fba00;
+}
+[data-accent="yellow"], :root:not([data-accent])[data-default-accent="yellow"] {
+  --accent-light: #805b00; --accent-dark: #ffb900;
+}
+</style>
+<link rel="stylesheet" href="assets/article.css">
+<link rel="stylesheet" href="assets/diagrams.css">
+<script src="assets/article.js" defer></script>
+<script src="assets/diagrams.js" defer></script>
+</head>
+
+<body>
+
+<div class="controls" role="group" aria-label="Article controls">
+  <button type="button" class="ctrl" data-action="expand-all">Expand all</button>
+  <button type="button" class="ctrl" data-action="collapse-all">Collapse all</button>
+  <button type="button" class="ctrl" data-action="print" aria-label="Save the current view as PDF or print it">PDF</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+  <button type="button" class="ctrl" data-action="toggle-accent">Accent: Blue</button>
+</div>
+
+<div class="doc">
+
+  <header class="doc-header" id="opening">
+    <p class="eyebrow">Autopilots on Azure / 1 of 3</p>
+    <h1>Autopilots architecture</h1>
+    <p class="subtitle">How a Worker receives work, reasons, acts under its identities, edits documents, and keeps state.</p>
+  </header>
+
+  <nav class="doc-nav" aria-label="Architecture documents">
+    <a href="architecture.html" aria-current="page">Architecture</a>
+    <a href="collective-learning.html">Collective learning</a>
+    <a href="azure-implementation.html">Azure implementation</a>
+  </nav>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-label">Contents</p>
+    <ol>
+      <li><a href="#ch-model">Operating model</a></li>
+      <li><a href="#ch-conversation">Conversation turns</a></li>
+      <li><a href="#ch-identity">Identity and network</a></li>
+      <li><a href="#ch-documents">Documents</a></li>
+      <li><a href="#ch-state">State and recovery</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section class="chapter" id="ch-model">
+      <h2 class="chapter-label">Operating model</h2>
+      <article class="card card--lead" id="card-orientation" data-open>
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">The gateway connects; the Worker does the work.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>A <strong>Worker</strong> is a named digital colleague with its own identity, role, private state, and tools. Its <strong>gateway</strong> accepts authenticated activities and manages runtime availability. The <strong>agent runtime</strong> owns reasoning, tool use, memory, skills, and document work. Foundry supplies model inference; it does not host the agent's compute.</p>
+          <p>A runtime wrapper adds execution and learning boundaries around the agent loop. Model and tool traffic leaves the runtime directly; the gateway is neither an inference proxy nor a general tool router.</p>
+          <p class="scope-note">Hover or focus a component to inspect it. Click, tap, or press Enter to pin its explanation; Escape dismisses it. Use <strong>Focus diagram</strong> for a larger view. The PDF lists every explanation in a component reference after the takeaway.</p>
+          <div class="diagram-legend"><span class="legend-solid">Solid: connection in use</span><span class="legend-dashed">Dashed: optional connection or component</span></div>
+          <figure class="architecture-figure" data-diagram id="diagram-application">
+            <div class="diagram-toolbar"><span class="diagram-label">01 / Application responsibilities and interfaces</span><button class="diagram-focus" type="button">Focus diagram</button></div>
+            <div class="diagram-scroll">
+              <svg class="architecture-svg" viewBox="0 0 1100 850" role="group" aria-labelledby="app-title app-desc">
+                <title id="app-title">Gateway, agent runtime, identity adapters, tools, and persistent state</title>
+                <desc id="app-desc">Authenticated activities enter the gateway. The gateway invokes the agent runtime through a wrapper. The runtime calls Foundry, remote MCP through a loopback identity adapter, and a local collaboration MCP for Office tools and Graph publication. Service Bus triggers return through the awake gateway. Worker state lives on a Data Disk.</desc>
+                <defs><marker id="app-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="var(--accent)"/></marker></defs>
+                <rect class="zone" x="310" y="95" width="485" height="725" rx="18"/>
+                <text class="zone-label" x="332" y="124">AGENT RUNTIME / ACA SANDBOX</text>
+                <path class="edge" data-from="detail-agent365" data-to="detail-gateway" d="M142 126V183" marker-end="url(#app-arrow)"/>
+                <text class="edge-label" x="159" y="157">Activity JSON</text>
+                <path class="edge" data-from="detail-gateway" data-to="detail-wrapper" d="M265 229H340" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-wrapper" data-to="detail-hermes" d="M550 253V308" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-hermes" data-to="detail-foundry" d="M760 346H825V63H840" marker-end="url(#app-arrow)"/>
+                <text class="edge-label" x="847" y="169">HTTPS / Entra</text>
+                <path class="edge" data-from="detail-hermes" data-to="detail-identity-adapter" d="M440 403V460" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-hermes" data-to="detail-office-tools" d="M650 403V610" marker-end="url(#app-arrow)"/>
+                <text class="edge-label" x="664" y="429">local tool call</text>
+                <path class="edge" data-from="detail-identity-adapter" data-to="detail-microsoft-tools" d="M545 493H808V260H840" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-identity-adapter" data-to="detail-existing-mcp" d="M545 513H817V403H840" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-identity-adapter" data-to="detail-private-mcp" d="M545 533H840" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-office-tools" data-to="detail-graph" d="M760 653H840" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-hermes" data-to="detail-cron" d="M340 367H289V565H265" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-cron" data-to="detail-servicebus" d="M142 517V443" marker-end="url(#app-arrow)"/>
+                <text class="edge-label" x="34" y="484">schedule next</text>
+                <path class="edge" data-from="detail-servicebus" data-to="detail-gateway" d="M142 343V281" marker-end="url(#app-arrow)"/>
+                <text class="edge-label" x="155" y="319">PeekLock</text>
+                <path class="edge" data-from="detail-hermes" data-to="detail-disk" d="M760 379H776V747H760" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-office-tools" data-to="detail-disk" d="M650 695V725" marker-end="url(#app-arrow)"/>
+                <path class="edge" data-from="detail-hermes" data-to="detail-telemetry" d="M340 393H294V748H265" marker-end="url(#app-arrow)"/>
+
+                <a class="arch-node" href="#detail-agent365" data-detail="detail-agent365" aria-label="Agent 365 activity delivery: details"><rect x="20" y="38" width="245" height="88" rx="10"/><text class="node-title" x="38" y="68">Agent 365</text><text class="node-sub" x="38" y="94">Teams / Mail / Office events</text><text class="node-meta" x="38" y="114">Supported workload delivery only</text></a>
+                <a class="arch-node" href="#detail-gateway" data-detail="detail-gateway" aria-label="Gateway activity and lifecycle handling: details"><rect x="20" y="183" width="245" height="98" rx="10"/><text class="node-title" x="38" y="214">Gateway / Python bridge</text><text class="node-sub" x="38" y="240">Agents SDK + runtime adapter</text><text class="node-meta" x="38" y="263">Channel auth, actions, replies</text></a>
+                <a class="arch-node" href="#detail-wrapper" data-detail="detail-wrapper" aria-label="Runtime wrapper: details"><rect x="340" y="168" width="420" height="85" rx="10"/><text class="node-title" x="360" y="200">Runtime wrapper</text><text class="node-sub" x="360" y="226">Session binding / execution lease / governed transaction</text><text class="node-meta" x="360" y="244">Invokes the runtime API</text></a>
+                <a class="arch-node" href="#detail-hermes" data-detail="detail-hermes" aria-label="Agent loop: details"><rect x="340" y="308" width="420" height="95" rx="10"/><text class="node-title" x="360" y="340">Agent loop</text><text class="node-sub" x="360" y="366">Role + memory + skills + model + tools</text><text class="node-meta" x="360" y="389">One active writer per Worker profile</text></a>
+                <a class="arch-node" href="#detail-identity-adapter" data-detail="detail-identity-adapter" aria-label="Loopback identity adapter for MCP: details"><rect x="340" y="460" width="205" height="103" rx="10"/><text class="node-title" x="355" y="491">MCP identity adapter</text><text class="node-sub" x="355" y="515">Loopback only</text><text class="node-meta" x="355" y="539">Agent Identity / Agent User</text></a>
+                <a class="arch-node" href="#detail-office-tools" data-detail="detail-office-tools" aria-label="Local collaboration MCP and Office editing: details"><rect x="560" y="610" width="200" height="85" rx="10"/><text class="node-title" x="575" y="639">Collaboration MCP</text><text class="node-sub" x="575" y="661">Local Office tools</text><text class="node-meta" x="575" y="683">Edit + validate + publish</text></a>
+                <a class="arch-node" href="#detail-disk" data-detail="detail-disk" aria-label="Worker profile and private document state: details"><rect x="340" y="725" width="420" height="70" rx="10"/><text class="node-title" x="360" y="752">Worker profile / Data Disk</text><text class="node-sub" x="360" y="777">Memory, skills, sessions, cron, receipts, private staging</text></a>
+                <a class="arch-node" href="#detail-servicebus" data-detail="detail-servicebus" aria-label="Service Bus trigger transport: details"><rect x="20" y="343" width="245" height="100" rx="10"/><text class="node-title" x="38" y="374">Service Bus queue</text><text class="node-sub" x="38" y="400">Scheduled metadata / no prompts</text><text class="node-meta" x="38" y="424">Gateway consumes and settles</text></a>
+                <a class="arch-node" href="#detail-cron" data-detail="detail-cron" aria-label="Native cron scheduler: details"><rect x="20" y="517" width="245" height="95" rx="10"/><text class="node-title" x="38" y="548">Native cron provider</text><text class="node-sub" x="38" y="574">Runs inside the runtime</text><text class="node-meta" x="38" y="596">Canonical schedule stays on disk</text></a>
+                <a class="arch-node" href="#detail-telemetry" data-detail="detail-telemetry" aria-label="Observability across components: details"><rect x="20" y="707" width="245" height="90" rx="10"/><text class="node-title" x="38" y="738">Cross-cutting telemetry</text><text class="node-sub" x="38" y="762">Model / tool / queue spans</text><text class="node-meta" x="38" y="785">Metadata, not document contents</text></a>
+                <a class="arch-node" href="#detail-foundry" data-detail="detail-foundry" aria-label="Direct Foundry model inference: details"><rect x="840" y="23" width="240" height="80" rx="10"/><text class="node-title" x="857" y="52">Foundry inference</text><text class="node-sub" x="857" y="77">Entra-only model endpoint</text><text class="node-meta" x="857" y="95">Runtime managed identity</text></a>
+                <a class="arch-node" href="#detail-microsoft-tools" data-detail="detail-microsoft-tools" aria-label="Microsoft-hosted MCP tools: details"><rect x="840" y="215" width="240" height="91" rx="10"/><text class="node-title" x="857" y="245">Microsoft-hosted MCP</text><text class="node-sub" x="857" y="270">Azure DevOps / Microsoft 365</text><text class="node-meta" x="857" y="292">Public HTTPS / approved access</text></a>
+                <a class="arch-node" href="#detail-existing-mcp" data-detail="detail-existing-mcp" aria-label="Existing private MCP in the customer network: details"><rect x="840" y="363" width="240" height="80" rx="10"/><text class="node-title" x="857" y="392">Existing private MCP</text><text class="node-sub" x="857" y="416">Customer network</text><text class="node-meta" x="857" y="435">Already provided by the customer</text></a>
+                <a class="arch-node" href="#detail-private-mcp" data-detail="detail-private-mcp" aria-label="Custom MCP adapter: details"><rect x="840" y="493" width="240" height="80" rx="10"/><text class="node-title" x="857" y="522">Custom MCP</text><text class="node-sub" x="857" y="546">Private adapter to backend APIs</text><text class="node-meta" x="857" y="565">No public MCP interface</text></a>
+                <a class="arch-node" href="#detail-graph" data-detail="detail-graph" aria-label="Microsoft Graph under the Agent User: details"><rect x="840" y="613" width="240" height="80" rx="10"/><text class="node-title" x="857" y="643">Microsoft Graph</text><text class="node-sub" x="857" y="666">Files, ETags, sharing, Excel</text><text class="node-meta" x="857" y="685">Fixed Agent User, not caller OBO</text></a>
+                <text class="svg-note" x="335" y="840">The cron box is drawn outside for clarity; its code executes in the runtime.</text>
+              </svg>
+            </div>
+            <figcaption>Arrows show calls or trigger delivery. Tool access follows the three integration patterns in the infrastructure view; telemetry spans the stack.</figcaption>
+          </figure>
+        </div>
+      </article>
+      <article class="card" id="card-topology">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Five service roles, separate Sandbox Groups.</span><span class="card-sub">Each role has its own Sandbox Group and managed identity.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <div class="summary-grid">
+            <div class="summary-item"><span class="summary-label">Gateway</span>Receives Agent 365 activities and scheduled work.</div>
+            <div class="summary-item"><span class="summary-label">Runtime</span>Runs Hermes against its attached Worker profile.</div>
+            <div class="summary-item"><span class="summary-label">Private MCP</span>Serves incidents through private networking.</div>
+            <div class="summary-item"><span class="summary-label">Public MCP</span>Serves authenticated shipments over public HTTPS.</div>
+            <div class="summary-item"><span class="summary-label">Generated apps</span>Runs Worker-created applications outside the agent runtime.</div>
+          </div>
+          <p>Each Group has its own user-assigned managed identity. Foundry supplies inference and external-agent monitoring, not compute. An Express managed environment supplies the private MCP networking foundation.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../terraform/platform/">Platform infrastructure</a> · <a href="../terraform/apps/">Worker infrastructure</a> · <a href="../scripts/sandbox_services.py">Service deployment</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-conversation">
+      <h2 class="chapter-label">Conversation turns</h2>
+      <article class="card" id="card-turn">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Acknowledge transport; finish the turn in the runtime.</span><span class="card-sub">The HTTP acknowledgement is not the business result.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>A user explicitly mentions the Agent User in a group conversation, and the host delivers the activity to the registered Worker endpoint. The gateway does not subscribe to all channel traffic and cannot assume complete group history.</p>
+          <figure class="architecture-figure" data-diagram id="diagram-message">
+            <div class="diagram-toolbar"><span class="diagram-label">02 / Interactive Teams request</span><button class="diagram-focus" type="button">Focus diagram</button></div>
+            <div class="diagram-scroll">
+              <svg class="architecture-svg" viewBox="0 0 1100 735" role="group" aria-labelledby="message-title message-desc">
+                <title id="message-title">Sequence of a Teams group mention</title>
+                <desc id="message-desc">A user mentions the Worker. Agent 365 sends an authenticated activity to the gateway, which can acknowledge before work completes. The gateway resumes the agent runtime, which calls models and tools and saves the result. The gateway replies through the channel. Service Bus is not on this ordinary chat path.</desc>
+                <defs><marker id="message-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="var(--accent)"/></marker></defs>
+                <path class="lane-line" d="M110 98V652M330 98V652M550 98V652M770 98V652M990 98V652"/>
+                <a class="arch-node" href="#detail-teams" data-detail="detail-teams" aria-label="Teams user and group: details"><rect x="22" y="20" width="176" height="78" rx="10"/><text class="node-title" x="42" y="50">Teams user</text><text class="node-sub" x="42" y="76">Group / thread</text></a>
+                <a class="arch-node" href="#detail-agent365" data-detail="detail-agent365" aria-label="Agent 365 channel delivery: details"><rect x="242" y="20" width="176" height="78" rx="10"/><text class="node-title" x="260" y="50">Agent 365</text><text class="node-sub" x="260" y="76">Activity transport</text></a>
+                <a class="arch-node" href="#detail-gateway" data-detail="detail-gateway" aria-label="Gateway during a Teams turn: details"><rect x="462" y="20" width="176" height="78" rx="10"/><text class="node-title" x="480" y="50">Gateway</text><text class="node-sub" x="480" y="76">Auth + delivery</text></a>
+                <a class="arch-node" href="#detail-runtime" data-detail="detail-runtime" aria-label="Agent runtime: details"><rect x="682" y="20" width="176" height="78" rx="10"/><text class="node-title" x="700" y="50">Agent runtime</text><text class="node-sub" x="700" y="76">Agent execution</text></a>
+                <a class="arch-node" href="#detail-tools-loop" data-detail="detail-tools-loop" aria-label="Models and tools: details"><rect x="902" y="20" width="176" height="78" rx="10"/><text class="node-title" x="920" y="50">Model / tools</text><text class="node-sub" x="920" y="76">Foundry + MCP</text></a>
+                <g class="sequence-step"><circle class="step-circle" cx="40" cy="149" r="16"/><text class="step-number" x="40" y="154" text-anchor="middle">1</text><path class="edge" data-from="detail-teams" data-to="detail-agent365" d="M110 158H330" marker-end="url(#message-arrow)"/><text class="edge-label" x="124" y="141">@mention + task</text></g>
+                <g class="sequence-step"><circle class="step-circle" cx="40" cy="218" r="16"/><text class="step-number" x="40" y="223" text-anchor="middle">2</text><path class="edge" data-from="detail-agent365" data-to="detail-gateway" d="M330 227H550" marker-end="url(#message-arrow)"/><text class="edge-label" x="343" y="210">POST /api/messages</text></g>
+                <path class="edge" data-from="detail-gateway" data-to="detail-agent365" d="M550 268H330" marker-end="url(#message-arrow)"/><text class="edge-label" x="343" y="254">transport ACK, not final answer</text>
+                <g class="sequence-step"><circle class="step-circle" cx="40" cy="320" r="16"/><text class="step-number" x="40" y="325" text-anchor="middle">3</text><path class="edge" data-from="detail-gateway" data-to="detail-runtime" d="M550 329H770" marker-end="url(#message-arrow)"/><text class="edge-label" x="564" y="311">resume / bind / invoke</text></g>
+                <g class="sequence-step"><circle class="step-circle" cx="40" cy="405" r="16"/><text class="step-number" x="40" y="410" text-anchor="middle">4</text><path class="edge" data-from="detail-runtime" data-to="detail-tools-loop" d="M770 410H990" marker-end="url(#message-arrow)"/><text class="edge-label" x="784" y="391">reason, call tools, repeat</text><path class="edge" data-from="detail-tools-loop" data-to="detail-runtime" d="M990 453H770" marker-end="url(#message-arrow)"/><text class="edge-label" x="790" y="439">authorized results</text></g>
+                <g class="sequence-step"><circle class="step-circle" cx="40" cy="520" r="16"/><text class="step-number" x="40" y="525" text-anchor="middle">5</text><path class="edge" data-from="detail-runtime" data-to="detail-gateway" d="M770 529H550" marker-end="url(#message-arrow)"/><text class="edge-label" x="564" y="510">record outcome / return reply</text></g>
+                <g class="sequence-step"><circle class="step-circle" cx="40" cy="607" r="16"/><text class="step-number" x="40" y="612" text-anchor="middle">6</text><path class="edge" data-from="detail-gateway" data-to="detail-agent365" d="M550 606H330" marker-end="url(#message-arrow)"/><text class="edge-label" x="344" y="588">reply to original conversation</text><path class="edge" data-from="detail-agent365" data-to="detail-teams" d="M330 638H110" marker-end="url(#message-arrow)"/><text class="edge-label" x="143" y="622">answer / supported card</text></g>
+                <rect class="note-box" x="100" y="676" width="975" height="39" rx="8"/><text class="svg-note" x="120" y="701">Service Bus enters only when the task creates scheduled work or a publication retry.</text>
+              </svg>
+            </div>
+            <figcaption>The order illustrates one supported interaction, not an exact packet capture or latency promise. The model/tool loop can take several calls. Public group output must respect the conversation's audience.</figcaption>
+          </figure>
+          <ol class="steps">
+            <li><h4>Authenticate before invoking the Worker</h4><p>The Agents SDK validates Activity Protocol authentication. The bridge resolves the Worker, caller, and conversation; unsupported or invalid input does not become an agent task.</p></li>
+            <li><h4>Reuse state without allowing concurrent writers</h4><p>The gateway ensures the runtime is available. The wrapper binds native session context and obtains the execution boundary; the agent runtime reads the appropriate profile and performs the requested work.</p></li>
+            <li><h4>Reply through the originating workload</h4><p>The bridge delivers the result through the channel. Office comment requests stay in their comment thread. An early HTTP acknowledgement is not a durable queue entry or proof of task completion.</p></li>
+          </ol>
+          <p>Email and Office notifications reply in their originating workload rather than being redirected to Teams.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../bridge/">Gateway and runtime adapter</a> · <a href="../runtimes/hermes/">Wrapper and native runtime integration</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-identity">
+      <h2 class="chapter-label">Identity and network</h2>
+      <article class="card" id="card-identities">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Choose the principal for the resource.</span><span class="card-sub">Managed identity, Agent Identity, and Agent User have distinct jobs.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>A managed identity runs Azure work, the Agent Identity calls autonomous tools, and the Agent User holds the Worker's Microsoft 365 account. A network route never substitutes for one of these decisions.</p>
+          <div class="table-scroll"><table class="architecture-table"><thead><tr><th>Call</th><th>Principal</th><th>Enforcement</th></tr></thead><tbody><tr><td>Gateway to runtime lifecycle</td><td>Gateway managed identity</td><td>Sandbox Group data-plane role on the runtime and generated-apps Groups.</td></tr><tr><td>Agent runtime to Foundry</td><td>Runtime managed identity</td><td>Entra token and model-resource RBAC through the native provider.</td></tr><tr><td>Agent runtime to custom MCP</td><td>Agent Identity</td><td>Expected tenant, issuer, audience, caller, and application role.</td></tr><tr><td>Work IQ and Microsoft Graph</td><td>Fixed Agent User via Agent Identity exchange</td><td>Approved delegated permissions and resource sharing. Not human on-behalf-of access.</td></tr><tr><td>Runtime cron to Service Bus</td><td>Agent Identity</td><td>Queue-scoped Data Sender role.</td></tr><tr><td>Gateway queue receive and document retry</td><td>Gateway managed identity</td><td>Queue-scoped Data Receiver and Data Sender roles.</td></tr></tbody></table></div>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Inspect the token path</button>
+            <div class="reveal-body"><p>The loopback MCP adapter obtains a workload assertion, exchanges through the blueprint federated credential using <code>fmi_path</code>, and requests the target audience. Microsoft 365 access adds the fixed Agent User exchange through <code>user_fic</code>. Tokens are short-lived; the agent does not receive bearer-token text. This is not human on-behalf-of delegation.</p></div>
+          </div>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../autopilots_identity/">Token exchange and MCP adapter</a> · <a href="../terraform/apps/main.tf">Worker role assignments</a></p></aside>
+        </div>
+      </article>
+      <article class="card" id="card-network">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Private networking and Entra checks both apply.</span><span class="card-sub">A public MCP endpoint is not anonymous; a private one is not automatically trusted.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>Hermes connects to loopback MCP endpoints. The adapter selects the business identity and upstream route. Private incidents use the Sandbox network connection, peering, private DNS, and a linked private endpoint; public shipments use HTTPS.</p>
+          <p>Both custom servers validate tokens for their configured tenant, issuer, audience, caller, and required role. Network reachability does not grant application access. The gateway is not a relay for this tool traffic.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../terraform/platform/networking.tf">Network topology</a> · <a href="../private-incidents-mcp/">Private server</a> · <a href="../public-shipments-mcp/">Public server</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-documents">
+      <h2 class="chapter-label">Documents</h2>
+      <article class="card" id="card-documents">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Edit a private copy; publish to the same item.</span><span class="card-sub">ETag conflicts and locks are explicit outcomes, not silent overwrites.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>Work IQ handles supported discovery, reading, creation, and comments. For a Word body edit, reviewed Office tools inside the runtime change a private copy, and the collaboration MCP coordinates Graph download, validation, and same-item publication.</p>
+          <figure class="architecture-figure" data-diagram id="diagram-document">
+            <div class="diagram-toolbar"><span class="diagram-label">03 / Document edit and publication lifecycle</span><button class="diagram-focus" type="button">Focus diagram</button></div>
+            <div class="diagram-scroll">
+              <svg class="architecture-svg" viewBox="0 0 1100 640" role="group" aria-labelledby="document-title document-desc">
+                <title id="document-title">Private document editing with safe publication and deterministic retry</title>
+                <desc id="document-desc">The Worker locates and downloads a shared item, edits and validates a private copy, then publishes with the original ETag. A successful write preserves the original item. A persistent lock leads to explicit user choice: retry in the background using metadata-only Service Bus messages, or send a separately shared copy. Retries do not rerun the model.</desc>
+                <defs><marker id="document-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="var(--accent)"/></marker></defs>
+                <rect class="zone" x="283" y="22" width="514" height="265" rx="14"/><text class="zone-label" x="303" y="52">PRIVATE RUNTIME WORKSPACE</text>
+                <path class="edge" data-from="detail-document-source" data-to="detail-document-stage" d="M240 147H315" marker-end="url(#document-arrow)"/>
+                <path class="edge" data-from="detail-document-stage" data-to="detail-document-validate" d="M505 147H563" marker-end="url(#document-arrow)"/>
+                <path class="edge" data-from="detail-document-validate" data-to="detail-document-publish" d="M758 147H840" marker-end="url(#document-arrow)"/>
+                <path class="edge" data-from="detail-document-publish" data-to="detail-document-success" d="M953 198V241H953V327" marker-end="url(#document-arrow)"/><text class="edge-label" x="974" y="273">success</text>
+                <path class="edge" data-from="detail-document-publish" data-to="detail-document-choice" d="M840 175H814V318H490V340" marker-end="url(#document-arrow)"/><text class="edge-label" x="564" y="311">persistent lock / publication blocked</text>
+                <path class="edge" data-from="detail-document-choice" data-to="detail-document-retry" d="M395 385H265" marker-end="url(#document-arrow)"/><text class="edge-label" x="277" y="370">keep trying</text>
+                <path class="edge" data-from="detail-document-choice" data-to="detail-document-copy" d="M585 385H652V495H840" marker-end="url(#document-arrow)"/><text class="edge-label" x="667" y="479">shared copy now</text>
+                <path class="edge" data-from="detail-document-retry" data-to="detail-document-publish" d="M142 436V579H1090V147H1065" marker-end="url(#document-arrow)"/><text class="edge-label" x="265" y="571">gateway resumes fixed publish API / reuse staged edit / no new LLM turn</text>
+                <path class="edge" data-from="detail-document-retry" data-to="detail-document-copy" d="M265 411H325V503H840" marker-end="url(#document-arrow)"/><text class="edge-label" x="355" y="493">deadline or terminal conflict: explicitly shared copy</text>
+
+                <a class="arch-node" href="#detail-document-source" data-detail="detail-document-source" aria-label="Discover and download the original file: details"><rect x="22" y="98" width="218" height="100" rx="10"/><text class="node-title" x="40" y="130">Locate original</text><text class="node-sub" x="40" y="156">Work IQ + Graph</text><text class="node-meta" x="40" y="181">Item identity + source ETag</text></a>
+                <a class="arch-node" href="#detail-document-stage" data-detail="detail-document-stage" aria-label="Private local document editing: details"><rect x="315" y="98" width="190" height="100" rx="10"/><text class="node-title" x="331" y="130">Edit private copy</text><text class="node-sub" x="331" y="156">Reviewed Office tools</text><text class="node-meta" x="331" y="181">Minimal requested change</text></a>
+                <a class="arch-node" href="#detail-document-validate" data-detail="detail-document-validate" aria-label="Semantic and Open XML validation: details"><rect x="563" y="98" width="195" height="100" rx="10"/><text class="node-title" x="580" y="130">Verify + validate</text><text class="node-sub" x="580" y="156">Meaning + Open XML</text><text class="node-meta" x="580" y="181">New defects block upload</text></a>
+                <a class="arch-node" href="#detail-document-publish" data-detail="detail-document-publish" aria-label="ETag-guarded Graph publication: details"><rect x="840" y="98" width="225" height="100" rx="10"/><text class="node-title" x="858" y="130">Publish with ETag</text><text class="node-sub" x="858" y="156">Graph / same item</text><text class="node-meta" x="858" y="181">Do not overwrite coauthors</text></a>
+                <text class="svg-note" x="315" y="231">Bytes, edit intent, and retained operations stay private.</text><text class="svg-note" x="315" y="256">Document contents do not enter learning exports.</text>
+                <a class="arch-node" href="#detail-document-retry" data-detail="detail-document-retry" aria-label="Deterministic Service Bus document retry: details"><rect x="22" y="340" width="243" height="96" rx="10"/><text class="node-title" x="40" y="371">Background retry</text><text class="node-sub" x="40" y="396">document.publish.retry</text><text class="node-meta" x="40" y="420">Metadata only in Service Bus</text></a>
+                <a class="arch-node" href="#detail-document-choice" data-detail="detail-document-choice" aria-label="Authenticated user choice after a lock: details"><rect x="395" y="340" width="190" height="96" rx="10"/><text class="node-title" x="410" y="371">Ask the user</text><text class="node-sub" x="410" y="396">Keep trying / send copy</text><text class="node-meta" x="410" y="420">Bound, expiring actions</text></a>
+                <a class="arch-node" href="#detail-document-success" data-detail="detail-document-success" aria-label="Successful same-item publication: details"><rect x="840" y="327" width="225" height="83" rx="10"/><text class="node-title" x="858" y="357">Original updated</text><text class="node-sub" x="858" y="382">Same URL and item identity</text><text class="node-meta" x="858" y="400">Report the applied change</text></a>
+                <a class="arch-node" href="#detail-document-copy" data-detail="detail-document-copy" aria-label="Explicitly shared copy fallback: details"><rect x="840" y="458" width="225" height="83" rx="10"/><text class="node-title" x="858" y="488">Shared copy</text><text class="node-sub" x="858" y="513">Verify recipient write access</text><text class="node-meta" x="858" y="531">Separate history and comments</text></a>
+                <text class="svg-note" x="22" y="622">A changed source is re-read. Only reconstructible guarded edits can rebase; opaque edits fail closed.</text>
+              </svg>
+            </div>
+            <figcaption>Preparation and model reasoning happen once. A background publication retry executes a storage workflow, not a repeated &ldquo;try again&rdquo; prompt.</figcaption>
+          </figure>
+          <p>Same-item publication preserves the document's identity, sharing, comments, and history. A copy is reported as a different item. The Worker never reports the original as updated when the upload failed.</p>
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Inspect locks and retry behavior</button>
+            <div class="reveal-body"><p>A locked edit is staged privately for one hour by default. Choosing background publication starts a separate 24-hour retry deadline and retains the file for one further hour for completion/cleanup. Teams actions select retrying the original or sharing a copy; retries do not start another model turn. See <a href="../SPEC.md">the document contract</a> for configuration and receipt retention.</p><p>ETag conflicts are not silently overwritten. Attachment content is turn-scoped and excluded from durable learning; pending publication is a separate bounded retention path. External message delivery is not exactly-once.</p></div>
+          </div>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../autopilots_identity/">Collaboration and file boundary</a> · <a href="../SPEC.md">Document and attachment limits</a></p></aside>
+        </div>
+      </article>
+    </section>
+    <section class="chapter" id="ch-state">
+      <h2 class="chapter-label">State and recovery</h2>
+      <article class="card" id="card-profile">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">The Data Disk is the Worker's continuity boundary.</span><span class="card-sub">Images provide software; the mounted profile provides identity-specific state.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <p>The profile contains native memory and history, private skills, governed role/candidate skills, learning records, schedules, and working files. A pinned Role Release provides the baseline against which local governed changes are tracked.</p>
+          <p>A healthy stopped or suspended Sandbox resumes with the same ID. A failed runtime can be replaced while preserving its Data Disk. A profile refresh is a separate governed operation, not an automatic side effect of a new image.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../scripts/sandbox_runtime.py">Lifecycle</a> · <a href="../runtimes/hermes/blueprint.py">Profile installation</a> · <a href="collective-learning.html">Refresh rules</a></p></aside>
+        </div>
+      </article>
+      <article class="card" id="card-scheduler">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Service Bus carries wake-up identifiers, not prompts.</span><span class="card-sub">The runtime owns schedule meaning; the gateway owns queue reception.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <ol class="sequence">
+            <li><span class="seq-title">Persist schedule</span><span class="seq-note">The profile retains the job, revision, and next occurrence.</span></li>
+            <li><span class="seq-title">Receive due work</span><span class="seq-note">The awake gateway takes a PeekLock and wakes the runtime.</span></li>
+            <li><span class="seq-title">Execute and settle</span><span class="seq-note">Validate revision, record outcome, deliver, and complete.</span></li>
+          </ol>
+          <div class="table-scroll"><table class="architecture-table"><thead><tr><th>Message type</th><th>Producer / credential</th><th>Consumer action</th></tr></thead><tbody>
+            <tr><td><code>hermes.cron.fire</code></td><td>Runtime cron provider / federated Agent Identity</td><td>Claim the due occurrence, run the saved task, record output, deliver to its bound conversation, and reconcile the next occurrence.</td></tr>
+            <tr><td><code>system.dream</code></td><td>Runtime cron provider / federated Agent Identity</td><td>Run the reserved reflection workflow with fenced checkpoints. Ambiguous already-started work stops for inspection rather than blindly running again.</td></tr>
+            <tr><td><code>document.publish.retry</code></td><td>Gateway / gateway managed identity</td><td>Resume a saved publication operation through a fixed API. No new model turn is needed.</td></tr>
+          </tbody></table></div>
+          <p>User tasks, the system Dream, and document retries share this transport. Durable claims and receipts distinguish retryable work from an ambiguous prior execution; failures stay visible.</p>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../runtimes/hermes/cron_runtime.py">Cron store integration</a> · <a href="../bridge/scheduled_learning.py">Dream phases</a> · <a href="../bridge/">Queue consumer and delivery</a></p></aside>
+        </div>
+      </article>
+      <article class="card" id="card-failures">
+        <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Recover known state; stop on unknown outcomes.</span><span class="card-sub">Lifecycle recovery must not become a blind replay of business actions.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
+        <div class="card-body">
+          <ul>
+            <li><strong>Stopped service:</strong> resume the matching Sandbox instead of replacing it.</li>
+            <li><strong>Failed service:</strong> create a healthy replacement before retiring the prior resource.</li>
+            <li><strong>Unknown Dream outcome:</strong> surface the fenced phase; do not rerun the model automatically.</li>
+            <li><strong>Changed governed state:</strong> require a new packet and approval, not an old receipt.</li>
+            <li><strong>Missing endpoint ownership:</strong> fail preflight before Agent 365 registration is mutated.</li>
+          </ul>
+          <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../scripts/sandbox_services.py">Service recovery</a> · <a href="../bridge/scheduled_learning.py">Dream recovery</a> · <a href="../scripts/setup_agent365.py">Endpoint registration</a></p></aside>
+        </div>
+      </article>
+    </section>
+
+  </main>
+
+  <section class="takeaway" id="closing">
+    <p>Keep the gateway thin, the profile durable, and every authorization and recovery decision explicit.</p>
+  </section>
+
+  <div class="component-reference" data-popup-reference>
+    <h2 class="chapter-label">Component reference</h2>
+    <details class="component-detail" id="detail-agent365" open><summary>Agent 365 channel and identity binding</summary><div class="component-copy"><p class="detail-status">Channel identity</p><p>Each Worker has an Agent Identity and Agent User. Agent 365 binds its endpoint and permissions, then delivers Microsoft 365 activities to <code>/api/messages</code>. The Agents SDK authenticates incoming requests.</p></div></details>
+    <details class="component-detail" id="detail-gateway" open><summary>Gateway Sandbox</summary><div class="component-copy"><p class="detail-status">Always awake</p><p>The gateway authenticates activities, binds conversations, wakes the agent runtime, consumes Service Bus, and delivers replies. It stays awake for queued and post-acknowledgement work. Model calls and MCP traffic go directly from the runtime.</p></div></details>
+    <details class="component-detail" id="detail-wrapper" open><summary>Runtime wrapper</summary><div class="component-copy"><p class="detail-status">Runtime-local boundary</p><p>The wrapper binds sessions, serializes execution, and applies learning safeguards around the runtime API. It prevents concurrent writers and reports ambiguous interrupted work instead of silently rerunning it.</p></div></details>
+    <details class="component-detail" id="detail-hermes" open><summary>Agent loop</summary><div class="component-copy"><p class="detail-status">Agent behaviour</p><p>The agent runtime combines role, memory, and skills; calls the model; and selects authorized tools until it can respond. Private learned state stays with the Worker. Reasoning does not run in the gateway.</p></div></details>
+    <details class="component-detail" id="detail-identity-adapter" open><summary>Loopback MCP identity adapter</summary><div class="component-copy"><p class="detail-status">Runtime-local authentication</p><p>The adapter refreshes tokens for approved MCP endpoints. Autonomous tools use Agent Identity; supported Microsoft 365 calls use the fixed Agent User. It is not human on-behalf-of access or a model proxy.</p></div></details>
+    <details class="component-detail" id="detail-office-tools" open><summary>Collaboration MCP and reviewed Office tools</summary><div class="component-copy"><p class="detail-status">Private local editing</p><p>A loopback MCP wraps reviewed Office tools and Graph publication. It edits a private copy, checks meaning, and validates Open XML. New defects block upload; tooling is built into the runtime image.</p></div></details>
+    <details class="component-detail" id="detail-disk" open><summary>Worker Data Disk</summary><div class="component-copy"><p class="detail-status">Persistent private state</p><p>Memory, skills, sessions, cron, receipts, and document staging survive compute replacement. The profile belongs to the Worker, not each caller. Raw documents and private state stay out of shared learning exports.</p></div></details>
+    <details class="component-detail" id="detail-servicebus" open><summary>Service Bus queue and dead-letter handling</summary><div class="component-copy"><p class="detail-status">Per-Worker queue</p><p>The queue carries cron, Dream, and document-retry triggers, never prompts or document contents. The awake gateway receives with PeekLock and settles each message explicitly. Runtime cron sends as Agent Identity; gateway receive and retry send use the gateway managed identity.</p></div></details>
+    <details class="component-detail" id="detail-cron" open><summary>Native cron provider</summary><div class="component-copy"><p class="detail-status">Scheduled work</p><p>Schedules stay on the Data Disk. Cron sends the next occurrence to Service Bus; the gateway wakes the agent runtime when due. Proactive delivery requires a previously bound conversation. Scheduling is enabled per Worker.</p></div></details>
+    <details class="component-detail" id="detail-telemetry" open><summary>Observability and correlation</summary><div class="component-copy"><p class="detail-status">Cross-cutting metadata</p><p>Gateway, queue, model, and tool spans report timing, correlation, and usage to Azure Monitor. Default traces exclude prompts and document contents. Foundry registers the external agent; some platform hops retain correlation gaps.</p></div></details>
+    <details class="component-detail" id="detail-foundry" open><summary>Foundry model inference</summary><div class="component-copy"><p class="detail-status">Model API</p><p>The agent runtime calls Foundry directly through the native provider. Its managed identity and RBAC authorize inference; local authentication is disabled. The gateway is not an inference proxy.</p><p>The reference deployment uses the Entra-only public endpoint; the <a href="azure-implementation.html#ch-hardening">production target</a> adds a private endpoint.</p></div></details>
+    <details class="component-detail" id="detail-microsoft-tools" open><summary>Microsoft-hosted MCP tools</summary><div class="component-copy"><p class="detail-status">Public HTTPS</p><p>Use approved Microsoft-hosted tools, such as Azure DevOps and Microsoft 365 MCP integrations. Configure permissions for each service. Microsoft 365 operations use the approved Agent User flow; other services require their own supported connection.</p></div></details>
+    <details class="component-detail" id="detail-existing-mcp" open><summary>Existing private MCP</summary><div class="component-copy"><p class="detail-status">Customer-provided service</p><p>Connect to an MCP server already running in the customer network through private routing and DNS. Reuse its approved authentication and permissions; no new MCP host is needed in this solution.</p></div></details>
+    <details class="component-detail" id="detail-private-mcp" open><summary>Custom MCP</summary><div class="component-copy"><p class="detail-status">Optional adapter</p><p>Add an ACA-hosted adapter when a backend lacks MCP. It exposes a private MCP interface and reaches backend APIs through the workload VNet and enterprise hub. Use a supported private-ingress hosting configuration.</p></div></details>
+    <details class="component-detail" id="detail-graph" open><summary>Microsoft Graph under the Agent User</summary><div class="component-copy"><p class="detail-status">Deterministic file operations</p><p>Graph handles downloads, ETags, guarded uploads, sharing, and supported Excel writes. Calls use the fixed Agent User's approved permissions. Verify the recipient's access before delivering an output link.</p></div></details>
+    <details class="component-detail" id="detail-teams" open><summary>Teams and Microsoft 365 entry points</summary><div class="component-copy"><p class="detail-status">Reference implementation</p><p>Personal messages and explicit Agent User mentions are supported entry points. Delivered replies, selected reactions, Mail notifications, and Office comment events have workload-specific handling.</p><p>Shared groups are a shared audience. Private per-person delivery and human on-behalf-of identity are not implemented.</p></div></details>
+    <details class="component-detail" id="detail-runtime" open><summary>Agent runtime</summary><div class="component-copy"><p class="detail-status">ACA Sandbox</p><p>The gateway resumes or reuses agent compute; state survives on a separate Data Disk. One runtime writes the Worker profile at a time. It suspends to Disk after 30 idle minutes and resumes with the same ID.</p></div></details>
+    <details class="component-detail" id="detail-tools-loop" open><summary>Model and tool loop</summary><div class="component-copy"><p class="detail-status">Illustrated runtime behaviour</p><p>The agent runtime calls Foundry for reasoning and invokes authorized MCP/native tools as needed. These are separate calls with separate credentials and failure modes. An external tool can be private-network reachable yet still deny access.</p><p>The example is a functional sequence, not measured call counts, timing, or an assurance that every request needs every tool.</p></div></details>
+    <details class="component-detail" id="detail-document-source" open><summary>Locate and download the original</summary><div class="component-copy"><p class="detail-status">Reference document workflow</p><p>Work IQ helps discover the shared item and its meaning. Deterministic Graph access captures the source item identity and ETag and downloads the document into a private Worker workspace. A link alone is not proof of permission.</p></div></details>
+    <details class="component-detail" id="detail-document-stage" open><summary>Edit a private copy</summary><div class="component-copy"><p class="detail-status">Reference document workflow</p><p>Reviewed local Office tools apply only the requested change. Source bytes, excerpts, staged output, edit intent, and operation metadata remain private. These are not stored in Service Bus and are not exported as shared skills.</p></div></details>
+    <details class="component-detail" id="detail-document-validate" open><summary>Verify meaning and package validity</summary><div class="component-copy"><p class="detail-status">Reference document workflow</p><p>Verify the requested semantic change and validate Open XML against the Microsoft 365 target. Existing validation defects are a private baseline; newly introduced defects prevent publication. Package validity alone does not prove that the edit means what the user asked.</p></div></details>
+    <details class="component-detail" id="detail-document-publish" open><summary>ETag-guarded same-item publication</summary><div class="component-copy"><p class="detail-status">Reference document workflow</p><p>Publish to the original item using its source ETag. If the source changed, re-read it. Only reconstructible guarded edits may rebase; opaque transformations fail closed instead of overwriting coauthor changes.</p><p>Apply the body update before claiming success in comments or messages. A lock does not justify checking out the document to block other authors.</p></div></details>
+    <details class="component-detail" id="detail-document-retry" open><summary>Deterministic background publication</summary><div class="component-copy"><p class="detail-status">Reference document workflow / no repeated model call</p><p>The gateway schedules <code>document.publish.retry</code> with an opaque operation ID and later invokes a fixed runtime publication API. Bytes, edit intent, source ETag, recipient, and delivery reference stay on the Data Disk.</p><p>The checked-in retry choice uses a 24-hour deadline. At expiry or a terminal rebase conflict it produces an explicitly shared copy, not a false &ldquo;original updated&rdquo; result. Receipts protect state transitions but cannot make external delivery exactly-once. The duration is an implementation policy, not an Azure limit.</p></div></details>
+    <details class="component-detail" id="detail-document-choice" open><summary>Explicit user choice after a persistent lock</summary><div class="component-copy"><p class="detail-status">Reference document workflow</p><p>Offer reviewed actions: &ldquo;Keep trying original&rdquo; or &ldquo;Send shared copy now&rdquo;. Authenticated encrypted tokens bind the Worker, user, conversation, operation, and expiry; the gateway consumes actions idempotently. The agent does not invent raw action payloads.</p></div></details>
+    <details class="component-detail" id="detail-document-success" open><summary>Original item updated</summary><div class="component-copy"><p class="detail-status">Reference document workflow</p><p>A successful same-item write preserves item identity, URL, sharing context, comments, and version history. Record the mutation receipt and report the applied change. When the request originated in an Office comment, reply in that thread rather than an unrelated Teams chat.</p></div></details>
+    <details class="component-detail" id="detail-document-copy" open><summary>Explicitly shared copy</summary><div class="component-copy"><p class="detail-status">Reference document workflow / distinct outcome</p><p>Create a separate Agent User-owned copy and verify the intended user's write permission before delivering its link. An unshareable copy is removed. The response must state that the original was not changed and that the copy has separate comments, sharing, and history.</p></div></details>
+  </div>
+
+  <footer class="doc-footer">
+    <a href="../SPEC.md">Implementation contract</a>
+    <a href="adr/">Architecture decisions</a>
+    <a href="../DEMO.md">Demo prompts</a>
+  </footer>
+
+</div>
+
+</body>
+</html>
