@@ -26,7 +26,7 @@ Each Worker has a separate Terraform workspace, Agent 365 platform blueprint, Ag
 
 | Group | Responsibility |
 | --- | --- |
-| `gateway` | Agent 365 `/api/messages`, operator `/invoke`, runtime lifecycle, Teams delivery, and continuous Service Bus receive. Auto-suspend is disabled. |
+| `gateway` | Agent 365 `/api/messages`, operator `/invoke`, Teams delivery, continuous Service Bus receive, and generated-app publication. It calls the runtime only through `AGENT_RUNTIME_URL`. Auto-suspend is disabled. |
 | `runtime` | One Hermes writer, OnDemand compute, persistent Data Disk, native tools, memory, learning, and cron state. |
 | `private-mcp` | Incidents MCP, private ingress through the linked Express environment, application-level Entra authorization. |
 | `public-mcp` | Shipments MCP, public HTTPS, application-level Entra authorization. |
@@ -34,7 +34,17 @@ Each Worker has a separate Terraform workspace, Agent 365 platform blueprint, Ag
 
 The gateway does not proxy model inference, MCP traffic, or generated-app traffic. An Agent 365 HTTP acknowledgement can precede completion of detached work; gateway availability must cover that work and queue receive. Runtime and generated-app suspension are independent.
 
-Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. The runtime suspends to Disk after 30 idle minutes; resume restarts the process, keeps the Data Disk, and mints fresh identity tokens. Terminal `Failed` instances are replaced. An image change replaces gateway and MCP Sandboxes, which changes their native URLs; the runtime Data Disk remains separate. A profile is single-writer because it contains SQLite and transactional skill state.
+Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. The runtime suspends to Disk after five idle minutes; resume restarts the process, keeps the Data Disk, and mints fresh identity tokens. Attached Data Disk volumes require Disk mode; Memory mode is not supported with these volumes. An image change replaces gateway and MCP Sandboxes, which changes their native URLs; the runtime Data Disk remains separate. A profile is single-writer because it contains SQLite and transactional skill state.
+
+The native `keepalive` plugin wraps actual model and tool execution in `try/finally` activity scopes. The runtime wrapper uses the same supervisor for mutating HTTP requests, including deterministic cron/document work. While active, each process sends periodic GETs at roughly 60-second intervals to its own published `/health`, using platform-provided `ADC_SANDBOX_ID` and `ADC_PROXY_DNS_SUFFIX`. Loopback requests, outbound model calls and local CPU work do not reset platform idle time. There is no keepalive queue, external controller, durable busy ledger or additional Azure permission. An operation expires after 30 minutes or when its owning thread exits; expiry and ingress failures are logged. This limit applies to one uninterrupted operation, not the total multi-step agent task. Detached subprocesses outside a tracked operation and future schedules do not keep compute awake.
+
+Deployment owns runtime compute. After the gateway Sandbox publishes its native URL, deployment creates or reuses the runtime with that URL, its Data Disk and a fingerprint of every compute-defining setting. A changed fingerprint or Role Release replaces compute while retaining the Data Disk; a Role Release change first requires Worker Refresh readiness. Deployment also replaces terminal `Failed` compute, then verifies `/health` through the public OnDemand ingress before writing `AGENT_RUNTIME_URL` into gateway settings.
+
+The gateway has no runtime Sandbox Group role, Sandbox SDK runtime path, or runtime provisioning settings. Every gateway request, including Teams, document retry, Service Bus delivery and Dreaming, simply calls the runtime URL. OnDemand ingress wakes `Stopped` or `Suspended` compute; the adapter waits for wrapper `/health` and native `/v1/models` readiness. Missing or `Failed` compute returns an explicit error until deployment is rerun. Keepalive does not fix a long HTTP request timeout, guarantee crash recovery, or change Teams delivery.
+
+Gateway, runtime and MCP ports all use `OnDemand`. A request to a stopped `Manual` port returns `403` instead of waking compute; this previously disabled both MCP servers whenever they had been idle for 30 minutes. Runtime startup waits for loopback adapters to accept connections instead of using fixed sleeps, and the MCP adapter exchanges all upstream tokens concurrently while Hermes is still importing. On 2026-10-30, direct OnDemand Disk wake booted the VM in under a second, reached wrapper `/health` in about 4 seconds and the native API in about 18 seconds (20 seconds when both MCP Sandboxes were also stopped). Hermes completes MCP discovery before opening its API; the remaining floor is the first HTTPS flow over the private VNet path after resume, which took about 12 seconds while later requests took 0.6 seconds.
+
+A Service Bus message does not wake a Sandbox. The awake gateway is the queue consumer: it holds the PeekLock, renews it, checks schedule revisions and receipts, settles or dead-letters messages and posts Teams output through Agent 365. Its runtime call then wakes compute through ingress. Platform connector triggers are preview, do not list Service Bus as a Sandbox trigger source and do not provide this lock/settlement coupling, so none is attached to this queue.
 
 Deployment explicitly separates Terraform resources, identity reconciliation, image conversion, service creation, and endpoint capture. It does not use Terraform `local-exec`. Linking a Group to the private-ingress environment is irreversible.
 
@@ -48,16 +58,17 @@ Deployment explicitly separates Terraform resources, identity reconciliation, im
 | Agent 365 ingress | Microsoft 365 Agents SDK validates Activity Protocol authentication. |
 | Native cron Service Bus send | Worker Agent Identity with Data Sender, federated from runtime managed identity. |
 | Document-retry Service Bus send and queue receive | Gateway managed identity with Data Sender/Data Receiver; no Agent Identity exchange. |
+| Runtime compute lifecycle | Deployer only. The gateway managed identity has no role on the runtime Sandbox Group. |
 | Generated-app lifecycle | Gateway managed identity with Data Owner on that Worker's generated-app Group. |
 | Generated-app user access | Native Entra-authenticated port with explicit participant allowlist. |
 
-`autopilots_identity.mcp_proxy` is the required loopback-only Agent Identity/Agent User federation adapter. It acquires and refreshes fixed upstream MCP tokens; it is not a model proxy or human OBO implementation.
+`autopilots_identity.mcp_proxy` is the required loopback-only Agent Identity/Agent User federation adapter. It acquires and refreshes fixed upstream MCP tokens, reusing one blueprint exchange and prefetching all scopes at startup; it is not a model proxy or human OBO implementation.
 
 Private network access and authorization are independent. Runtime VNet attachment supplies routing/DNS; the Express environment's Private Endpoint restricts incidents ingress. Gateway and MCP native ports allow anonymous HTTPS transport, but their applications authenticate requests. Shipments accepts `Shipments.Read.All` application access or the separate `Shipments.Read` delegated BYO flow.
 
 Sandbox egress inspection remains enabled. Python clients trust the system certificate store through `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`; disabling TLS checks is not an authentication remedy.
 
-Registry conversion is deployment-only: the deployer submits native-v2 disk-image conversions that the runtime/gateway/private-MCP/public-MCP Sandbox Groups authenticate with their own managed identities (`AcrPull`), then passes ready image IDs to workloads. Gateway runtime startup uses `AGENT_RUNTIME_DISK_IMAGE_ID`. No registry token or admin credential exists; workloads have no conversion code path. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records the decision.
+Registry conversion is deployment-only: the deployer submits native-v2 disk-image conversions that the runtime/gateway/private-MCP/public-MCP Sandbox Groups authenticate with their own managed identities (`AcrPull`), then passes ready image IDs to workloads. Runtime deployment uses `AGENT_RUNTIME_DISK_IMAGE_ID`. No registry token or admin credential exists; workloads have no conversion code path. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records the decision.
 
 ## Messaging, events, and sessions
 
@@ -70,6 +81,10 @@ Registry conversion is deployment-only: the deployer submits native-v2 disk-imag
 - Stable `X-Hermes-Session-Key` includes Worker, source, authenticated user, and conversation/thread hash. `X-Hermes-Session-Id` is conversation/thread-based and time-bucketed. Group transcripts are shared despite user-specific memory keys.
 - `/new` and `/reset` create a distinct native session generation; native inventory preserves that selection across gateway restarts. Personal Memory and Work History remain on disk.
 - Email and Word/Excel/PowerPoint comment notifications use `/api/messages` and reply through the originating workload, not an arbitrary Teams channel. An email gets exactly one reply: Hermes either sends it with Mail tools and returns `NO_RESPONSE`, or returns only the body that the bridge sends.
+
+Teams currently receives a completed response through the Agents SDK, not raw model deltas. Personal/group chats show typing; eligible group requests also receive a temporary processing reaction. The bridge first removes provenance and UI control directives, reconciles learning and schedule bindings, then chooses text, a card, a reaction, or no visible reply. Streaming internal transport and streaming text to Teams are separate decisions.
+
+As checked on 2026-10-30, [Teams streaming documentation](https://learn.microsoft.com/microsoftteams/platform/bots/streaming-ux) describes non-notifying informative updates and one progressively populated message in personal, group and channel conversations with current SDKs. It limits a conversation to one open stream and a stream to ten minutes, and excludes proactive messaging. This documents Teams capability, not verified support for this Worker's Agent 365 identity/SDK path. Keep UI streaming disabled until that path and final-response filtering are explicitly validated.
 
 ## Persistent state
 
@@ -161,10 +176,13 @@ Native `llm_execution` and `tool_execution` callbacks are instrumented. A local 
 
 ## Current limitations
 
+The 2026-10-30 lifecycle pilot is deployed to `hermes2` only. It also exposed a separate cold-response long tail: a non-streaming upstream model call hit Hermes' 90-second no-response watchdog and retried. VM wake, native API readiness, model generation and Teams delivery are distinct timings; keepalive and UI streaming do not by themselves resolve that model-transport behavior.
+
 | Area | Boundary |
 | --- | --- |
 | Fresh Worker bootstrap | `scripts.worker_lifecycle bootstrap` needs a tenant administrator, interactive admin consent, available licenses, and a manual package upload in Microsoft 365 admin center. |
-| Gateway endpoint | A gateway image change replaces its Sandbox and URL; Agent 365 keeps sending to the old URL until a direct blueprint owner updates the endpoint ([DEPLOYMENT.md](DEPLOYMENT.md) step 6). |
+| Gateway endpoint | A gateway image change replaces its Sandbox and URL, which also replaces runtime compute because the runtime environment contains that URL. Agent 365 keeps sending to the old URL until a direct blueprint owner updates the endpoint ([DEPLOYMENT.md](DEPLOYMENT.md) step 6). |
+| Runtime repair | Ingress wakes only existing compute. Deleted or `Failed` runtime compute is replaced by rerunning service deployment, not by the gateway. |
 | Registry conversion | SDK 0.1.0b4 does not expose the native-v2 disk-image endpoint, so the deployer calls it through the SDK client pipeline ([ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). The four workload identities can pull from the demo registry. |
 | Hermes version | Hermes 0.19.0 is the newest release on PyPI and the approved feed; 0.20+ ships only as GitHub releases, which this environment must not install. |
 | Work IQ routes | Only the per-server Work IQ MCP servers are used. The unified Work IQ MCP, A2A, and REST routes reject the Agent User under the current tenant billing and Copilot licensing. |

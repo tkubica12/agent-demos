@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,9 @@ from azure.identity import DefaultAzureCredential
 
 
 HERMES_API_PORT = 8642
+RUNTIME_IDLE_SECONDS = 300
+RUNTIME_ACTIVATION_MODE = "OnDemand"
+RUNTIME_READY_TIMEOUT_SECONDS = 300
 WORKER_REFRESH_PREFLIGHT_TIMEOUT_SECONDS = 300
 WORKER_REFRESH_RETRY_SECONDS = 3
 WORKER_REFRESH_TRANSIENT_STATUS_CODES = {502, 503, 504}
@@ -131,10 +135,6 @@ def resolve_executable(name: str) -> str:
         if azure_cli.exists():
             return str(azure_cli)
     raise FileNotFoundError(f"Could not find executable '{name}' on PATH.")
-
-
-def get_config(name: str, fallback: str = "") -> str:
-    return os.getenv(name) or fallback
 
 
 def existing_named(items, name: str):
@@ -364,12 +364,15 @@ def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
     return {key: value for key, value in environment.items() if value}
 
 
-def runtime_telemetry_environment(config: AgentSandboxConfig) -> dict[str, str]:
+def runtime_telemetry_environment(
+    config: AgentSandboxConfig,
+    settings: Mapping[str, str],
+) -> dict[str, str]:
     environment = {
         key: value
         for key in ("APPLICATIONINSIGHTS_CONNECTION_STRING", "FOUNDRY_AGENT_NAME", "OTEL_AGENT_ID",
                     "FOUNDRY_PROJECT_ENDPOINT", "OTEL_TRACES_SAMPLER_ARG")
-        if (value := os.getenv(key))
+        if (value := settings.get(key))
     }
     image = config.runtime_image_reference or config.image_name
     environment["OTEL_CONTAINER_IMAGE"] = image
@@ -396,6 +399,7 @@ def hermes_runtime_environment(
     scheduler_max_lock_renewal_seconds: int = 1800,
     servicebus_dream_enabled: bool = False,
     servicebus_dream_cron_expression: str = "0 2 * * *",
+    bridge_url: str = "",
 ) -> dict[str, str]:
     environment = {
         "API_SERVER_ENABLED": "true",
@@ -425,7 +429,7 @@ def hermes_runtime_environment(
             "true" if servicebus_dream_enabled else "false"
         ),
         "SERVICEBUS_DREAM_CRON_EXPRESSION": servicebus_dream_cron_expression,
-        "AUTOPILOT_BRIDGE_URL": get_config("AUTOPILOT_BRIDGE_URL"),
+        "AUTOPILOT_BRIDGE_URL": bridge_url,
     }
     if foundry_openai_base_url:
         environment["FOUNDRY_OPENAI_BASE_URL"] = foundry_openai_base_url
@@ -463,6 +467,7 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
             overrides.get("servicebus_dream_cron_expression")
             or "0 2 * * *"
         ),
+        bridge_url=overrides.get("bridge_url") or "",
     )
     config = AgentSandboxConfig(
         subscription_id=overrides.get("subscription_id") or "",
@@ -497,7 +502,7 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
         agent365_agent_user_id=overrides.get("agent365_agent_user_id") or "",
         runtime_image_reference=overrides.get("runtime_image_reference") or "",
-        managed_identity_client_id=overrides.get("managed_identity_client_id") or os.getenv("AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID", ""),
+        managed_identity_client_id=overrides.get("managed_identity_client_id") or "",
         disk_image_id=overrides.get("disk_image_id") or "",
         disk_image_name=overrides.get("disk_image_name") or "hermes-api-server-image",
         data_volume_name=overrides.get("data_volume_name") or "hermes-data",
@@ -516,11 +521,25 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         assignment_scope=overrides.get("assignment_scope") or "",
         collective_learning_approval_public_key=overrides.get("collective_learning_approval_public_key") or "",
         previous_api_server_key=overrides.get("previous_api_server_key") or "",
-        runtime_config_revision=overrides.get("runtime_config_revision") or "",
     )
     environment.update(agent_mcp_environment(config))
-    environment.update(runtime_telemetry_environment(config))
-    return config
+    environment.update(
+        runtime_telemetry_environment(config, overrides.get("telemetry_settings") or {})
+    )
+    return replace(config, runtime_config_revision=runtime_config_revision(config))
+
+
+def runtime_config_revision(config: AgentSandboxConfig) -> str:
+    """Fingerprint every desired runtime property that requires replacing compute."""
+    desired = {
+        "environment": config.environment,
+        "resources": [config.cpu, config.memory, config.root_disk_size],
+        "idleSeconds": RUNTIME_IDLE_SECONDS,
+        "activationMode": RUNTIME_ACTIVATION_MODE,
+        "diskImageId": config.disk_image_id,
+        "command": [*config.command, *config.args],
+    }
+    return hashlib.sha256(json.dumps(desired, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
 def create_agent_sandbox(
@@ -549,7 +568,7 @@ def create_agent_sandbox(
         "lifecycle": {
             "autoSuspendPolicy": {
                 "enabled": True,
-                "interval": 1800,
+                "interval": RUNTIME_IDLE_SECONDS,
                 "mode": "Disk",
             },
         },
@@ -559,7 +578,10 @@ def create_agent_sandbox(
             SandboxVolume(config.data_volume_name, config.data_mount_path)._to_dict(),
         ],
         "ports": [
-            AddPortRequest(config.port, protocol="Http", auth=PortAuthConfig(anonymous=True))._to_dict(),
+            AddPortRequest(
+                config.port, protocol="Http", activation_mode=RUNTIME_ACTIVATION_MODE,
+                auth=PortAuthConfig(anonymous=True),
+            )._to_dict(),
         ],
         "entrypoint": list(config.command),
         "cmd": list(config.args),
@@ -581,32 +603,6 @@ def create_agent_sandbox(
     raise TimeoutError(f"Timed out waiting for sandbox {sandbox_id} to start.")
 
 
-def ensure_sandbox_runtime_process(
-    sandbox_client,
-    config: AgentSandboxConfig,
-) -> None:
-    command = shlex.join([*config.command, *config.args])
-    launch = (
-        f"if curl -fsS --max-time 2 "
-        f"http://127.0.0.1:{config.port}{config.health_path} "
-        ">/dev/null 2>&1; "
-        "then exit 0; fi; "
-        f"if pgrep -f -x {shlex.quote(command)} >/dev/null 2>&1; "
-        "then exit 0; fi; "
-        f"nohup {command} "
-        ">/tmp/autopilot-runtime.log 2>&1 </dev/null & "
-        "echo $! >/tmp/autopilot-runtime.pid"
-    )
-    result = sandbox_client.exec(
-        f"sh -lc {shlex.quote(launch)}"
-    )
-    if getattr(result, "exit_code", 1) != 0:
-        raise RuntimeError(
-            "Could not start the Sandbox runtime process: "
-            + str(getattr(result, "stderr", "") or "")
-        )
-
-
 def create_sandbox_group_client(config: AgentSandboxConfig, credential: TokenCredential | None = None) -> SandboxGroupClient:
     return SandboxGroupClient(
         endpoint_for_region(config.region),
@@ -617,18 +613,26 @@ def create_sandbox_group_client(config: AgentSandboxConfig, credential: TokenCre
     )
 
 
-def ensure_agent_sandbox(
+def port_url(ports: list[Any], port: int) -> str | None:
+    for item in ports or []:
+        number = item.get("port") if isinstance(item, dict) else getattr(item, "port", None)
+        if number == port:
+            return item.get("url") if isinstance(item, dict) else getattr(item, "url", None)
+    return None
+
+
+def deploy_agent_sandbox(
     config: AgentSandboxConfig,
     *,
     credential: TokenCredential | None = None,
-    wait_for_ready_seconds: int = 20,
 ) -> AgentSandboxResult:
+    """Reconcile runtime compute at deployment; later requests wake it through OnDemand ingress."""
     if not config.resource_group:
-        raise ValueError("AZURE_RESOURCE_GROUP is required. Use the gateway deployment settings or pass --resource-group.")
+        raise ValueError("AZURE_RESOURCE_GROUP is required for runtime deployment.")
     if not config.sandbox_group:
-        raise ValueError("AZURE_SANDBOX_GROUP is required. Use the gateway deployment settings or pass --sandbox-group.")
+        raise ValueError("AZURE_SANDBOX_GROUP is required for runtime deployment.")
     if not config.region:
-        raise ValueError("AZURE_REGION is required. Use the gateway deployment settings or pass --region.")
+        raise ValueError("AZURE_REGION is required for runtime deployment.")
     if not config.disk_image_id:
         raise ValueError("AGENT_RUNTIME_DISK_IMAGE_ID is required. Deploy the Sandbox disk images before starting the runtime.")
     client = create_sandbox_group_client(config, credential)
@@ -643,10 +647,8 @@ def ensure_agent_sandbox(
     )
     reused_existing_sandbox = existing_sandbox is not None
     if existing_sandbox:
-        sandbox_id = existing_sandbox["id"]
-        sandbox_client = client.get_sandbox_client(sandbox_id)
-        sandbox_client.ensure_running(timeout=600)
-        current = client.get_sandbox(sandbox_id)
+        sandbox_id = str(existing_sandbox["id"])
+        endpoint_url = port_url(existing_sandbox.get("ports") or [], config.port)
     else:
         volume = existing_named(client.list_volumes(), config.data_volume_name)
         if volume is None:
@@ -656,27 +658,19 @@ def ensure_agent_sandbox(
                 size=config.data_volume_size,
                 labels=runtime_labels(config),
             )
-        sandbox_client, current = create_agent_sandbox(
+        _, current = create_agent_sandbox(
             client,
             config=config,
             disk_id=config.disk_image_id,
         )
-
-    ensure_sandbox_runtime_process(sandbox_client, config)
-    sandbox_id = getattr(current, "id")
-    if wait_for_ready_seconds > 0:
-        time.sleep(wait_for_ready_seconds)
-    current = sandbox_client.get()
-    ports = getattr(current, "ports", []) or []
-    endpoint_url = None
-    for port in ports:
-        if getattr(port, "port", None) == config.port:
-            endpoint_url = getattr(port, "url", None)
-            break
+        sandbox_id = str(getattr(current, "id"))
+        endpoint_url = port_url(getattr(current, "ports", []) or [], config.port)
+    if not endpoint_url:
+        raise RuntimeError(f"Runtime Sandbox {sandbox_id} does not publish port {config.port}.")
 
     return AgentSandboxResult(
         sandbox_id=sandbox_id,
-        endpoint_url=endpoint_url,
+        endpoint_url=str(endpoint_url).rstrip("/"),
         reused_existing_sandbox=reused_existing_sandbox,
         runtime_kind=config.runtime_kind,
         port=config.port,
@@ -689,7 +683,34 @@ def ensure_agent_sandbox(
     )
 
 
-def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
+def require_runtime_ready(url: str, *, timeout: int = RUNTIME_READY_TIMEOUT_SECONDS) -> float:
+    """Wake runtime compute through its OnDemand port and return seconds until the wrapper is healthy."""
+    started = time.monotonic()
+    detail = ""
+    while time.monotonic() - started < timeout:
+        try:
+            with urllib.request.urlopen(f"{url.rstrip('/')}/health", timeout=60) as response:
+                if response.status == 200:
+                    return time.monotonic() - started
+                detail = f"HTTP {response.status}"
+        except urllib.error.HTTPError as exc:
+            detail = f"HTTP {exc.code}"
+        except (urllib.error.URLError, TimeoutError) as exc:
+            detail = str(exc)
+        time.sleep(2)
+    raise TimeoutError(f"Runtime at {url} did not become healthy: {detail}")
+
+
+def config_from_environment(
+    environment: Mapping[str, str] | None = None,
+    **overrides: Any,
+) -> AgentSandboxConfig:
+    """Build runtime configuration from deployment settings; os.environ is only the operator default."""
+    settings = os.environ if environment is None else environment
+
+    def get_config(name: str, fallback: str = "") -> str:
+        return settings.get(name) or fallback
+
     subscription_id = overrides.get("subscription_id") or get_config("AZURE_SUBSCRIPTION_ID") or run_text(["az", "account", "show", "--query", "id", "-o", "tsv"])
     common = {
         "subscription_id": subscription_id,
@@ -756,6 +777,8 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
     }
     return hermes_sandbox_config(
         **common,
+        bridge_url=overrides.get("bridge_url") or get_config("AUTOPILOT_BRIDGE_URL"),
+        telemetry_settings=settings,
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or get_config("FOUNDRY_OPENAI_BASE_URL"),
         model_deployment=overrides.get("model_deployment") or get_config("HERMES_MODEL", "gpt-6-1-sol"),
         api_server_key=overrides.get("api_server_key") or get_config("API_SERVER_KEY"),
@@ -773,9 +796,5 @@ def config_from_environment(**overrides: Any) -> AgentSandboxConfig:
         previous_api_server_key=(
             overrides.get("previous_api_server_key")
             or get_config("PREVIOUS_API_SERVER_KEY")
-        ),
-        runtime_config_revision=(
-            overrides.get("runtime_config_revision")
-            or get_config("RUNTIME_CONFIG_REVISION")
         ),
     )

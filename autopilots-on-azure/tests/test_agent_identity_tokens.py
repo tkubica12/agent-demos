@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 
@@ -78,6 +79,35 @@ class AgentIdentityTokenProviderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[2]["grant_type"], "user_fic")
         self.assertEqual(calls[2]["user_id"], "user-1")
         self.assertEqual(calls[2]["user_federated_identity_credential"], "agent-exchange-token")
+
+    async def test_independent_scopes_share_one_blueprint_exchange_and_run_concurrently(self) -> None:
+        calls: list[dict[str, str]] = []
+
+        class ScopeClient(FakeClient):
+            async def post(self, url: str, data: dict[str, str]) -> FakeResponse:
+                self.calls.append(data)
+                await asyncio.sleep(0.01)
+                return FakeResponse({"access_token": f"{data['grant_type']}:{data['scope']}", "expires_in": 3600})
+
+        provider = AgentIdentityTokenProvider(
+            AgentIdentityTokenConfig("tenant-1", "blueprint-1", "agent-1", "user-1"),
+            credential_factory=FakeCredential,
+            client_factory=lambda **kwargs: ScopeClient(calls, [], **kwargs),
+        )
+
+        tokens = await asyncio.gather(
+            provider.get_agent_token("api://private/.default"),
+            provider.get_agent_token("api://public/.default"),
+            provider.get_agent_user_token("mail-resource/.default"),
+            provider.get_agent_user_token("teams-resource/.default"),
+        )
+
+        self.assertEqual(tokens[0], "client_credentials:api://private/.default")
+        self.assertEqual(tokens[3], "user_fic:teams-resource/.default")
+        self.assertEqual(sum(call["client_id"] == "blueprint-1" for call in calls), 1)
+        self.assertEqual(sum(call["scope"] == "api://AzureADTokenExchange/.default" and call["client_id"] == "agent-1"
+                             for call in calls), 1)
+        self.assertEqual(len(calls), 6)
 
 
 if __name__ == "__main__":

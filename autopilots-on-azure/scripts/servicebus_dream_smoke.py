@@ -65,14 +65,13 @@ def main() -> None:
         raise RuntimeError("Queue-driven Dreaming is not enabled.")
 
     key = str(tfvars["api_server_key"])
-    bridge_url = str(outputs["bridge_url"]).rstrip("/")
+    runtime_url = str(outputs["runtime_url"]).rstrip("/")
     operator_headers = {"X-Autopilot-Key": key}
     resource_group = str(platform["resource_group_name"])
     namespace = str(platform["scheduler_servicebus_namespace_name"])
     queue = str(outputs["scheduler_servicebus_queue_name"])
     gateway_before = require_awake_gateway(outputs)
     job_id = ""
-    gateway_url = ""
 
     def queue_counts() -> dict[str, Any]:
         return az_json(
@@ -83,17 +82,10 @@ def main() -> None:
     counts_before = queue_counts()
 
     with httpx.Client(timeout=900) as client:
-        runtime = request_with_retry(
+        diagnostics = request_with_retry(
             client,
-            "POST",
-            f"{bridge_url}/internal/runtime/ensure",
-            headers=operator_headers,
-            timeout=300,
-        )
-        runtime.raise_for_status()
-        gateway_url = str(runtime.json()["gatewayUrl"]).rstrip("/")
-        diagnostics = client.get(
-            f"{gateway_url}/internal/cron/diagnostics",
+            "GET",
+            f"{runtime_url}/internal/cron/diagnostics",
             headers=operator_headers,
             timeout=120,
         )
@@ -102,7 +94,7 @@ def main() -> None:
         schedule_before = schedule_definition(job)
         job_id = str(job["id"])
         enqueued = client.post(
-            f"{gateway_url}/internal/cron/system/run-now",
+            f"{runtime_url}/internal/cron/system/run-now",
             headers=operator_headers,
             json={},
             timeout=120,
@@ -112,23 +104,12 @@ def main() -> None:
         occurrence_id = str(enqueued.json()["occurrenceId"])
 
         def receipt_probe() -> dict[str, Any]:
-            nonlocal gateway_url
-            runtime_response = request_with_retry(
+            response = request_with_retry(
                 client,
-                "POST",
-                f"{bridge_url}/internal/runtime/ensure",
+                "GET",
+                f"{runtime_url}/internal/cron/diagnostics",
                 headers=operator_headers,
                 attempts=2,
-                timeout=120,
-            )
-            runtime_response.raise_for_status()
-            current_gateway = str(
-                runtime_response.json()["gatewayUrl"]
-            ).rstrip("/")
-            gateway_url = current_gateway
-            response = client.get(
-                f"{current_gateway}/internal/cron/diagnostics",
-                headers=operator_headers,
                 timeout=120,
             )
             response.raise_for_status()
@@ -167,8 +148,8 @@ def main() -> None:
         if int(counts_after.get("deadLetterMessageCount") or 0) > int(counts_before.get("deadLetterMessageCount") or 0):
             raise RuntimeError("A new dead-letter message appeared during the Dreaming smoke.")
         result["queueCounts"] = counts_after
-        observed = client.get(
-            f"{gateway_url}/internal/cron/diagnostics", headers=operator_headers, timeout=120,
+        observed = request_with_retry(
+            client, "GET", f"{runtime_url}/internal/cron/diagnostics", headers=operator_headers, timeout=120,
         )
         observed.raise_for_status()
         schedule_after = schedule_definition(system_job(observed.json()))

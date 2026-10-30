@@ -228,9 +228,7 @@ class DemoOpsTests(unittest.TestCase):
         def transport(request):
             calls.append((request.method, str(request.url)))
             path = request.url.path
-            if path == "/internal/runtime/ensure":
-                payload = {"gatewayUrl": "https://runtime.example"}
-            elif path == "/api/jobs" and request.method == "POST":
+            if path == "/api/jobs" and request.method == "POST":
                 payload = {"job": {"id": "smoke-job"}}
             elif path == "/internal/cron/jobs":
                 payload = {"jobs": [{"id": "smoke-job", "externallyScheduled": True, "revision": "revision"}]}
@@ -244,7 +242,7 @@ class DemoOpsTests(unittest.TestCase):
         config.read_text.return_value = json.dumps({"api_server_key": "unit-test-key"})
         output_file = MagicMock()
         output_file.read_text.return_value = json.dumps({
-            **self.outputs(), "user_scheduling_enabled": True,
+            **self.outputs(), "user_scheduling_enabled": True, "runtime_url": "https://runtime.example/",
             "bridge_url": "https://gateway.example", "scheduler_servicebus_queue_name": "worker-queue",
         })
         client = httpx.Client(transport=httpx.MockTransport(transport))
@@ -265,7 +263,8 @@ class DemoOpsTests(unittest.TestCase):
             patch("builtins.print") as printed,
         ):
             user_smoke.main()
-        self.assertIn(("POST", "https://gateway.example/internal/runtime/ensure"), calls)
+        self.assertFalse(any("gateway.example" in url for _, url in calls))
+        self.assertEqual(calls[0], ("GET", "https://runtime.example/v1/models"))
         self.assertIn(("DELETE", "https://runtime.example/api/jobs/smoke-job"), calls)
         self.assertEqual(sum(method == "POST" and url.endswith("/api/jobs") for method, url in calls), 1)
         result = json.loads(printed.call_args.args[0])
@@ -282,9 +281,7 @@ class DemoOpsTests(unittest.TestCase):
 
         def transport(request):
             calls.append((request.method, str(request.url)))
-            if request.url.path == "/internal/runtime/ensure":
-                payload = {"gatewayUrl": "https://runtime.example"}
-            elif request.url.path == "/internal/cron/system/run-now":
+            if request.url.path == "/internal/cron/system/run-now":
                 payload = {"revision": "revision", "occurrenceId": "adhoc-one"}
             else:
                 payload = {"jobs": [job], "systemReceipts": [receipt]}
@@ -294,7 +291,7 @@ class DemoOpsTests(unittest.TestCase):
         config.read_text.return_value = json.dumps({"api_server_key": "unit-test-key"})
         output_file = MagicMock()
         output_file.read_text.return_value = json.dumps({
-            **self.outputs(), "servicebus_dream_enabled": True,
+            **self.outputs(), "servicebus_dream_enabled": True, "runtime_url": "https://runtime.example",
             "bridge_url": "https://gateway.example", "scheduler_servicebus_queue_name": "worker-queue",
         })
         client = httpx.Client(transport=httpx.MockTransport(transport))
@@ -312,7 +309,8 @@ class DemoOpsTests(unittest.TestCase):
             patch("builtins.print") as printed,
         ):
             dream_smoke.main()
-        writes = [(method, url) for method, url in calls if method != "GET" and not url.endswith("/internal/runtime/ensure")]
+        self.assertFalse(any("gateway.example" in url for _, url in calls))
+        writes = [(method, url) for method, url in calls if method != "GET"]
         self.assertEqual(writes, [("POST", "https://runtime.example/internal/cron/system/run-now")])
         result = json.loads(printed.call_args.args[0])
         self.assertTrue(result["productionScheduleUnchanged"])

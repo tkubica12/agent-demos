@@ -502,7 +502,7 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
             {
                 "runtime": "hermes",
                 "found": False,
-                "message": "No matching sandbox found. The next bridge invoke will create one if the runtime is configured.",
+                "message": "No matching sandbox found. Rerun deploy_apps_runtime --deploy-services to create runtime compute.",
             }
         )
         return 0
@@ -529,7 +529,10 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
     ) as group:
         group.get_sandbox_client(sandbox_id).begin_delete(polling_timeout=args.timeout).result()
     summary["deleted"] = True
-    summary["next"] = f"Run `uv run python -m scripts.demo_ops smoke --state-name {args.state_name or 'hermes'}` to create a fresh sandbox."
+    summary["next"] = (
+        "Run `uv run python -m scripts.deploy_apps_runtime "
+        f"--state-name {args.state_name or 'hermes'} --deploy-services --capture` to create fresh runtime compute."
+    )
     print_json(summary)
     return 0
 

@@ -1,6 +1,9 @@
 output "worker_id" {
   value = var.autopilot_name
 }
+output "deployer_principal_id" {
+  value = var.deployer_principal_id
+}
 output "agent_runtime" {
   value = var.agent_runtime
 }

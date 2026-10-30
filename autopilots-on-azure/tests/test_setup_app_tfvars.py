@@ -10,6 +10,7 @@ from scripts.setup_app_tfvars import (
     default_data_volume_name,
     existing_app_tfvars,
     load_or_create_collective_approval_identity,
+    resolve_deployer_principal_id,
     runtime_app_tfvars_path,
     runtime_outputs_path,
     runtime_workspace,
@@ -17,6 +18,25 @@ from scripts.setup_app_tfvars import (
 
 
 class SetupAppTfvarsTests(unittest.TestCase):
+    def test_existing_deployer_does_not_follow_the_current_login(self):
+        original = "11111111-2222-3333-4444-555555555555"
+        with patch.object(setup_app_tfvars, "output") as current_login:
+            self.assertEqual(
+                resolve_deployer_principal_id({"deployer_principal_id": original}), original,
+            )
+            current_login.assert_not_called()
+
+    def test_missing_original_deployer_never_silently_grants_the_current_user(self):
+        with patch.object(setup_app_tfvars, "output") as current_login:
+            with self.assertRaisesRegex(ValueError, "original principal"):
+                resolve_deployer_principal_id({"autopilot_name": "existing-worker"})
+            current_login.assert_not_called()
+
+    def test_fresh_worker_pins_its_initial_deployer(self):
+        principal = "11111111-2222-3333-4444-555555555555"
+        with patch.object(setup_app_tfvars, "output", return_value=principal):
+            self.assertEqual(resolve_deployer_principal_id({}), principal)
+
     def test_generated_blueprint_loading_is_keyless_and_does_not_decrypt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

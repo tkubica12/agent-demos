@@ -15,13 +15,10 @@ from urllib.parse import quote, unquote
 from datetime import datetime, timezone
 
 import httpx
-from azure.core.credentials import TokenCredential
-from azure.identity import DefaultAzureCredential
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
 from bridge.telemetry import runtime_trace_headers
-from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, ensure_agent_sandbox
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
 ROLE_POLICY_REFERENCE = (
@@ -91,8 +88,9 @@ def _env_optional(*names: str, default: str = "") -> str:
     return value if value is not None else default
 
 
-def hermes_sandbox_config_from_env() -> AgentSandboxConfig:
-    return config_from_environment(api_server_key=_env_required("API_SERVER_KEY"))
+def runtime_url_from_env() -> str:
+    """Native OnDemand runtime endpoint captured at deployment; requests wake suspended compute."""
+    return _env_required("AGENT_RUNTIME_URL").rstrip("/")
 
 
 def _clean_header_part(value: str, *, default: str) -> str:
@@ -368,19 +366,19 @@ class HermesRuntimeAdapter:
     def __init__(
         self,
         *,
-        sandbox_lock: asyncio.Lock | None = None,
         learning_lock: asyncio.Lock | None = None,
-        credential_factory: Callable[[], TokenCredential] = DefaultAzureCredential,
-        sandbox_config_factory: Callable[[], AgentSandboxConfig] = hermes_sandbox_config_from_env,
-        ensure_sandbox: Callable[..., Any] = ensure_agent_sandbox,
+        runtime_url_factory: Callable[[], str] = runtime_url_from_env,
         client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient,
     ) -> None:
-        self._sandbox_lock = sandbox_lock or asyncio.Lock()
         self._learning_lock = learning_lock or asyncio.Lock()
-        self._credential_factory = credential_factory
-        self._sandbox_config_factory = sandbox_config_factory
-        self._ensure_sandbox = ensure_sandbox
+        self._runtime_url_factory = runtime_url_factory
         self._client_factory = client_factory
+
+    async def _ready_runtime(self) -> tuple[str, str]:
+        base_url = self._runtime_url_factory().rstrip("/")
+        api_key = _env_required("API_SERVER_KEY")
+        await self._wait_for_health(base_url, api_key)
+        return base_url, api_key
 
     async def invoke(self, request: AgentRequest) -> AgentResponse:
         if session_reset_command(request.prompt):
@@ -421,21 +419,7 @@ class HermesRuntimeAdapter:
         self,
         request: AgentRequest,
     ) -> AgentResponse:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(
-                self._ensure_sandbox,
-                config,
-                credential=credential,
-            )
-        if not sandbox.endpoint_url:
-            raise RuntimeError(
-                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-            )
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
+        base_url, api_key = await self._ready_runtime()
         transcript_id = (
             f"{_hermes_transcript_id(request)}:new:{uuid.uuid4().hex[:12]}"
         )
@@ -450,27 +434,11 @@ class HermesRuntimeAdapter:
                 "Started a new topic. The previous transcript is no longer "
                 "in the active context; durable Hermes memory remains available."
             ),
-            raw={
-                "sessionReset": "completed",
-                "sandboxId": sandbox.sandbox_id,
-                "gatewayUrl": sandbox.endpoint_url,
-                "reusedExistingSandbox": (
-                    sandbox.reused_existing_sandbox
-                ),
-            },
+            raw={"sessionReset": "completed", "runtimeUrl": base_url},
         )
 
     async def _invoke_with_learning_transaction(self, request: AgentRequest) -> AgentResponse:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(self._ensure_sandbox, config, credential=credential)
-        if not sandbox.endpoint_url:
-            raise RuntimeError(f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port.")
-
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
+        base_url, api_key = await self._ready_runtime()
         cron_jobs_before: dict[str, str] = {}
         delivery_reference = request.metadata.get("deliveryReference")
         if _configured_env("USER_SCHEDULING_ENABLED") == "true":
@@ -637,10 +605,7 @@ class HermesRuntimeAdapter:
         return AgentResponse(
             text=visible_text,
             raw={
-                "sandboxId": sandbox.sandbox_id,
-                "gatewayUrl": sandbox.endpoint_url,
-                "reusedExistingSandbox": sandbox.reused_existing_sandbox,
-                "dataVolume": sandbox.data_volume,
+                "runtimeUrl": base_url,
                 "hermesEndpoint": endpoint,
                 "payload": payload,
                 "learningReconciliation": learning_submission,
@@ -713,9 +678,7 @@ class HermesRuntimeAdapter:
                         "raw": agent_response.raw,
                     }},
                 )
-        base_url = str(agent_response.raw.get("gatewayUrl") or "").rstrip("/")
-        if not base_url:
-            raise RuntimeError("Hermes dream run did not return a gateway URL.")
+        base_url = self._runtime_url_factory().rstrip("/")
         api_key = _env_required("API_SERVER_KEY")
         async with self._client_factory(timeout=30) as client:
             response = await client.get(
@@ -827,22 +790,8 @@ class HermesRuntimeAdapter:
         revision: str,
     ) -> dict[str, Any]:
         async with self._learning_lock:
-            config = self._sandbox_config_factory()
-            credential = self._credential_factory()
-            async with self._sandbox_lock:
-                sandbox = await asyncio.to_thread(
-                    self._ensure_sandbox,
-                    config,
-                    credential=credential,
-                )
-            if not sandbox.endpoint_url:
-                raise RuntimeError(
-                    f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-                )
-            base_url = sandbox.endpoint_url.rstrip("/")
-            api_key = _env_required("API_SERVER_KEY")
-            await self._wait_for_health(base_url, api_key)
-            result = await self._cron_request(
+            base_url, api_key = await self._ready_runtime()
+            return await self._cron_request(
                 base_url,
                 api_key,
                 "POST",
@@ -850,34 +799,6 @@ class HermesRuntimeAdapter:
                 body={"jobId": job_id, "revision": revision},
                 timeout=1800,
             )
-            return {
-                **result,
-                "sandboxId": sandbox.sandbox_id,
-                "reusedExistingSandbox": sandbox.reused_existing_sandbox,
-            }
-
-    async def ensure_runtime(self) -> dict[str, Any]:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(
-                self._ensure_sandbox,
-                config,
-                credential=credential,
-            )
-        if not sandbox.endpoint_url:
-            raise RuntimeError(
-                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-            )
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
-        return {
-            "sandboxId": sandbox.sandbox_id,
-            "gatewayUrl": sandbox.endpoint_url,
-            "reusedExistingSandbox": sandbox.reused_existing_sandbox,
-            "dataVolume": sandbox.data_volume,
-        }
 
     async def pending_document_choices(
         self,
@@ -908,21 +829,7 @@ class HermesRuntimeAdapter:
         self,
         reference_key: str,
     ) -> dict[str, Any]:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(
-                self._ensure_sandbox,
-                config,
-                credential=credential,
-            )
-        if not sandbox.endpoint_url:
-            raise RuntimeError(
-                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-            )
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
+        base_url, api_key = await self._ready_runtime()
         return await self._cron_request(
             base_url,
             api_key,
@@ -1025,22 +932,8 @@ class HermesRuntimeAdapter:
         body: dict[str, Any],
     ) -> dict[str, Any]:
         async with self._learning_lock:
-            config = self._sandbox_config_factory()
-            credential = self._credential_factory()
-            async with self._sandbox_lock:
-                sandbox = await asyncio.to_thread(
-                    self._ensure_sandbox,
-                    config,
-                    credential=credential,
-                )
-            if not sandbox.endpoint_url:
-                raise RuntimeError(
-                    f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-                )
-            base_url = sandbox.endpoint_url.rstrip("/")
-            api_key = _env_required("API_SERVER_KEY")
-            await self._wait_for_health(base_url, api_key)
-            result = await self._cron_request(
+            base_url, api_key = await self._ready_runtime()
+            return await self._cron_request(
                 base_url,
                 api_key,
                 "POST",
@@ -1048,13 +941,6 @@ class HermesRuntimeAdapter:
                 body=body,
                 timeout=300,
             )
-            return {
-                **result,
-                "sandboxId": sandbox.sandbox_id,
-                "reusedExistingSandbox": (
-                    sandbox.reused_existing_sandbox
-                ),
-            }
 
     async def acknowledge_cron_delivery(
         self,
@@ -1063,21 +949,7 @@ class HermesRuntimeAdapter:
         revision: str,
         delivery_activity_id: str = "",
     ) -> dict[str, Any]:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(
-                self._ensure_sandbox,
-                config,
-                credential=credential,
-            )
-        if not sandbox.endpoint_url:
-            raise RuntimeError(
-                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-            )
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
+        base_url, api_key = await self._ready_runtime()
         return await self._cron_request(
             base_url,
             api_key,
@@ -1156,21 +1028,7 @@ class HermesRuntimeAdapter:
         path: str,
         body: dict[str, Any],
     ) -> dict[str, Any]:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(
-                self._ensure_sandbox,
-                config,
-                credential=credential,
-            )
-        if not sandbox.endpoint_url:
-            raise RuntimeError(
-                f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port."
-            )
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
+        base_url, api_key = await self._ready_runtime()
         return await self._cron_request(
             base_url,
             api_key,
@@ -1221,15 +1079,7 @@ class HermesRuntimeAdapter:
         *,
         body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        config = self._sandbox_config_factory()
-        credential = self._credential_factory()
-        async with self._sandbox_lock:
-            sandbox = await asyncio.to_thread(self._ensure_sandbox, config, credential=credential)
-        if not sandbox.endpoint_url:
-            raise RuntimeError(f"Sandbox {sandbox.sandbox_id} does not expose the Hermes API port.")
-        base_url = sandbox.endpoint_url.rstrip("/")
-        api_key = _env_required("API_SERVER_KEY")
-        await self._wait_for_health(base_url, api_key)
+        base_url, api_key = await self._ready_runtime()
         async with self._client_factory(timeout=60) as client:
             response = await client.request(
                 method,
@@ -1241,12 +1091,7 @@ class HermesRuntimeAdapter:
             payload = response.json()
         if not isinstance(payload, dict):
             raise RuntimeError(f"Hermes {path} returned a non-object response.")
-        return {
-            **payload,
-            "sandboxId": sandbox.sandbox_id,
-            "gatewayUrl": sandbox.endpoint_url,
-            "reusedExistingSandbox": sandbox.reused_existing_sandbox,
-        }
+        return payload
 
     async def _begin_learning_turn(
         self,

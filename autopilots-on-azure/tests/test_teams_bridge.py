@@ -665,11 +665,7 @@ class TeamsBridgeTests(unittest.TestCase):
                 return DreamResponse(
                     agent=AgentResponse(
                         text="Dream complete",
-                        raw={
-                            "sandboxId": "sandbox-1",
-                            "gatewayUrl": "https://hermes.example",
-                            "reusedExistingSandbox": True,
-                        },
+                        raw={"runtimeUrl": "https://hermes.example"},
                     ),
                     learning_status={"statusVersion": "2.0", "records": []},
                 )
@@ -702,7 +698,8 @@ class TeamsBridgeTests(unittest.TestCase):
 
         self.assertTrue(adapter.request.session_id.startswith("dream:worker-1:"))
         self.assertEqual(result.learning_status["statusVersion"], "2.0")
-        self.assertEqual(result.sandbox_id, "sandbox-1")
+        self.assertEqual(result.response, "Dream complete")
+        self.assertNotIn("sandboxId", result.model_dump(by_alias=True))
 
     def test_internal_dream_rejects_wrong_operator_key(self):
         previous = os.environ.get("API_SERVER_KEY")

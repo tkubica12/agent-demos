@@ -13,11 +13,13 @@ from scripts.sandbox_services import (
     SandboxService,
     convert_disk_image,
     deploy_service,
+    deploy_runtime,
     deploy_sandbox_services,
     gateway_environment,
     mcp_service,
     prepare_disk_image,
     service_body,
+    worker_settings,
 )
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, runtime_telemetry_environment
 
@@ -71,6 +73,7 @@ class SandboxServicesTests(unittest.TestCase):
         body = service_body(service, self.group(), "disk", "worker")
         self.assertFalse(body["lifecycle"]["autoSuspendPolicy"]["enabled"])
         self.assertEqual(body["ports"][0]["auth"], {"anonymous": True})
+        self.assertEqual(body["ports"][0]["activationMode"], "OnDemand")
         self.assertEqual(body["customerVnetConnectionName"], "private-tools")
         self.assertEqual(body["entrypoint"], ["python3", "-c", BOOTSTRAP])
         self.assertTrue(all(len(value) <= 63 for value in body["labels"].values()))
@@ -88,8 +91,14 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertEqual(public.environment["MCP_ALLOWED_ROLES"], "Shipments.Read.All")
         self.assertNotIn("MCP_ALLOWED_OBJECT_IDS", public.environment)
 
-    def test_gateway_uses_federation_and_worker_runtime_group(self):
-        env = gateway_environment(
+    def test_suspended_mcp_ingress_wakes_instead_of_rejecting_requests(self):
+        service = mcp_service("private-mcp", self.config(), self.infrastructure())
+        body = service_body(service, self.group("private-mcp"), "disk", "worker")
+        self.assertTrue(body["lifecycle"]["autoSuspendPolicy"]["enabled"])
+        self.assertEqual(body["ports"][0]["activationMode"], "OnDemand")
+
+    def test_gateway_receives_messaging_settings_and_no_runtime_provisioning(self):
+        settings = worker_settings(
             self.config(),
             {"foundry_openai_base_url": "https://foundry/openai/v1", "model_deployment_name": "model",
              "acr_name": "registry", "scheduler_servicebus_fully_qualified_namespace": "schedule.servicebus.windows.net",
@@ -99,10 +108,18 @@ class SandboxServicesTests(unittest.TestCase):
             {"private_mcp_url": "https://private/mcp", "public_shipments_mcp_url": "https://public/mcp",
              "runtime_disk_image_id": "runtime-disk"},
         )
-        self.assertEqual(env["AZURE_SANDBOX_GROUP"], "worker-runtime")
+        self.assertEqual(settings["AZURE_SANDBOX_GROUP"], "worker-runtime")
+        self.assertEqual(settings["AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID"], "runtime-client")
+        self.assertEqual(settings["AGENT_RUNTIME_DISK_IMAGE_ID"], "runtime-disk")
+        self.assertNotIn("RUNTIME_CONFIG_REVISION", settings)
+        env = gateway_environment(settings)
+        for runtime_only in ("AZURE_SANDBOX_GROUP", "AZURE_REGION", "AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID",
+                             "AGENT_RUNTIME_DISK_IMAGE_ID", "AGENT_RUNTIME_IMAGE", "PREVIOUS_API_SERVER_KEY",
+                             "FOUNDRY_OPENAI_BASE_URL", "PRIVATE_INCIDENTS_MCP_URL"):
+            self.assertNotIn(runtime_only, env)
+        self.assertFalse(any(key.startswith("WORKIQ_") for key in env))
+        self.assertEqual(env["GENERATED_APPS_SANDBOX_GROUP"], "worker-generated-apps")
         self.assertEqual(env["AZURE_CLIENT_ID"], "gateway-client")
-        self.assertEqual(env["AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID"], "runtime-client")
-        self.assertEqual(env["AGENT_RUNTIME_DISK_IMAGE_ID"], "runtime-disk")
         self.assertNotIn("ACR_NAME", env)
         self.assertNotIn("AGENT_RUNTIME_REGISTRY_IDENTITY_RESOURCE_ID", env)
         self.assertEqual(env["CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE"], "FederatedCredentials")
@@ -117,13 +134,13 @@ class SandboxServicesTests(unittest.TestCase):
     def test_runtime_telemetry_uses_runtime_image_not_gateway_image(self):
         config = AgentSandboxConfig("sub", "rg", "group", "region", "registry/runtime:build123",
                                     runtime_image_reference="registry/runtime@sha256:123")
-        with patch.dict(os.environ, {
-            "APPLICATIONINSIGHTS_CONNECTION_STRING": "instrumentation-identifier",
-            "FOUNDRY_AGENT_NAME": "autopilots-hermes",
-            "OTEL_CONTAINER_IMAGE": "registry/bridge@sha256:abc",
-            "OTEL_SERVICE_VERSION": "sha256:abc",
-        }, clear=True):
-            environment = runtime_telemetry_environment(config)
+        with patch.dict(os.environ, {"APPLICATIONINSIGHTS_CONNECTION_STRING": "operator-shell"}, clear=True):
+            environment = runtime_telemetry_environment(config, {
+                "APPLICATIONINSIGHTS_CONNECTION_STRING": "instrumentation-identifier",
+                "FOUNDRY_AGENT_NAME": "autopilots-hermes",
+                "OTEL_CONTAINER_IMAGE": "registry/bridge@sha256:abc",
+                "OTEL_SERVICE_VERSION": "sha256:abc",
+            })
         self.assertEqual(environment["APPLICATIONINSIGHTS_CONNECTION_STRING"], "instrumentation-identifier")
         self.assertEqual(environment["FOUNDRY_AGENT_NAME"], "autopilots-hermes")
         self.assertEqual(environment["OTEL_CONTAINER_IMAGE"], "registry/runtime@sha256:123")
@@ -135,11 +152,10 @@ class SandboxServicesTests(unittest.TestCase):
             "AGENT_RUNTIME_DISK_SOURCE_IMAGE": "registry/runtime:build123",
             "AGENT_RUNTIME_DISK_IMAGE_ID": "runtime-disk",
         }
-        with patch("scripts.sandbox_runtime.get_config", side_effect=lambda name, fallback="": values.get(name, fallback)):
-            config = config_from_environment(
-                subscription_id="sub", resource_group="rg", sandbox_group="group", region="region",
-                api_server_key="runtime-test-key",
-            )
+        config = config_from_environment(
+            values, subscription_id="sub", resource_group="rg", sandbox_group="group", region="region",
+            api_server_key="runtime-test-key",
+        )
         self.assertEqual(config.image_name, "registry/runtime@sha256:123")
         self.assertEqual(config.disk_image_id, "runtime-disk")
         self.assertEqual(config.runtime_image_reference, "registry/runtime@sha256:123")
@@ -150,6 +166,46 @@ class SandboxServicesTests(unittest.TestCase):
         infra.update({"deployment_config": self.config(), "private_ingress": {"publicNetworkAccess": "Enabled"}})
         with self.assertRaisesRegex(RuntimeError, "disabled public ingress"):
             deploy_sandbox_services(infra, {})
+
+    def test_runtime_is_deployed_with_gateway_url_and_verified_through_ondemand_ingress(self):
+        runtime = SimpleNamespace(sandbox_id="runtime-1", endpoint_url="https://runtime.example",
+                                  reused_existing_sandbox=False)
+        settings = {"AZURE_SUBSCRIPTION_ID": "sub", "AZURE_RESOURCE_GROUP": "rg", "AZURE_SANDBOX_GROUP": "runtime",
+                    "AZURE_REGION": "swedencentral", "API_SERVER_KEY": "key", "AGENT_RUNTIME_DISK_IMAGE_ID": "disk"}
+        with (
+            patch("scripts.sandbox_services.deploy_agent_sandbox", return_value=runtime) as deploy,
+            patch("scripts.sandbox_services.require_runtime_ready", return_value=9.5) as ready,
+        ):
+            result = deploy_runtime(settings, "https://gateway.example", "credential")
+        config = deploy.call_args.args[0]
+        self.assertEqual(config.environment["AUTOPILOT_BRIDGE_URL"], "https://gateway.example")
+        self.assertEqual(deploy.call_args.kwargs, {"credential": "credential"})
+        ready.assert_called_once_with("https://runtime.example")
+        self.assertEqual(result, {"runtime_url": "https://runtime.example", "runtime_sandbox_id": "runtime-1"})
+
+    def test_gateway_settings_receive_runtime_url_derived_from_gateway_url(self):
+        service = SandboxService("gateway", "image@sha256:123", 8000, ("python3",), {}, False)
+        client = Mock()
+        client._group_path = "/group"
+        client._dp_get.return_value = []
+        client._dp_put.return_value = {"id": "sandbox"}
+        sandbox = client.get_sandbox_client.return_value
+        sandbox.sandbox_id = "sandbox"
+        sandbox.get.return_value = SimpleNamespace(ports=[SimpleNamespace(port=8000, url="https://gateway.example/")])
+        sandbox.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
+        seen = []
+
+        def endpoint_environment(url):
+            seen.append(url)
+            return {"AGENT_RUNTIME_URL": "https://runtime.example"}
+
+        with patch("scripts.sandbox_services.require_service_health"):
+            deploy_service(client, service, self.group(), "worker", disk_image_id="disk",
+                           endpoint_environment=endpoint_environment)
+        written = json.loads(sandbox.write_file.call_args.args[1])["environment"]
+        self.assertEqual(seen, ["https://gateway.example"])
+        self.assertEqual(written["AGENT_RUNTIME_URL"], "https://runtime.example")
+        self.assertEqual(written["AUTOPILOT_BRIDGE_URL"], "https://gateway.example")
 
     def test_native_url_supplied_before_gateway_process_starts(self):
         service = SandboxService("gateway", "image@sha256:123", 8000, ("python3", "-m", "server"), {}, False,
@@ -358,10 +414,10 @@ class SandboxServicesTests(unittest.TestCase):
     def test_missing_runtime_disk_fails_before_lifecycle_changes(self):
         config = AgentSandboxConfig("sub", "rg", "group", "region", "image")
         with patch("scripts.sandbox_runtime.create_sandbox_group_client") as create:
-            from scripts.sandbox_runtime import ensure_agent_sandbox
+            from scripts.sandbox_runtime import deploy_agent_sandbox
 
             with self.assertRaisesRegex(ValueError, "AGENT_RUNTIME_DISK_IMAGE_ID"):
-                ensure_agent_sandbox(config)
+                deploy_agent_sandbox(config)
         create.assert_not_called()
 
 

@@ -100,11 +100,11 @@ resource "azurerm_role_assignment" "deployer_sandbox_data_owner" {
   for_each           = local.roles
   scope              = azapi_resource.sandbox_group[each.key].id
   role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
-  principal_id       = data.azurerm_client_config.current.object_id
+  principal_id       = var.deployer_principal_id
 }
 
 resource "azurerm_role_assignment" "gateway_sandbox_data_owner" {
-  for_each           = toset(["runtime", "generated-apps"])
+  for_each           = toset(["generated-apps"])
   scope              = azapi_resource.sandbox_group[each.key].id
   role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
   principal_id       = azurerm_user_assigned_identity.workload["gateway"].principal_id

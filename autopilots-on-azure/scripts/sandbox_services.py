@@ -14,7 +14,13 @@ from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.core.rest import HttpRequest
 from azure.identity import DefaultAzureCredential
 
-from scripts.sandbox_runtime import existing_named, run_text
+from scripts.sandbox_runtime import (
+    config_from_environment,
+    deploy_agent_sandbox,
+    existing_named,
+    require_runtime_ready,
+    run_text,
+)
 
 
 DISK_IMAGE_AUDIENCE = "https://management.azuredevcompute.io/.default"
@@ -114,7 +120,8 @@ def text(value: Any) -> str:
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 
-def gateway_environment(config: dict, platform: dict, infrastructure: dict, endpoints: dict) -> dict[str, str]:
+def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoints: dict) -> dict[str, str]:
+    """All Worker deployment settings; the gateway receives only its own subset."""
     groups = infrastructure["sandbox_groups"]
     runtime = groups["runtime"]
     gateway = groups["gateway"]
@@ -179,10 +186,48 @@ def gateway_environment(config: dict, platform: dict, infrastructure: dict, endp
         if name.startswith("workiq_"):
             key = name.upper().replace("_MCP_URL", "_MCP_UPSTREAM_URL")
             environment[key] = text(value)
-    environment["RUNTIME_CONFIG_REVISION"] = hashlib.sha256(
-        json.dumps(environment, sort_keys=True).encode()
-    ).hexdigest()[:16]
     return environment
+
+
+RUNTIME_ONLY_SETTINGS = frozenset({
+    "AZURE_SANDBOX_GROUP",
+    "AZURE_REGION",
+    "SANDBOX_VNET_CONNECTION_NAME",
+    "AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID",
+    "AGENT_RUNTIME_IMAGE",
+    "AGENT_RUNTIME_DISK_IMAGE_ID",
+    "AGENT_RUNTIME_DISK_IMAGE_NAME",
+    "AGENT_RUNTIME_DATA_VOLUME_NAME",
+    "PREVIOUS_API_SERVER_KEY",
+    "FOUNDRY_OPENAI_BASE_URL",
+    "PRIVATE_INCIDENTS_MCP_URL",
+    "PRIVATE_INCIDENTS_MCP_SCOPE",
+    "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL",
+    "PUBLIC_SHIPMENTS_MCP_SCOPE",
+    "WORKER_ASSIGNMENT_SCOPE",
+})
+
+
+def gateway_environment(settings: dict[str, str]) -> dict[str, str]:
+    """Messaging settings only: the gateway reaches runtime compute through AGENT_RUNTIME_URL."""
+    return {
+        key: value
+        for key, value in settings.items()
+        if key not in RUNTIME_ONLY_SETTINGS and not key.startswith("WORKIQ_")
+    }
+
+
+def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) -> dict[str, Any]:
+    """Create or reuse runtime compute at deployment and return its native OnDemand endpoint."""
+    config = config_from_environment({**settings, "AUTOPILOT_BRIDGE_URL": gateway_url})
+    runtime = deploy_agent_sandbox(config, credential=credential)
+    seconds = require_runtime_ready(runtime.endpoint_url)
+    print(
+        f"Runtime {runtime.sandbox_id} healthy through OnDemand ingress after {seconds:.1f}s "
+        f"({'reused' if runtime.reused_existing_sandbox else 'created'}).",
+        flush=True,
+    )
+    return {"runtime_url": runtime.endpoint_url, "runtime_sandbox_id": runtime.sandbox_id}
 
 
 def mcp_service(role: str, config: dict, infrastructure: dict) -> SandboxService:
@@ -227,7 +272,8 @@ def service_body(service: SandboxService, group: dict, disk_id: str, worker: str
         "environment": {"SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
                         "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
                         "AZURE_CLIENT_ID": group["identity_client_id"]},
-        "ports": [{"port": service.port, "protocol": "Http", "auth": {"anonymous": True}}],
+        "ports": [{"port": service.port, "protocol": "Http", "activationMode": "OnDemand",
+                   "auth": {"anonymous": True}}],
         "entrypoint": ["python3", "-c", BOOTSTRAP],
         "cmd": [],
         "skipEgressProxy": False,
@@ -269,7 +315,16 @@ def write_service_settings(sandbox: Any, settings: dict) -> None:
     )
 
 
-def deploy_service(client: Any, service: SandboxService, group: dict, worker: str, *, disk_image_id: str) -> dict:
+def deploy_service(
+    client: Any,
+    service: SandboxService,
+    group: dict,
+    worker: str,
+    *,
+    disk_image_id: str,
+    endpoint_environment: Any = None,
+) -> dict:
+    """Deploy one service; endpoint_environment derives settings that need this service's native URL."""
     if not disk_image_id:
         raise ValueError("A deployment-prepared disk image ID is required.")
     image_hash = hashlib.sha256(service.image.encode()).hexdigest()[:32]
@@ -319,6 +374,8 @@ def deploy_service(client: Any, service: SandboxService, group: dict, worker: st
         environment = dict(service.environment)
         if service.role == "gateway":
             environment["AUTOPILOT_BRIDGE_URL"] = endpoint.rstrip("/")
+        if endpoint_environment is not None:
+            environment.update(endpoint_environment(endpoint.rstrip("/")))
         settings = {"environment": environment, "command": list(service.command)}
         if not created:
             try:
@@ -392,24 +449,37 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                     identity_client_id=groups[role]["identity_client_id"],
                 )
         endpoints["runtime_disk_image_id"] = disks["runtime"]
+        runtime: dict[str, Any] = {}
         for role in ("private-mcp", "public-mcp", "gateway"):
             group = infrastructure["sandbox_groups"][role]
-            service = mcp_service(role, config, infrastructure) if role != "gateway" else SandboxService(
-                role="gateway", image=config["bridge_image"], port=8000,
-                disk_source_image=config["bridge_disk_source_image"],
-                command=("/app/.venv/bin/python", "-m", "uvicorn", "bridge.app:app", "--host", "0.0.0.0", "--port", "8000"),
-                environment=gateway_environment(config, platform, infrastructure, endpoints),
-                auto_suspend=False,
-            )
+            endpoint_environment = None
+            if role == "gateway":
+                settings = worker_settings(config, platform, infrastructure, endpoints)
+                service = SandboxService(
+                    role="gateway", image=config["bridge_image"], port=8000,
+                    disk_source_image=config["bridge_disk_source_image"],
+                    command=("/app/.venv/bin/python", "-m", "uvicorn", "bridge.app:app", "--host", "0.0.0.0", "--port", "8000"),
+                    environment=gateway_environment(settings),
+                    auto_suspend=False,
+                )
+
+                def endpoint_environment(gateway_url: str) -> dict[str, str]:
+                    runtime.update(deploy_runtime(settings, gateway_url, credential))
+                    return {"AGENT_RUNTIME_URL": runtime["runtime_url"]}
+            else:
+                service = mcp_service(role, config, infrastructure)
             with SandboxGroupClient(
                 endpoint_for_region(infrastructure["sandbox_location"]), credential,
                 subscription_id=infrastructure["subscription_id"],
                 resource_group=infrastructure["resource_group_name"], sandbox_group=group["name"],
             ) as client:
-                result = deploy_service(client, service, group, infrastructure["worker_id"], disk_image_id=disks[role])
+                result = deploy_service(
+                    client, service, group, infrastructure["worker_id"], disk_image_id=disks[role],
+                    endpoint_environment=endpoint_environment,
+                )
                 services[role] = result
                 prefix = {"private-mcp": "private_mcp", "public-mcp": "public_shipments_mcp", "gateway": "bridge"}[role]
                 endpoints[prefix + "_url"] = result["url"] + ("/mcp" if role != "gateway" else "")
                 endpoints[prefix + "_fqdn"] = urlsplit(result["url"]).hostname
                 endpoints[prefix + "_sandbox_id"] = result["sandbox_id"]
-    return {**endpoints, "sandbox_services": services}
+    return {**endpoints, **runtime, "sandbox_services": services}

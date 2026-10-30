@@ -18,7 +18,7 @@ uv run python -m scripts.demo_ops smoke --state-name hermes2 `
   --message "Reply exactly: Hermes ready" --timeout 600
 ```
 
-The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. `hermes2` also runs user scheduling and Service Bus Dreaming; `hermes` does not.
+The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. `hermes2` also runs user scheduling and Service Bus Dreaming; `hermes` does not. The keepalive/five-minute lifecycle is currently piloted on `hermes2`; `hermes` intentionally retains its previous deployment.
 
 ## Read next
 
@@ -52,4 +52,4 @@ node assets\export-pdf.js architecture.standalone.html
 
 ## Boundaries
 
-The gateway stays awake; runtime compute suspends after 30 idle minutes. Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` creates and removes whole Workers; uploading the Teams package stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists all current limitations.
+The gateway stays awake; runtime compute suspends to Disk after five idle minutes. Deployment creates runtime compute; the gateway only calls its URL, and OnDemand ingress wakes it. A native keepalive plugin sends self-ingress only during model/tool execution; the wrapper also covers deterministic runtime requests. Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` creates and removes whole Workers; uploading the Teams package stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists all current limitations.

@@ -35,11 +35,7 @@ class DreamRecoveryTests(unittest.TestCase):
 
     def create_adapter(self, transport):
         adapter = HermesRuntimeAdapter(
-            credential_factory=lambda: object(),
-            sandbox_config_factory=lambda: object(),
-            ensure_sandbox=lambda *args, **kwargs: SimpleNamespace(
-                sandbox_id="test-sandbox", endpoint_url="http://runtime.test",
-            ),
+            runtime_url_factory=lambda: "http://runtime.test",
             client_factory=lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs),
         )
         adapter._wait_for_health = AsyncMock()
@@ -68,7 +64,7 @@ class DreamRecoveryTests(unittest.TestCase):
                 self.assertEqual(current["phase"], "dream_started")
                 inference_calls.append(True)
                 return AgentResponse(
-                    text="Dream completed", raw={"gatewayUrl": "http://runtime.test"},
+                    text="Dream completed", raw={"runtimeUrl": "http://runtime.test"},
                 )
 
             async def run():
@@ -129,7 +125,7 @@ class DreamRecoveryTests(unittest.TestCase):
 
             adapter = self.create_adapter(httpx.MockTransport(transport))
             inference = AsyncMock(return_value=AgentResponse(
-                text="Completed before response loss", raw={"gatewayUrl": "http://runtime.test"},
+                text="Completed before response loss", raw={"runtimeUrl": "http://runtime.test"},
             ))
             request = DreamRequest(session_id=operation["sessionId"])
 
@@ -177,12 +173,7 @@ class DreamRecoveryTests(unittest.TestCase):
                 }
                 after = {**before, "revision": "after", "externallyScheduled": False}
                 adapter = HermesRuntimeAdapter(
-                    credential_factory=lambda: object(),
-                    sandbox_config_factory=lambda: object(),
-                    ensure_sandbox=lambda *args, **kwargs: SimpleNamespace(
-                        sandbox_id="test", endpoint_url="http://runtime.test",
-                        reused_existing_sandbox=True, data_volume="test",
-                    ),
+                    runtime_url_factory=lambda: "http://runtime.test",
                 )
                 with (
                     patch.dict(os.environ, {

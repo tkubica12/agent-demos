@@ -117,15 +117,6 @@ def main() -> None:
     document_name = f"A13 Automated Validation {int(time.time())}"
 
     with httpx.Client(timeout=args.timeout) as client:
-        runtime = request_with_retry(
-            client,
-            "POST",
-            f"{bridge_url}/internal/runtime/ensure",
-            headers={"X-Autopilot-Key": api_key},
-            timeout=min(args.timeout, 900),
-            attempts=8,
-        )
-        runtime.raise_for_status()
         created = request_with_retry(
             client,
             "POST",
@@ -172,7 +163,6 @@ def main() -> None:
             {
                 "ok": True,
                 "workerId": str(outputs.get("worker_id") or args.state_name),
-                "sandboxId": str(readback_body.get("sandboxId") or ""),
                 "documentUrl": document_url,
                 "marker": marker,
                 "create": True,

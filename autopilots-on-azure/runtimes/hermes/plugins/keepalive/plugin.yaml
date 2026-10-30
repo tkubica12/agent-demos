@@ -1,0 +1,3 @@
+name: keepalive
+version: '1.0.0'
+description: Bounded self-ingress while native model and tool execution is active

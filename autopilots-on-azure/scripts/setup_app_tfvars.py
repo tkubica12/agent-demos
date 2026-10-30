@@ -5,13 +5,14 @@ import base64
 import json
 import re
 import secrets
+import uuid
 from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from scripts.tf_helpers import APPS_DIR, REPO_ROOT, write_tfvars
+from scripts.tf_helpers import APPS_DIR, REPO_ROOT, output, write_tfvars
 
 
 def random_token() -> str:
@@ -73,6 +74,19 @@ def existing_app_tfvars(runtime: str, state_name: str = "") -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def resolve_deployer_principal_id(previous: dict[str, Any], requested: str = "") -> str:
+    value = requested or str(previous.get("deployer_principal_id") or "")
+    if not value and previous:
+        raise ValueError(
+            "Existing Worker has no pinned deployer_principal_id. Supply "
+            "--deployer-principal-id with the original principal from its Terraform "
+            "role assignments; do not substitute the current login."
+        )
+    if not value:
+        value = output(["az", "ad", "signed-in-user", "show", "--query", "id", "-o", "tsv"])
+    return str(uuid.UUID(value))
+
+
 def default_data_volume_name(runtime: str, autopilot_name: str = "") -> str:
     if autopilot_name and autopilot_name != "hermes":
         normalized = "".join(character if character.isalnum() else "-" for character in autopilot_name.lower()).strip("-")
@@ -88,6 +102,7 @@ def build_tfvars(
     autopilot_name: str,
     data_volume_name: str,
     previous: dict[str, Any],
+    deployer_principal_id: str = "",
     api_server_key: str = "",
     runtime_image: str = "",
     runtime_disk_source_image: str = "",
@@ -124,6 +139,8 @@ def build_tfvars(
     collective_approval_public_key: str = "",
 ) -> dict[str, Any]:
     tfvars: dict[str, Any] = dict(previous)
+    if deployer_principal_id:
+        tfvars["deployer_principal_id"] = str(uuid.UUID(deployer_principal_id))
     tfvars.update(
         {
             "autopilot_name": autopilot_name,
@@ -265,6 +282,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare Hermes Worker bootstrap values and write apps generated tfvars.")
     parser.add_argument("--state-name", default="hermes", help="Worker state directory under .local (default: hermes).")
     parser.add_argument("--autopilot-name", default="")
+    parser.add_argument(
+        "--deployer-principal-id", default="",
+        help="Stable original deployment principal object ID; preserved on updates.",
+    )
     parser.add_argument("--data-volume-name", default="")
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY. Generated when omitted.")
     parser.add_argument("--role-blueprint", default="", help="Hermes Role Blueprint name.")
@@ -341,6 +362,7 @@ def main() -> None:
     autopilot_name = args.autopilot_name or state_name
 
     previous = existing_app_tfvars(runtime, state_name)
+    deployer_principal_id = resolve_deployer_principal_id(previous, args.deployer_principal_id)
     agent365_auth = load_agent365_auth(runtime, state_name) if args.agent365_from_generated else {}
     data_volume_name = (
         args.data_volume_name
@@ -355,6 +377,7 @@ def main() -> None:
     collective_identity = load_or_create_collective_approval_identity(collective_identity_path)
 
     tfvars = build_tfvars(
+        deployer_principal_id=deployer_principal_id,
         runtime=runtime,
         autopilot_name=autopilot_name,
         data_volume_name=data_volume_name,

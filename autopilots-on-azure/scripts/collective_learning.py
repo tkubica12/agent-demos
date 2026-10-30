@@ -149,10 +149,6 @@ def main() -> None:
             body={"dispositionDigest": args.disposition_digest, "rejectedBy": args.rejected_by, "reason": args.reason},
             timeout=args.timeout, state_name=args.state_name,
         )
-        result = {
-            key: value for key, value in result.items()
-            if key not in {"sandboxId", "gatewayUrl", "reusedExistingSandbox"}
-        }
         verify_rejection_receipt(
             result, public_key=public_key, digest=args.disposition_digest,
             rejected_by=args.rejected_by, reason=args.reason,

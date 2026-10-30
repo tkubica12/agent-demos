@@ -28,9 +28,8 @@ from bridge.runtime.hermes import (
     session_reset_command,
 )
 from scripts.sandbox_runtime import (
-    AgentSandboxConfig,
     config_from_environment,
-    ensure_agent_sandbox,
+    deploy_agent_sandbox,
     hermes_sandbox_config,
     require_worker_refresh_ready,
     runtime_labels,
@@ -38,18 +37,6 @@ from scripts.sandbox_runtime import (
 
 
 SCENARIOS_JSON = json.dumps(json.loads(hermes_runtime.PROVENANCE_SHAPE_EXAMPLE)["agentProposedScenarios"])
-
-
-def sandbox_config() -> AgentSandboxConfig:
-    return AgentSandboxConfig(
-        subscription_id="sub-1",
-        resource_group="rg-1",
-        sandbox_group="sandbox-group-1",
-        region="swedencentral",
-        foundry_openai_base_url="https://foundry.example/openai/v1",
-        model_deployment="gpt-test",
-        image_name="registry.example/hermes-runtime@sha256:test",
-    )
 
 
 class RuntimeAdapterTests(unittest.TestCase):
@@ -66,13 +53,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             return httpx.Response(200, json={"token": "turn-1"})
 
         adapter = HermesRuntimeAdapter(
-            credential_factory=lambda: "credential-1",
-            sandbox_config_factory=sandbox_config,
-            ensure_sandbox=lambda *args, **kwargs: SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-            ),
+            runtime_url_factory=lambda: "https://hermes.example",
             client_factory=lambda **kwargs: httpx.AsyncClient(
                 transport=httpx.MockTransport(handle), **kwargs
             ),
@@ -211,11 +192,17 @@ class RuntimeAdapterTests(unittest.TestCase):
             "snapshot-1",
         )
 
-    def test_bridge_app_does_not_import_sandbox_lifecycle(self):
-        source = inspect.getsource(bridge_app)
-
-        self.assertNotIn("ensure_agent_sandbox", source)
-        self.assertNotIn("AgentSandboxConfig", source)
+    def test_gateway_reaches_runtime_only_through_its_native_url(self):
+        for module in (bridge_app, hermes_runtime):
+            source = inspect.getsource(module)
+            with self.subTest(module=module.__name__):
+                self.assertNotIn("sandbox_runtime", source)
+                self.assertNotIn("deploy_agent_sandbox", source)
+                self.assertNotIn("SandboxGroupClient", source)
+        with patch.dict(os.environ, {"AGENT_RUNTIME_URL": "https://runtime.example/"}, clear=True):
+            self.assertEqual(hermes_runtime.runtime_url_from_env(), "https://runtime.example")
+        with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(RuntimeError, "AGENT_RUNTIME_URL"):
+            hermes_runtime.runtime_url_from_env()
 
     def test_bridge_caches_hermes_adapter(self):
         bridge_app.runtime_adapter.cache_clear()
@@ -230,13 +217,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         calls: list[dict] = []
         post_responses = [(200, {"output": " stateful OK "})]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "HERMES_BRIDGE_ENDPOINT_MODE", "AUTOPILOT_NAME"]}
         os.environ["API_SERVER_KEY"] = "api-key-1"
@@ -244,9 +224,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         os.environ["AUTOPILOT_NAME"] = "hermes-worker"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
             )
             response = asyncio.run(
@@ -303,13 +281,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         calls: list[dict] = []
         post_responses = [(404, {"error": "not found"}), (200, {"output_text": "responses OK"})]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "HERMES_BRIDGE_ENDPOINT_MODE", "AUTOPILOT_NAME"]}
         os.environ["API_SERVER_KEY"] = "api-key-1"
@@ -317,9 +288,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         os.environ["AUTOPILOT_NAME"] = "hermes-worker"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
             )
             with self.assertRaises(httpx.HTTPStatusError):
@@ -586,13 +555,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             )
         ]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = {
             "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
@@ -606,9 +568,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         ).decode("ascii")
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
             )
             result = asyncio.run(
@@ -676,13 +636,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             },
         ]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = {
             "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
@@ -696,9 +649,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         ).decode("ascii")
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(
                     calls,
                     post_responses,
@@ -742,21 +693,12 @@ class RuntimeAdapterTests(unittest.TestCase):
     def test_ordinary_remember_request_does_not_start_fallback_turn(self):
         calls: list[dict] = []
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = os.environ.get("API_SERVER_KEY")
         os.environ["API_SERVER_KEY"] = "api-key-1"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(
                     calls,
                     [(200, {"output": "I understand."})],
@@ -805,13 +747,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             )
         ]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = {
             "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
@@ -825,9 +760,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         ).decode("ascii")
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
             )
             result = asyncio.run(
@@ -878,22 +811,13 @@ class RuntimeAdapterTests(unittest.TestCase):
             )
         ]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "AUTOPILOT_NAME"]}
         os.environ["API_SERVER_KEY"] = "api-key-1"
         os.environ["AUTOPILOT_NAME"] = "hermes-worker"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
             )
             result = asyncio.run(
@@ -1088,13 +1012,6 @@ class RuntimeAdapterTests(unittest.TestCase):
     def test_hermes_collective_learning_calls_secured_runtime_operations(self):
         calls: list[dict] = []
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = {
             "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
@@ -1108,9 +1025,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         ).decode("ascii")
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(calls, [], **kwargs),
             )
             prepared = asyncio.run(adapter.prepare_collective_learning())
@@ -1135,7 +1050,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         )
         self.assertEqual(operation_calls[2]["json"]["receipt"]["approvedBy"], "operator")
         self.assertEqual(len(operation_calls[2]["json"]["receipt"]["signature"]), 88)
-        self.assertEqual(prepared["sandboxId"], "sandbox-1")
+        self.assertNotIn("sandboxId", prepared)
         self.assertTrue(approved["approved"])
         self.assertEqual(exported["packet"]["packetVersion"], "2.0")
 
@@ -1144,21 +1059,12 @@ class RuntimeAdapterTests(unittest.TestCase):
         active = 0
         maximum_active = 0
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = os.environ.get("API_SERVER_KEY")
         os.environ["API_SERVER_KEY"] = "api-key-1"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(
                     calls,
                     [],
@@ -1257,21 +1163,12 @@ class RuntimeAdapterTests(unittest.TestCase):
             },
         ]
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = os.environ.get("API_SERVER_KEY")
         os.environ["API_SERVER_KEY"] = "api-key-1"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(
                     calls,
                     post_responses,
@@ -1318,21 +1215,12 @@ class RuntimeAdapterTests(unittest.TestCase):
     def test_hermes_aborts_learning_transaction_when_model_invocation_fails(self):
         calls: list[dict] = []
 
-        def ensure_sandbox(config, *, credential):
-            return SimpleNamespace(
-                sandbox_id="sandbox-1",
-                endpoint_url="https://hermes.example",
-                reused_existing_sandbox=True,
-                data_volume="hermes-data",
-            )
 
         previous = os.environ.get("API_SERVER_KEY")
         os.environ["API_SERVER_KEY"] = "api-key-1"
         try:
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: "credential-1",
-                sandbox_config_factory=sandbox_config,
-                ensure_sandbox=ensure_sandbox,
+                runtime_url_factory=lambda: "https://hermes.example",
                 client_factory=lambda **kwargs: FakeHermesClient(
                     calls,
                     [(500, {"error": "model failed"})],
@@ -1417,16 +1305,18 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(runtime_labels(config)["worker"], "worker-1")
         self.assertEqual(runtime_labels(config)["runtimeImage"], "hermes-api-server-image")
 
-    @patch("scripts.sandbox_runtime.get_config", side_effect=lambda name, fallback="": os.getenv(name) or fallback)
-    def test_environment_config_uses_predeployed_disk_and_runtime_identity(self, _get_config):
+    def test_deployment_settings_use_predeployed_disk_and_runtime_identity(self):
         image = "registry.example/runtime@sha256:" + "a" * 64
-        with patch.dict(os.environ, {
+        settings = {
             "AGENT_RUNTIME_DISK_IMAGE_ID": "ready-disk-1",
             "AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID": "runtime-client",
             "AGENT_RUNTIME_IMAGE": image,
+            "AUTOPILOT_BRIDGE_URL": "https://gateway.example",
             "DISK_SOURCE_IMAGE": "obsolete-conversion-source",
-        }, clear=True):
+        }
+        with patch.dict(os.environ, {"AGENT_RUNTIME_DISK_IMAGE_ID": "operator-shell-disk"}, clear=True):
             config = config_from_environment(
+                settings,
                 subscription_id="sub-1",
                 resource_group="rg-1",
                 sandbox_group="sandbox-group-1",
@@ -1434,10 +1324,19 @@ class RuntimeAdapterTests(unittest.TestCase):
                 foundry_openai_base_url="https://foundry.example/openai/v1",
                 api_server_key="api-key-1",
             )
-            self.assertEqual(config.disk_image_id, "ready-disk-1")
-            self.assertEqual(config.managed_identity_client_id, "runtime-client")
-            self.assertEqual(config.image_name, image)
-            self.assertEqual(config.runtime_image_reference, image)
+        self.assertEqual(config.disk_image_id, "ready-disk-1")
+        self.assertEqual(config.managed_identity_client_id, "runtime-client")
+        self.assertEqual(config.image_name, image)
+        self.assertEqual(config.runtime_image_reference, image)
+        self.assertEqual(config.environment["AUTOPILOT_BRIDGE_URL"], "https://gateway.example")
+        self.assertRegex(config.runtime_config_revision, r"^[0-9a-f]{16}$")
+        changed = config_from_environment(
+            {**settings, "AUTOPILOT_BRIDGE_URL": "https://replacement-gateway.example"},
+            subscription_id="sub-1", resource_group="rg-1", sandbox_group="sandbox-group-1",
+            region="swedencentral", api_server_key="api-key-1",
+            foundry_openai_base_url="https://foundry.example/openai/v1",
+        )
+        self.assertNotEqual(changed.runtime_config_revision, config.runtime_config_revision)
 
     def test_missing_predeployed_disk_fails_before_any_sandbox_lifecycle_action(self):
         config = hermes_sandbox_config(
@@ -1449,7 +1348,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         )
         with patch.object(sandbox_runtime, "create_sandbox_group_client") as create_client:
             with self.assertRaisesRegex(ValueError, "AGENT_RUNTIME_DISK_IMAGE_ID is required"):
-                ensure_agent_sandbox(config, wait_for_ready_seconds=0)
+                deploy_agent_sandbox(config)
         create_client.assert_not_called()
 
     def test_hermes_environment_config_uses_runtime_volume_env(self):
@@ -1472,7 +1371,7 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(config.data_volume_name, "hermes-env-data")
 
-    def test_existing_sandbox_reuse_uses_predeployed_disk_without_conversion(self):
+    def test_deployment_reuses_matching_runtime_without_waking_or_exec(self):
         config = hermes_sandbox_config(
             subscription_id="sub-1",
             resource_group="rg-1",
@@ -1482,16 +1381,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             disk_image_id="ready-disk-1",
             data_volume_name="hermes-data",
         )
-
-        class SandboxClient:
-            def ensure_running(self, timeout):
-                self.timeout = timeout
-
-            def get(self):
-                return SimpleNamespace(ports=[SimpleNamespace(port=8642, url="https://gateway.example")])
-
-            def exec(self, command):
-                return SimpleNamespace(exit_code=0, stdout="", stderr="")
 
         class Client:
             _group_path = "/groups/test"
@@ -1505,21 +1394,15 @@ class RuntimeAdapterTests(unittest.TestCase):
                     },
                     {
                         "id": "sandbox-1",
-                        "labels": {
-                            "app": "autopilots-on-azure",
-                            "kind": "hermes",
-                            "identityArchitecture": "agent-federation-v1",
-                            "runtimeImage": config.disk_image_name,
-                        },
+                        "state": "Stopped",
+                        "labels": runtime_labels(config),
                         "volumes": [{"volumeName": "hermes-data"}],
+                        "ports": [{"port": 8642, "url": "https://runtime.example/", "activationMode": "OnDemand"}],
                     },
                 ]
 
             def get_sandbox_client(self, sandbox_id):
-                return SandboxClient()
-
-            def get_sandbox(self, sandbox_id):
-                return SimpleNamespace(id=sandbox_id)
+                raise AssertionError("Reusing runtime compute must not resume it or execute commands.")
 
             def list_disk_images(self):
                 raise AssertionError("Existing sandbox reuse must not inspect disk images.")
@@ -1527,15 +1410,11 @@ class RuntimeAdapterTests(unittest.TestCase):
             def list_volumes(self):
                 raise AssertionError("Existing sandbox reuse must not inspect volumes.")
 
-        previous_factory = sandbox_runtime.create_sandbox_group_client
-        sandbox_runtime.create_sandbox_group_client = lambda config, credential=None: Client()
-        try:
-            result = ensure_agent_sandbox(config, wait_for_ready_seconds=0)
-        finally:
-            sandbox_runtime.create_sandbox_group_client = previous_factory
+        with patch.object(sandbox_runtime, "create_sandbox_group_client", return_value=Client()):
+            result = deploy_agent_sandbox(config)
 
         self.assertEqual(result.sandbox_id, "sandbox-1")
-        self.assertEqual(result.endpoint_url, "https://gateway.example")
+        self.assertEqual(result.endpoint_url, "https://runtime.example")
         self.assertTrue(result.reused_existing_sandbox)
 
     def test_worker_refresh_preflight_retries_transient_gateway_failure(self):

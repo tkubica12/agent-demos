@@ -67,15 +67,6 @@ def main() -> None:
     api_key = str(tfvars["api_server_key"])
     headers = {"X-Autopilot-Key": api_key}
     with httpx.Client(timeout=args.timeout) as client:
-        runtime = request_with_retry(
-            client,
-            "POST",
-            f"{bridge_url}/internal/runtime/ensure",
-            headers=headers,
-            timeout=min(args.timeout, 900),
-            attempts=8,
-        )
-        runtime.raise_for_status()
         transport = request_with_retry(
             client,
             "POST",

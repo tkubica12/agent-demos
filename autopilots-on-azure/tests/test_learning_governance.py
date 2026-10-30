@@ -106,11 +106,7 @@ class LearningGovernanceTests(unittest.TestCase):
             app = start_hermes.create_health_app(profile, profile, None, None)
             transport = httpx.ASGITransport(app=app)
             adapter = HermesRuntimeAdapter(
-                credential_factory=lambda: object(),
-                sandbox_config_factory=lambda: object(),
-                ensure_sandbox=lambda *args, **kwargs: SimpleNamespace(
-                    sandbox_id="worker", endpoint_url="http://runtime.test", reused_existing_sandbox=True,
-                ),
+                runtime_url_factory=lambda: "http://runtime.test",
                 client_factory=lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs),
             )
             adapter._wait_for_health = AsyncMock()
@@ -137,8 +133,7 @@ class LearningGovernanceTests(unittest.TestCase):
                 )
                 self.assertEqual(result["disposition"], "reject_and_refresh")
                 self.assertNotIn("approved", result)
-                receipt = {key: value for key, value in result.items()
-                           if key not in {"sandboxId", "gatewayUrl", "reusedExistingSandbox"}}
+                receipt = dict(result)
                 self.assertEqual(collective_learning.attest_refresh_rejection(profile, receipt=receipt), receipt)
                 self.assertTrue(collective_learning.worker_refresh_readiness(profile)["ready"])
                 with self.assertRaisesRegex(collective_learning.CollectiveLearningError, "No approved"):

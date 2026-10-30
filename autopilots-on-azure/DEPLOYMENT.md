@@ -47,6 +47,8 @@ Both logins must complete in the same tenant; `setup_identity` rejects a tenant 
 
 These files and Terraform state may contain sensitive material; never commit them. Preserve existing Worker names, identity state, release pins, volume names, and scheduling settings. `hermes2` enables user scheduling/Service Bus Dreaming; `hermes` disables both.
 
+Each Worker's `deployer_principal_id` pins the original deployment principal, independently of the current Azure CLI login. Fresh `setup_app_tfvars` runs record the initial signed-in user's object ID, or accept `--deployer-principal-id`. For an existing state that has no pin, read the original `principal_id` from that Worker's `azurerm_role_assignment.deployer_sandbox_data_owner` Terraform state and supply it explicitly. Never accept role-assignment replacements just because a different operator runs an image update.
+
 ## Update sequence
 
 ### 1. Shared platform
@@ -102,7 +104,9 @@ uv run python -m scripts.deploy_apps_runtime `
 
 Each Sandbox Group converts images with its own managed identity (`AcrPull`, [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). A new role assignment can take minutes to propagate; a failed conversion stops the deployment. All four disk images are prepared before any service is created, and unchanged images are reused. The capture records native endpoints, `sandbox_services`, and disk image IDs.
 
-A changed image creates new gateway and MCP Sandboxes with new URLs; an environment-only change updates them in place. The gateway never auto-suspends (post-ACK work, Service Bus receive). MCPs and the gateway-created runtime suspend to Disk after 1800 s idle; the runtime keeps its persistent Data Disk.
+A changed image creates new gateway and MCP Sandboxes with new URLs; an environment-only change updates them in place. Service deployment then creates or reuses runtime compute with the gateway URL, waits for runtime `/health` through its OnDemand ingress, and only then writes `AGENT_RUNTIME_URL` into gateway settings. A changed gateway URL, MCP URL, runtime image or other runtime setting replaces runtime compute and keeps the Data Disk. The capture adds `runtime_url` and `runtime_sandbox_id`.
+
+All service ports are OnDemand. The gateway never auto-suspends (post-ACK work, Service Bus receive). MCPs suspend to Disk after 1800 s idle and wake on their next request. The runtime suspends after 300 s and uses the native execution keepalive plugin. The gateway has no runtime Sandbox Group role; rerun this step if runtime compute is missing or `Failed`.
 
 ### 6. Update the Agent 365 endpoint as its direct owner
 
@@ -200,6 +204,7 @@ uv run python -m scripts.servicebus_dream_smoke `
 - Schedule smoke checks native schedule/queue state, durable execution/delivery receipts, output hash, and DLQ, then removes the test job.
 - Dream smoke runs an ad-hoc occurrence without advancing production cron. A prepared no-change result may contain `packet=null`.
 - For resume, stop an otherwise idle runtime, invoke through the gateway, and verify the same Sandbox ID and an existing Data Disk marker. Deleting/recreating compute is a different operation.
+- For automatic idle/keepalive, run a native model/tool operation for longer than 300 s, then observe only Sandbox management metadata until it stops. Health polling, open ingress connections, execute calls and file reads reset idle time and invalidate this measurement. Repeat with the plugin disabled only in an isolated test Sandbox. Verify OnDemand wake directly as well as through the gateway; compare transport readiness separately from the model's first/final response.
 
 Use [DEMO.md](DEMO.md) for Teams attachments, comments, cards, app authorization, and learning evaluation.
 
@@ -242,7 +247,7 @@ uv run python -m scripts.demo_ops logs `
 uv run python -m scripts.demo_ops reset-sandbox --state-name $worker
 ```
 
-`logs` prints the target unless `--execute` is given; `--app` is `gateway` (alias `bridge`), `runtime` (requires `--path`), `private-mcp`, or `public-mcp`, and the Sandbox must be running. `reset-sandbox` previews deletion of runtime compute while retaining its Data Disk; add `--execute` only for intentional replacement. Do not reset healthy suspended or `Stopped` compute to perform a resume test.
+`logs` prints the target unless `--execute` is given; `--app` is `gateway` (alias `bridge`), `runtime` (requires `--path`), `private-mcp`, or `public-mcp`, and the Sandbox must be running. `reset-sandbox` previews deletion of runtime compute while retaining its Data Disk; add `--execute` only for intentional replacement, then rerun step 5 with `--deploy-services --capture`. The gateway does not recreate runtime compute. Do not reset healthy suspended or `Stopped` compute to perform a resume test.
 
 For trace-interrupted-session `409` and ambiguous `dream_started` receipts, follow [SPEC.md](SPEC.md#observability) and [Scheduling and Dreaming](SPEC.md#scheduling-and-dreaming): restart the runtime wrapper and native gateway, never delete a lease, and inspect before replaying.
 

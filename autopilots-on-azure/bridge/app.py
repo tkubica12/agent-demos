@@ -164,9 +164,6 @@ class InvokeRequest(BaseModel):
 
 class InvokeResponse(BaseModel):
     conversation_id: str = Field(alias="conversationId")
-    sandbox_id: str = Field(alias="sandboxId")
-    gateway_url: str = Field(alias="gatewayUrl")
-    reused_existing_sandbox: bool = Field(alias="reusedExistingSandbox")
     response: str
 
 
@@ -177,9 +174,6 @@ class DreamRunRequest(BaseModel):
 
 class DreamRunResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
-    sandbox_id: str = Field(alias="sandboxId")
-    gateway_url: str = Field(alias="gatewayUrl")
-    reused_existing_sandbox: bool = Field(alias="reusedExistingSandbox")
     response: str
     learning_status: dict[str, Any] = Field(alias="learningStatus")
 
@@ -919,12 +913,6 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
         return invoke_response_from_agent_response(request.conversation_id, response)
     except Exception as exc:
         detail = {"message": str(exc)}
-        sandbox_id = getattr(exc, "sandbox_id", "")
-        gateway_url = getattr(exc, "gateway_url", "")
-        if sandbox_id:
-            detail["sandboxId"] = sandbox_id
-        if gateway_url:
-            detail["gatewayUrl"] = gateway_url
         if os.getenv("AUTOPILOT_BRIDGE_DEBUG", "").lower() in {"1", "true", "yes"}:
             detail["type"] = exc.__class__.__name__
         raise HTTPException(status_code=500, detail=detail) from exc
@@ -960,19 +948,9 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
                 )
             )
     except Exception as exc:
-        detail = {"message": str(exc)}
-        sandbox_id = getattr(exc, "sandbox_id", "")
-        gateway_url = getattr(exc, "gateway_url", "")
-        if sandbox_id:
-            detail["sandboxId"] = sandbox_id
-        if gateway_url:
-            detail["gatewayUrl"] = gateway_url
-        raise HTTPException(status_code=500, detail=detail) from exc
+        raise HTTPException(status_code=500, detail={"message": str(exc)}) from exc
     return DreamRunResponse(
         sessionId=session_id,
-        sandboxId=str(result.agent.raw.get("sandboxId") or ""),
-        gatewayUrl=str(result.agent.raw.get("gatewayUrl") or ""),
-        reusedExistingSandbox=bool(result.agent.raw.get("reusedExistingSandbox")),
         response=result.agent.text,
         learningStatus=result.learning_status,
     )
@@ -1065,13 +1043,6 @@ async def scheduled_learning_status(http_request: Request) -> dict[str, Any]:
 async def user_scheduling_status(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     return schedule_consumer.status()
-
-
-@app.post("/internal/runtime/ensure")
-async def ensure_runtime_status(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
-    adapter = runtime_adapter()
-    return await adapter.ensure_runtime()
 
 
 @app.post("/internal/generated-apps/deploy")
@@ -3114,8 +3085,5 @@ async def invoke_agent_runtime(
 def invoke_response_from_agent_response(conversation_id: str, response: AgentResponse) -> InvokeResponse:
     return InvokeResponse(
         conversationId=conversation_id,
-        sandboxId=str(response.raw.get("sandboxId") or ""),
-        gatewayUrl=str(response.raw.get("gatewayUrl") or ""),
-        reusedExistingSandbox=bool(response.raw.get("reusedExistingSandbox")),
         response=response.text,
     )

@@ -1,29 +1,32 @@
-import os
 import unittest
+import urllib.error
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from scripts.sandbox_runtime import (
     AgentSandboxConfig,
     create_agent_sandbox,
-    ensure_agent_sandbox,
-    ensure_sandbox_runtime_process,
-    get_config,
+    deploy_agent_sandbox,
     recycle_failed_agent_sandbox,
+    require_runtime_ready,
 )
 
 
 class SandboxLauncherTests(unittest.TestCase):
-    def test_configuration_uses_environment_or_explicit_default(self):
+    def test_runtime_readiness_wakes_through_ondemand_health(self):
+        healthy = MagicMock()
+        healthy.__enter__.return_value.status = 200
         with (
-            patch.dict(os.environ, {"CONFIGURED": "value", "EMPTY": ""}, clear=True),
-            patch("scripts.sandbox_runtime.run_text") as run,
+            patch(
+                "scripts.sandbox_runtime.urllib.request.urlopen",
+                side_effect=[urllib.error.HTTPError("https://runtime", 503, "waking", {}, None), healthy],
+            ) as urlopen,
+            patch("scripts.sandbox_runtime.time.sleep") as sleep,
         ):
-            self.assertEqual(get_config("CONFIGURED", "default"), "value")
-            self.assertEqual(get_config("EMPTY", "default"), "default")
-            self.assertEqual(get_config("MISSING", "default"), "default")
-            self.assertEqual(get_config("MISSING"), "")
-        run.assert_not_called()
+            seconds = require_runtime_ready("https://runtime.example/")
+        self.assertGreaterEqual(seconds, 0)
+        self.assertEqual(urlopen.call_args.args[0], "https://runtime.example/health")
+        sleep.assert_called_once_with(2)
 
     def test_runtime_process_uses_current_entrypoint_fields(self):
         class Client:
@@ -78,50 +81,10 @@ class SandboxLauncherTests(unittest.TestCase):
             client.body["lifecycle"]["autoSuspendPolicy"]["mode"],
             "Disk",
         )
+        self.assertEqual(client.body["lifecycle"]["autoSuspendPolicy"]["interval"], 300)
+        self.assertEqual(client.body["ports"][0]["activationMode"], "OnDemand")
         self.assertNotIn("command", client.body)
         self.assertNotIn("args", client.body)
-
-    def test_runtime_process_has_pid_guard_and_private_log(self):
-        class Sandbox:
-            def __init__(self):
-                self.command = ""
-
-            def exec(self, command):
-                self.command = command
-                return SimpleNamespace(
-                    exit_code=0,
-                    stdout="",
-                    stderr="",
-                )
-
-        sandbox = Sandbox()
-        config = AgentSandboxConfig(
-            subscription_id="subscription",
-            resource_group="resource-group",
-            sandbox_group="group",
-            region="swedencentral",
-            image_name="registry/runtime@sha256:digest",
-            runtime_kind="hermes",
-            command=("python3",),
-            args=("/app/start_hermes.py",),
-        )
-
-        ensure_sandbox_runtime_process(sandbox, config)
-
-        self.assertIn("/tmp/autopilot-runtime.pid", sandbox.command)
-        self.assertIn("/tmp/autopilot-runtime.log", sandbox.command)
-        self.assertIn(
-            "http://127.0.0.1:8642/health",
-            sandbox.command,
-        )
-        self.assertIn(
-            "python3 /app/start_hermes.py",
-            sandbox.command,
-        )
-        self.assertIn(
-            "pgrep -f -x",
-            sandbox.command,
-        )
 
     def test_only_failed_runtime_compute_is_recreated(self):
         class Poller:
@@ -149,7 +112,7 @@ class SandboxLauncherTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(client.deleted, [("sandbox-1", 600)])
 
-    def test_stopped_runtime_is_started_in_place(self):
+    def test_missing_runtime_is_created_with_its_data_disk_and_native_url(self):
         config = AgentSandboxConfig(
             subscription_id="subscription",
             resource_group="resource-group",
@@ -158,25 +121,26 @@ class SandboxLauncherTests(unittest.TestCase):
             image_name="registry/runtime@sha256:digest",
             disk_image_id="disk-1",
             runtime_kind="hermes",
+            data_volume_name="hermes-data",
         )
         client = Mock()
-        sandbox = client.get_sandbox_client.return_value
-        sandbox.get.return_value = SimpleNamespace(id="sandbox-1", ports=[])
-        client.get_sandbox.return_value = SimpleNamespace(id="sandbox-1")
+        client.list_volumes.return_value = []
+        created = SimpleNamespace(id="sandbox-1", ports=[SimpleNamespace(port=8642, url="https://runtime.example/")])
         with (
             patch("scripts.sandbox_runtime.create_sandbox_group_client", return_value=client),
             patch("scripts.sandbox_runtime.stale_agent_sandboxes", return_value=[]),
-            patch("scripts.sandbox_runtime.existing_agent_sandbox", return_value={"id": "sandbox-1", "state": "Stopped"}),
-            patch("scripts.sandbox_runtime.ensure_sandbox_runtime_process") as ensure_process,
+            patch("scripts.sandbox_runtime.existing_agent_sandbox", return_value=None),
+            patch("scripts.sandbox_runtime.create_agent_sandbox", return_value=(Mock(), created)) as create,
+            patch("scripts.sandbox_runtime.time.sleep") as sleep,
         ):
-            result = ensure_agent_sandbox(config, wait_for_ready_seconds=0)
-        sandbox.ensure_running.assert_called_once_with(timeout=600)
-        client.begin_delete_sandbox.assert_not_called()
-        client.create_volume.assert_not_called()
-        ensure_process.assert_called_once_with(sandbox, config)
+            result = deploy_agent_sandbox(config)
+        client.create_volume.assert_called_once()
+        create.assert_called_once_with(client, config=config, disk_id="disk-1")
+        client.get_sandbox_client.assert_not_called()
+        sleep.assert_not_called()
         self.assertEqual(result.sandbox_id, "sandbox-1")
-        self.assertTrue(result.reused_existing_sandbox)
-
+        self.assertEqual(result.endpoint_url, "https://runtime.example")
+        self.assertFalse(result.reused_existing_sandbox)
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -76,7 +76,7 @@ class AgentIdentityTokenProvider:
         self._client_factory = client_factory
         self._credential: TokenCredential | None = None
         self._cache: dict[tuple[str, str], tuple[str, float]] = {}
-        self._lock = asyncio.Lock()
+        self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     @classmethod
     def from_environment(cls) -> "AgentIdentityTokenProvider":
@@ -84,62 +84,62 @@ class AgentIdentityTokenProvider:
 
     async def get_agent_token(self, scope: str) -> str:
         self._config.validate()
-        cache_key = ("agent", scope)
-        async with self._lock:
-            cached = self._cached(cache_key)
-            if cached:
-                return cached
-            blueprint_token = await self._get_blueprint_exchange_token()
-            token, expires_in = await self._exchange(
-                {
-                    "client_id": self._config.agent_identity_client_id,
-                    "scope": scope,
-                    "grant_type": "client_credentials",
-                    "client_assertion_type": CLIENT_ASSERTION_TYPE,
-                    "client_assertion": blueprint_token,
-                }
-            )
-            self._store(cache_key, token, expires_in)
-            return token
+        return await self._cached_token(("agent", scope), lambda: self._exchange_agent_token(scope))
 
     async def get_agent_user_token(self, scope: str) -> str:
         self._config.validate(require_agent_user=True)
-        cache_key = ("agent_user", scope)
-        async with self._lock:
-            cached = self._cached(cache_key)
+        return await self._cached_token(("agent_user", scope), lambda: self._exchange_agent_user_token(scope))
+
+    async def _cached_token(
+        self,
+        key: tuple[str, str],
+        acquire: Callable[[], Awaitable[tuple[str, int]]],
+    ) -> str:
+        """Serialize acquisition per token, so independent scopes are exchanged concurrently."""
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            cached = self._cached(key)
             if cached:
                 return cached
-            blueprint_token = await self._get_blueprint_exchange_token()
-            agent_exchange_token, _ = await self._exchange(
-                {
-                    "client_id": self._config.agent_identity_client_id,
-                    "scope": TOKEN_EXCHANGE_SCOPE,
-                    "grant_type": "client_credentials",
-                    "client_assertion_type": CLIENT_ASSERTION_TYPE,
-                    "client_assertion": blueprint_token,
-                }
-            )
-            token, expires_in = await self._exchange(
-                {
-                    "client_id": self._config.agent_identity_client_id,
-                    "scope": scope,
-                    "grant_type": "user_fic",
-                    "client_assertion_type": CLIENT_ASSERTION_TYPE,
-                    "client_assertion": blueprint_token,
-                    "user_id": self._config.agent_user_id,
-                    "user_federated_identity_credential": agent_exchange_token,
-                }
-            )
-            self._store(cache_key, token, expires_in)
+            token, expires_in = await acquire()
+            self._store(key, token, expires_in)
             return token
 
-    async def _get_blueprint_exchange_token(self) -> str:
+    async def _exchange_agent_token(self, scope: str) -> tuple[str, int]:
+        return await self._exchange(
+            {
+                "client_id": self._config.agent_identity_client_id,
+                "scope": scope,
+                "grant_type": "client_credentials",
+                "client_assertion_type": CLIENT_ASSERTION_TYPE,
+                "client_assertion": await self._blueprint_exchange_token(),
+            }
+        )
+
+    async def _exchange_agent_user_token(self, scope: str) -> tuple[str, int]:
+        blueprint_token = await self._blueprint_exchange_token()
+        agent_exchange_token = await self.get_agent_token(TOKEN_EXCHANGE_SCOPE)
+        return await self._exchange(
+            {
+                "client_id": self._config.agent_identity_client_id,
+                "scope": scope,
+                "grant_type": "user_fic",
+                "client_assertion_type": CLIENT_ASSERTION_TYPE,
+                "client_assertion": blueprint_token,
+                "user_id": self._config.agent_user_id,
+                "user_federated_identity_credential": agent_exchange_token,
+            }
+        )
+
+    async def _blueprint_exchange_token(self) -> str:
+        return await self._cached_token(("blueprint", TOKEN_EXCHANGE_SCOPE), self._exchange_blueprint_token)
+
+    async def _exchange_blueprint_token(self) -> tuple[str, int]:
         credential = self._credential
         if credential is None:
             credential = self._credential_factory()
             self._credential = credential
         managed_identity_token: AccessToken = await asyncio.to_thread(credential.get_token, TOKEN_EXCHANGE_SCOPE)
-        token, _ = await self._exchange(
+        return await self._exchange(
             {
                 "client_id": self._config.blueprint_client_id,
                 "scope": TOKEN_EXCHANGE_SCOPE,
@@ -149,7 +149,6 @@ class AgentIdentityTokenProvider:
                 "fmi_path": self._config.agent_identity_client_id,
             }
         )
-        return token
 
     async def _exchange(self, form: dict[str, str]) -> tuple[str, int]:
         endpoint = f"{self._config.authority_host.rstrip('/')}/{self._config.tenant_id}/oauth2/v2.0/token"

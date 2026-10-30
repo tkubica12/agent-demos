@@ -1,4 +1,5 @@
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -10,11 +11,12 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtimes" / "hermes"))
 
 import start_hermes
+import runtime_keepalive
 
 
 class HermesBootstrapTests(unittest.TestCase):
     def test_native_telemetry_plugin_cannot_be_silently_disabled(self):
-        with self.assertRaisesRegex(ValueError, "telemetry plugin must not be disabled"):
+        with self.assertRaisesRegex(ValueError, "autopilots-telemetry plugin must not be disabled"):
             start_hermes.hermes_config(
                 Path("unused-runtime-home"),
                 {"plugins": {"disabled": ["autopilots-telemetry"]}},
@@ -25,10 +27,28 @@ class HermesBootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config = start_hermes.hermes_config(Path(directory), base)
             repeated = start_hermes.hermes_config(Path(directory), config)
-        self.assertEqual(config["plugins"]["enabled"], ["azure", "autopilots-telemetry"])
+        self.assertEqual(config["plugins"]["enabled"], ["azure", "autopilots-telemetry", "keepalive"])
         self.assertEqual(repeated["plugins"], config["plugins"])
         self.assertEqual(base["plugins"]["enabled"], ["azure"])
         self.assertEqual(config["plugins"]["disabled"], ["unrelated"])
+
+    def test_native_keepalive_plugin_cannot_be_disabled(self):
+        with self.assertRaisesRegex(ValueError, "keepalive plugin must not be disabled"):
+            start_hermes.hermes_config(
+                Path("unused-runtime-home"),
+                {"plugins": {"disabled": ["keepalive"]}},
+            )
+
+    def test_hermes_starts_when_loopback_adapter_accepts_connections(self):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        try:
+            start_hermes.wait_for_loopback(Mock(poll=Mock(return_value=None)), listener.getsockname()[1], timeout=2)
+        finally:
+            listener.close()
+        with self.assertRaisesRegex(RuntimeError, "exited with code 3"):
+            start_hermes.wait_for_loopback(Mock(poll=Mock(return_value=3), returncode=3), 9, timeout=2)
 
     def test_health_never_reports_ready_without_a_running_gateway(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -39,6 +59,38 @@ class HermesBootstrapTests(unittest.TestCase):
                     response = client.get("/health")
                     self.assertEqual(response.status_code, 503)
                     self.assertEqual(response.json()["status"], "gateway-unavailable")
+
+    def test_runtime_requests_keep_deterministic_work_alive_but_health_does_not(self):
+        supervisor = runtime_keepalive.Keepalive(
+            "https://sandbox.example/health", send=Mock(return_value=200),
+        )
+        self.addCleanup(supervisor.close)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "test-key"}),
+            patch.object(start_hermes, "get_keepalive", return_value=supervisor),
+            patch.object(supervisor, "_run"),
+        ):
+            home = Path(directory)
+            app = start_hermes.create_health_app(
+                home, home, None, Mock(pid=123, poll=Mock(return_value=None)),
+            )
+            client = TestClient(app)
+            client.get("/health")
+            self.assertEqual(supervisor.tick(), 0)
+            supervisor._send.assert_not_called()
+
+            def begin(*args, **kwargs):
+                self.assertEqual(supervisor.tick(), 1)
+                return {"token": "test-turn"}
+
+            with patch.object(start_hermes, "begin_learning_turn", side_effect=begin):
+                response = client.post(
+                    "/internal/learning/turns", json={},
+                    headers={"X-Autopilot-Key": "test-key"},
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(supervisor.tick(), 0)
 
     def test_native_foundry_auth_replaces_persisted_proxy_configuration(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

@@ -83,6 +83,20 @@ def request_with_retry(
     return response
 
 
+def wait_for_native_runtime(client: httpx.Client, runtime_url: str, api_key: str, *, timeout: int = 300) -> None:
+    """Wake the runtime through its OnDemand port and wait until the native Hermes API answers."""
+
+    def status() -> int:
+        try:
+            return client.get(
+                f"{runtime_url}/v1/models", headers={"Authorization": f"Bearer {api_key}"}, timeout=60,
+            ).status_code
+        except httpx.TransportError:
+            return 0
+
+    wait_until(status, lambda code: code == 200, timeout=timeout, interval=2)
+
+
 def require_awake_gateway(outputs: dict[str, Any]) -> dict[str, Any]:
     gateway = worker_sandbox(outputs, "gateway")
     policy = (gateway.get("lifecycle") or {}).get("autoSuspendPolicy") or {}
@@ -128,32 +142,22 @@ def main() -> None:
         raise RuntimeError("User scheduling is not enabled for this Worker.")
     gateway_before = require_awake_gateway(outputs)
 
-    bridge_url = str(outputs["bridge_url"]).rstrip("/")
+    runtime_url = str(outputs["runtime_url"]).rstrip("/")
     api_key = str(tfvars["api_server_key"])
-    bridge_headers = {"X-Autopilot-Key": api_key}
     gateway_headers = {"Authorization": f"Bearer {api_key}"}
     internal_headers = {"X-Autopilot-Key": api_key}
     marker = f"A12-SCHEDULE-{uuid.uuid4().hex[:12]}"
     due_at: datetime | None = None
     job_id = ""
-    gateway_url = ""
 
     with httpx.Client(timeout=900) as client:
-        invoke = request_with_retry(
-            client,
-            "POST",
-            f"{bridge_url}/internal/runtime/ensure",
-            headers=bridge_headers,
-            timeout=300,
-        )
-        invoke.raise_for_status()
-        gateway_url = str(invoke.json()["gatewayUrl"]).rstrip("/")
+        wait_for_native_runtime(client, runtime_url, api_key)
         if args.require_runtime_suspension:
             require_suspend_window(outputs, args.due_seconds)
         due_at = datetime.now(UTC) + timedelta(seconds=args.due_seconds)
         try:
             created = client.post(
-                f"{gateway_url}/api/jobs",
+                f"{runtime_url}/api/jobs",
                 headers=gateway_headers,
                 json={
                     "name": f"A12 smoke {marker}",
@@ -166,13 +170,13 @@ def main() -> None:
             created.raise_for_status()
             job_id = str(created.json()["job"]["id"])
             bound = client.post(
-                f"{gateway_url}/internal/cron/bind-local",
+                f"{runtime_url}/internal/cron/bind-local",
                 headers=internal_headers,
                 json={"jobIds": [job_id]},
             )
             bound.raise_for_status()
             reconciled = client.post(
-                f"{gateway_url}/internal/cron/reconcile",
+                f"{runtime_url}/internal/cron/reconcile",
                 headers=internal_headers,
                 json={},
             )
@@ -182,7 +186,7 @@ def main() -> None:
                     f"Hermes cron reconciliation failed: {reconciled.json()!r}"
                 )
             jobs = client.get(
-                f"{gateway_url}/internal/cron/jobs",
+                f"{runtime_url}/internal/cron/jobs",
                 headers=internal_headers,
             )
             jobs.raise_for_status()
@@ -229,20 +233,9 @@ def main() -> None:
                 wait_until(lambda: runtime_state(outputs), lambda state: state.lower() == "running", timeout=300)
 
             def receipt_probe() -> dict[str, Any]:
-                nonlocal gateway_url
                 try:
-                    ensured = request_with_retry(
-                        client,
-                        "POST",
-                        f"{bridge_url}/internal/runtime/ensure",
-                        headers=bridge_headers,
-                        attempts=2,
-                        timeout=120,
-                    )
-                    ensured.raise_for_status()
-                    gateway_url = str(ensured.json()["gatewayUrl"]).rstrip("/")
                     receipt_url = (
-                        f"{gateway_url}/internal/cron/delivery-receipt/"
+                        f"{runtime_url}/internal/cron/delivery-receipt/"
                         f"{job_id}/{revision}"
                     )
                     response = client.get(
@@ -259,7 +252,7 @@ def main() -> None:
                 receipt = response.json()
                 if receipt.get("status") == "pending":
                     jobs_response = client.get(
-                        f"{gateway_url}/internal/cron/jobs",
+                        f"{runtime_url}/internal/cron/jobs",
                         headers=internal_headers,
                         timeout=60,
                     )
@@ -314,15 +307,10 @@ def main() -> None:
                 "queueCounts": queue_counts,
             }
         finally:
-            if gateway_url and job_id:
-                ensured = request_with_retry(
-                    client, "POST", f"{bridge_url}/internal/runtime/ensure",
-                    headers=bridge_headers, timeout=300,
-                )
-                ensured.raise_for_status()
-                gateway_url = str(ensured.json()["gatewayUrl"]).rstrip("/")
+            if job_id:
+                wait_for_native_runtime(client, runtime_url, api_key)
                 removed = request_with_retry(
-                    client, "DELETE", f"{gateway_url}/api/jobs/{job_id}",
+                    client, "DELETE", f"{runtime_url}/api/jobs/{job_id}",
                     headers=gateway_headers, attempts=2, timeout=60,
                 )
                 if removed.status_code != 404:

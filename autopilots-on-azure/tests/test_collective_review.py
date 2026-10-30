@@ -42,9 +42,6 @@ class CollectiveReviewTests(unittest.TestCase):
             {
                 "packet": packet,
                 "receipt": receipt,
-                "sandboxId": "sandbox-1",
-                "gatewayUrl": "https://sandbox.example",
-                "reusedExistingSandbox": True,
             }
         )
 

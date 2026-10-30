@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache
 from urllib.parse import urlsplit, urlunsplit
@@ -12,6 +16,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .tokens import AgentIdentityTokenProvider
 
+
+logger = logging.getLogger(__name__)
 
 _HOP_BY_HOP_HEADERS = {
     "connection",
@@ -104,7 +110,23 @@ async def access_token(config: McpServerConfig) -> str:
     return await provider.get_agent_token(config.scope)
 
 
-app = FastAPI(title="Autopilots Agent Identity MCP adapter")
+async def prefetch_tokens() -> None:
+    """Exchange every upstream token while Hermes is still importing, before its blocking MCP discovery."""
+    configs = {(config.identity_mode, config.scope): config for config in server_configs().values()}
+    results = await asyncio.gather(*(access_token(config) for config in configs.values()), return_exceptions=True)
+    for (identity_mode, scope), result in zip(configs, results):
+        if isinstance(result, Exception):
+            logger.warning("MCP token prefetch failed for %s scope %s: %s", identity_mode, scope, result)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    prefetch = asyncio.create_task(prefetch_tokens())
+    yield
+    prefetch.cancel()
+
+
+app = FastAPI(title="Autopilots Agent Identity MCP adapter", lifespan=lifespan)
 
 
 @app.get("/health")

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import shutil
 import sys
@@ -20,6 +21,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from runtime_keepalive import PLUGIN_NAME as KEEPALIVE_PLUGIN_NAME, get_keepalive
 from bridge.hermes_telemetry import (
     GatewayTraceConflictError,
     PLUGIN_NAME as TELEMETRY_PLUGIN_NAME,
@@ -257,12 +259,15 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         }
     config = _deep_merge(base or {}, runtime_config)
     plugins = dict(config.get("plugins") or {})
-    if TELEMETRY_PLUGIN_NAME in (plugins.get("disabled") or []):
-        raise ValueError("Hermes native telemetry plugin must not be disabled.")
+    for required_plugin in (TELEMETRY_PLUGIN_NAME, KEEPALIVE_PLUGIN_NAME):
+        if required_plugin in (plugins.get("disabled") or []):
+            raise ValueError(f"Hermes native {required_plugin} plugin must not be disabled.")
     enabled_plugins = plugins.get("enabled") or []
     if not isinstance(enabled_plugins, list):
         raise ValueError("Hermes plugins.enabled must be a list.")
-    plugins["enabled"] = list(dict.fromkeys([*enabled_plugins, TELEMETRY_PLUGIN_NAME]))
+    plugins["enabled"] = list(dict.fromkeys([
+        *enabled_plugins, TELEMETRY_PLUGIN_NAME, KEEPALIVE_PLUGIN_NAME,
+    ]))
     config["plugins"] = plugins
     config["model"].pop("name", None)
     configured_servers = config.get("mcp_servers")
@@ -353,6 +358,20 @@ def start_m365_collaboration_mcp() -> subprocess.Popen | None:
     )
 
 
+def wait_for_loopback(process: subprocess.Popen, port: int, timeout: float = 30) -> None:
+    """Start Hermes as soon as a local adapter accepts connections instead of after a fixed delay."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"Loopback service on port {port} exited with code {process.returncode}.")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return
+        except OSError:
+            time.sleep(0.1)
+    raise TimeoutError(f"Loopback service on port {port} did not start within {timeout:.0f} seconds.")
+
+
 def write_config(home: Path) -> Path:
     config_path = home / "config.yaml"
     base: dict[str, Any] = {}
@@ -396,6 +415,15 @@ def create_health_app(
     app = FastAPI(title="Hermes ACA Sandbox runtime")
     app.add_middleware(TelemetryMiddleware, runtime=True)
     app.router.add_event_handler("shutdown", flush_telemetry)
+    keepalive = get_keepalive()
+
+    @app.middleware("http")
+    async def keep_runtime_request_active(request: Request, call_next):
+        if keepalive is not None and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            with keepalive.activity("runtime-request"):
+                return await call_next(request)
+        return await call_next(request)
+
     role_release_health = None
     if role_release:
         role_release_health = {
@@ -1081,14 +1109,16 @@ def main() -> None:
     try:
         mcp_proxy = start_agent_mcp_proxy()
         collaboration_mcp = start_m365_collaboration_mcp()
-        if mcp_proxy or collaboration_mcp:
-            time.sleep(2)
+        if mcp_proxy:
+            wait_for_loopback(mcp_proxy, int(os.getenv("AGENT_MCP_PROXY_PORT", str(DEFAULT_AGENT_MCP_PROXY_PORT))))
+        if collaboration_mcp:
+            wait_for_loopback(
+                collaboration_mcp,
+                int(os.getenv("M365_COLLABORATION_MCP_PORT", str(DEFAULT_M365_COLLABORATION_MCP_PORT))),
+            )
         if bool_env("HERMES_START_GATEWAY", True):
             gateway = start_gateway(profile_home)
             print(f"Started Hermes gateway pid={gateway.pid}", flush=True)
-            time.sleep(3)
-            if gateway.poll() is not None:
-                raise RuntimeError(f"Hermes gateway exited during startup with code {gateway.returncode}.")
 
         if bool_env("HERMES_HEALTH_WRAPPER", False) or gateway is None:
             app = create_health_app(home, profile_home, role_release, gateway)

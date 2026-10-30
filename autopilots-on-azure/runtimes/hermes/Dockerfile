@@ -41,6 +41,7 @@ COPY runtimes/hermes/pyproject.toml runtimes/hermes/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --python python3 --no-managed-python
 
 COPY runtimes/hermes/start_hermes.py .
+COPY runtimes/hermes/runtime_keepalive.py .
 COPY runtimes/hermes/blueprint.py .
 COPY runtimes/hermes/learning.py .
 COPY runtimes/hermes/collective_learning.py .

@@ -3,6 +3,16 @@ variable "autopilot_name" {
   default = "hermes"
 }
 
+variable "deployer_principal_id" {
+  type        = string
+  description = "Stable object ID of the deployment principal. Changing the operator login must not change existing grants."
+
+  validation {
+    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.deployer_principal_id))
+    error_message = "deployer_principal_id must be the existing deployment principal's object ID."
+  }
+}
+
 variable "agent_runtime" {
   type    = string
   default = "hermes"
