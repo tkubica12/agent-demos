@@ -6,7 +6,6 @@ output "deployment_config" {
     runtime_image                            = var.runtime_image
     runtime_disk_source_image                = var.runtime_disk_source_image
     runtime_disk_image_name                  = local.runtime_disk_image_name
-    runtime_data_volume_name                 = local.runtime_data_volume_name
     bridge_image                             = var.bridge_image
     bridge_disk_source_image                 = var.bridge_disk_source_image
     private_mcp_image                        = var.private_mcp_image

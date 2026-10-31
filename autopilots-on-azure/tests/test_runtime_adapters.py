@@ -27,6 +27,7 @@ from bridge.runtime.hermes import (
     session_reset_command,
 )
 from scripts.sandbox_runtime import (
+    RUNTIME_BACKUP_VOLUME,
     config_from_environment,
     deploy_agent_sandbox,
     hermes_sandbox_config,
@@ -860,7 +861,7 @@ class RuntimeAdapterTests(unittest.TestCase):
             config.environment["COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY"],
             "approval-public-key",
         )
-        self.assertEqual(config.data_volume_name, "hermes-data")
+        self.assertEqual(config.environment["RUNTIME_BACKUP_DIR"], "/backup")
         self.assertEqual(runtime_labels(config)["kind"], "hermes")
         self.assertEqual(runtime_labels(config)["roleBlueprint"], "junior-project-manager")
         self.assertEqual(runtime_labels(config)["roleRelease"], "3.0.0")
@@ -914,25 +915,82 @@ class RuntimeAdapterTests(unittest.TestCase):
                 deploy_agent_sandbox(config)
         create_client.assert_not_called()
 
-    def test_hermes_environment_config_uses_runtime_volume_env(self):
-        previous = os.environ.get("AGENT_RUNTIME_DATA_VOLUME_NAME")
-        os.environ["AGENT_RUNTIME_DATA_VOLUME_NAME"] = "hermes-env-data"
-        try:
-            config = config_from_environment(
-                subscription_id="sub-1",
-                resource_group="rg-1",
-                sandbox_group="sandbox-group-1",
-                region="swedencentral",
-                image_name="registry.example/hermes-runtime@sha256:test",
-                api_server_key="api-key-1",
-            )
-        finally:
-            if previous is None:
-                os.environ.pop("AGENT_RUNTIME_DATA_VOLUME_NAME", None)
-            else:
-                os.environ["AGENT_RUNTIME_DATA_VOLUME_NAME"] = previous
+    def replacement_scenario(self, exec_result):
+        config = hermes_sandbox_config(
+            subscription_id="sub-1",
+            resource_group="rg-1",
+            sandbox_group="sandbox-group-1",
+            region="swedencentral",
+            image_name="",
+            disk_image_id="ready-disk-1",
+            role_release_commit="a" * 40,
+        )
+        events = []
+        backup_volume = [{"volumeName": RUNTIME_BACKUP_VOLUME}]
 
-        self.assertEqual(config.data_volume_name, "hermes-env-data")
+        class SandboxClient:
+            def __init__(self, sandbox_id):
+                self.sandbox_id = sandbox_id
+
+            def ensure_running(self, timeout):
+                events.append(("wake", self.sandbox_id))
+
+            def exec(self, command):
+                events.append(("exec", self.sandbox_id, command))
+                return exec_result
+
+        class Poller:
+            def result(self):
+                return None
+
+        class Client:
+            _group_path = "/groups/test"
+
+            def _dp_get(self, path):
+                return [
+                    {"id": "old-runtime", "state": "Stopped", "volumes": backup_volume,
+                     "labels": {**runtime_labels(config), "runtimeConfigRevision": "old"}},
+                    {"id": "failed-runtime", "state": "Failed", "volumes": backup_volume,
+                     "labels": {**runtime_labels(config), "runtimeConfigRevision": "older"}},
+                    {"id": "sandbox-1", "state": "Stopped", "volumes": backup_volume,
+                     "labels": runtime_labels(config),
+                     "ports": [{"port": 8642, "url": "https://runtime.example/"}]},
+                ]
+
+            def get_sandbox_client(self, sandbox_id):
+                return SandboxClient(sandbox_id)
+
+            def begin_delete_sandbox(self, sandbox_id, polling_timeout):
+                events.append(("delete", sandbox_id))
+                return Poller()
+
+        return config, Client(), events
+
+    def test_replaced_runtime_publishes_final_backup_before_deletion(self):
+        published = SimpleNamespace(exit_code=0, stderr="", stdout='{"archive": "hermes-backup-1.zip", "seconds": 4.2}\n')
+        config, client, events = self.replacement_scenario(published)
+
+        with patch.object(sandbox_runtime, "create_sandbox_group_client", return_value=client):
+            result = deploy_agent_sandbox(config)
+
+        command = "/app/.venv/bin/python /app/runtime_backup.py --home /data/hermes --backup-dir /backup"
+        self.assertEqual(
+            events,
+            [("wake", "old-runtime"), ("exec", "old-runtime", command), ("delete", "old-runtime"),
+             ("delete", "failed-runtime")],
+        )
+        self.assertEqual(result.sandbox_id, "sandbox-1")
+        self.assertEqual(result.backup_volume, RUNTIME_BACKUP_VOLUME)
+
+    def test_failed_final_backup_keeps_the_runtime_being_replaced(self):
+        failed = SimpleNamespace(exit_code=1, stdout="", stderr="hermes backup failed (1)")
+        config, client, events = self.replacement_scenario(failed)
+
+        with patch.object(sandbox_runtime, "create_sandbox_group_client", return_value=client):
+            with self.assertRaisesRegex(RuntimeError, "Final Worker backup on runtime Sandbox old-runtime failed"):
+                deploy_agent_sandbox(config)
+
+        self.assertNotIn(("delete", "old-runtime"), events)
 
     def test_deployment_reuses_matching_runtime_without_waking_or_exec(self):
         config = hermes_sandbox_config(
@@ -942,7 +1000,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             region="swedencentral",
             image_name="",
             disk_image_id="ready-disk-1",
-            data_volume_name="hermes-data",
         )
 
         class Client:
@@ -953,13 +1010,13 @@ class RuntimeAdapterTests(unittest.TestCase):
                     {
                         "id": "other-sandbox",
                         "labels": {"app": "other-project"},
-                        "volumes": [{"volumeName": "hermes-data"}],
+                        "volumes": [{"volumeName": RUNTIME_BACKUP_VOLUME}],
                     },
                     {
                         "id": "sandbox-1",
                         "state": "Stopped",
                         "labels": runtime_labels(config),
-                        "volumes": [{"volumeName": "hermes-data"}],
+                        "volumes": [{"volumeName": RUNTIME_BACKUP_VOLUME}],
                         "ports": [{"port": 8642, "url": "https://runtime.example/", "activationMode": "OnDemand"}],
                     },
                 ]
@@ -987,7 +1044,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             sandbox_group="sandbox-group-1",
             region="swedencentral",
             image_name="registry.example/hermes-runtime@sha256:test",
-            data_volume_name="hermes-data",
             api_server_key="api-key-1",
             role_blueprint="junior-project-manager",
             role_blueprint_source="https://example.com/roles.git",

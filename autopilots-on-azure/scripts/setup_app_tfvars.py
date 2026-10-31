@@ -87,20 +87,10 @@ def resolve_deployer_principal_id(previous: dict[str, Any], requested: str = "")
     return str(uuid.UUID(value))
 
 
-def default_data_volume_name(runtime: str, autopilot_name: str = "") -> str:
-    if autopilot_name and autopilot_name != "hermes":
-        normalized = "".join(character if character.isalnum() else "-" for character in autopilot_name.lower()).strip("-")
-        if not normalized:
-            raise ValueError("autopilot_name must contain at least one letter or number.")
-        return f"hermes-{normalized[:40]}-data"
-    return "hermes-data"
-
-
 def build_tfvars(
     *,
     runtime: str,
     autopilot_name: str,
-    data_volume_name: str,
     previous: dict[str, Any],
     deployer_principal_id: str = "",
     worker_owner_id: str = "",
@@ -148,7 +138,6 @@ def build_tfvars(
         {
             "autopilot_name": autopilot_name,
             "agent_runtime": runtime,
-            "runtime_data_volume_name": data_volume_name,
             "user_scheduling_enabled": (
                 user_scheduling_enabled
                 if user_scheduling_enabled is not None
@@ -293,7 +282,6 @@ def main() -> None:
         "--worker-owner-id", default="",
         help="Entra object ID of the Worker owner (Agent Identity sponsor); only this user receives the learning digest.",
     )
-    parser.add_argument("--data-volume-name", default="")
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY. Generated when omitted.")
     parser.add_argument("--role-blueprint", default="", help="Hermes Role Blueprint name.")
     parser.add_argument("--role-blueprint-source", default="", help="Git repository URL containing the Role Blueprint.")
@@ -371,11 +359,6 @@ def main() -> None:
     previous = existing_app_tfvars(runtime, state_name)
     deployer_principal_id = resolve_deployer_principal_id(previous, args.deployer_principal_id)
     agent365_auth = load_agent365_auth(runtime, state_name) if args.agent365_from_generated else {}
-    data_volume_name = (
-        args.data_volume_name
-        or previous.get("runtime_data_volume_name")
-        or default_data_volume_name(runtime, autopilot_name)
-    )
     collective_identity_path = (
         Path(args.collective_approval_identity_file)
         if args.collective_approval_identity_file
@@ -388,7 +371,6 @@ def main() -> None:
         worker_owner_id=args.worker_owner_id,
         runtime=runtime,
         autopilot_name=autopilot_name,
-        data_volume_name=data_volume_name,
         previous=previous,
         api_server_key=args.api_server_key,
         runtime_image=args.runtime_image,
@@ -438,7 +420,6 @@ def main() -> None:
                 "runtime": runtime,
                 "stateName": state_name,
                 "workerId": autopilot_name,
-                "dataVolumeName": data_volume_name,
                 "runtimeTfvarsFile": str(runtime_path),
                 "activeTfvarsFile": "" if args.runtime_only else str(active_path),
                 "activePrecedenceTfvarsFile": "" if args.runtime_only else str(precedence_path),

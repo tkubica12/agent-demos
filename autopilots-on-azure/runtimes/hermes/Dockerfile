@@ -52,7 +52,7 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --target /opt/autopilot
         --no-deps --require-hashes -r /opt/autopilots/hermes-site.txt \
     && /opt/hermes/.venv/bin/python -c "import sys; sys.path.append('/opt/autopilots/hermes-site'); import azure.servicebus, azure.monitor.opentelemetry.exporter, yaml"
 
-COPY runtimes/hermes/start_hermes.py runtimes/hermes/runtime_keepalive.py runtimes/hermes/runtime_routes.py ./
+COPY runtimes/hermes/start_hermes.py runtimes/hermes/runtime_keepalive.py runtimes/hermes/runtime_routes.py runtimes/hermes/runtime_backup.py ./
 COPY runtimes/hermes/blueprint.py runtimes/hermes/collective_learning.py runtimes/hermes/native_learning.py ./
 COPY runtimes/hermes/azure_cron_provider.py runtimes/hermes/cron_runtime.py ./
 COPY runtimes/hermes/plugins ./runtime_plugins

@@ -1,8 +1,8 @@
 # Hermes on Azure
 
-A Junior Project Manager digital Worker: Hermes 0.19.0 in Azure Container Apps Sandboxes, Microsoft Agent 365 for Teams and Microsoft 365, and Foundry `gpt-6.1-sol` with Entra-authenticated inference.
+A Junior Project Manager digital Worker: Hermes 0.22.5 (official image) in Azure Container Apps Sandboxes, Microsoft Agent 365 for Teams and Microsoft 365, and Foundry `gpt-6.1-sol` with Entra-authenticated inference.
 
-Each Worker owns its identity, persistent state, memory, and skills. Local learning becomes shared behavior only through signed Learning Packets, human-reviewed Git Promotion, and Worker Refresh.
+Each Worker owns its identity, persistent state, memory, and skills. Hermes learns natively; the Worker owner reviews each change, and local learning becomes shared behavior only through signed Learning Packets, human-reviewed Git Promotion, and Worker Refresh.
 
 ![Architecture: Teams and Outlook reach the Worker through Agent 365 and the always-on gateway Sandbox; the gateway wakes the Hermes runtime Sandbox, which calls Foundry with Entra and MCP tools with Worker tokens; scheduled jobs flow through Service Bus.](docs/assets/architecture.svg)
 
@@ -18,7 +18,7 @@ uv run python -m scripts.demo_ops smoke --state-name hermes2 `
   --message "Reply exactly: Hermes ready" --timeout 600
 ```
 
-The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. `hermes2` also runs user scheduling and Service Bus Dreaming; `hermes` does not. The keepalive/five-minute lifecycle is currently piloted on `hermes2`; `hermes` intentionally retains its previous deployment.
+The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. `hermes2` also runs user scheduling and Service Bus Dreaming; `hermes` does not. Hermes 0.22.5, native learning and the Memory-suspended runtime with Blob-volume backups run on `hermes2`; `hermes` intentionally retains its previous deployment.
 
 ## Read next
 
@@ -27,7 +27,7 @@ Three architecture documents, each an interactive HTML page (hover or pin any di
 | Document | Contents | Offline and print |
 | --- | --- | --- |
 | [Architecture](docs/architecture.html) | Operating model, conversation turns, identities, documents, state and recovery | [Standalone](docs/architecture.standalone.html), [PDF](docs/architecture.pdf) |
-| [Collective learning](docs/collective-learning.html) | Memory layers, local acceptance, signed packets, Git Promotion, Worker Refresh | [Standalone](docs/collective-learning.standalone.html), [PDF](docs/collective-learning.pdf) |
+| [Collective learning](docs/collective-learning.html) | Memory layers, native learning and owner review, signed packets, Git Promotion, Worker Refresh | [Standalone](docs/collective-learning.standalone.html), [PDF](docs/collective-learning.pdf) |
 | [Azure implementation](docs/azure-implementation.html) | Deployed topology, roles, Terraform layers, suspend behavior, telemetry, production network | [Standalone](docs/azure-implementation.standalone.html), [PDF](docs/azure-implementation.pdf) |
 
 Then:
@@ -52,4 +52,4 @@ node assets\export-pdf.js architecture.standalone.html
 
 ## Boundaries
 
-The gateway stays awake; runtime compute suspends to Disk after five idle minutes. Deployment creates runtime compute; the gateway only calls its URL, and OnDemand ingress wakes it. A native keepalive plugin sends self-ingress only during model/tool execution; the wrapper also covers deterministic runtime requests. Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` creates and removes whole Workers; uploading the Teams package stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists all current limitations.
+The gateway stays awake; runtime compute suspends to memory after five idle minutes and resumes Hermes in about two seconds. Its home lives on the Sandbox disk and is backed up with native `hermes backup` to a platform Blob volume, from which a replacement runtime restores it. Deployment creates runtime compute; the gateway only calls its URL, and OnDemand ingress wakes it. The `autopilots` Hermes plugin sends self-ingress only during model/tool execution; the wrapper also covers deterministic runtime requests. Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` creates and removes whole Workers; uploading the Teams package stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists all current limitations.

@@ -369,8 +369,3 @@ variable "workiq_copilot_mcp_scope" {
   type    = string
   default = "ab7c82de-7946-4454-ac28-70249d17c95e/Tools.ListInvoke.All"
 }
-
-variable "runtime_data_volume_name" {
-  type    = string
-  default = "hermes-data"
-}

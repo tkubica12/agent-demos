@@ -2,11 +2,11 @@
 
 ## Decision
 
-Keep private adaptation local. Export only governed skill changes, cumulative evidence, and synthetic proposed cases through a signed Learning Packet; review shared behavior in Git.
+Keep private adaptation local and let Hermes learn natively. Export only governed skill changes that the Worker owner chose to share, with their native ledger chain, through a signed Learning Packet; review shared behavior in Git.
 
 - Personal Memory, Private Playbooks, and raw Work History never enter packets.
-- Provenance 3.0 links each exact `SKILL.md` create/patch to hashes, Worker/release, generalized rationale, privacy result, and declarative agent-proposed scenarios.
-- Packet 2.0 retains the complete baseline-to-final chain. Scripts, references, and other artifacts are excluded.
+- Hermes' native skill ledger records every skill change with actor, action and before/after hashes. The Worker owner reviews changes in a private Teams digest and can undo them, approve or reject staged writes, and choose Share, Keep (private playbook) or Discard for Role Skill and Candidate Improvement changes.
+- Packet 3.0 contains each shared skill's single `SKILL.md`, release-baseline hashes, ledger chain and owner decisions. Hashes are recomputed from disk; scripts, references, and other artifacts are excluded, and every unshared or untraceable change is listed as excluded.
 - Human approval binds the digest and exact Worker state. The gateway holds the Ed25519 private key; Workers/reviewers receive public keys.
 - Signed `reject_and_refresh` authorizes discard instead of export. It is a different disposition, not an approved empty packet.
 - Central review compares compatible releases, support, conflicts, role fit, and privacy. Promotion creates a draft PR; only human review permits merge and subsequent refresh.
@@ -16,10 +16,10 @@ Keep private adaptation local. Export only governed skill changes, cumulative ev
 | Alternative | Reason not selected |
 | --- | --- |
 | Direct skill synchronization | Leaks assignment-specific information and promotes local mistakes automatically. |
-| File diffs alone | Loses why the Worker changed its behavior. |
+| Custom per-turn provenance transaction | Duplicated the native skill ledger, needed its own prompt contract and recovery, and blocked native background review. |
 | Narrative proposals alone | Loses the exact artifact and baseline relationship. |
 | Separate review database/UI | Duplicates Git's review and release source of truth. |
 
-Signatures establish origin/integrity, not quality. Agent-proposed cases remain distinct from mandatory independent evaluation. Local transactions reject malformed, private, or unprovenanced governed writes; quarantine/reconciliation handles direct-CLI drift.
+Signatures establish origin/integrity, not quality; mandatory independent evaluation judges behavior. The owner's Share decision, not an agent-written rationale, admits a change to the shared role.
 
 Full validation, evaluation, and refresh contracts are in [SPEC.md](../../SPEC.md); runnable commands are in [DEMO.md](../../DEMO.md).

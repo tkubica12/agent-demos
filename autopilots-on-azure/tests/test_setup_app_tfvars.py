@@ -7,7 +7,6 @@ from unittest.mock import patch
 import scripts.setup_app_tfvars as setup_app_tfvars
 from scripts.setup_app_tfvars import (
     build_tfvars,
-    default_data_volume_name,
     existing_app_tfvars,
     load_or_create_collective_approval_identity,
     resolve_deployer_principal_id,
@@ -40,7 +39,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
     def test_worker_owner_is_validated_and_preserved_on_updates(self):
         owner = "a12de0c7-f871-4bbe-b037-780688a5666d"
         common = {
-            "runtime": "hermes", "autopilot_name": "worker", "data_volume_name": "worker-data",
+            "runtime": "hermes", "autopilot_name": "worker",
             "role_blueprint": "junior-project-manager", "role_blueprint_source": "https://example.com/repo.git",
             "role_release": "1.0.0", "role_release_commit": "a" * 40,
         }
@@ -67,7 +66,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
         for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
             values[f"{prefix}_image"] = f"registry.example/{prefix}@sha256:digest"
             values[f"{prefix}_disk_source_image"] = f"registry.example/{prefix}:build-1"
-        kwargs = dict(runtime="hermes", autopilot_name="worker", data_volume_name="worker-data",
+        kwargs = dict(runtime="hermes", autopilot_name="worker",
                       role_blueprint="jpm", role_blueprint_source="https://example.com/roles.git",
                       role_release="3.0.0", role_release_commit="a" * 40)
         configured = build_tfvars(previous={}, **kwargs, **values)
@@ -77,7 +76,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
 
     def test_changed_image_never_silently_reuses_old_disk_source(self):
         for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
-            kwargs = dict(runtime="hermes", autopilot_name="worker", data_volume_name="worker-data",
+            kwargs = dict(runtime="hermes", autopilot_name="worker",
                           role_blueprint="jpm", role_blueprint_source="https://example.com/roles.git",
                           role_release="3.0.0", role_release_commit="a" * 40)
             previous = {f"{prefix}_image": "registry/image@sha256:old",
@@ -104,7 +103,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         tfvars = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
-            data_volume_name="hermes-data",
             previous={},
             api_server_key="api-key",
             runtime_image="registry.example/hermes-runtime@sha256:test",
@@ -124,7 +122,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
 
         self.assertEqual(tfvars["agent_runtime"], "hermes")
         self.assertEqual(tfvars["autopilot_name"], "hermes")
-        self.assertEqual(tfvars["runtime_data_volume_name"], "hermes-data")
+        self.assertNotIn("runtime_data_volume_name", tfvars)
         self.assertEqual(tfvars["api_server_key"], "api-key")
         self.assertEqual(tfvars["runtime_image"], "registry.example/hermes-runtime@sha256:test")
         self.assertEqual(tfvars["bridge_image"], "registry.example/bridge@sha256:test")
@@ -149,7 +147,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         configured = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
-            data_volume_name="hermes-data",
             previous={},
             api_server_key="api-key",
             role_blueprint="junior-project-manager",
@@ -170,7 +167,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         reused = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
-            data_volume_name="hermes-data",
             previous=configured,
             api_server_key="api-key",
             role_blueprint="junior-project-manager",
@@ -194,7 +190,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         tfvars = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
-            data_volume_name="hermes-data",
             previous={
                 "agent365_client_id": "previous-client",
                 "agent365_tenant_id": "previous-tenant",
@@ -214,7 +209,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         tfvars = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
-            data_volume_name="hermes-data",
             previous={"api_server_key": "old-key"},
             api_server_key="new-key",
             role_blueprint="junior-project-manager",
@@ -230,7 +224,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
         tfvars = build_tfvars(
             runtime="hermes",
             autopilot_name="hermes",
-            data_volume_name="hermes-data",
             previous={
                 "agent365_agent_identity_client_id": "agent-id",
                 "agent365_agent_user_id": "agent-user-id",
@@ -254,7 +247,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
             build_tfvars(
                 runtime="hermes",
                 autopilot_name="hermes",
-                data_volume_name="hermes-data",
                 previous={},
                 role_blueprint="junior-project-manager",
                 role_blueprint_source="https://github.com/example/agent-demos.git",
@@ -263,9 +255,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
             )
 
     def test_runtime_defaults_keep_side_by_side_state_distinct(self):
-        self.assertEqual(default_data_volume_name("hermes"), "hermes-data")
-        self.assertEqual(default_data_volume_name("hermes", "jpm-team-alpha"), "hermes-jpm-team-alpha-data")
-        self.assertEqual(default_data_volume_name("hermes", "hermes2"), "hermes-hermes2-data")
         self.assertEqual(runtime_workspace("hermes"), Path.cwd() / ".local" / "hermes" / "apps")
         self.assertEqual(runtime_app_tfvars_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "generated.app.auto.tfvars.json")
         self.assertEqual(runtime_outputs_path("hermes"), Path.cwd() / ".local" / "hermes" / "apps" / "terraform-outputs.json")
@@ -280,7 +269,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
             apps_dir = root / "terraform" / "apps"
             apps_dir.mkdir(parents=True)
             (apps_dir / "generated.runtime.auto.tfvars.json").write_text(
-                '{"agent_runtime":"hermes","runtime_data_volume_name":"other-worker-data"}',
+                '{"agent_runtime":"hermes","autopilot_name":"other-worker"}',
                 encoding="utf-8",
             )
             hermes_dir = root / ".local" / "hermes" / "apps"

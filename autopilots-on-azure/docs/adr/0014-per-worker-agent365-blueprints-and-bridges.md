@@ -2,7 +2,7 @@
 
 ## Decision
 
-Each Worker owns its Agent 365 platform blueprint, messaging endpoint/gateway, Agent Identity, Agent User, Terraform workspace, Data Disk, API/approval keys, and local operator state. Its five service-role Sandbox Groups each have a distinct user-assigned identity.
+Each Worker owns its Agent 365 platform blueprint, messaging endpoint/gateway, Agent Identity, Agent User, Terraform workspace, Hermes home and backup volume, API/approval keys, and local operator state. Its five service-role Sandbox Groups each have a distinct user-assigned identity.
 
 Workers may share the Git Role Blueprint, Role Release, images, Foundry deployment, networking, and MCP resource applications—not profile state or workload identities. Collective review groups evidence by role/release/commit, not platform blueprint.
 
@@ -35,7 +35,7 @@ Endpoint changes are owner-sensitive and potentially destructive; [DEPLOYMENT.md
 A candidate is one project-manager Agent 365 blueprint, channel registration
 and Gateway serving several project-manager instances for different teams or
 projects. Each instance would remain a separate Hermes Worker with its own
-Agent Identity, Agent User, profile and Data Disk. This is a proposal, not an
+Agent Identity, Agent User, Hermes home and backups. This is a proposal, not an
 instruction to merge the existing deployment envelopes.
 
 Do not conflate these groupings:

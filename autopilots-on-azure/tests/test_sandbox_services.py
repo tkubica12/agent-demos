@@ -42,7 +42,7 @@ class SandboxServicesTests(unittest.TestCase):
             "runtime_image": "registry/hermes@sha256:123",
             "bridge_image": "registry/bridge@sha256:abc",
             "bridge_disk_source_image": "registry/bridge:build123",
-            "runtime_disk_image_name": "hermes-release", "runtime_data_volume_name": "worker-data",
+            "runtime_disk_image_name": "hermes-release",
             "private_mcp_image": "registry/private@sha256:456",
             "private_mcp_disk_source_image": "registry/private:build123",
             "public_shipments_mcp_image": "registry/public@sha256:789",

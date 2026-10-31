@@ -14,6 +14,7 @@ from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
 from azure.identity import DefaultAzureCredential
 
 from scripts.deploy_apps_runtime import activate_runtime_tfvars, terraform_workspace_name
+from scripts.sandbox_runtime import RUNTIME_BACKUP_VOLUME, mounts_backup_volume, publish_final_backup
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
 from scripts.tf_helpers import resolve_executable
 
@@ -187,7 +188,7 @@ def runtime_sandbox_selector(runtime: str, outputs: dict[str, Any]) -> dict[str,
             "kind": runtime,
             "worker": outputs["worker_id"],
         },
-        "dataVolume": outputs.get("runtime_data_volume_name") or "",
+        "backupVolume": RUNTIME_BACKUP_VOLUME,
     }
 
 
@@ -197,9 +198,7 @@ def sandbox_matches(sandbox: dict[str, Any], selector: dict[str, Any]) -> bool:
         return False
     if "runtime" in labels or "autopilot" in labels:
         return False
-    data_volume = selector.get("dataVolume")
-    volumes = sandbox.get("volumes") or []
-    return bool(data_volume and any(volume.get("volumeName") == data_volume for volume in volumes))
+    return mounts_backup_volume(sandbox)
 
 
 def http_json(
@@ -514,11 +513,14 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
         "sandboxId": sandbox_id,
         "state": sandbox.get("state"),
         "labels": sandbox.get("labels", {}),
-        "dataVolume": selector["dataVolume"],
+        "backupVolume": selector["backupVolume"],
         "execute": args.execute,
     }
     if not args.execute:
-        summary["next"] = f"Rerun with --execute to delete sandbox {sandbox_id}. The data volume is not deleted."
+        summary["next"] = (
+            f"Rerun with --execute to publish a final Worker backup and delete sandbox {sandbox_id}. "
+            "The backup volume is not deleted."
+        )
         print_json(summary)
         return 0
 
@@ -527,11 +529,13 @@ def run_reset_sandbox(args: argparse.Namespace) -> int:
         subscription_id=outputs["subscription_id"], resource_group=outputs["resource_group_name"],
         sandbox_group=outputs["sandbox_groups"]["runtime"]["name"],
     ) as group:
+        summary["finalBackup"] = publish_final_backup(group, sandbox)
         group.get_sandbox_client(sandbox_id).begin_delete(polling_timeout=args.timeout).result()
     summary["deleted"] = True
     summary["next"] = (
         "Run `uv run python -m scripts.deploy_apps_runtime "
-        f"--state-name {args.state_name or 'hermes'} --deploy-services --capture` to create fresh runtime compute."
+        f"--state-name {args.state_name or 'hermes'} --deploy-services --capture` to create fresh runtime compute; "
+        "it restores the newest Worker backup."
     )
     print_json(summary)
     return 0
@@ -618,7 +622,7 @@ def main() -> None:
     logs.add_argument("--execute", action="store_true", help="Run the log command instead of only printing it.")
     logs.set_defaults(func=run_logs)
 
-    reset = subparsers.add_parser("reset-sandbox", help="Delete one runtime sandbox while keeping its data volume.")
+    reset = subparsers.add_parser("reset-sandbox", help="Back up and delete one runtime sandbox while keeping its backup volume.")
     reset.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
     reset.add_argument("--execute", action="store_true", help="Actually delete the sandbox. Omitted means dry-run.")
     reset.add_argument("--timeout", type=int, default=300)

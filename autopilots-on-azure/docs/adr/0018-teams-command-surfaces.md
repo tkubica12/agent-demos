@@ -2,7 +2,7 @@
 
 ## Decision
 
-Document personal-chat text commands `/learn <instruction>` and `/new`; `/reset` is also accepted. `/learn` selects one constrained native learning turn. `/new` creates a distinct native session generation without deleting durable memory.
+Document personal-chat text commands `/learn <instruction>` and `/new`; `/reset` is also accepted. `/learn` passes unchanged to Hermes' native `/learn`, which turns the request into a skill through `skill_manage`. `/new` creates a distinct native session generation without deleting durable memory. The Worker owner's `/learning` and `/learned` show the learning digest in the personal chat.
 
 Reject `/new` and `/reset` in group/channel contexts. Do not advertise native gateway commands such as `/compress`, `/model`, or `/usage` without a corresponding implemented API operation.
 

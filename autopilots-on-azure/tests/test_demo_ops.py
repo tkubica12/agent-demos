@@ -47,7 +47,7 @@ class DemoOpsTests(unittest.TestCase):
         return {
             "agent_runtime": "hermes", "worker_id": "worker-one",
             "sandbox_location": "swedencentral", "resource_group_name": "rg-test",
-            "subscription_id": "sub-test", "runtime_data_volume_name": "worker-data",
+            "subscription_id": "sub-test",
             "sandbox_groups": {
                 role: {"name": f"worker-{role}", "id": f"/groups/worker-{role}"}
                 for role in ops.SANDBOX_ROLES
@@ -99,23 +99,18 @@ class DemoOpsTests(unittest.TestCase):
     def test_runtime_sandbox_selector_uses_captured_runtime_state(self):
         selector = runtime_sandbox_selector(
             "hermes",
-            {"worker_id": "worker-one", "runtime_disk_image_name": "hermes-image", "runtime_data_volume_name": "hermes-data"},
+            {"worker_id": "worker-one", "runtime_disk_image_name": "hermes-image"},
         )
 
         self.assertEqual(selector["labels"]["kind"], "hermes")
-        self.assertEqual(selector["dataVolume"], "hermes-data")
+        self.assertEqual(selector["backupVolume"], "hermes-backups")
         self.assertEqual(selector["labels"]["worker"], "worker-one")
 
-    def test_sandbox_matches_labels_and_data_volume(self):
-        self.assertTrue(
-            sandbox_matches(
-                {
-                    "labels": {"app": "autopilots-on-azure", "kind": "hermes"},
-                    "volumes": [{"volumeName": "hermes-data"}],
-                },
-                {"labels": {"app": "autopilots-on-azure", "kind": "hermes"}, "dataVolume": "hermes-data"},
-            )
-        )
+    def test_sandbox_matches_labels_and_backup_volume(self):
+        selector = {"labels": {"app": "autopilots-on-azure", "kind": "hermes"}, "backupVolume": "hermes-backups"}
+        labels = {"app": "autopilots-on-azure", "kind": "hermes"}
+        self.assertTrue(sandbox_matches({"labels": labels, "volumes": [{"volumeName": "hermes-backups"}]}, selector))
+        self.assertFalse(sandbox_matches({"labels": labels, "volumes": [{"volumeName": "hermes-data"}]}, selector))
 
     def test_sandbox_group_url_uses_sandbox_region(self):
         url = sandbox_group_url(self.outputs(), "gateway")
@@ -154,7 +149,7 @@ class DemoOpsTests(unittest.TestCase):
     def test_status_does_not_hide_failed_runtime(self):
         runtime = {"id": "runtime", "state": "Failed",
                    "labels": {"app": "autopilots-on-azure", "kind": "hermes", "worker": "worker-one"},
-                   "volumes": [{"volumeName": "worker-data"}]}
+                   "volumes": [{"volumeName": "hermes-backups"}]}
         with (
             patch.object(ops, "load_json", return_value=self.outputs()),
             patch.object(ops, "list_role_sandboxes", side_effect=lambda outputs, role, **kwargs: (

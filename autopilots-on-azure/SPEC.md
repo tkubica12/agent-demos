@@ -1,6 +1,6 @@
 # Hermes Worker contracts
 
-Hermes 0.19.0 implements a Junior Project Manager Worker: delivery coordination, document collaboration, scheduled work, and governed learning. [Deployment](DEPLOYMENT.md) contains operator procedures; [Demo](DEMO.md) contains prompts.
+Hermes 0.22.5, built from the official image pinned by digest, implements a Junior Project Manager Worker: delivery coordination, document collaboration, scheduled work, and governed learning. [Deployment](DEPLOYMENT.md) contains operator procedures; [Demo](DEMO.md) contains prompts.
 
 ## Domain
 
@@ -8,10 +8,10 @@ Hermes 0.19.0 implements a Junior Project Manager Worker: delivery coordination,
 | --- | --- |
 | Role Blueprint | Git definition of a job: instructions, reviewed skills, tools, and distribution metadata. |
 | Role Release | Immutable semantic version pinned to a full Git commit. |
-| Worker | Named deployment with its own Agent 365 identity, assignment, Data Disk, and local adaptations. |
+| Worker | Named deployment with its own Agent 365 identity, assignment, Hermes home with durable backups, and local adaptations. |
 | Candidate Improvement | Local reusable skill or inherited Role Skill patch; not shared until Promotion. |
 | Dreaming | Fresh-session reflection over private Work History; may change memory or skills, or store nothing. |
-| Learning Packet | Content-addressed bundle of eligible skill changes, provenance, and proposed tests. Export requires signed approval. |
+| Learning Packet | Content-addressed bundle of owner-shared skill changes with their native ledger chain. Export requires signed approval. |
 | Collective Learning Review | Comparison of compatible Worker packets, evidence, conflicts, and role fit. |
 | Promotion | Human-reviewed Git pull request producing a newer Role Release. |
 | Worker Refresh | Transactional adoption of that release while preserving private state. |
@@ -27,22 +27,22 @@ Each Worker has a separate Terraform workspace, Agent 365 platform blueprint, Ag
 | Group | Responsibility |
 | --- | --- |
 | `gateway` | Agent 365 `/api/messages`, operator `/invoke`, Teams delivery, continuous Service Bus receive, and generated-app publication. It calls the runtime only through `AGENT_RUNTIME_URL`. Auto-suspend is disabled. |
-| `runtime` | One Hermes writer, OnDemand compute, persistent Data Disk, native tools, memory, learning, and cron state. |
+| `runtime` | One Hermes writer, OnDemand compute suspended to memory, Hermes home on the Sandbox disk with native backups on a Blob volume, native tools, memory, learning, and cron state. |
 | `private-mcp` | Incidents MCP, private ingress through the linked Express environment, application-level Entra authorization. |
 | `public-mcp` | Shipments MCP, public HTTPS, application-level Entra authorization. |
 | `generated-apps` | Separate child Sandbox per published app; participant-authenticated ports and native lifecycle. |
 
 The gateway does not proxy model inference, MCP traffic, or generated-app traffic. An Agent 365 HTTP acknowledgement can precede completion of detached work; gateway availability must cover that work and queue receive. Runtime and generated-app suspension are independent.
 
-Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. The runtime suspends to Disk after five idle minutes; resume restarts the process, keeps the Data Disk, and mints fresh identity tokens. Attached Data Disk volumes require Disk mode; Memory mode is not supported with these volumes. An image change replaces gateway and MCP Sandboxes, which changes their native URLs; the runtime Data Disk remains separate. A profile is single-writer because it contains SQLite and transactional skill state.
+Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. The runtime suspends to **Memory** after five idle minutes, so resume continues the running Hermes processes instead of starting them again, and mints fresh identity tokens on demand. The Hermes home (`/data/hermes`) lives on the Sandbox root disk, which suspension, resume and platform maintenance preserve. Native backups on a platform-managed Blob volume make it survive replacement or loss of the Sandbox ([Persistent state](#persistent-state)). A Data Disk volume would force Disk mode, which restarts Hermes on every wake. An image change replaces gateway and MCP Sandboxes, which changes their native URLs. A profile is single-writer because it contains SQLite and transactional skill state.
 
-The native `keepalive` plugin wraps actual model and tool execution in `try/finally` activity scopes. The runtime wrapper uses the same supervisor for mutating HTTP requests, including deterministic cron/document work. While active, each process sends periodic GETs at roughly 60-second intervals to its own published `/health`, using platform-provided `ADC_SANDBOX_ID` and `ADC_PROXY_DNS_SUFFIX`. Loopback requests, outbound model calls and local CPU work do not reset platform idle time. There is no keepalive queue, external controller, durable busy ledger or additional Azure permission. An operation expires after 30 minutes or when its owning thread exits; expiry and ingress failures are logged. This limit applies to one uninterrupted operation, not the total multi-step agent task. Detached subprocesses outside a tracked operation and future schedules do not keep compute awake.
+The `autopilots` Hermes plugin's keepalive wraps actual model and tool execution, including background review and Curator forks, in `try/finally` activity scopes. The runtime wrapper uses the same supervisor for mutating HTTP requests, including deterministic cron/document work. While active, each process sends periodic GETs at roughly 60-second intervals to its own published `/health`, using platform-provided `ADC_SANDBOX_ID` and `ADC_PROXY_DNS_SUFFIX`. Loopback requests, outbound model calls and local CPU work do not reset platform idle time. There is no keepalive queue, external controller, durable busy ledger or additional Azure permission. An operation expires after 30 minutes or when its owning thread exits; expiry and ingress failures are logged. This limit applies to one uninterrupted operation, not the total multi-step agent task. Detached subprocesses outside a tracked operation and future schedules do not keep compute awake.
 
-Deployment owns runtime compute. After the gateway Sandbox publishes its native URL, deployment creates or reuses the runtime with that URL, its Data Disk and a fingerprint of every compute-defining setting. A changed fingerprint or Role Release replaces compute while retaining the Data Disk; a Role Release change first requires Worker Refresh readiness. Deployment also replaces terminal `Failed` compute, then verifies `/health` through the public OnDemand ingress before writing `AGENT_RUNTIME_URL` into gateway settings.
+Deployment owns runtime compute. After the gateway Sandbox publishes its native URL, deployment creates or reuses the runtime with that URL, the Worker backup volume and a fingerprint of every compute-defining setting. A changed fingerprint or Role Release replaces compute: a Role Release change first requires Worker Refresh readiness, then the old runtime publishes a final backup before it is deleted, and its replacement restores that backup. Deployment also replaces terminal `Failed` compute, which restores the newest automatic backup, then verifies `/health` through the public OnDemand ingress before writing `AGENT_RUNTIME_URL` into gateway settings.
 
 The gateway has no runtime Sandbox Group role, Sandbox SDK runtime path, or runtime provisioning settings. Every gateway request, including Teams, document retry, Service Bus delivery and Dreaming, simply calls the runtime URL. OnDemand ingress wakes `Stopped` or `Suspended` compute; the adapter waits for wrapper `/health` and native `/v1/models` readiness. Missing or `Failed` compute returns an explicit error until deployment is rerun. Keepalive does not fix a long HTTP request timeout, guarantee crash recovery, or change Teams delivery.
 
-Gateway, runtime and MCP ports all use `OnDemand`. A request to a stopped `Manual` port returns `403` instead of waking compute; this previously disabled both MCP servers whenever they had been idle for 30 minutes. Runtime startup waits for loopback adapters to accept connections instead of using fixed sleeps, and the MCP adapter exchanges all upstream tokens concurrently while Hermes is still importing. On 2026-10-30, direct OnDemand Disk wake booted the VM in under a second, reached wrapper `/health` in about 4 seconds and the native API in about 18 seconds (20 seconds when both MCP Sandboxes were also stopped). Hermes completes MCP discovery before opening its API; the remaining floor is the first HTTPS flow over the private VNet path after resume, which took about 12 seconds while later requests took 0.6 seconds.
+Gateway, runtime and MCP ports all use `OnDemand`. A request to a stopped `Manual` port returns `403` instead of waking compute; this previously disabled both MCP servers whenever they had been idle for 30 minutes. Measured on 2026-10-31 in Sweden Central (2 vCPU, 2 GiB): the platform resumed a Sandbox in under a second in either mode, and a Memory resume reached the native Hermes API in 1.5–2.7 s, including three cycles on the deployed `hermes2` Worker. Disk mode needed 17–25 s, because every wake repeated the launcher, the official bootstrap, imports and plugins, and MCP discovery of eleven servers, which Hermes completes before opening its API. A new runtime Sandbox pays that full start once: the `hermes2` replacement restored a 24 MB backup and passed `/health` 12 s after creation.
 
 A Service Bus message does not wake a Sandbox. The awake gateway is the queue consumer: it holds the PeekLock, renews it, checks schedule revisions and receipts, settles or dead-letters messages and posts Teams output through Agent 365. Its runtime call then wakes compute through ingress. Platform connector triggers are preview, do not list Service Bus as a Sandbox trigger source and do not provide this lock/settlement coupling, so none is attached to this queue.
 
@@ -88,46 +88,58 @@ As checked on 2026-10-30, [Teams streaming documentation](https://learn.microsof
 
 ## Persistent state
 
-The active profile is `/data/hermes/profiles/<role-blueprint>`.
+The Worker home is `/data/hermes` on the runtime Sandbox root disk. Hermes 0.22.5 runs one gateway per home, so the Worker is the home itself rather than a named profile.
 
-| State | Profile-relative location | Refresh | Packet |
+| State | Home-relative location | Refresh | Packet |
 | --- | --- | --- | --- |
 | Personal Memory | `memories\USER.md`, `memories\MEMORY.md` | Preserve | Exclude |
 | Private Playbooks | `skills\private\<name>\` | Preserve | Exclude |
 | Work History | `state.db` and native session data | Preserve | Exclude raw content |
-| Role Skills | `skills\role\<name>\SKILL.md` | Replace | Recorded local diff |
-| Candidate Improvements | `skills\candidates\<name>\SKILL.md` | Archive/retire | Artifact and provenance |
-| Provenance | `learning\records.jsonl` | Archive per release | Cumulative eligible chain |
+| Role Skills | `skills\role\<name>\SKILL.md` | Replace | Shared diff from release baseline |
+| Candidate Improvements | `skills\candidates\<name>\SKILL.md` | Archive/retire | Shared artifact |
+| Skill change history | Native skill ledger and staged writes | Preserve | Ledger chain of shared changes |
+| Owner decisions | `learning\receipts\`, `learning\share-choices.json` | Archive per release | Share choice |
 | Worker manifest | `local\worker.json` | Update atomically | Identity/release bindings |
 | Cron and delivery state | Native cron files and execution ledger | Preserve | Exclude |
 
-Personal Memory is a bounded frozen snapshot injected at fresh-session start. Its files and Private Playbooks belong to the Worker profile, not separate per-caller profiles. A user-specific session key does not split these stores. Skills use progressive disclosure; transferable skills are restricted to one `SKILL.md`. Skill basenames are unique across namespaces.
+Personal Memory is a bounded frozen snapshot injected at fresh-session start. Its files and Private Playbooks belong to the Worker, not separate per-caller profiles. A user-specific session key does not split these stores. Skills use progressive disclosure; transferable skills are restricted to one `SKILL.md`. Skill basenames are unique across namespaces.
 
 The distribution includes only declared role-owned files: `distribution.yaml`, `SOUL.md`, configuration, MCP definitions, Role Skills, schemas, and optional reviewed cron definitions. Credentials, memories, private/candidate skills, sessions, workspace, caches, and learning state are excluded. The Worker manifest records the source, commit, release, owned paths, and Role Skill baseline hashes.
 
+### Durability
+
+The root disk is local to one Sandbox, so it is not the only copy. The runtime wrapper checks the home once a minute and, when anything a backup would keep has changed, runs native `hermes backup`. Logs, caches, heartbeats, locks and SQLite shared-memory files that idle Hermes rewrites by itself do not count as changes. `hermes backup` snapshots every SQLite database through the SQLite backup API and writes a complete zip into the home's own `backups` directory; only a complete archive is copied to the Worker's platform-managed `AzureBlob` Sandbox volume at `/backup` and published by rename. The newest 24 archives are kept. Staging is local because SQLite snapshots fail on the blobfuse mount.
+
+A runtime starting with an empty home restores the newest archive with native `hermes import` before anything else touches the home, then checks that the restored manifest names the same Worker. A damaged or foreign archive, or a volume that cannot be listed, stops startup; a readable empty volume starts a fresh Worker. An existing home is never overwritten. Before deployment deletes a replaced runtime, it runs one more backup inside it, waiting for any automatic backup in progress. `/health` reports the last published archive and error.
+
+| Event | Data kept |
+| --- | --- |
+| Idle suspend, resume, platform maintenance | Everything, including running processes |
+| Image, setting or Role Release change | Everything up to the final backup before deletion |
+| `Failed` or lost Sandbox | Everything up to the newest automatic backup, at most about a minute before the last change |
+| Deleted Sandbox Group | Nothing; volumes belong to the group |
+
 ## Learning and review
 
-### Local transaction
+### Native learning on the Worker
 
-1. Snapshot governed skills and serialize changes per Worker.
-2. Run one native Hermes turn. Ordinary turns may learn; exact `/learn <instruction>` or trusted explicit-learning metadata selects constrained mode without a keyword-triggered second model call.
-3. Validate changed artifacts, privacy, and provenance. Any rejection accompanying governed changes restores the entire governed snapshot and appends no records; accepted changes append provenance atomically. Ordinary private writes remain separate, while a namespace-validation failure restores all skill namespaces.
-4. Recover interrupted transactions atomically. Quarantine asynchronous/direct-CLI drift, restore committed state, then reconcile safe generalized changes through a bridged turn or Dreaming.
+Hermes learns natively. Ordinary turns may update memory and skills, and a background review after a turn may add more; memory and skill nudges arrive every ten turns. The skill ledger records every skill change with before/after file hashes and contents. With `HERMES_SKILL_WRITE_APPROVAL`, skill writes are staged until the owner approves them. Automatic Curator runs are disabled.
 
-The runtime process owns the lease: concurrent live writers are rejected; a replacement runtime recovers interrupted predecessor state. Private memory/playbook changes stay local. Attachment-derived learning is separately blocked and restored.
+The Worker owner (`worker_owner_id`, the Agent Identity sponsor) is the only person who reviews what was learned. After Dreaming, and on `/learning` or `/learned` in the owner's personal chat, the gateway sends a digest card: recent skill changes with diffs and **Undo** (native rollback), staged writes with **Approve**/**Reject**, and for Role Skill or Candidate Improvement changes **Share**, **Keep** or **Discard**. **Keep** copies the change to the private `<skill>-playbook` and restores the release baseline; **Discard** restores the baseline. Actions are encrypted, expiring tokens bound to the owner and conversation, and every decision is an idempotent receipt. Nothing is sent to group chats.
+
+Attachment and persistence-disabled turns run in a separate native session marked `private:`. A `pre_tool_call` hook blocks `memory`, `skill_manage` and file writes into `skills/` or `memories/` there, including in the background review fork, which Hermes 0.22.5 cannot skip per request.
 
 ### Transferable contract
 
-- Provenance **3.0** records classification, stage, action, Worker/release, before/after hashes, generalized rationale, redacted evidence, confidence/privacy outcome, and synthetic `agentProposedScenarios`.
-- `artifactPath` names `skills/role/<name>` or `skills/candidates/<name>`. `artifact.path` matches it; `changedFiles` is exactly `["<artifactPath>/SKILL.md"]`.
-- Learning Packet **2.0** contains only allowed skill creates/patches and the cumulative provenance chain from release baseline to current hash. No scripts, references, symlinks, binary payloads, credentials, private source, or other artifacts.
-- Agent-proposed scenarios use declarative `response.text` criteria. Signed scenarios retain their authorship; they are not independent holdouts.
+- A Role Skill or Candidate Improvement leaves the Worker only after the owner chose **Share** for its current content. A later change requires a new choice.
+- Learning Packet **3.0** contains each shared skill's files, release-baseline hashes, artifact hash, native ledger chain from the release baseline to the current files, share decision and owner approvals of staged writes. File hashes are recomputed from disk; the ledger explains them.
+- Every other governed change is excluded with a reason and stays local. Only one bounded UTF-8 `SKILL.md` whose frontmatter names its directory is transferable; scripts, references, binary payloads, credentials, memories, sessions and private playbooks never are. A privacy scan rejects addresses, identifiers, internal URLs, secrets and absolute paths.
 - Human approval binds the exact digest, Worker, release commit, and governed-state hash. The gateway holds the Ed25519 private key; runtime and review receive public keys only.
 - Central review rejects modified, stale, unsigned, unknown-Worker, or incompatible-release packets. It privacy-scans every model-visible field and decision.
 - The judge receives reviewed role context, identifies support/conflicts/outliers, and proposes only `skills\role\<name>\SKILL.md` changes.
 - Promotion is a draft Git pull request by default. Deterministic validation and independent semantic privacy, role-alignment, evidence, and skill-quality gates support human review; automation does not merge or refresh Workers.
 
-The evaluation runner invokes real Hermes in isolated baseline/candidate profiles with identical non-skill state and model settings. An independent suite is mandatory. It checks literal response text with skill content supplied in prompts; tools, hooks, plugins, MCP, and background learning are disabled. Report independent cases separately from agent-proposed cases.
+The evaluation runner invokes real Hermes in isolated baseline/candidate profiles with identical non-skill state and model settings. An independent suite is mandatory. It checks literal response text with skill content supplied in prompts; tools, hooks, plugins, MCP, and background learning are disabled. Packets do not carry agent-proposed scenarios.
 
 ### Refresh
 
@@ -135,7 +147,7 @@ Refresh is forward-only to a newer semantic release and immutable commit. Local 
 
 ## Scheduling and Dreaming
 
-Hermes cron state is canonical on the Data Disk. Its Azure `CronScheduler` provider schedules only the next occurrence in a per-Worker Service Bus queue. Messages contain type, Worker/job identity, revision, and due time—not prompts, skill text, document content, tokens, or delivery credentials.
+Hermes cron state is canonical in the Worker home and travels with its backups. Its Azure `CronScheduler` provider schedules only the next occurrence in a per-Worker Service Bus queue. Messages contain type, Worker/job identity, revision, and due time—not prompts, skill text, document content, tokens, or delivery credentials.
 
 The awake gateway uses PeekLock, lock renewal, bounded concurrency, and explicit settlement. It wakes/reuses runtime compute; revision checks and durable execution receipts prevent a stale/redelivered occurrence from rerunning the task. Hosted jobs allow prompts and reviewed Role Skills, not arbitrary scripts or durable human delegation.
 
@@ -176,15 +188,16 @@ Native `llm_execution` and `tool_execution` callbacks are instrumented. A local 
 
 ## Current limitations
 
-The 2026-10-30 lifecycle pilot is deployed to `hermes2` only. It also exposed a separate cold-response long tail: a non-streaming upstream model call hit Hermes' 90-second no-response watchdog and retried. VM wake, native API readiness, model generation and Teams delivery are distinct timings; keepalive and UI streaming do not by themselves resolve that model-transport behavior.
+Hermes 0.22.5, Memory suspend and Blob-volume backups are deployed to `hermes2` only. `hermes` still runs the previous Hermes 0.19 Disk and Data Disk deployment; the current scripts do not migrate it, so it needs a one-time operator move before its next update. A separate cold-response long tail remains: a non-streaming upstream model call can stall until Hermes' no-response watchdog retries. VM wake, native API readiness, model generation and Teams delivery are distinct timings; keepalive and UI streaming do not by themselves resolve that model-transport behavior.
 
 | Area | Boundary |
 | --- | --- |
 | Fresh Worker bootstrap | `scripts.worker_lifecycle bootstrap` needs a tenant administrator, interactive admin consent, available licenses, and a manual package upload in Microsoft 365 admin center. |
 | Gateway endpoint | A gateway image change replaces its Sandbox and URL, which also replaces runtime compute because the runtime environment contains that URL. Agent 365 keeps sending to the old URL until a direct blueprint owner updates the endpoint ([DEPLOYMENT.md](DEPLOYMENT.md) step 6). |
-| Runtime repair | Ingress wakes only existing compute. Deleted or `Failed` runtime compute is replaced by rerunning service deployment, not by the gateway. |
+| Runtime repair | Ingress wakes only existing compute. Deleted or `Failed` runtime compute is replaced by rerunning service deployment, not by the gateway; the replacement loses changes made after the newest automatic backup. |
 | Registry conversion | SDK 0.1.0b4 does not expose the native-v2 disk-image endpoint, so the deployer calls it through the SDK client pipeline ([ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). The four workload identities can pull from the demo registry. |
-| Hermes version | Hermes 0.19.0 is the newest release on PyPI and the approved feed; 0.20+ ships only as GitHub releases, which this environment must not install. |
+| Hermes version | Hermes 0.20+ ships only as GitHub releases and container images, not on the approved package feed. The runtime uses the official image, imported into ACR by digest. Packages the plugins need inside Hermes' sealed environment are vendored from the approved feed and pinned by hash. |
+| MCP discovery | A fresh Hermes start discovers all eleven MCP servers before opening its API. Native lazy discovery needs a cached tool schema, but these servers return `ttlMs: 0`, so it stays eager. Memory resume avoids the cost; a new Sandbox pays it once. |
 | Work IQ routes | Only the per-server Work IQ MCP servers are used. The unified Work IQ MCP, A2A, and REST routes reject the Agent User under the current tenant billing and Copilot licensing. |
 | Teams privacy | Public group `@` discovery is available; Hermes `/` discovery is absent in this Agent User package. `agenticUserTemplates` has no `bots[]`; targeted private handling and human OBO are not implemented. Do not put private facts in shared group context. |
 | Teams routing | Do not assume unmentioned channel messages, thread subscriptions, full history, or every supported SDK event reaches the Agent User. |

@@ -1,6 +1,6 @@
 # Hermes demonstration
 
-Use existing `hermes` and `hermes2` Workers after [deployment validation](DEPLOYMENT.md). They share a role but not identities or Data Disks. Run personal-memory examples in **1:1 chats**, not shared groups. Use harmless synthetic facts throughout.
+Use existing `hermes` and `hermes2` Workers after [deployment validation](DEPLOYMENT.md). They share a role but not identities or Worker homes. Steps 2–6 describe Hermes 0.22.5 native learning, which only `hermes2` runs today ([SPEC.md](SPEC.md#current-limitations)). Run personal-memory examples in **1:1 chats**, not shared groups. Use harmless synthetic facts throughout.
 
 Commands run from `autopilots-on-azure`. [SPEC.md](SPEC.md) defines boundaries and current limitations.
 
@@ -26,7 +26,7 @@ Expect real MCP results: incidents through private ingress, shipments through pu
 In a personal chat:
 
 ```text
-/learn Remember my harmless marker LOTUS-81 and my preference for delivery-risk summaries with an owner and due date. Store these as Personal Memory, not a reusable skill.
+Remember my harmless marker LOTUS-81 and my preference for delivery-risk summaries with an owner and due date. This is personal memory, not a reusable skill.
 ```
 
 Then send `/new`, followed by:
@@ -37,10 +37,10 @@ Without retrieval tools or file reads, what is my marker and summary preference?
 
 Expect fresh-session memory injection. `/new` changes the transcript, not durable memory.
 
-Create a richer private procedure:
+Create a richer private procedure with Hermes' native `/learn`, which turns a request into a skill through `skill_manage`:
 
 ```text
-/learn Create Private Playbook cedar-delivery. Project Cedar's harmless marker is CEDAR-42. Its weekly draft is due Thursday at 15:00 Europe/Prague. Verify owners and deadlines. Keep all Cedar-specific details private.
+/learn Private Playbook cedar-delivery in the private category. Project Cedar's harmless marker is CEDAR-42. Its weekly draft is due Thursday at 15:00 Europe/Prague. Verify owners and deadlines. Keep all Cedar-specific details private.
 ```
 
 After `/new`:
@@ -51,21 +51,22 @@ After `/new`:
 
 Expect progressive skill loading rather than mandatory injection into every prompt.
 
-| Inspect on the Worker profile | Meaning |
+| Inspect in the Worker home | Meaning |
 | --- | --- |
 | `memories\USER.md`, `memories\MEMORY.md` | Personal Memory |
 | `skills\private\cedar-delivery\SKILL.md` | Private Playbook |
 | `state.db` and session data | Work History |
 | `skills\role\` | Inherited Role Skills |
 | `skills\candidates\` | Local reusable additions |
-| `learning\records.jsonl` | Why governed skills changed, not behavior memory |
+| Native skill ledger | Every skill change, with before/after content |
+| `learning\receipts\` | The owner's decisions on learned changes |
 
 ## 3. Local reusable learning
 
 On Hermes 2:
 
 ```text
-/learn Create Candidate Improvement dependency-handoff-contract. A dependency handoff must record provider, receiver, deliverable, acceptance criteria, and needed-by date. Keep it general, use one SKILL.md only, and attach required provenance with synthetic proposed test cases.
+/learn Candidate Improvement dependency-handoff-contract in the candidates category. A dependency handoff must record provider, receiver, deliverable, acceptance criteria, and needed-by date. Keep it general and use one SKILL.md only.
 ```
 
 After `/new`:
@@ -74,11 +75,11 @@ After `/new`:
 /dependency-handoff-contract What must every dependency handoff record?
 ```
 
-Expect one constrained transactional learning turn, a candidate skill, and provenance 3.0. The change is local to Hermes 2. A failed privacy/provenance check rolls back governed state rather than reporting persistence.
+Expect a native skill write that the ledger records; the change is local to Hermes 2. As the Worker owner, send `/learning` in your personal chat. The digest card shows the diff with **Undo** and, for this Candidate Improvement, **Share**, **Keep** or **Discard**. Choose **Share** to make the current content eligible for the next Learning Packet. With `HERMES_SKILL_WRITE_APPROVAL` enabled, the write first appears under staged writes with **Approve**/**Reject**.
 
 For multi-Worker review, independently teach Hermes a related generalized correction, such as requiring explicit confirmation of a handoff date and its timezone. Do not copy private Cedar details or manufacture agreement between Workers.
 
-Direct native `hermes --cli` edits bypass the bridge transaction. The next bridged turn/Dream quarantines and reconciles unprovenanced drift; do not treat an immediate CLI file write as export-ready learning.
+Background review, Curator and Dreaming write through the same native tools, so their changes appear in the same digest. A governed change without a complete ledger trace, such as a direct file edit, is shown but stays out of packets.
 
 ## 4. Dreaming
 
@@ -96,7 +97,7 @@ uv run python -m scripts.demo_ops dream --state-name hermes2 `
   --max-records 1 --timeout 900
 ```
 
-Expect a private memory/playbook change, a governed create/patch with provenance, or no change when already represented. Dreaming is not required to invent a skill.
+Expect a private memory/playbook change, a governed create/patch recorded in the native ledger, or no change when already represented; the owner receives the learning digest afterwards. Dreaming is not required to invent a skill.
 
 Run an ad-hoc queue-backed Dream without changing production cron:
 
@@ -116,7 +117,7 @@ uv run python -m scripts.collective_learning --state-name hermes prepare
 uv run python -m scripts.collective_learning --state-name hermes2 prepare
 ```
 
-Review the returned summaries, generalized evidence, and proposed scenarios. Packet 2.0 must contain only allowed skill changes and cumulative provenance—not Personal Memory, Private Playbooks, documents, or raw Work History.
+Review the returned improvements and exclusions. Packet 3.0 contains only skills whose current content the owner shared, each with its native ledger chain; `excluded` names every other governed change and why it stays local. It never contains Personal Memory, Private Playbooks, documents, or raw Work History.
 
 Approve each exact returned digest:
 
@@ -155,7 +156,7 @@ This signs `reject_and_refresh`, not export approval.
 Prepare real baseline/candidate profile snapshots and an independently authored suite. Both profiles must have identical model/configuration/private state except for the exact delta covered by Hermes 2's approved packet:
 
 ```powershell
-$hermesPython = Read-Host "Python executable with Hermes 0.19.0 installed"
+$hermesPython = Read-Host "Python executable with Hermes installed"
 uv run python -m scripts.evaluate_learning `
   --baseline-profile .local\evaluation\baseline `
   --candidate-profile .local\evaluation\candidate `
@@ -165,7 +166,7 @@ uv run python -m scripts.evaluate_learning `
   --hermes-python $hermesPython --output .local\evaluation\result.json
 ```
 
-Keep `AZURE_CONFIG_DIR` pointing to the existing operator cache when using an isolated profile; do not copy credentials. The runner makes actual model calls and reports independent cases separately from agent-proposed scenarios. Its scope is response-text behavior, not tool execution or native skill discovery.
+Keep `AZURE_CONFIG_DIR` pointing to the existing operator cache when using an isolated profile; do not copy credentials. The runner makes actual model calls on the independent suite. Its scope is response-text behavior with skill content in the prompt, so the Hermes version matters little: 0.19.0 is the newest on the approved package feed, and the runtime image's `/opt/hermes/.venv/bin/python` provides 0.22.5.
 
 Run central review against compatible packets:
 
@@ -206,7 +207,7 @@ Run scheduled-hello-demo now.
 Remove scheduled-hello-demo.
 ```
 
-Expect proactive output in the originating conversation and durable execution/delivery receipts. Only scheduling metadata enters Service Bus; the prompt stays on the Data Disk. The gateway remains awake while runtime compute may suspend. Remove the demonstration task afterward.
+Expect proactive output in the originating conversation and durable execution/delivery receipts. Only scheduling metadata enters Service Bus; the prompt stays in the Worker home. The gateway remains awake while runtime compute may suspend. Remove the demonstration task afterward.
 
 Automated deployed check:
 

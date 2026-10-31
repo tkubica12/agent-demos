@@ -59,9 +59,6 @@ output "private_mcp_identity_client_id" {
 output "private_mcp_identity_principal_id" {
   value = azurerm_user_assigned_identity.workload["private-mcp"].principal_id
 }
-output "runtime_data_volume_name" {
-  value = local.runtime_data_volume_name
-}
 output "runtime_disk_image_name" {
   value = local.runtime_disk_image_name
 }

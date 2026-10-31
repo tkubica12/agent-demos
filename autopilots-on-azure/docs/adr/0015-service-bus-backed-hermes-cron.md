@@ -2,7 +2,7 @@
 
 ## Decision
 
-Keep native Hermes cron and its execution ledger on the Worker Data Disk. An Azure `CronScheduler` plugin arms only the next occurrence in a per-Worker Service Bus queue. The non-suspending gateway receives it and wakes/reuses runtime compute.
+Keep native Hermes cron and its execution ledger in the Worker's Hermes home. An Azure `CronScheduler` plugin arms only the next occurrence in a per-Worker Service Bus queue. The non-suspending gateway receives it and wakes/reuses runtime compute.
 
 ![Scheduling flow: Hermes cron arms the next occurrence in Service Bus; the gateway receives it, the runtime runs it, Teams delivers the result, and the next occurrence is armed.](../assets/scheduling-flow.svg)
 

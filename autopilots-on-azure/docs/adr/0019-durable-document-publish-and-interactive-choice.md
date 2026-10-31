@@ -11,7 +11,7 @@ Action tokens are encrypted/authenticated, Worker/user/conversation/operation-bo
 
 Staging TTL defaults to one hour, configurable within 5 minutes–24 hours. Choosing background retry creates a separate 24-hour retry deadline and sets staged-file expiry one hour beyond it for completion/cleanup.
 
-Background retries use `document.publish.retry` on the existing Worker queue, without an LLM turn. The gateway sends and receives using its own managed identity. Queue content is limited to operation ID, attempt, Worker ID, and due time. Private bytes, edit intent, ETag, recipient, and delivery reference remain on the Data Disk.
+Background retries use `document.publish.retry` on the existing Worker queue, without an LLM turn. The gateway sends and receives using its own managed identity. Queue content is limited to operation ID, attempt, Worker ID, and due time. Private bytes, edit intent, ETag, recipient, and delivery reference remain in the Worker's Hermes home.
 
 Retry after 2, 5, 15, 30, and 60 minutes, then hourly, within a 24-hour deadline. Re-read the ETag; rebase only reconstructible guarded edits. Verify explicit sharing before copy delivery and delete an unshareable copy.
 

@@ -21,6 +21,7 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from runtime_backup import BackupLoop, restore_latest
 from runtime_keepalive import get_keepalive
 from bridge.hermes_telemetry import (
     GatewayTraceConflictError,
@@ -81,6 +82,11 @@ def bool_env(name: str, default: bool = False) -> bool:
 
 def hermes_home() -> Path:
     return Path(os.getenv("HERMES_HOME", DEFAULT_HERMES_HOME)).expanduser()
+
+
+def runtime_backup_dir() -> Path | None:
+    value = os.getenv("RUNTIME_BACKUP_DIR", "").strip()
+    return Path(value) if value else None
 
 
 def api_server_port() -> int:
@@ -410,6 +416,7 @@ def create_health_app(
     profile_home: Path,
     role_release: RoleReleaseInstall | None,
     gateway: subprocess.Popen | None,
+    backup: BackupLoop | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Hermes ACA Sandbox runtime")
     app.add_middleware(TelemetryMiddleware, runtime=True)
@@ -446,6 +453,7 @@ def create_health_app(
             "gatewayPort": gateway_port(),
             "apiServerPort": api_server_port(),
             "gatewayPid": gateway.pid if gateway and gateway.poll() is None else None,
+            "backup": backup.status() if backup else None,
         }
         return JSONResponse(payload, status_code=200 if running else 503)
 
@@ -712,6 +720,14 @@ def main() -> None:
     configure_telemetry("hermes-runtime")
     home = hermes_home()
     configure_model_environment()
+    uid, gid = hermes_account()
+    backup_dir = runtime_backup_dir()
+    if backup_dir:
+        restored = restore_latest(home, backup_dir, worker_id=os.getenv("WORKER_ID", ""), **as_hermes(uid, gid))
+        if restored:
+            print(f"Hermes Worker restored from {restored.name}", flush=True)
+    else:
+        print("RUNTIME_BACKUP_DIR is not set; Worker backups are disabled.", flush=True)
     home.mkdir(parents=True, exist_ok=True)
     role_release = None
     profile_home = home
@@ -733,7 +749,6 @@ def main() -> None:
     os.environ["HERMES_HOME"] = str(profile_home)
     env_path = write_env_file(profile_home)
     config_path = write_config(profile_home)
-    uid, gid = hermes_account()
     own_profile(profile_home, uid, gid)
     print(f"Hermes profile home: {profile_home}; env {env_path}; config {config_path}", flush=True)
 
@@ -758,7 +773,8 @@ def main() -> None:
         os.setgid(gid)
         os.setuid(uid)
         os.environ["HOME"] = str(profile_home / "home")
-        app = create_health_app(home, profile_home, role_release, gateway)
+        backup_loop = BackupLoop(profile_home, backup_dir).start() if backup_dir else None
+        app = create_health_app(home, profile_home, role_release, gateway, backup_loop)
         uvicorn.run(app, host="0.0.0.0", port=api_server_port())
     finally:
         for process in (gateway, collaboration_mcp, mcp_proxy):

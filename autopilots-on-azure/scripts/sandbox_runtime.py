@@ -28,6 +28,10 @@ HERMES_API_PORT = 8642
 RUNTIME_IDLE_SECONDS = 300
 RUNTIME_ACTIVATION_MODE = "OnDemand"
 RUNTIME_READY_TIMEOUT_SECONDS = 300
+RUNTIME_SUSPEND_MODE = "Memory"
+RUNTIME_HOME = "/data/hermes"
+RUNTIME_BACKUP_VOLUME = "hermes-backups"
+RUNTIME_BACKUP_DIR = "/backup"
 WORKER_REFRESH_PREFLIGHT_TIMEOUT_SECONDS = 300
 WORKER_REFRESH_RETRY_SECONDS = 3
 WORKER_REFRESH_TRANSIENT_STATUS_CODES = {502, 503, 504}
@@ -59,7 +63,6 @@ class AgentSandboxConfig:
     health_path: str = "/health"
     command: tuple[str, ...] = ("/app/.venv/bin/python",)
     args: tuple[str, ...] = ("/app/start_hermes.py",)
-    data_mount_path: str = "/data"
     environment: dict[str, str] = field(default_factory=dict)
     labels: dict[str, str] = field(default_factory=dict)
     foundry_openai_base_url: str = ""
@@ -84,13 +87,11 @@ class AgentSandboxConfig:
     runtime_image_reference: str = ""
     disk_image_id: str = ""
     disk_image_name: str = "hermes-api-server-image"
-    data_volume_name: str = "hermes-data"
-    data_volume_size: str = "20Gi"
     cpu: str = "2000m"
     memory: str = "2048Mi"
     root_disk_size: str = "20Gi"
-    runtime_home: str = "/data/hermes"
-    runtime_workspace: str = "/data/hermes/workspace"
+    runtime_home: str = RUNTIME_HOME
+    runtime_workspace: str = f"{RUNTIME_HOME}/workspace"
     role_blueprint: str = ""
     role_blueprint_source: str = ""
     role_blueprint_path: str = ""
@@ -111,7 +112,7 @@ class AgentSandboxResult:
     runtime_kind: str
     port: int
     health_path: str
-    data_volume: str
+    backup_volume: str
     runtime_home: str
     runtime_workspace: str
     private_incidents_mcp_url: str | None
@@ -169,16 +170,19 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
     return labels
 
 
+def mounts_backup_volume(sandbox: Mapping[str, Any]) -> bool:
+    return any(volume.get("volumeName") == RUNTIME_BACKUP_VOLUME for volume in sandbox.get("volumes") or [])
+
+
 def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfig) -> dict | None:
     expected_labels = runtime_labels(config)
     for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
         labels = sandbox.get("labels", {})
-        volumes = sandbox.get("volumes", [])
         if any(labels.get(key) != value for key, value in expected_labels.items()):
             continue
         if "runtime" in labels or "autopilot" in labels:
             continue
-        if any(volume.get("volumeName") == config.data_volume_name for volume in volumes):
+        if mounts_backup_volume(sandbox):
             return sandbox
     return None
 
@@ -188,16 +192,34 @@ def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig
     stale = []
     for sandbox in client._dp_get(f"{client._group_path}/sandboxes"):
         labels = sandbox.get("labels", {})
-        volumes = sandbox.get("volumes", [])
         if labels.get("app") != "autopilots-on-azure":
             continue
         if labels.get("kind") != config.runtime_kind:
             continue
-        if not any(volume.get("volumeName") == config.data_volume_name for volume in volumes):
+        if not mounts_backup_volume(sandbox):
             continue
         if any(labels.get(key) != value for key, value in expected_labels.items()):
             stale.append(sandbox)
     return stale
+
+
+def publish_final_backup(client: SandboxGroupClient, sandbox: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Back up a runtime about to be deleted, so its replacement restores the newest Worker state.
+
+    A `Failed` runtime cannot run commands; its replacement restores the newest automatic backup.
+    """
+    if str(sandbox.get("state") or "") == "Failed":
+        return None
+    sandbox_id = str(sandbox.get("id") or "")
+    sandbox_client = client.get_sandbox_client(sandbox_id)
+    sandbox_client.ensure_running(timeout=600)
+    result = sandbox_client.exec(
+        f"/app/.venv/bin/python /app/runtime_backup.py --home {RUNTIME_HOME} --backup-dir {RUNTIME_BACKUP_DIR}"
+    )
+    if result.exit_code != 0:
+        detail = (result.stderr or result.stdout or "")[-2000:]
+        raise RuntimeError(f"Final Worker backup on runtime Sandbox {sandbox_id} failed: {detail}")
+    return json.loads(result.stdout.strip().splitlines()[-1])
 
 
 def recycle_failed_agent_sandbox(
@@ -407,7 +429,8 @@ def hermes_runtime_environment(
         "API_SERVER_PORT": str(HERMES_API_PORT),
         "RUNTIME_INGRESS_PORT": str(HERMES_API_PORT),
         "HERMES_GATEWAY_PORT": "9119",
-        "HERMES_HOME": "/data/hermes",
+        "HERMES_HOME": RUNTIME_HOME,
+        "RUNTIME_BACKUP_DIR": RUNTIME_BACKUP_DIR,
         "PATH": "/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "PYTHONPATH": "/app",
         "NODE_PATH": "/app/node_modules",
@@ -480,7 +503,6 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         health_path="/health",
         command=("/app/.venv/bin/python",),
         args=("/app/start_hermes.py",),
-        data_mount_path="/data",
         environment=environment,
         labels=overrides.get("labels") or {},
         foundry_openai_base_url=overrides.get("foundry_openai_base_url") or "",
@@ -505,13 +527,9 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         managed_identity_client_id=overrides.get("managed_identity_client_id") or "",
         disk_image_id=overrides.get("disk_image_id") or "",
         disk_image_name=overrides.get("disk_image_name") or "hermes-api-server-image",
-        data_volume_name=overrides.get("data_volume_name") or "hermes-data",
-        data_volume_size=overrides.get("data_volume_size") or "20Gi",
         cpu=overrides.get("cpu") or "2000m",
         memory=overrides.get("memory") or "2048Mi",
         root_disk_size=overrides.get("root_disk_size") or "20Gi",
-        runtime_home="/data/hermes",
-        runtime_workspace="/data/hermes/workspace",
         role_blueprint=overrides.get("role_blueprint") or "",
         role_blueprint_source=overrides.get("role_blueprint_source") or "",
         role_blueprint_path=overrides.get("role_blueprint_path") or "",
@@ -535,6 +553,8 @@ def runtime_config_revision(config: AgentSandboxConfig) -> str:
         "environment": config.environment,
         "resources": [config.cpu, config.memory, config.root_disk_size],
         "idleSeconds": RUNTIME_IDLE_SECONDS,
+        "suspendMode": RUNTIME_SUSPEND_MODE,
+        "volumes": {RUNTIME_BACKUP_VOLUME: RUNTIME_BACKUP_DIR},
         "activationMode": RUNTIME_ACTIVATION_MODE,
         "diskImageId": config.disk_image_id,
         "command": [*config.command, *config.args],
@@ -569,13 +589,13 @@ def create_agent_sandbox(
             "autoSuspendPolicy": {
                 "enabled": True,
                 "interval": RUNTIME_IDLE_SECONDS,
-                "mode": "Disk",
+                "mode": RUNTIME_SUSPEND_MODE,
             },
         },
         "labels": runtime_labels(config),
         "environment": environment,
         "volumes": [
-            SandboxVolume(config.data_volume_name, config.data_mount_path)._to_dict(),
+            SandboxVolume(RUNTIME_BACKUP_VOLUME, RUNTIME_BACKUP_DIR)._to_dict(),
         ],
         "ports": [
             AddPortRequest(
@@ -639,6 +659,7 @@ def deploy_agent_sandbox(
 
     for stale in stale_agent_sandboxes(client, config):
         require_worker_refresh_ready(client, config, stale)
+        publish_final_backup(client, stale)
         client.begin_delete_sandbox(stale["id"], polling_timeout=600).result()
 
     existing_sandbox = recycle_failed_agent_sandbox(
@@ -650,13 +671,12 @@ def deploy_agent_sandbox(
         sandbox_id = str(existing_sandbox["id"])
         endpoint_url = port_url(existing_sandbox.get("ports") or [], config.port)
     else:
-        volume = existing_named(client.list_volumes(), config.data_volume_name)
-        if volume is None:
+        if existing_named(client.list_volumes(), RUNTIME_BACKUP_VOLUME) is None:
+            volume_labels = {"app": "autopilots-on-azure", "worker": config.worker_id}
             client.create_volume(
-                config.data_volume_name,
-                type="DataDisk",
-                size=config.data_volume_size,
-                labels=runtime_labels(config),
+                RUNTIME_BACKUP_VOLUME,
+                type="AzureBlob",
+                labels={key: value for key, value in volume_labels.items() if value},
             )
         _, current = create_agent_sandbox(
             client,
@@ -675,7 +695,7 @@ def deploy_agent_sandbox(
         runtime_kind=config.runtime_kind,
         port=config.port,
         health_path=config.health_path,
-        data_volume=config.data_volume_name,
+        backup_volume=RUNTIME_BACKUP_VOLUME,
         runtime_home=config.runtime_home,
         runtime_workspace=config.runtime_workspace,
         private_incidents_mcp_url=config.private_incidents_mcp_url or None,
@@ -769,8 +789,6 @@ def config_from_environment(
         "managed_identity_client_id": overrides.get("managed_identity_client_id") or get_config("AGENT_RUNTIME_MANAGED_IDENTITY_CLIENT_ID"),
         "disk_image_id": overrides.get("disk_image_id") or get_config("AGENT_RUNTIME_DISK_IMAGE_ID"),
         "disk_image_name": overrides.get("disk_image_name") or get_config("AGENT_RUNTIME_DISK_IMAGE_NAME"),
-        "data_volume_name": overrides.get("data_volume_name") or get_config("AGENT_RUNTIME_DATA_VOLUME_NAME"),
-        "data_volume_size": overrides.get("data_volume_size") or get_config("AGENT_RUNTIME_DATA_VOLUME_SIZE", "20Gi"),
         "cpu": overrides.get("cpu") or get_config("AGENT_RUNTIME_SANDBOX_CPU", "2000m"),
         "memory": overrides.get("memory") or get_config("AGENT_RUNTIME_SANDBOX_MEMORY", "2048Mi"),
         "root_disk_size": overrides.get("root_disk_size") or get_config("AGENT_RUNTIME_SANDBOX_ROOT_DISK_SIZE", "20Gi"),

@@ -26,7 +26,6 @@ locals {
   scheduler_transport_enabled = (
     var.user_scheduling_enabled || local.document_retry_active
   )
-  runtime_data_volume_name   = var.runtime_data_volume_name
   runtime_disk_image_name    = var.runtime_disk_image_name
   sandbox_data_owner_role_id = "c24cf47c-5077-412d-a19c-45202126392c"
 }

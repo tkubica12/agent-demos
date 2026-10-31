@@ -8,7 +8,7 @@ from typing import Any
 from azure.containerapps.sandbox import SandboxGroupClient
 from azure.identity import DefaultAzureCredential
 
-from scripts.sandbox_runtime import endpoint_for_region
+from scripts.sandbox_runtime import RUNTIME_BACKUP_VOLUME, endpoint_for_region, mounts_backup_volume
 from scripts.demo_ops import sandbox_items
 from scripts.setup_agent365 import load_json
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
@@ -25,13 +25,11 @@ def require_demo_owned(
     *,
     state_name: str,
     worker_id: str,
-    volume_name: str,
     workspace: str,
 ) -> None:
     values = {
         "state name": state_name,
         "Worker ID": worker_id,
-        "Data Disk": volume_name,
         "Terraform workspace": workspace,
     }
     invalid = [name for name, value in values.items() if not value.startswith(DEMO_PREFIX)]
@@ -45,16 +43,12 @@ def matching_sandboxes(
     sandboxes: list[dict[str, Any]],
     *,
     worker_id: str,
-    volume_name: str,
 ) -> list[dict[str, Any]]:
     return [
         sandbox
         for sandbox in sandboxes
         if (sandbox.get("labels") or {}).get("worker") == worker_id
-        and any(
-            volume.get("volumeName") == volume_name
-            for volume in sandbox.get("volumes") or []
-        )
+        and mounts_backup_volume(sandbox)
     ]
 
 
@@ -62,18 +56,16 @@ def reset(args: argparse.Namespace) -> None:
     tfvars = load_json(runtime_app_tfvars_path("hermes", args.state_name))
     outputs = load_json(runtime_outputs_path("hermes", args.state_name))
     worker_id = str(tfvars.get("autopilot_name") or "")
-    volume_name = str(tfvars.get("runtime_data_volume_name") or "")
     require_demo_owned(
         state_name=args.state_name,
         worker_id=worker_id,
-        volume_name=volume_name,
         workspace=args.workspace,
     )
     if tfvars.get("hermes_role_release") != args.baseline_release:
         raise ValueError("Demo Worker is not pinned to the requested baseline Role Release.")
     if tfvars.get("hermes_role_release_commit") != args.baseline_commit:
         raise ValueError("Demo Worker is not pinned to the requested baseline commit.")
-    if outputs.get("worker_id") != worker_id or outputs.get("runtime_data_volume_name") != volume_name:
+    if outputs.get("worker_id") != worker_id:
         raise ValueError("Demo Worker outputs do not match the reset configuration.")
     if outputs.get("terraform_workspace") != args.workspace:
         raise ValueError("Captured Worker outputs do not match the requested Terraform workspace.")
@@ -89,20 +81,19 @@ def reset(args: argparse.Namespace) -> None:
     matches = matching_sandboxes(
         sandbox_items(sandboxes),
         worker_id=worker_id,
-        volume_name=volume_name,
     )
     summary = {
         "stateName": args.state_name,
         "workerId": worker_id,
         "workspace": args.workspace,
-        "dataVolume": volume_name,
+        "backupVolume": RUNTIME_BACKUP_VOLUME,
         "baselineRelease": args.baseline_release,
         "baselineCommit": args.baseline_commit,
         "sandboxIds": [str(item.get("id") or "") for item in matches],
         "execute": args.execute,
     }
     if not args.execute:
-        summary["next"] = "Rerun with --execute to delete only these demo Sandboxes and this demo Data Disk."
+        summary["next"] = "Rerun with --execute to delete only these demo Sandboxes and this demo Worker's backups."
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
 
@@ -112,16 +103,15 @@ def reset(args: argparse.Namespace) -> None:
             raise RuntimeError("A matching demo Sandbox has no ID.")
         client.begin_delete_sandbox(sandbox_id, polling_timeout=600).result()
     volume_exists = any(
-        str(getattr(volume, "name", "")) == volume_name
-        or str(getattr(volume, "id", "")).rstrip("/").endswith(f"/{volume_name}")
+        str(getattr(volume, "name", "")) == RUNTIME_BACKUP_VOLUME
         for volume in client.list_volumes()
     )
     if volume_exists:
-        client.begin_delete_volume(volume_name, polling_timeout=600).result()
+        client.begin_delete_volume(RUNTIME_BACKUP_VOLUME, polling_timeout=600).result()
     summary["deleted"] = True
     summary["next"] = (
-        "Invoke the demo Worker. The bridge will recreate its Data Disk and install "
-        "the immutable baseline Role Release."
+        "Rerun deploy_apps_runtime --deploy-services for the demo Worker. It creates an empty backup "
+        "volume and fresh runtime compute that installs the immutable baseline Role Release."
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
 
