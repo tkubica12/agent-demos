@@ -124,7 +124,7 @@ class ScheduledLearningTests(unittest.TestCase):
         self.assertFalse(calls[0]["success"])
         self.assertIn("interrupted", calls[0]["error"].lower())
         self.assertIn("will not be rerun automatically", result["reason"])
-    def test_dream_prepares_packet_when_records_exist(self):
+    def test_dream_prepares_packet_when_owner_shared_changes_exist(self):
         class Adapter:
             runtime_kind = "hermes"
 
@@ -132,10 +132,12 @@ class ScheduledLearningTests(unittest.TestCase):
                 self.request = request
                 return DreamResponse(
                     agent=AgentResponse(text="done", raw={}),
-                    learning_status={
-                        "records": [{"recordId": "lr-1"}],
-                        "rejectedRecords": [],
-                        "roleRelease": {"release": "3.2.0"},
+                    learning_digest={
+                        "changes": [{"entryId": "e1", "new": True}],
+                        "pending": [],
+                        "governed": [{"artifactPath": "skills/candidates/example",
+                                      "choice": {"choice": "share", "current": True}}],
+                        "worker": {"workerId": "worker-1", "roleRelease": "3.2.0"},
                     },
                 )
 
@@ -166,27 +168,28 @@ class ScheduledLearningTests(unittest.TestCase):
         result = asyncio.run(coordinator.run_once())
 
         self.assertEqual(adapter.request.focus, "recent work")
-        self.assertEqual(result["dream"]["recordCount"], 1)
+        self.assertEqual(result["dream"]["sharedChangeCount"], 1)
+        self.assertEqual(result["dream"]["skillChangeCount"], 1)
         self.assertEqual(result["packet"]["packetDigest"], "a" * 64)
         self.assertTrue(result["packet"]["approvalRequired"])
         self.assertEqual(coordinator.status()["successCount"], 1)
 
-    def test_no_packet_is_prepared_without_records(self):
+    def test_no_packet_is_prepared_without_owner_shared_changes(self):
         class Adapter:
             runtime_kind = "hermes"
 
             async def dream(self, request):
                 return DreamResponse(
                     agent=AgentResponse(text="done", raw={}),
-                    learning_status={
-                        "records": [],
-                        "rejectedRecords": [],
-                        "roleRelease": {"release": "3.2.0"},
+                    learning_digest={
+                        "changes": [{"entryId": "e1"}],
+                        "pending": [],
+                        "governed": [{"artifactPath": "skills/role/example", "choice": None}],
                     },
                 )
 
             async def prepare_collective_learning(self):
-                raise AssertionError("An empty Dream must not prepare a packet.")
+                raise AssertionError("Nothing the owner shared means no packet.")
 
         coordinator = ScheduledLearningCoordinator(
             adapter_factory=Adapter,
@@ -206,7 +209,8 @@ class ScheduledLearningTests(unittest.TestCase):
         result = asyncio.run(coordinator.run_once())
 
         self.assertIsNone(result["packet"])
-        self.assertEqual(coordinator.status()["lastDream"]["recordCount"], 0)
+        self.assertEqual(coordinator.status()["lastDream"]["sharedChangeCount"], 0)
+        self.assertEqual(coordinator.status()["lastDream"]["governedChangeCount"], 1)
 
     def test_uncheckpointed_failure_does_not_blindly_repeat_inference(self):
         attempts = 0
@@ -224,11 +228,7 @@ class ScheduledLearningTests(unittest.TestCase):
                     raise RuntimeError("temporary")
                 return DreamResponse(
                     agent=AgentResponse(text="done", raw={}),
-                    learning_status={
-                        "records": [],
-                        "rejectedRecords": [],
-                        "roleRelease": {"release": "3.2.0"},
-                    },
+                    learning_digest={"changes": [], "pending": [], "governed": []},
                 )
 
         async def sleep(delay):
@@ -267,7 +267,13 @@ class ScheduledLearningTests(unittest.TestCase):
                 calls["dream"] += 1
                 return DreamResponse(
                     agent=AgentResponse(text="done", raw={}),
-                    learning_status={"records": [{"recordId": "one"}]},
+                    learning_digest={
+                        "changes": [{"entryId": "e1", "new": True}],
+                        "pending": [],
+                        "governed": [{"artifactPath": "skills/candidates/example",
+                                      "choice": {"choice": "share", "current": True}}],
+                        "worker": {"workerId": "worker-1", "roleRelease": "3.2.0"},
+                    },
                 )
 
             async def prepare_collective_learning(self):
@@ -329,7 +335,7 @@ class ScheduledLearningTests(unittest.TestCase):
                         raise RuntimeError("status unavailable after model checkpoint")
                     return DreamResponse(
                         agent=AgentResponse(text="done", raw={}),
-                        learning_status={"records": [{"recordId": "one"}]},
+                        learning_digest={"governed": [{"choice": {"choice": "share", "current": True}}]},
                     )
 
                 async def prepare_collective_learning(self):

@@ -1,0 +1,4 @@
+name: autopilots
+kind: standalone
+version: '1.0.0'
+description: Autopilots on Azure runtime extensions (keepalive, tracing, Worker endpoints, private turns)

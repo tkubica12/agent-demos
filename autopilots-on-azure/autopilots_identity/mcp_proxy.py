@@ -110,13 +110,26 @@ async def access_token(config: McpServerConfig) -> str:
     return await provider.get_agent_token(config.scope)
 
 
+async def warm_upstream(name: str, config: McpServerConfig) -> int:
+    """Acquire the server token and open one upstream connection, waking OnDemand compute and private routes."""
+    token = await access_token(config)
+    async with httpx.AsyncClient(timeout=60) as client:
+        async with client.stream(
+            "GET", config.upstream_url,
+            headers={"Authorization": " ".join(("Bearer", token)), "Accept": "text/event-stream"},
+        ) as response:
+            return response.status_code
+
+
 async def prefetch_tokens() -> None:
-    """Exchange every upstream token while Hermes is still importing, before its blocking MCP discovery."""
-    configs = {(config.identity_mode, config.scope): config for config in server_configs().values()}
-    results = await asyncio.gather(*(access_token(config) for config in configs.values()), return_exceptions=True)
-    for (identity_mode, scope), result in zip(configs, results):
+    """Prepare every upstream while Hermes is still bootstrapping, before its blocking MCP discovery."""
+    servers = server_configs()
+    results = await asyncio.gather(
+        *(warm_upstream(name, config) for name, config in servers.items()), return_exceptions=True,
+    )
+    for name, result in zip(servers, results):
         if isinstance(result, Exception):
-            logger.warning("MCP token prefetch failed for %s scope %s: %s", identity_mode, scope, result)
+            logger.warning("MCP upstream warm-up failed for %s: %s", name, result)
 
 
 @asynccontextmanager

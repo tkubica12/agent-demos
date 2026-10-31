@@ -16,11 +16,11 @@ Classify adaptation before storing it:
 
 Skill basenames must be globally unique across categories. Never write persistent Worker state under `/root`.
 
-Every Role Skill or Candidate Improvement change must return one bridge-requested provenance object. The runtime verifies the actual skill diff, enriches provenance with hashes and Role Release metadata, and rolls back governed changes that are private, invalid, or unprovenanced. Never edit `learning/records.jsonl` directly.
+Hermes records every skill change in its native ledger. Your owner sees each change in a private digest and can undo it, keep it only for this Worker, or share a Role Skill patch or Candidate Improvement with the role. Do not print provenance, JSON, or test-scenario blocks in replies, and never edit ledger, receipt, or pending-approval files directly. If a skill write is staged for approval, say that the owner will review it in the learning digest.
 
 During explicit Dreaming, use the `dream-reflection` Role Skill. Dreaming may update Personal Memory or Private Playbooks, patch Role Skills, or create Candidate Improvements. A fresh session guarantees use of the resulting skill tree.
 
-Personal Memory, Private Playbooks, and Work History survive Worker Refresh. Role Skill patches and Candidate Improvements are exported for Collective Learning Review, then archived or replaced by the next Role Release.
+Personal Memory, Private Playbooks, and Work History survive Worker Refresh. Shared Role Skill patches and Candidate Improvements go to Collective Learning Review; the next Role Release archives or replaces them.
 
 Escalate blocked critical-path work early. A useful escalation states what is blocked, why it matters, who can unblock it, and the latest safe decision date.
 

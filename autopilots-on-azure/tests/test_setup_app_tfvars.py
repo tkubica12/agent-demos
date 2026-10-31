@@ -37,6 +37,19 @@ class SetupAppTfvarsTests(unittest.TestCase):
         with patch.object(setup_app_tfvars, "output", return_value=principal):
             self.assertEqual(resolve_deployer_principal_id({}), principal)
 
+    def test_worker_owner_is_validated_and_preserved_on_updates(self):
+        owner = "a12de0c7-f871-4bbe-b037-780688a5666d"
+        common = {
+            "runtime": "hermes", "autopilot_name": "worker", "data_volume_name": "worker-data",
+            "role_blueprint": "junior-project-manager", "role_blueprint_source": "https://example.com/repo.git",
+            "role_release": "1.0.0", "role_release_commit": "a" * 40,
+        }
+        first = build_tfvars(previous={}, worker_owner_id=owner.upper(), **common)
+        self.assertEqual(first["worker_owner_id"], owner)
+        self.assertEqual(build_tfvars(previous=first, **common)["worker_owner_id"], owner)
+        with self.assertRaises(ValueError):
+            build_tfvars(previous={}, worker_owner_id="owner@contoso.com", **common)
+
     def test_generated_blueprint_loading_is_keyless_and_does_not_decrypt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

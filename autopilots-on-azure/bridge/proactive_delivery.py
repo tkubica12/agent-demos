@@ -46,6 +46,16 @@ def delivery_reference_metadata(
     }
 
 
+def stored_conversation_id(stored: dict[str, Any]) -> str:
+    """Teams conversation ID of a stored proactive delivery reference."""
+    conversation_payload = stored.get("conversation")
+    if not isinstance(conversation_payload, dict):
+        raise RuntimeError("Stored proactive conversation is invalid.")
+    conversation = Conversation.from_json_to_store_item(conversation_payload)
+    conversation.validate()
+    return str(conversation.conversation_reference.conversation.id)
+
+
 async def send_proactive_activity(
     adapter: Any,
     stored: dict[str, Any],

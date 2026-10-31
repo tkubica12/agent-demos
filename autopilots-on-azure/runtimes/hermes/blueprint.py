@@ -407,9 +407,9 @@ def _archive_release_state(profile_home: Path, manifest: dict[str, Any]) -> None
     release = str(manifest["roleRelease"])
     archive = profile_home / "learning" / "archive" / f"role-release-{release}"
     archive.mkdir(parents=True, exist_ok=True)
-    records = profile_home / "learning" / "records.jsonl"
-    if records.exists() and records.stat().st_size:
-        shutil.move(str(records), str(archive / "records.jsonl"))
+    choices = profile_home / "learning" / "share-choices.json"
+    if choices.exists():
+        shutil.move(str(choices), str(archive / "share-choices.json"))
     candidates = profile_home / "skills" / "candidates"
     if candidates.exists() and any(candidates.iterdir()):
         destination = archive / "candidate-improvements"
@@ -453,7 +453,7 @@ def _recover_refresh_transaction(profile_home: Path) -> None:
         destination = profile_home.joinpath(*PurePosixPath(relative).parts)
         _copy_path(source, destination)
     for relative in (
-        "learning/records.jsonl",
+        "learning/share-choices.json",
         "skills/candidates",
         f"learning/archive/role-release-{metadata['previousRelease']}",
     ):
@@ -485,7 +485,7 @@ def _start_refresh_transaction(
             profile_home.joinpath(*PurePosixPath(relative).parts),
             backup_profile.joinpath(*PurePosixPath(relative).parts),
         )
-    for relative in ("learning/records.jsonl", "skills/candidates"):
+    for relative in ("learning/share-choices.json", "skills/candidates"):
         _copy_path(
             profile_home.joinpath(*PurePosixPath(relative).parts),
             backup_profile.joinpath(*PurePosixPath(relative).parts),
@@ -504,11 +504,42 @@ def _start_refresh_transaction(
     return transaction_root
 
 
+LEGACY_DEFAULT_PROFILE = "legacy-default-profile"
+
+
+def adopt_worker_home_layout(hermes_home: Path, role_blueprint: str) -> bool:
+    """Move a Hermes 0.19 named-profile Worker into the Hermes home itself, resumably.
+
+    Hermes 0.22 runs one host gateway per home and serves named profiles by multiplexing; a
+    per-Worker Sandbox therefore keeps its single Worker as the default home. Root leftovers of the
+    unused 0.19 default profile are kept under LEGACY_DEFAULT_PROFILE, never deleted.
+    """
+    profiles = hermes_home / "profiles"
+    named = profiles / role_blueprint
+    if not named.is_dir():
+        return False
+    legacy = hermes_home / LEGACY_DEFAULT_PROFILE
+    complete = legacy / ".complete"
+    if not complete.exists():
+        legacy.mkdir(exist_ok=True)
+        for entry in list(hermes_home.iterdir()):
+            if entry.name not in {"profiles", LEGACY_DEFAULT_PROFILE}:
+                shutil.move(str(entry), str(legacy / entry.name))
+        complete.touch()
+    for entry in list(named.iterdir()):
+        shutil.move(str(entry), str(hermes_home / entry.name))
+    named.rmdir()
+    if not any(profiles.iterdir()):
+        profiles.rmdir()
+    return True
+
+
 def install_or_refresh_role_release(
     hermes_home: Path,
     settings: RoleReleaseSettings,
 ) -> RoleReleaseInstall:
-    profile_home = hermes_home / "profiles" / settings.role_blueprint
+    adopt_worker_home_layout(hermes_home, settings.role_blueprint)
+    profile_home = hermes_home
     _recover_refresh_transaction(profile_home)
     manifest_path = worker_manifest_path(profile_home)
     installed = _read_json(manifest_path)

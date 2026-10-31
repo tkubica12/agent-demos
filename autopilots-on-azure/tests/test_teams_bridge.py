@@ -656,7 +656,7 @@ class TeamsBridgeTests(unittest.TestCase):
                 else:
                     os.environ[name] = value
 
-    def test_internal_dream_requires_operator_key_and_returns_packet(self):
+    def test_internal_dream_requires_operator_key_and_returns_learning_digest(self):
         class Adapter:
             runtime_kind = "hermes"
 
@@ -667,7 +667,7 @@ class TeamsBridgeTests(unittest.TestCase):
                         text="Dream complete",
                         raw={"runtimeUrl": "https://hermes.example"},
                     ),
-                    learning_status={"statusVersion": "2.0", "records": []},
+                    learning_digest={"digestVersion": "1.0", "changes": [], "newCount": 0},
                 )
 
         adapter = Adapter()
@@ -679,12 +679,13 @@ class TeamsBridgeTests(unittest.TestCase):
         bridge_app.runtime_adapter = lambda: adapter
         request = ns(headers={"x-autopilot-key": "operator-key"})
         try:
-            result = asyncio.run(
-                bridge_app.dream(
-                    DreamRunRequest(focus="recent delivery work", maxRecords=2),
-                    request,
+            with patch.dict(os.environ, {"WORKER_OWNER_ID": ""}):
+                result = asyncio.run(
+                    bridge_app.dream(
+                        DreamRunRequest(focus="recent delivery work", maxRecords=2),
+                        request,
+                    )
                 )
-            )
         finally:
             bridge_app.runtime_adapter = original_adapter
             if previous_key is None:
@@ -697,7 +698,8 @@ class TeamsBridgeTests(unittest.TestCase):
                 os.environ["WORKER_ID"] = previous_worker
 
         self.assertTrue(adapter.request.session_id.startswith("dream:worker-1:"))
-        self.assertEqual(result.learning_status["statusVersion"], "2.0")
+        self.assertEqual(result.learning_digest["digestVersion"], "1.0")
+        self.assertEqual(result.learning_digest_delivery, {"status": "owner_not_configured"})
         self.assertEqual(result.response, "Dream complete")
         self.assertNotIn("sandboxId", result.model_dump(by_alias=True))
 

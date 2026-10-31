@@ -11,7 +11,6 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from runtimes.hermes.learning import LearningRecordError
 from scripts import evaluate_learning as evaluation
 from scripts.collective_learning import verify_rejection_receipt
 from tests import test_collective_review as review_tests
@@ -86,7 +85,12 @@ class LearningEvaluationTests(unittest.TestCase):
         data = json.loads(self.suite.read_text(encoding="utf-8"))
         data["scenarios"][0]["command"] = "echo unsafe"
         self.suite.write_text(json.dumps(data), encoding="utf-8")
-        with self.assertRaises(LearningRecordError):
+        with self.assertRaisesRegex(evaluation.EvaluationError, "commands and code"):
+            evaluation.load_independent_suite(self.suite)
+        data["scenarios"][0].pop("command")
+        data["scenarios"][0]["input"] = "Send it to person@example.com"
+        self.suite.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaisesRegex(evaluation.EvaluationError, "privacy scan"):
             evaluation.load_independent_suite(self.suite)
 
     def test_profile_comparison_requires_same_private_state_and_single_skill_contract(self):
@@ -97,7 +101,7 @@ class LearningEvaluationTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(evaluation.EvaluationError, "identical"):
                 evaluation.compare_profiles(baseline, changed)
-        with self.assertRaises(LearningRecordError):
+        with self.assertRaisesRegex(evaluation.EvaluationError, "exactly one SKILL.md"):
             evaluation.compare_profiles(
                 baseline, {**candidate, "skills/role/clarify-deadline/extra.py": b"print('not allowed')"},
             )
@@ -117,6 +121,7 @@ class LearningEvaluationTests(unittest.TestCase):
         self.assertEqual(env["AZURE_CONFIG_DIR"], str(self.root / "shared-azure-login"))
         self.assertEqual(config["skills"]["creation_nudge_interval"], 0)
         self.assertEqual(config["memory"]["nudge_interval"], 0)
+        self.assertFalse(config["auxiliary"]["background_review"]["enabled"])
         self.assertFalse(config["skills"]["inline_shell"])
         self.assertEqual(config["platform_toolsets"]["cli"], [])
         self.assertEqual(config["mcp_servers"], {})
@@ -141,10 +146,15 @@ class LearningEvaluationTests(unittest.TestCase):
         self.assertNotIn("expected-secret", prompt)
 
     def test_installed_hermes_response_only_preflight_without_model_execution(self):
-        runtime = Path(__file__).resolve().parents[1] / "runtimes" / "hermes" / ".venv"
-        interpreter = runtime / "Scripts" / "python.exe" if os.name == "nt" else runtime / "bin" / "python"
+        interpreter = Path(os.getenv("HERMES_EVALUATION_PYTHON", "/opt/hermes/.venv/bin/python"))
         if not interpreter.is_file():
-            self.skipTest("The separate pinned Hermes environment is not installed.")
+            self.skipTest("Set HERMES_EVALUATION_PYTHON to the pinned Hermes environment, as in the runtime image.")
+        version = subprocess.run(
+            [str(interpreter), "-I", "-c", "from importlib.metadata import version; print(version('hermes-agent'))"],
+            capture_output=True, text=True, timeout=60, check=False,
+        ).stdout.strip()
+        if version != evaluation.HERMES_VERSION:
+            self.skipTest(f"{interpreter} provides Hermes {version or 'none'}, not {evaluation.HERMES_VERSION}.")
         baseline, _, config, _ = self.files_and_config()
         home, env = evaluation.isolated_profile(self.root / "preflight", baseline, config)
         result = subprocess.run(
@@ -216,15 +226,7 @@ class LearningEvaluationTests(unittest.TestCase):
         self.assertNotIn("comparison", report)
         self.assertEqual(list((self.root / ".artifacts" / "learning-evaluation").iterdir()), [])
 
-    def test_holdout_cannot_reuse_agent_proposed_input(self):
-        with patch.object(evaluation, "signed_scenarios", return_value=(
-            [{"scenario": scenario(), "source": "agent_proposed", "recordId": "record-1"}], "a" * 64,
-        )), patch.object(evaluation, "run_response") as run:
-            with self.assertRaisesRegex(evaluation.EvaluationError, "must not duplicate"):
-                evaluation.evaluate(**self.parameters)
-            run.assert_not_called()
-
-    def test_signed_packet_scenarios_are_bound_to_exact_operator_profile_changes(self):
+    def test_signed_packet_is_bound_to_exact_operator_profile_changes(self):
         fixture = review_tests.CollectiveReviewTests()
         envelope = fixture._envelope("worker-1")
         packet_path = self.root / "approved-packet.json"
@@ -236,17 +238,19 @@ class LearningEvaluationTests(unittest.TestCase):
             **baseline,
             **{key: value.encode("utf-8") for key, value in envelope["packet"]["improvements"][0]["files"].items()},
         }
-        cases, digest = evaluation.signed_scenarios(packet_path, keys_path, baseline, candidate)
-        self.assertEqual(cases[0]["source"], "agent_proposed")
-        self.assertEqual(cases[0]["recordId"], "lr-worker-1")
-        self.assertEqual(digest, envelope["receipt"]["packetDigest"])
+        self.assertEqual(
+            evaluation.signed_packet(packet_path, keys_path, baseline, candidate),
+            envelope["receipt"]["packetDigest"],
+        )
         candidate["skills/role/clarify-deadline/SKILL.md"] += b"\nUnrelated change."
         with self.assertRaisesRegex(evaluation.EvaluationError, "All compared skill changes"):
-            evaluation.signed_scenarios(packet_path, keys_path, baseline, candidate)
-        envelope["packet"]["improvements"][0]["provenance"][0]["agentProposedScenarios"][0]["input"] = "Tampered."
+            evaluation.signed_packet(packet_path, keys_path, baseline, candidate)
+        envelope["packet"]["improvements"][0]["files"]["skills/candidates/deadline-verification/SKILL.md"] += "x"
         packet_path.write_text(json.dumps(envelope), encoding="utf-8")
         with self.assertRaises(ValueError):
-            evaluation.signed_scenarios(packet_path, keys_path, baseline, candidate)
+            evaluation.signed_packet(packet_path, keys_path, baseline, candidate)
+        with self.assertRaisesRegex(evaluation.EvaluationError, "together"):
+            evaluation.signed_packet(packet_path, None, baseline, candidate)
 
     def test_signed_rejection_verifies_existing_public_key_and_requested_disposition(self):
         key = Ed25519PrivateKey.from_private_bytes(b"\x05" * 32)

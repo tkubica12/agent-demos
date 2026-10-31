@@ -22,7 +22,7 @@ from scripts.collective_review import (
     create_role_release_pull_request,
 )
 from scripts.collective_learning import attested_envelope
-from runtimes.hermes.learning import _artifact_hash
+from collective_learning import exported_artifact_hash, file_hashes
 
 
 class CollectiveReviewTests(unittest.TestCase):
@@ -35,7 +35,7 @@ class CollectiveReviewTests(unittest.TestCase):
     ).decode("ascii")
 
     def test_operator_export_removes_bridge_transport_metadata(self):
-        packet = {"packetVersion": "2.0"}
+        packet = {"packetVersion": "3.0"}
         receipt = {"approved": True}
 
         envelope = attested_envelope(
@@ -47,11 +47,20 @@ class CollectiveReviewTests(unittest.TestCase):
 
         self.assertEqual(envelope, {"packet": packet, "receipt": receipt})
 
+    @staticmethod
+    def improvement_id(worker_id: str) -> str:
+        return "li-" + hashlib.sha256(worker_id.encode("utf-8")).hexdigest()[:24]
+
     def _packet(self, worker_id: str = "worker-1") -> dict:
-        record_id = f"lr-{worker_id}"
-        packet = {
-            "packetVersion": "2.0",
-            "createdAt": "2026-07-16T08:00:00Z",
+        path = "skills/candidates/deadline-verification"
+        files = {
+            f"{path}/SKILL.md": "---\nname: deadline-verification\ndescription: Verify deadline evidence.\n---\n",
+        }
+        created = {f"{path}/SKILL.md": {"before": None, "after": "0" * 64}}
+        patched = {f"{path}/SKILL.md": {"before": "0" * 64, "after": file_hashes(files)[f"{path}/SKILL.md"]}}
+        return {
+            "packetVersion": "3.0",
+            "createdAt": "2026-10-31T08:00:00Z",
             "roleRelease": {
                 "roleBlueprint": "junior-project-manager",
                 "source": "https://github.com/example/roles.git",
@@ -59,98 +68,55 @@ class CollectiveReviewTests(unittest.TestCase):
                 "release": "3.0.0",
                 "commit": "a" * 40,
             },
-            "worker": {
-                "workerId": worker_id,
-                "assignmentScope": "team-alpha",
-            },
+            "worker": {"workerId": worker_id, "assignmentScope": "team-alpha"},
             "governedStateHash": "b" * 64,
-            "improvements": [
-                {
-                    "classification": "candidate_improvement",
-                    "artifactPath": "skills/candidates/deadline-verification",
-                    "files": {
-                        "skills/candidates/deadline-verification/SKILL.md": (
-                            "---\nname: deadline-verification\n"
-                            "description: Verify deadline evidence.\n---\n"
-                        )
-                    },
-                    "baselineFileHashes": {},
-                    "provenance": [{
-                        "schemaVersion": "3.0",
-                        "recordId": record_id,
-                        "createdAt": "2026-07-16T08:00:00Z",
-                        "classification": "candidate_improvement",
-                        "artifactPath": "skills/candidates/deadline-verification",
-                        "action": "create",
-                        "title": "Verify deadline evidence",
-                        "generalizedLearning": "Request a timezone before confirming a deadline.",
-                        "rationale": "Ambiguous dates need clarification.",
-                        "evidence": [{"sourceType": "private_session", "summary": "Several deadlines lacked timezone context."}],
-                        "confidence": 0.8,
-                        "sourceStage": "foreground",
-                        "agentProposedScenarios": [{
-                            "scenarioId": "missing-timezone",
-                            "input": "Confirm Friday as the deadline.",
-                            "setupAssumptions": ["The timezone is unknown."],
-                            "expectedObservableOutcomes": ["Ask for timezone confirmation."],
-                            "acceptanceCriteria": [{"observable": "response.text", "operator": "contains", "value": "timezone"}],
-                            "scope": "Deadline clarification.",
-                        }],
-                        "privacy": {"redactionStatus": "passed", "warnings": []},
-                    }],
-                }
-            ],
+            "improvements": [{
+                "improvementId": self.improvement_id(worker_id),
+                "classification": "candidate_improvement",
+                "artifactPath": path,
+                "files": files,
+                "baselineFileHashes": {},
+                "artifactHash": exported_artifact_hash(files),
+                "ledger": [
+                    {"id": "e1", "ts": "2026-10-30T10:00:00+00:00", "actor": "curator", "action": "create",
+                     "files": created},
+                    {"id": "e2", "ts": "2026-10-30T11:00:00+00:00", "actor": "agent", "action": "patch",
+                     "files": patched},
+                ],
+                "shareDecision": {"receiptId": "share-candidates-deadline-verification", "decidedBy": "owner-1",
+                                  "decidedAt": "2026-10-31T07:00:00Z"},
+                "approvals": [],
+            }],
             "privacy": {
                 "status": "ready_for_human_approval",
                 "excludedPaths": ["memories/", "skills/private/", "state.db"],
             },
             "evaluation": {
-                "agentProposedScenarios": "included_in_provenance",
+                "agentProposedScenarios": "not_generated",
                 "executionStatus": "not_run",
                 "independentHoldout": "not_supplied",
             },
         }
-        improvement = packet["improvements"][0]
-        record = improvement["provenance"][0]
-        record["artifact"] = {
-            "path": improvement["artifactPath"], "beforeHash": None,
-            "afterHash": _artifact_hash({key: value.encode("utf-8") for key, value in improvement["files"].items()}),
-            "changedFiles": list(improvement["files"]),
-        }
-        record["roleRelease"] = {key: packet["roleRelease"][key] for key in ("roleBlueprint", "release", "commit")}
-        record["worker"] = dict(packet["worker"])
-        return packet
 
-    def _envelope(self, worker_id: str) -> dict:
-        packet = self._packet(worker_id)
-        packet_digest = hashlib.sha256(
-            json.dumps(
-                packet,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-            ).encode("utf-8")
-        ).hexdigest()
+    def _signed(self, packet: dict) -> dict:
         receipt = {
             "approved": True,
-            "approvedAt": "2026-07-16T08:01:00Z",
+            "approvedAt": "2026-10-31T08:01:00Z",
             "approvedBy": "operator",
-            "workerId": worker_id,
+            "workerId": packet["worker"]["workerId"],
             "roleReleaseCommit": "a" * 40,
             "governedStateHash": "b" * 64,
-            "packetDigest": packet_digest,
+            "packetDigest": hashlib.sha256(
+                json.dumps(packet, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+            ).hexdigest(),
         }
-        receipt["signature"] = base64.b64encode(
-            self.worker_private_key.sign(
-                json.dumps(
-                    receipt,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=True,
-                ).encode("utf-8")
-            )
-        ).decode("ascii")
+        receipt["signature"] = base64.b64encode(self.worker_private_key.sign(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        )).decode("ascii")
         return {"packet": packet, "receipt": receipt}
+
+    def _envelope(self, worker_id: str) -> dict:
+        return self._signed(self._packet(worker_id))
 
     def test_load_packets_requires_approved_same_release_unique_workers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -170,72 +136,48 @@ class CollectiveReviewTests(unittest.TestCase):
 
         self.assertEqual([packet["worker"]["workerId"] for packet in packets], ["worker-1", "worker-2"])
 
-    def test_load_packets_rejects_unapproved_or_private_content(self):
+    def test_load_packets_rejects_unapproved_untraced_or_private_content(self):
+        keys = {"worker-1": self.worker_public_key}
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "packet.json"
             envelope = self._envelope("worker-1")
             envelope["receipt"]["approved"] = False
-            unsigned = {
-                key: value
-                for key, value in envelope["receipt"].items()
-                if key != "signature"
-            }
-            envelope["receipt"]["signature"] = base64.b64encode(
-                self.worker_private_key.sign(
-                    json.dumps(
-                        unsigned,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=True,
-                    ).encode("utf-8")
-                )
-            ).decode("ascii")
+            unsigned = {key: value for key, value in envelope["receipt"].items() if key != "signature"}
+            envelope["receipt"]["signature"] = base64.b64encode(self.worker_private_key.sign(
+                json.dumps(unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+            )).decode("ascii")
             path.write_text(json.dumps(envelope), encoding="utf-8")
             with self.assertRaisesRegex(CollectiveReviewError, "does not match"):
-                load_packets([path], worker_public_keys={"worker-1": self.worker_public_key})
+                load_packets([path], worker_public_keys=keys)
 
             envelope = self._envelope("worker-1")
-            envelope["packet"]["improvements"][0]["files"]["skills/candidates/deadline-verification/SKILL.md"] += (
-                "Contact owner@example.com."
-            )
+            envelope["packet"]["improvements"][0]["files"]["skills/candidates/deadline-verification/SKILL.md"] += "x"
             path.write_text(json.dumps(envelope), encoding="utf-8")
             with self.assertRaisesRegex(CollectiveReviewError, "attestation"):
-                load_packets([path], worker_public_keys={"worker-1": self.worker_public_key})
+                load_packets([path], worker_public_keys=keys)
 
-            packet_digest = hashlib.sha256(
-                json.dumps(
-                    envelope["packet"],
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=True,
-                ).encode("utf-8")
-            ).hexdigest()
-            envelope["receipt"]["packetDigest"] = packet_digest
-            improvement = envelope["packet"]["improvements"][0]
-            improvement["provenance"][-1]["artifact"]["afterHash"] = _artifact_hash(
-                {key: value.encode("utf-8") for key, value in improvement["files"].items()}
+            packet = self._packet("worker-1")
+            packet["improvements"][0]["ledger"].pop(0)
+            path.write_text(json.dumps(self._signed(packet)), encoding="utf-8")
+            with self.assertRaisesRegex(CollectiveReviewError, "continuous change chain"):
+                load_packets([path], worker_public_keys=keys)
+
+            packet = self._packet("worker-1")
+            packet["improvements"][0]["shareDecision"] = {}
+            path.write_text(json.dumps(self._signed(packet)), encoding="utf-8")
+            with self.assertRaisesRegex(CollectiveReviewError, "Share decision"):
+                load_packets([path], worker_public_keys=keys)
+
+            packet = self._packet("worker-1")
+            improvement = packet["improvements"][0]
+            improvement["files"]["skills/candidates/deadline-verification/SKILL.md"] += "Contact owner@example.com.\n"
+            improvement["artifactHash"] = exported_artifact_hash(improvement["files"])
+            improvement["ledger"][-1]["files"]["skills/candidates/deadline-verification/SKILL.md"]["after"] = (
+                file_hashes(improvement["files"])["skills/candidates/deadline-verification/SKILL.md"]
             )
-            envelope["receipt"]["packetDigest"] = hashlib.sha256(
-                json.dumps(envelope["packet"], sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-            ).hexdigest()
-            unsigned = {
-                key: value
-                for key, value in envelope["receipt"].items()
-                if key != "signature"
-            }
-            envelope["receipt"]["signature"] = base64.b64encode(
-                self.worker_private_key.sign(
-                    json.dumps(
-                        unsigned,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=True,
-                    ).encode("utf-8")
-                )
-            ).decode("ascii")
-            path.write_text(json.dumps(envelope), encoding="utf-8")
+            path.write_text(json.dumps(self._signed(packet)), encoding="utf-8")
             with self.assertRaisesRegex(CollectiveReviewError, "privacy scan"):
-                load_packets([path], worker_public_keys={"worker-1": self.worker_public_key})
+                load_packets([path], worker_public_keys=keys)
 
     def test_validate_decision_accepts_safe_role_skill_proposal(self):
         packets = [self._packet()]
@@ -251,7 +193,7 @@ class CollectiveReviewTests(unittest.TestCase):
                         "\n# Deadline verification\n\nRecord source, timezone, and confirmer.\n"
                     ),
                     "rationale": "The procedure is reusable across assignments.",
-                    "supportingRecordIds": ["lr-worker-1"],
+                    "supportingImprovementIds": [self.improvement_id("worker-1")],
                     "supportingWorkers": ["worker-1"],
                 }
             ],
@@ -346,7 +288,7 @@ class CollectiveReviewTests(unittest.TestCase):
                     "targetPath": "skills/private/cedar/SKILL.md",
                     "content": "# Private",
                     "rationale": "Unsafe.",
-                    "supportingRecordIds": ["lr-worker-1"],
+                    "supportingImprovementIds": [self.improvement_id("worker-1")],
                     "supportingWorkers": ["worker-1"],
                 }
             ],
@@ -358,10 +300,74 @@ class CollectiveReviewTests(unittest.TestCase):
             validate_decision(decision, packets=packets)
 
         decision["proposals"] = []
-        decision["rejected"] = [{"recordId": "lr-worker-1", "reason": "Unsupported."}]
+        decision["rejected"] = [{"improvementId": self.improvement_id("worker-1"), "reason": "Unsupported."}]
         decision["summary"] = "Send the review to owner@example.com."
         with self.assertRaisesRegex(CollectiveReviewError, "decision privacy scan"):
             validate_decision(decision, packets=packets)
+
+
+    def decision(self):
+        return {
+            "summary": "Clarify ambiguous deadlines.",
+            "proposals": [{
+                "action": "create_or_replace", "targetPath": "skills/role/deadline-verification/SKILL.md",
+                "content": "---\nname: deadline-verification\ndescription: Clarify missing deadline context.\n---\nAsk for timezone.",
+                "rationale": "Observed ambiguity supports narrow clarification.",
+                "supportingImprovementIds": [self.improvement_id("worker-1")], "supportingWorkers": ["worker-1"],
+            }],
+            "rejected": [], "conflicts": [],
+        }
+
+    def test_promotion_requires_complete_correct_improvement_worker_accounting(self):
+        packets = [self._packet()]
+        for label, change in (
+            ("empty improvements", {"supportingImprovementIds": []}),
+            ("wrong worker", {"supportingWorkers": ["worker-2"]}),
+            ("empty rationale", {"rationale": ""}),
+            ("wrong skill name", {"content": "---\nname: wrong\ndescription: Wrong.\n---\n"}),
+        ):
+            with self.subTest(label=label), self.assertRaises(CollectiveReviewError):
+                decision = self.decision()
+                decision["proposals"][0].update(change)
+                validate_decision(decision, packets=packets)
+        decision = self.decision()
+        decision["rejected"] = [{"improvementId": self.improvement_id("worker-1"), "reason": "Rejected."}]
+        with self.assertRaisesRegex(CollectiveReviewError, "both accepted and rejected"):
+            validate_decision(decision, packets=packets)
+        decision["rejected"] = []
+        decision["proposals"] = []
+        with self.assertRaisesRegex(CollectiveReviewError, "accounted"):
+            validate_decision(decision, packets=packets)
+        duplicate = self._packet("worker-2")
+        duplicate["improvements"][0]["improvementId"] = self.improvement_id("worker-1")
+        with self.assertRaisesRegex(CollectiveReviewError, "Duplicate improvement"):
+            validate_decision(self.decision(), packets=[packets[0], duplicate])
+
+    def test_manifest_retains_exact_signed_sources_and_no_pr_for_all_rejected(self):
+        envelope = self._envelope("worker-1")
+        packets = [envelope["packet"]]
+        keys = {"worker-1": self.worker_public_key}
+        with self.assertRaisesRegex(CollectiveReviewError, "exactly match"):
+            build_review_manifest(packets, self.decision(), approved_envelopes=[], worker_public_keys=keys)
+        manifest = build_review_manifest(
+            packets, self.decision(), approved_envelopes=[envelope], worker_public_keys=keys,
+        )
+        self.assertEqual(manifest["approvedSources"], [envelope])
+        self.assertEqual(manifest["improvementWorkers"], {self.improvement_id("worker-1"): "worker-1"})
+        self.assertEqual(manifest["evaluation"]["independentHoldout"], "not_supplied")
+        decision = {"summary": "Not enough evidence.", "proposals": [],
+                    "rejected": [{"improvementId": self.improvement_id("worker-1"), "reason": "Too narrow."}],
+                    "conflicts": []}
+        with patch("scripts.collective_review._run") as run:
+            result = create_role_release_pull_request(
+                packets, decision, next_role_release="3.1.0", draft=True,
+                approved_envelopes=[envelope], worker_public_keys=keys,
+            )
+        run.assert_not_called()
+        self.assertEqual(result["status"], "no_promotion")
+        envelope["packet"]["evaluation"]["executionStatus"] = "passed"
+        with self.assertRaisesRegex(CollectiveReviewError, "attestation"):
+            build_review_manifest(packets, self.decision(), approved_envelopes=[envelope], worker_public_keys=keys)
 
 
 if __name__ == "__main__":

@@ -71,11 +71,44 @@ class UserSchedulingTests(unittest.TestCase):
 
         self.assertTrue(consumer.status()["enabled"])
 
-    def test_azure_provider_plugin_directory_matches_configured_name(self):
-        self.assertTrue((RUNTIME_DIR / "plugins" / "azure" / "__init__.py").is_file())
-        self.assertFalse((RUNTIME_DIR / "plugins" / "azure_cron").exists())
+    def test_cron_provider_is_a_separate_exclusive_plugin_and_autopilots_is_standalone(self):
+        plugins = RUNTIME_DIR / "plugins"
+        self.assertEqual(sorted(path.name for path in plugins.iterdir() if path.is_dir()), ["autopilots", "azure"])
+        provider_source = (plugins / "azure" / "__init__.py").read_text(encoding="utf-8")
+        general_source = (plugins / "autopilots" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("register_cron_scheduler", provider_source)
+        for marker in ("register_cron_scheduler", "CronScheduler", "MemoryProvider"):
+            self.assertNotIn(marker, general_source)
+        self.assertIn("kind: standalone", (plugins / "autopilots" / "plugin.yaml").read_text(encoding="utf-8"))
+
+        calls = []
+
+        class Context:
+            def register_platform_handler(self, platform, factory):
+                calls.append(("handler", platform))
+
+        modules = {
+            "runtime_keepalive": types.SimpleNamespace(register=lambda ctx: calls.append(("keepalive", None))),
+            "bridge.hermes_telemetry": types.SimpleNamespace(register=lambda ctx: calls.append(("telemetry", None))),
+            "runtime_routes": types.SimpleNamespace(register_routes=lambda app, home: None),
+            "native_learning": types.SimpleNamespace(
+                register_attachment_privacy=lambda ctx: calls.append(("privacy", None)),
+            ),
+        }
+        spec = importlib.util.spec_from_file_location("autopilots_plugin_under_test", plugins / "autopilots" / "__init__.py")
+        module = importlib.util.module_from_spec(spec)
+        import bridge
+
+        with (
+            patch.dict(sys.modules, modules),
+            patch.object(bridge, "hermes_telemetry", modules["bridge.hermes_telemetry"], create=True),
+            patch.dict(os.environ, {"HERMES_HOME": "/data/hermes", "AUTOPILOTS_PLUGIN_PATH": ""}),
+        ):
+            spec.loader.exec_module(module)
+            module.register(Context())
+        self.assertEqual(calls, [("telemetry", None), ("keepalive", None), ("privacy", None), ("handler", "api_server")])
         dockerfile = (RUNTIME_DIR / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("ENV PYTHONPATH=/app", dockerfile)
+        self.assertIn("ENV AUTOPILOTS_PLUGIN_PATH=/app:/opt/autopilots/hermes-site", dockerfile)
 
     def test_delivery_reference_key_is_stable_and_boundary_scoped(self):
         first = delivery_reference_key(

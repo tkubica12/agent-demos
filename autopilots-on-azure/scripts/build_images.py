@@ -10,6 +10,12 @@ from scripts.setup_app_tfvars import runtime_app_tfvars_path
 from scripts.tf_helpers import PLATFORM_DIR, REPO_ROOT, run, terraform_output, write_tfvars
 
 
+HERMES_UPSTREAM_SOURCE = "docker.io/nousresearch/hermes-agent"
+HERMES_UPSTREAM_VERSION = "v0.22.5"
+HERMES_UPSTREAM_DIGEST = "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d"
+HERMES_UPSTREAM_REPOSITORY = "hermes-agent-upstream"
+
+
 def git_sha() -> str:
     result = run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, capture=True, check=False)
     if result.returncode == 0 and result.stdout.strip():
@@ -17,7 +23,28 @@ def git_sha() -> str:
     return "nogit"
 
 
-def acr_build(*, registry: str, repository: str, dockerfile: str, context: str, tag: str) -> str:
+def import_hermes_upstream(registry: str, login_server: str) -> str:
+    """Mirror the official Hermes image into ACR by digest; ACR pulls it server-side without stored credentials."""
+    reference = f"{HERMES_UPSTREAM_REPOSITORY}@{HERMES_UPSTREAM_DIGEST}"
+    present = run(
+        ["az", "acr", "manifest", "show", "--registry", registry, "--name", reference, "--only-show-errors", "-o", "none"],
+        cwd=REPO_ROOT, capture=True, check=False,
+    )
+    if present.returncode != 0:
+        run([
+            "az", "acr", "import", "--name", registry,
+            "--source", f"{HERMES_UPSTREAM_SOURCE}@{HERMES_UPSTREAM_DIGEST}",
+            "--image", f"{HERMES_UPSTREAM_REPOSITORY}:{HERMES_UPSTREAM_VERSION}",
+            "--only-show-errors",
+        ], cwd=REPO_ROOT)
+    return f"{login_server}/{reference}"
+
+
+def acr_build(
+    *, registry: str, repository: str, dockerfile: str, context: str, tag: str,
+    build_args: dict[str, str] | None = None,
+) -> str:
+    arguments = [argument for name, value in (build_args or {}).items() for argument in ("--build-arg", f"{name}={value}")]
     result = run(
         [
             "az",
@@ -29,6 +56,7 @@ def acr_build(*, registry: str, repository: str, dockerfile: str, context: str, 
             f"{repository}:{tag}",
             "--file",
             dockerfile,
+            *arguments,
             context,
             "--no-logs",
             "-o",
@@ -107,9 +135,14 @@ def main() -> None:
     for path in runtime_paths:
         if not path.exists():
             raise FileNotFoundError(f"{path} does not exist. Run scripts.setup_app_tfvars first.")
+    hermes_base = import_hermes_upstream(registry, login_server)
     built_images: dict[str, str] = {}
     for var_name, (repository, dockerfile, context) in images.items():
-        digest = acr_build(registry=registry, repository=repository, dockerfile=dockerfile, context=context, tag=tag)
+        build_args = {"HERMES_BASE_IMAGE": hermes_base} if var_name == "runtime_image" else None
+        digest = acr_build(
+            registry=registry, repository=repository, dockerfile=dockerfile, context=context, tag=tag,
+            build_args=build_args,
+        )
         built_images[var_name] = f"{login_server}/{repository}@{digest}"
         built_images[var_name.removesuffix("_image") + "_disk_source_image"] = (
             f"{login_server}/{repository}:{tag}"

@@ -170,6 +170,7 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "AGENT365_AGENT_IDENTITY_CLIENT_ID": config["agent365_agent_identity_client_id"],
         "AGENT365_AGENT_USER_ID": config["agent365_agent_user_id"],
         "AGENT365_AGENT_USER_PRINCIPAL_NAME": config["agent365_agent_user_principal_name"],
+        "WORKER_OWNER_ID": config["worker_owner_id"],
         "USE_AGENTIC_AUTH": "true",
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID": config["agent365_client_id"],
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID": tenant,

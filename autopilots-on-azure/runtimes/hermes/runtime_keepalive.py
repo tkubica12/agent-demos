@@ -18,7 +18,6 @@ from functools import lru_cache
 from typing import Any
 
 
-PLUGIN_NAME = "keepalive"
 INTERVAL_SECONDS = 60
 MAX_OPERATION_SECONDS = 1800
 logger = logging.getLogger(__name__)
@@ -34,9 +33,9 @@ def sandbox_health_url() -> str | None:
     sandbox_id = str(uuid.UUID(sandbox_id))
     if not re.fullmatch(r"[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*", suffix):
         raise ValueError("ADC_PROXY_DNS_SUFFIX must be a DNS suffix.")
-    port = int(os.getenv("API_SERVER_PORT", "8642"))
+    port = int(os.getenv("RUNTIME_INGRESS_PORT", "8642"))
     if not 1 <= port <= 65535:
-        raise ValueError("API_SERVER_PORT must be between 1 and 65535.")
+        raise ValueError("RUNTIME_INGRESS_PORT must be between 1 and 65535.")
     return f"https://{sandbox_id}--{port}.{suffix}/health"
 
 

@@ -1,4 +1,4 @@
-"""Local, response-only baseline/candidate evaluation using the real Hermes 0.19 CLI."""
+"""Local, response-only baseline/candidate evaluation with an independent holdout suite and the real Hermes CLI."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -16,13 +17,17 @@ from typing import Any
 
 import yaml
 
-from runtimes.hermes.learning import (
-    evaluate_scenario_response, validate_agent_proposed_scenarios, validate_governed_artifact,
-)
 from scripts.collective_review import load_approved_envelopes
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtimes" / "hermes"))
+from collective_learning import redaction_findings, validate_governed_artifact  # noqa: E402
 
 
 SCHEMA_VERSION = "1.0"
+HERMES_VERSION = "0.22.5"
+SCENARIO_FIELDS = {
+    "scenarioId", "input", "setupAssumptions", "expectedObservableOutcomes", "acceptanceCriteria", "scope",
+}
 GOVERNED_PREFIXES = ("skills/role/", "skills/candidates/")
 LIMITATIONS = [
     "Literal response.text assertions only; no tool workflows, environment setup, or side-effect assertions.",
@@ -33,16 +38,18 @@ LIMITATIONS = [
     "Private state stays in local isolated copies and normal model context; raw responses are not exported.",
     "Tools, hooks, plugins, MCP, external memory, fallback models, and background learning are disabled.",
 ]
-PREFLIGHT = """
+PREFLIGHT = f"""
 from importlib.metadata import version
-if version("hermes-agent") != "0.19.0":
-    raise RuntimeError("Hermes 0.19.0 is required")
+if version("hermes-agent") != "{HERMES_VERSION}":
+    raise RuntimeError("Hermes {HERMES_VERSION} is required")
 from hermes_cli.config import load_config
 from hermes_cli.tools_config import _get_platform_tools
 from model_tools import get_tool_definitions
 cfg = load_config()
 if cfg["memory"]["nudge_interval"] != 0 or cfg["skills"]["creation_nudge_interval"] != 0:
     raise RuntimeError("Learning must be disabled")
+if cfg["auxiliary"]["background_review"]["enabled"]:
+    raise RuntimeError("Background review must be disabled")
 tools = get_tool_definitions(enabled_toolsets=sorted(_get_platform_tools(cfg, "cli")), quiet_mode=True)
 if tools:
     raise RuntimeError("The actual Hermes runtime enabled tools despite response-only configuration")
@@ -52,6 +59,65 @@ print("HERMES_EVALUATION_PREFLIGHT_OK")
 
 class EvaluationError(ValueError):
     pass
+
+
+def _bounded_text(value: Any, name: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
+        raise EvaluationError(f"{name} must be a nonempty string of at most {maximum} characters.")
+    return value
+
+
+def validate_scenarios(value: Any) -> list[dict[str, Any]]:
+    """Declarative response.text scenarios; commands, code, and private examples are rejected."""
+    if not isinstance(value, list) or not 1 <= len(value) <= 50:
+        raise EvaluationError("Suites must contain 1-50 declarative scenarios.")
+    seen: set[str] = set()
+    for scenario in value:
+        if not isinstance(scenario, dict) or set(scenario) != SCENARIO_FIELDS:
+            raise EvaluationError("Scenario fields are invalid; commands and code are not supported.")
+        scenario_id = _bounded_text(scenario["scenarioId"], "scenarioId", 63)
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", scenario_id) or scenario_id in seen:
+            raise EvaluationError("Scenario IDs must be unique lowercase kebab-case names.")
+        seen.add(scenario_id)
+        _bounded_text(scenario["input"], "input", 4000)
+        _bounded_text(scenario["scope"], "scope", 1000)
+        for field in ("setupAssumptions", "expectedObservableOutcomes"):
+            items = scenario[field]
+            if not isinstance(items, list) or not 1 <= len(items) <= 10:
+                raise EvaluationError(f"{field} must contain 1-10 nonempty strings.")
+            for item in items:
+                _bounded_text(item, field, 1000)
+        criteria = scenario["acceptanceCriteria"]
+        if not isinstance(criteria, list) or not 1 <= len(criteria) <= 20:
+            raise EvaluationError("acceptanceCriteria must contain 1-20 assertions.")
+        for criterion in criteria:
+            if not isinstance(criterion, dict) or set(criterion) != {"observable", "operator", "value"}:
+                raise EvaluationError("Acceptance criteria must contain only observable, operator, value.")
+            if criterion["observable"] != "response.text" or criterion["operator"] not in (
+                "contains", "not_contains", "equals",
+            ):
+                raise EvaluationError("Only declarative response.text contains/not_contains/equals assertions run.")
+            _bounded_text(criterion["value"], "value", 1000)
+    findings = redaction_findings(value, "scenarios")
+    if findings:
+        raise EvaluationError("Scenario privacy scan failed: " + " ".join(findings))
+    return value
+
+
+def evaluate_scenario_response(scenario: dict[str, Any], response_text: str) -> dict[str, Any]:
+    """Score an actual response supplied by the runner; this function invokes no agent."""
+    validate_scenarios([scenario])
+    assertions = []
+    for criterion in scenario["acceptanceCriteria"]:
+        expected = criterion["value"]
+        passed = {
+            "contains": expected in response_text,
+            "not_contains": expected not in response_text,
+            "equals": expected == response_text,
+        }[criterion["operator"]]
+        assertions.append({"criterion": criterion, "passed": passed})
+    return {"scenarioId": scenario["scenarioId"], "passed": all(item["passed"] for item in assertions),
+            "assertions": assertions}
 
 
 def _digest(value: Any) -> str:
@@ -73,7 +139,7 @@ def load_independent_suite(path: Path) -> dict[str, Any]:
         raise EvaluationError("Independent suite requires schemaVersion 1.0, suiteKind, and scenarios.")
     if suite["suiteKind"] not in ("independent_regression", "independent_holdout"):
         raise EvaluationError("A trusted independent regression or holdout suite is mandatory.")
-    validate_agent_proposed_scenarios(suite["scenarios"])
+    validate_scenarios(suite["scenarios"])
     return suite
 
 
@@ -118,9 +184,12 @@ def compare_profiles(
         governed = {key: value for key, value in files.items() if key.startswith(GOVERNED_PREFIXES)}
         artifacts = {key.rsplit("/", 1)[0] for key in governed}
         for artifact in artifacts:
-            validate_governed_artifact(artifact, {
-                key: value.decode("utf-8") for key, value in governed.items() if key.startswith(artifact + "/")
-            })
+            try:
+                validate_governed_artifact(artifact, {
+                    key: value.decode("utf-8") for key, value in governed.items() if key.startswith(artifact + "/")
+                })
+            except ValueError as exc:
+                raise EvaluationError(str(exc)) from exc
     config = yaml.safe_load(baseline["config.yaml"])
     if not isinstance(config, dict):
         raise EvaluationError("config.yaml must contain a mapping.")
@@ -144,23 +213,27 @@ def compare_profiles(
         "creation_nudge_interval": 0, "write_approval": True,
     }
     settings["curator"] = {"enabled": False}
+    settings["auxiliary"] = {
+        **(settings.get("auxiliary") or {}),
+        "background_review": {"enabled": False},
+    }
     settings["context"] = {"engine": "compressor"}
     settings["agent"] = {**(settings.get("agent") or {}), "coding_context": "off"}
     return settings, model
 
 
-def signed_scenarios(
+def signed_packet(
     packet_path: Path | None, public_keys_path: Path | None,
     baseline: dict[str, bytes], candidate: dict[str, bytes],
-) -> tuple[list[dict[str, Any]], str | None]:
+) -> str | None:
+    """Bind the compared profiles to exactly the changes in one attested Learning Packet."""
     if packet_path is None and public_keys_path is None:
-        return [], None
+        return None
     if packet_path is None or public_keys_path is None:
         raise EvaluationError("--approved-packet and --worker-public-keys must be provided together.")
     envelope = load_approved_envelopes(
         [packet_path], worker_public_keys=_json_file(public_keys_path),
     )[0]
-    cases = []
     packet_paths: set[str] = set()
     for improvement in envelope["packet"]["improvements"]:
         packet_paths.update(improvement["files"])
@@ -172,13 +245,10 @@ def signed_scenarios(
             candidate.get(key) != value.encode("utf-8") for key, value in improvement["files"].items()
         ):
             raise EvaluationError("Operator profiles must match the signed packet's baseline and candidate artifacts.")
-        for record in improvement["provenance"]:
-            for scenario in record["agentProposedScenarios"]:
-                cases.append({"scenario": scenario, "recordId": record["recordId"], "source": "agent_proposed"})
     changed_paths = {key for key in baseline.keys() | candidate.keys() if baseline.get(key) != candidate.get(key)}
     if changed_paths != packet_paths:
         raise EvaluationError("All compared skill changes must be covered by the supplied signed packet.")
-    return cases, envelope["receipt"]["packetDigest"]
+    return envelope["receipt"]["packetDigest"]
 
 
 def isolated_profile(case_root: Path, files: dict[str, bytes], config: dict[str, Any]) -> tuple[Path, dict[str, str]]:
@@ -231,7 +301,9 @@ def run_response(
         capture_output=True, timeout=timeout, check=False, shell=False,
     )
     if preflight.returncode or "HERMES_EVALUATION_PREFLIGHT_OK" not in preflight.stdout:
-        raise EvaluationError("Actual Hermes 0.19 preflight failed; check installation and tool-free configuration.")
+        raise EvaluationError(
+            f"Actual Hermes {HERMES_VERSION} preflight failed; check installation and tool-free configuration."
+        )
     usage_path = home / "evaluation-usage.json"
     result = subprocess.run(
         [str(python), "-I", "-m", "hermes_cli.main", "-z", prompt, "--model", model["default"],
@@ -270,14 +342,11 @@ def evaluate(
         raise EvaluationError("Timeout must be between 1 and 900 seconds.")
     suite = load_independent_suite(independent_suite)
     config, model = compare_profiles(baseline, candidate)
-    cases, packet_digest = signed_scenarios(approved_packet, worker_public_keys, baseline, candidate)
-    author_inputs = {case["scenario"]["input"].strip().casefold() for case in cases}
-    if any(case["input"].strip().casefold() in author_inputs for case in suite["scenarios"]):
-        raise EvaluationError("Independent test inputs must not duplicate signed agent-proposed test inputs.")
-    cases.extend({"scenario": case, "source": suite["suiteKind"]} for case in suite["scenarios"])
+    packet_digest = signed_packet(approved_packet, worker_public_keys, baseline, candidate)
+    cases = [{"scenario": case, "source": suite["suiteKind"]} for case in suite["scenarios"]]
     report: dict[str, Any] = {
         "evaluationVersion": SCHEMA_VERSION, "status": "not_evaluated",
-        "runtime": "hermes-agent==0.19.0", "model": model["default"], "provider": model["provider"],
+        "runtime": f"hermes-agent=={HERMES_VERSION}", "model": model["default"], "provider": model["provider"],
         "independentSuiteDigest": _digest(suite), "independence": "operator_declared",
         "packetDigest": packet_digest, "limitations": LIMITATIONS, "cases": [],
         "profileDigests": {
@@ -293,7 +362,7 @@ def evaluate(
         for case in cases:
             row: dict[str, Any] = {
                 "scenarioId": case["scenario"]["scenarioId"], "source": case["source"],
-                "scenarioDigest": _digest(case["scenario"]), "recordId": case.get("recordId"),
+                "scenarioDigest": _digest(case["scenario"]),
             }
             report["cases"].append(row)
             for arm, files in (("baseline", baseline), ("candidate", candidate)):
@@ -317,7 +386,7 @@ def evaluate(
                     shutil.rmtree(case_root)
         if profile_files(baseline_profile) != baseline or profile_files(candidate_profile) != candidate:
             raise EvaluationError("A source profile changed during evaluation; comparison is invalid.")
-        independent = [row for row in report["cases"] if row["source"] != "agent_proposed"]
+        independent = report["cases"]
         report["status"] = "evaluated"
         report["comparison"] = {
             "independentBaselinePassed": sum(row["baseline"]["passed"] for row in independent),
@@ -358,7 +427,7 @@ def main() -> None:
     parser.add_argument("--approved-packet", type=Path)
     parser.add_argument("--worker-public-keys", type=Path)
     parser.add_argument("--hermes-python", type=Path, default=Path(sys.executable),
-                        help="Python interpreter with the actual pinned Hermes 0.19.0 runtime installed.")
+                        help=f"Python interpreter of the pinned Hermes {HERMES_VERSION} environment.")
     parser.add_argument("--output", type=Path, required=True, help="New local summary path; no raw private responses.")
     parser.add_argument("--timeout", type=int, default=180)
     args = parser.parse_args()

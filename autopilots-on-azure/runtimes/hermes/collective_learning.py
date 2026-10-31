@@ -1,3 +1,5 @@
+"""Collective Learning export built from Hermes-native skill state and the owner's sharing choices."""
+
 from __future__ import annotations
 
 import argparse
@@ -9,32 +11,120 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from blueprint import governed_state_hash, worker_refresh_requires_export, _require_export_receipt
-from learning import (
-    LearningRecordError,
-    PRIVATE_EXCLUSIONS,
-    _artifact_files,
-    _artifact_hash,
-    _decoded_snapshot,
-    _file_snapshot,
-    _redaction_findings,
-    _skill_content_for_dlp,
-    stored_learning_records,
+from blueprint import governed_state_hash, worker_manifest_path, worker_refresh_requires_export, _require_export_receipt
+from native_learning import (
+    LearningConflictError,
+    artifact_hash,
+    current_share_choice,
+    governed_changes,
+    learning_receipts,
+    ledger_chain,
+    native_module,
     utc_now,
-    worker_manifest_path,
-    validate_governed_artifact,
-    _write_json_atomic,
+    write_json_atomic,
 )
 
 
-LEARNING_PACKET_VERSION = "2.0"
+LEARNING_PACKET_VERSION = "3.0"
+PACKET_EVALUATION = {
+    "agentProposedScenarios": "not_generated",
+    "executionStatus": "not_run",
+    "independentHoldout": "not_supplied",
+}
+PRIVATE_EXCLUSIONS = [
+    ".env",
+    "auth/",
+    "learning/",
+    "logs/",
+    "memories/",
+    "pending/",
+    "sessions/",
+    "skills/private/",
+    "state.db",
+    "state.db-shm",
+    "state.db-wal",
+    "workspace/",
+]
+MAX_SKILL_BYTES = 1_000_000
+GOVERNED_ARTIFACT_PATH = re.compile(r"^skills/(?:role|candidates)/[a-z0-9][a-z0-9-]{0,62}$")
+_EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_GUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b", re.IGNORECASE)
+_IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+_INTERNAL_URL = re.compile(r"https?://(?:localhost|127\.0\.0\.1|[^/\s]*\.(?:internal|local))(?:[/:][^\s]*)?", re.IGNORECASE)
+_SECRET = re.compile(
+    r"(?:bearer\s+[A-Za-z0-9._~+/=-]{12,}|api[_ -]?key\s*[:=]\s*\S+|client[_ -]?secret\s*[:=]\s*\S+|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----|[A-Za-z0-9_-]{40,})",
+    re.IGNORECASE,
+)
+_ABSOLUTE_PATH = re.compile(
+    r"(?:\b[A-Za-z]:\\Users\\[^\\\s]+|/(?:root|data|etc|home|tmp|users|var)/[^\s]*)",
+    re.IGNORECASE,
+)
 
 
 class CollectiveLearningError(ValueError):
     pass
+
+
+def redaction_findings(value: Any, path: str = "record") -> list[str]:
+    """Privacy scan for anything that may leave the Worker."""
+    findings: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            findings.extend(redaction_findings(child, f"{path}.{key}"))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            findings.extend(redaction_findings(child, f"{path}[{index}]"))
+    elif isinstance(value, str):
+        for label, pattern in (
+            ("email address", _EMAIL),
+            ("GUID or tenant identifier", _GUID),
+            ("IP address", _IPV4),
+            ("internal URL", _INTERNAL_URL),
+            ("secret or token-shaped value", _SECRET),
+            ("user-specific absolute path", _ABSOLUTE_PATH),
+        ):
+            if pattern.search(value):
+                findings.append(f"{path} contains a {label}.")
+    return findings
+
+
+def validate_governed_artifact(artifact_path: str, files: dict[str, str]) -> None:
+    """Export transfer contract: exactly one bounded SKILL.md whose frontmatter names its directory."""
+    if not isinstance(artifact_path, str) or not GOVERNED_ARTIFACT_PATH.fullmatch(artifact_path):
+        raise CollectiveLearningError("Governed artifact path must identify one lowercase skill name.")
+    if set(files) != {f"{artifact_path}/SKILL.md"}:
+        raise CollectiveLearningError(
+            "Export transfers exactly one SKILL.md per skill; deletions and supporting files stay local."
+        )
+    text = files[f"{artifact_path}/SKILL.md"]
+    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_SKILL_BYTES:
+        raise CollectiveLearningError("SKILL.md must be bounded UTF-8 text.")
+    match = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", text, re.DOTALL)
+    if not match:
+        raise CollectiveLearningError("SKILL.md must start with YAML frontmatter.")
+    try:
+        metadata = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        raise CollectiveLearningError("SKILL.md frontmatter is invalid YAML.") from exc
+    if not isinstance(metadata, dict) or metadata.get("name") != artifact_path.rsplit("/", 1)[1]:
+        raise CollectiveLearningError("SKILL.md frontmatter name must match the skill directory.")
+    description = metadata.get("description")
+    if not isinstance(description, str) or not description.strip() or len(description) > 1024:
+        raise CollectiveLearningError("SKILL.md frontmatter needs a description of at most 1024 characters.")
+
+
+def file_hashes(files: dict[str, str]) -> dict[str, str]:
+    return {path: hashlib.sha256(text.encode("utf-8")).hexdigest() for path, text in files.items()}
+
+
+def exported_artifact_hash(files: dict[str, str]) -> str | None:
+    """Artifact identity of exported text files, matching the Worker's native-state artifact hash."""
+    return artifact_hash(file_hashes(files))
 
 
 def _canonical_json(payload: Any) -> str:
@@ -81,127 +171,113 @@ def _load_worker_manifest(profile_home: Path) -> dict[str, Any]:
     return payload
 
 
-def _artifact_roots(paths: set[str], namespace: str) -> set[str]:
-    prefix = f"skills/{namespace}/"
-    roots: set[str] = set()
-    for path in paths:
-        if not path.startswith(prefix):
-            continue
-        parts = path.split("/")
-        if len(parts) >= 4:
-            roots.add("/".join(parts[:3]))
-    return roots
+def _ledger_record(profile_home: Path, entry: dict[str, Any], artifact_path: str) -> dict[str, Any]:
+    files: dict[str, dict[str, str | None]] = {}
+    for section in ("before", "after"):
+        for item in entry.get(section) or []:
+            try:
+                relative = Path(os.path.normpath(str(item.get("path") or ""))).relative_to(
+                    os.path.normpath(str(profile_home))
+                ).as_posix()
+            except ValueError:
+                continue
+            if relative.startswith(f"{artifact_path}/") and Path(relative).name != ".usage.json":
+                files.setdefault(relative, {"before": None, "after": None})[section] = str(item.get("sha256") or "")
+    return {
+        "id": str(entry.get("id") or ""),
+        "ts": str(entry.get("ts") or ""),
+        "actor": str(entry.get("actor") or ""),
+        "action": str(entry.get("action") or ""),
+        "files": files,
+    }
 
 
-def _artifact_hashes_from_map(files: dict[str, bytes], roots: set[str]) -> dict[str, str | None]:
-    return {root: _artifact_hash(_artifact_files(files, root)) for root in sorted(roots)}
-
-
-def _governed_artifacts(profile_home: Path, manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    current = _decoded_snapshot(_file_snapshot(profile_home))
-    baseline = manifest.get("roleSkillBaseline")
-    if not isinstance(baseline, dict):
-        raise CollectiveLearningError("Worker manifest roleSkillBaseline must be an object.")
-    baseline_paths = set(str(path) for path in baseline)
-    current_paths = set(current)
-    for path in baseline_paths | current_paths:
-        if path.startswith(("skills/role/", "skills/candidates/")) and not re.fullmatch(
-            r"skills/(?:role|candidates)/[a-z0-9][a-z0-9-]{0,62}/SKILL\.md", path,
-        ):
-            raise CollectiveLearningError("Governed export supports only a single SKILL.md per artifact.")
-    role_roots = _artifact_roots(baseline_paths | current_paths, "role")
-    candidate_roots = _artifact_roots(current_paths, "candidates")
-    artifacts: dict[str, dict[str, Any]] = {}
-    for root in sorted(role_roots):
-        current_files = _artifact_files(current, root)
-        current_hashes = {
-            path: hashlib.sha256(content).hexdigest()
-            for path, content in current_files.items()
-        }
-        baseline_hashes = {
-            path: str(value)
-            for path, value in baseline.items()
-            if path.startswith(f"{root}/")
-        }
-        if current_hashes != baseline_hashes:
-            artifacts[root] = {
-                "classification": "role_skill_improvement",
-                "files": current_files,
-                "afterHash": _artifact_hash(current_files),
-            }
-    for root, after_hash in _artifact_hashes_from_map(current, candidate_roots).items():
-        artifacts[root] = {
-            "classification": "candidate_improvement",
-            "files": _artifact_files(current, root),
-            "afterHash": after_hash,
-        }
-    return artifacts
-
-
-def _matching_provenance(
-    records: list[dict[str, Any]],
-    *,
-    artifact_path: str,
-    after_hash: str | None,
-) -> list[dict[str, Any]]:
-    matches = [
-        record
-        for record in records
-        if record["artifact"]["path"] == artifact_path
-    ]
-    if not matches or matches[-1]["artifact"]["afterHash"] != after_hash:
-        raise CollectiveLearningError(
-            f"{artifact_path} has no provenance matching its current artifact hash."
-        )
-    for previous, current in zip(matches, matches[1:]):
-        if previous["artifact"]["afterHash"] != current["artifact"]["beforeHash"]:
-            raise CollectiveLearningError(f"{artifact_path} provenance history is not a continuous change chain.")
-    return matches
-
-
-def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
-    manifest = _load_worker_manifest(profile_home)
-    records, rejected = stored_learning_records(profile_home)
-    if rejected:
-        raise CollectiveLearningError("Stored provenance contains invalid records; repair it before export.")
-    for record in records:
-        if (
-            record["worker"]["workerId"] != manifest["workerId"]
-            or record["roleRelease"]["commit"] != manifest["roleReleaseCommit"]
-        ):
-            raise CollectiveLearningError("Provenance must belong to this Worker and current Role Release.")
-    if len({record["recordId"] for record in records}) != len(records):
-        raise CollectiveLearningError("Provenance record IDs must be unique.")
-    artifacts = _governed_artifacts(profile_home, manifest)
-    improvements: list[dict[str, Any]] = []
-    for artifact_path, artifact in sorted(artifacts.items()):
-        text_files = _skill_content_for_dlp(artifact["files"])
+def _export_texts(profile_home: Path, change: dict[str, Any]) -> dict[str, str]:
+    texts: dict[str, str] = {}
+    for relative in sorted(change["fileHashes"]):
         try:
-            validate_governed_artifact(artifact_path, text_files)
-        except LearningRecordError as exc:
-            raise CollectiveLearningError(str(exc)) from exc
-        findings = _redaction_findings(text_files, f"artifact.{artifact_path}")
-        if findings:
-            raise CollectiveLearningError(
-                f"Privacy checks rejected {artifact_path}: {' '.join(findings)}"
+            texts[relative] = profile_home.joinpath(*relative.split("/")).read_bytes().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CollectiveLearningError(f"{relative} is not UTF-8 text.") from exc
+    return texts
+
+
+def _improvement(
+    profile_home: Path,
+    manifest: dict[str, Any],
+    change: dict[str, Any],
+    *,
+    ledger: Any,
+    entries: list[dict[str, Any]] | None,
+    receipts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """One shareable improvement, or CollectiveLearningError with the exclusion reason (fail closed)."""
+    path = change["artifactPath"]
+    choice = current_share_choice(profile_home, change, manifest)
+    if not choice:
+        raise CollectiveLearningError("The Worker owner has not chosen Share for this change.")
+    if not choice["current"]:
+        raise CollectiveLearningError("The skill changed after the owner chose Share; the owner must choose again.")
+    texts = _export_texts(profile_home, change)
+    validate_governed_artifact(path, texts)
+    if exported_artifact_hash(texts) != change["artifactHash"]:
+        raise CollectiveLearningError("The skill changed while the packet was being prepared.")
+    findings = redaction_findings(texts, f"artifact.{path}")
+    if findings:
+        raise CollectiveLearningError("Privacy checks rejected the skill: " + " ".join(findings))
+    try:
+        chain = ledger_chain(profile_home, change, ledger=ledger, entries=entries)
+    except LearningConflictError as exc:
+        raise CollectiveLearningError(str(exc)) from exc
+    chain_ids = {str(entry.get("id")) for entry in chain}
+    approvals = [
+        {key: receipt.get(key) for key in ("receiptId", "pendingId", "origin", "action", "decidedBy", "decidedAt")}
+        for receipt in receipts
+        if receipt.get("kind") == "pending" and receipt.get("approved") is True
+        and chain_ids & set(receipt.get("ledgerEntryIds") or [])
+    ]
+    return {
+        "improvementId": "li-" + hashlib.sha256(
+            f"{manifest['workerId']}\n{path}\n{change['artifactHash']}".encode("utf-8")
+        ).hexdigest()[:24],
+        "classification": change["classification"],
+        "artifactPath": path,
+        "files": texts,
+        "baselineFileHashes": change["baselineFileHashes"],
+        "artifactHash": change["artifactHash"],
+        "ledger": [_ledger_record(profile_home, entry, path) for entry in chain],
+        "shareDecision": {key: choice.get(key) for key in ("receiptId", "decidedBy", "decidedAt")},
+        "approvals": approvals,
+    }
+
+
+def prepare_learning_packet(profile_home: Path, *, ledger: Any = None) -> dict[str, Any]:
+    """Build the pending Learning Packet from governed changes the owner marked Share.
+
+    File hashes are recomputed from disk against the Role Release baseline. Every other governed change,
+    or a shared change without a complete native trace, is excluded with a reason and stays local.
+    """
+    manifest = _load_worker_manifest(profile_home)
+    ledger = native_module(ledger, "tools.skill_ledger")
+    entries = ledger.list_entries()
+    receipts = learning_receipts(profile_home)
+    improvements: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    try:
+        changes = governed_changes(profile_home, manifest)
+    except LearningConflictError as exc:
+        raise CollectiveLearningError(str(exc)) from exc
+    for change in changes:
+        try:
+            improvements.append(
+                _improvement(profile_home, manifest, change, ledger=ledger, entries=entries, receipts=receipts)
             )
-        provenance = _matching_provenance(
-            records,
-            artifact_path=artifact_path,
-            after_hash=artifact["afterHash"],
-        )
-        improvements.append(
-            {
-                "classification": artifact["classification"],
-                "artifactPath": artifact_path,
-                "files": text_files,
-                "baselineFileHashes": {
-                    path: value for path, value in manifest["roleSkillBaseline"].items()
-                    if path.startswith(f"{artifact_path}/")
-                },
-                "provenance": provenance,
-            }
-        )
+        except CollectiveLearningError as exc:
+            excluded.append({
+                "artifactPath": change["artifactPath"],
+                "classification": change["classification"],
+                "reason": str(exc),
+            })
     packet = {
         "packetVersion": LEARNING_PACKET_VERSION,
         "createdAt": utc_now(),
@@ -218,18 +294,13 @@ def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
         },
         "governedStateHash": governed_state_hash(profile_home),
         "improvements": improvements,
-        "evaluation": {
-            "agentProposedScenarios": "included_in_provenance",
-            "executionStatus": "not_run",
-            "independentHoldout": "not_supplied",
-        },
+        "evaluation": dict(PACKET_EVALUATION),
         "privacy": {
             "status": "ready_for_human_approval",
             "excludedPaths": PRIVATE_EXCLUSIONS,
         },
     }
     exports = profile_home / "learning" / "exports"
-    exports.mkdir(parents=True, exist_ok=True)
     pending_path = exports / f"{manifest['roleReleaseCommit']}.pending.json"
     if pending_path.is_file():
         previous = json.loads(pending_path.read_text(encoding="utf-8"))
@@ -238,25 +309,22 @@ def prepare_learning_packet(profile_home: Path) -> dict[str, Any]:
             == {key: value for key, value in packet.items() if key != "createdAt"}
         ):
             packet = previous
-    digest = _packet_digest(packet)
-    _write_json_atomic(pending_path, packet)
+    write_json_atomic(pending_path, packet)
     return {
         "roleRelease": packet["roleRelease"],
         "worker": packet["worker"],
-        "packetDigest": digest,
+        "packetDigest": _packet_digest(packet),
         "improvements": [
             {
+                "improvementId": improvement["improvementId"],
                 "classification": improvement["classification"],
                 "artifactPath": improvement["artifactPath"],
-                "action": improvement["provenance"][-1]["action"],
-                "title": improvement["provenance"][-1]["title"],
-                "recordCount": len(improvement["provenance"]),
-                "agentProposedScenarioCount": sum(
-                    len(record["agentProposedScenarios"]) for record in improvement["provenance"]
-                ),
+                "ledgerEntryCount": len(improvement["ledger"]),
+                "approvalCount": len(improvement["approvals"]),
             }
             for improvement in improvements
         ],
+        "excluded": excluded,
         "approvalRequired": True,
     }
 
@@ -312,10 +380,8 @@ def attest_learning_packet(
     ):
         raise CollectiveLearningError("Learning Packet receipt does not match this Worker or Role Release.")
     _verify_receipt_signature(receipt)
-    packet_path = exports / f"{manifest['roleReleaseCommit']}.packet.json"
-    _write_json_atomic(packet_path, packet)
-    receipt_path = exports / f"{manifest['roleReleaseCommit']}.approved.json"
-    _write_json_atomic(receipt_path, receipt)
+    write_json_atomic(exports / f"{manifest['roleReleaseCommit']}.packet.json", packet)
+    write_json_atomic(exports / f"{manifest['roleReleaseCommit']}.approved.json", receipt)
     (exports / f"{manifest['roleReleaseCommit']}.rejected.json").unlink(missing_ok=True)
     pending_path.unlink()
     return receipt
@@ -350,7 +416,6 @@ def prepare_refresh_rejection(profile_home: Path) -> dict[str, Any]:
         "governedStateHash": governed_state_hash(profile_home),
     }
     exports = profile_home / "learning" / "exports"
-    exports.mkdir(parents=True, exist_ok=True)
     pending = exports / f"{manifest['roleReleaseCommit']}.rejection.pending.json"
     if pending.is_file():
         previous = json.loads(pending.read_text(encoding="utf-8"))
@@ -359,7 +424,7 @@ def prepare_refresh_rejection(profile_home: Path) -> dict[str, Any]:
             == {key: value for key, value in descriptor.items() if key != "createdAt"}
         ):
             descriptor = previous
-    _write_json_atomic(pending, descriptor)
+    write_json_atomic(pending, descriptor)
     return {"disposition": descriptor, "dispositionDigest": _packet_digest(descriptor)}
 
 
@@ -397,10 +462,8 @@ def attest_refresh_rejection(profile_home: Path, *, receipt: dict[str, Any]) -> 
         raise CollectiveLearningError("Rejection requires rejectedAt, rejectedBy, and a reason.")
     _verify_receipt_signature(receipt)
     audit = {"disposition": descriptor, "receipt": receipt}
-    audit_dir = profile_home / "learning" / "dispositions"
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    _write_json_atomic(audit_dir / f"{receipt['dispositionDigest']}.json", audit)
-    _write_json_atomic(exports / f"{manifest['roleReleaseCommit']}.rejected.json", audit)
+    write_json_atomic(profile_home / "learning" / "dispositions" / f"{receipt['dispositionDigest']}.json", audit)
+    write_json_atomic(exports / f"{manifest['roleReleaseCommit']}.rejected.json", audit)
     for suffix in ("approved.json", "packet.json", "pending.json"):
         (exports / f"{manifest['roleReleaseCommit']}.{suffix}").unlink(missing_ok=True)
     pending.unlink()
@@ -435,7 +498,9 @@ def worker_refresh_readiness(profile_home: Path) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prepare and approve Collective Learning Review packets.")
+    parser = argparse.ArgumentParser(
+        description="Prepare and approve Collective Learning Review packets. Run with the Hermes Python environment.",
+    )
     parser.add_argument("--profile-home", required=True)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("prepare")

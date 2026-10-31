@@ -66,11 +66,24 @@ from bridge.generated_app_cards import (
     generated_apps_activity,
     generated_apps_card,
 )
+from bridge.learning_cards import (
+    decode_learning_action_token,
+    digest_has_news,
+    is_worker_owner,
+    learning_action_accepted_card,
+    learning_action_data,
+    learning_action_label,
+    learning_command,
+    learning_digest_activity,
+    learning_result_message,
+    worker_owner_id,
+)
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
-from bridge.runtime.hermes import HermesRuntimeAdapter
+from bridge.runtime.hermes import HermesRuntimeAdapter, runtime_error_detail
 from bridge.proactive_delivery import (
     delivery_reference_metadata,
     send_proactive_activity,
+    stored_conversation_id,
 )
 from bridge.servicebus_scheduler import (
     ServiceBusScheduleConsumer,
@@ -175,7 +188,8 @@ class DreamRunRequest(BaseModel):
 class DreamRunResponse(BaseModel):
     session_id: str = Field(alias="sessionId")
     response: str
-    learning_status: dict[str, Any] = Field(alias="learningStatus")
+    learning_digest: dict[str, Any] = Field(alias="learningDigest")
+    learning_digest_delivery: dict[str, Any] = Field(alias="learningDigestDelivery")
 
 
 class CollectiveLearningApprovalRequest(BaseModel):
@@ -952,7 +966,8 @@ async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResp
     return DreamRunResponse(
         sessionId=session_id,
         response=result.agent.text,
-        learningStatus=result.learning_status,
+        learningDigest=result.learning_digest,
+        learningDigestDelivery=await deliver_learning_digest_to_owner(),
     )
 
 
@@ -1025,12 +1040,13 @@ async def export_collective_learning(http_request: Request) -> dict[str, Any]:
 async def run_scheduled_learning(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
     try:
-        return await scheduled_learning.run_once()
+        result = await scheduled_learning.run_once()
     except RETRYABLE_ERRORS as exc:
         raise HTTPException(
             status_code=500,
             detail={"type": exc.__class__.__name__, "message": str(exc)},
         ) from exc
+    return {**result, "learningDigestDelivery": await deliver_learning_digest_to_owner()}
 
 
 @app.get("/internal/scheduled-learning/status")
@@ -1463,6 +1479,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
             "jobId": job_id,
             "result": result,
             "completion": completion,
+            "learningDigestDelivery": await deliver_learning_digest_to_owner(),
         }
     if message_type != "hermes.cron.fire":
         raise ValueError(f"Unsupported scheduled message type: {message_type!r}.")
@@ -1628,7 +1645,6 @@ async def handle_agent_notification(
         must_answer=True,
         metadata={
             "persistenceDisabled": True,
-            "maxRecords": 0,
             "notificationWorkload": workload,
             "notificationId": identifier,
         },
@@ -2070,7 +2086,6 @@ async def continue_interaction_action(
                 "deliveryReference": delivery_reference,
                 "interactionAction": True,
                 "interactionId": interaction_id,
-                "maxRecords": 3,
             },
             auth_context=auth_context,
         )
@@ -2251,11 +2266,280 @@ async def accept_generated_app_action(
     return True, confirmation
 
 
+def owner_personal_chat(activity: Activity) -> bool:
+    return teams_conversation_type(activity) == "personal" and is_worker_owner(user_id(activity))
+
+
+async def send_owner_learning_digest(
+    ctx: TurnContext,
+    *,
+    conversation_id: str,
+    delivery_reference: dict[str, Any] | None,
+    only_new: bool,
+) -> bool:
+    """Pull the native learning digest on the owner's personal interaction; nothing goes to group chats."""
+    adapter = runtime_adapter()
+    if isinstance(delivery_reference, dict):
+        await adapter.remember_owner_delivery(delivery_reference)
+    digest = await adapter.learning_digest(mark_presented=True)
+    if only_new and not digest_has_news(digest):
+        return False
+    await ctx.send_activity(
+        learning_digest_activity(
+            digest,
+            user_id=user_id(ctx.activity),
+            conversation_id=conversation_id,
+            only_new=only_new,
+        )
+    )
+    record_teams_diag(
+        {
+            "event": "learningDigestSent",
+            "conversationId": conversation_id,
+            "newCount": int(digest.get("newCount") or 0),
+        }
+    )
+    return True
+
+
+async def handle_learning_command(ctx: TurnContext) -> None:
+    conversation_id = teams_conversation_id(ctx.activity)
+    if teams_conversation_type(ctx.activity) != "personal":
+        await ctx.send_activity(
+            "The learning digest is available only in the Worker owner's personal chat."
+        )
+        return
+    if not worker_owner_id():
+        await ctx.send_activity(
+            "The learning digest is unavailable because WORKER_OWNER_ID is not configured for this Worker."
+        )
+        return
+    if not is_worker_owner(user_id(ctx.activity)):
+        await ctx.send_activity(
+            "Only the Worker owner can review what the Worker learned."
+        )
+        return
+    auth_context = agent_auth_context(ctx.activity)
+    try:
+        await send_owner_learning_digest(
+            ctx,
+            conversation_id=conversation_id,
+            delivery_reference=delivery_reference_metadata(
+                ctx,
+                worker_id=os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "worker")),
+                boundary=auth_context.conversation_boundary,
+            ),
+            only_new=False,
+        )
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "learningDigestFailed",
+                "conversationId": conversation_id,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+        await ctx.send_activity(
+            f"{runtime_display_name()} could not load the learning digest: {runtime_error_detail(exc)}"
+        )
+
+
+async def deliver_learning_digest_to_owner() -> dict[str, Any]:
+    """After Dreaming, send new learning to the owner's personal chat captured on their last interaction."""
+    owner = worker_owner_id()
+    if not owner:
+        return {"status": "owner_not_configured"}
+    try:
+        adapter = runtime_adapter()
+        reference = await adapter.owner_delivery_reference()
+        if reference is None:
+            return {"status": "owner_chat_unknown"}
+        digest = await adapter.learning_digest(mark_presented=True)
+        if not digest_has_news(digest):
+            return {"status": "no_news"}
+        await send_proactive_activity(
+            agent365_adapter,
+            reference,
+            activity=learning_digest_activity(
+                digest,
+                user_id=owner,
+                conversation_id=stored_conversation_id(reference),
+                only_new=True,
+            ),
+        )
+        return {"status": "sent", "newCount": int(digest.get("newCount") or 0)}
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "learningDigestDeliveryFailed",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+        return {"status": "failed", "type": exc.__class__.__name__, "message": runtime_error_detail(exc)}
+
+
+async def continue_learning_action(
+    *,
+    token: dict[str, Any],
+    delivery_reference: dict[str, Any],
+    decided_by: str,
+    conversation_id: str,
+) -> None:
+    adapter = runtime_adapter()
+    action = str(token["action"])
+    target = str(token["target"])
+    try:
+        if action == "undo":
+            receipt = await adapter.undo_learning(entry_id=target, decided_by=decided_by)
+        elif action in {"approve", "reject"}:
+            receipt = await adapter.decide_learning_pending(
+                pending_id=target, approve=action == "approve", decided_by=decided_by,
+            )
+        else:
+            receipt = await adapter.share_learning(
+                skill=target,
+                choice=action,
+                decided_by=decided_by,
+                artifact_hash=str(token.get("artifactHash") or ""),
+            )
+        message = learning_result_message(token, receipt)
+        record_teams_diag(
+            {
+                "event": "learningActionCompleted",
+                "conversationId": conversation_id,
+                "action": action,
+                "duplicate": bool(receipt.get("duplicate")),
+            }
+        )
+    except Exception as exc:
+        message = (
+            f"{runtime_display_name()} could not apply that learning decision: "
+            f"{runtime_error_detail(exc)}"
+        )
+        record_teams_diag(
+            {
+                "event": "learningActionFailed",
+                "conversationId": conversation_id,
+                "action": action,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+    activity = Activity(type="message", text=message)
+    try:
+        activity = learning_digest_activity(
+            await adapter.learning_digest(mark_presented=True),
+            user_id=decided_by,
+            conversation_id=conversation_id,
+            text=message,
+        )
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "learningDigestFailed",
+                "conversationId": conversation_id,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+    try:
+        await send_proactive_activity(agent365_adapter, delivery_reference, activity=activity)
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "learningActionDeliveryFailed",
+                "conversationId": conversation_id,
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+
+
+async def accept_learning_action(
+    ctx: TurnContext,
+) -> tuple[bool, str]:
+    action = learning_action_data(field_value(ctx.activity, "value"))
+    if not action:
+        return False, ""
+    if teams_conversation_type(ctx.activity) != "personal":
+        raise ValueError("Learning decisions are accepted only in the Worker owner's personal chat.")
+    conversation_id = teams_conversation_id(ctx.activity)
+    invoking_user_id = user_id(ctx.activity)
+    token = decode_learning_action_token(
+        action["token"],
+        user_id=invoking_user_id,
+        conversation_id=conversation_id,
+    )
+    if token["action"] != action["action"]:
+        raise ValueError("The learning action is invalid.")
+    auth_context = agent_auth_context(ctx.activity)
+    delivery_reference = delivery_reference_metadata(
+        ctx,
+        worker_id=os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "worker")),
+        boundary=auth_context.conversation_boundary,
+    )
+    if not isinstance(delivery_reference, dict):
+        raise RuntimeError("The Teams conversation cannot receive learning updates.")
+    start_background_turn(
+        continue_learning_action(
+            token=token,
+            delivery_reference=delivery_reference,
+            decided_by=invoking_user_id,
+            conversation_id=conversation_id,
+        )
+    )
+    record_teams_diag(
+        {
+            "event": "learningActionAccepted",
+            "conversationId": conversation_id,
+            "action": token["action"],
+        }
+    )
+    return True, learning_action_label(token)
+
+
 @agent365_app.activity("invoke")
 async def handle_teams_invoke(
     ctx: TurnContext,
     _state: TurnState,
 ) -> None:
+    try:
+        learning_handled, learning_label = await accept_learning_action(ctx)
+    except Exception as exc:
+        record_teams_diag(
+            {
+                "event": "learningActionRejected",
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+            }
+        )
+        ctx.turn_state[TurnContext._INVOKE_RESPONSE_KEY] = Activity(
+            type="invoke_response",
+            value={
+                "status": 200,
+                "body": {
+                    "statusCode": 400,
+                    "type": "application/vnd.microsoft.error",
+                    "value": {"message": str(exc)},
+                },
+            },
+        )
+        return
+    if learning_handled:
+        ctx.turn_state[TurnContext._INVOKE_RESPONSE_KEY] = Activity(
+            type="invoke_response",
+            value={
+                "status": 200,
+                "body": {
+                    "statusCode": 200,
+                    "type": CARD_CONTENT_TYPE,
+                    "value": learning_action_accepted_card(learning_label),
+                },
+            },
+        )
+        return
     try:
         generated_app_handled, generated_app_confirmation = (
             await accept_generated_app_action(ctx)
@@ -2358,6 +2642,16 @@ async def handle_teams_invoke(
 @agent365_app.activity("message")
 async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
     try:
+        learning_handled, learning_label = await accept_learning_action(ctx)
+    except Exception as exc:
+        await ctx.send_activity(
+            f"{runtime_display_name()} could not accept that learning decision: {exc}"
+        )
+        return
+    if learning_handled:
+        await ctx.send_activity(f"Received: {learning_label}. A refreshed digest follows.")
+        return
+    try:
         generated_app_handled, generated_app_confirmation = (
             await accept_generated_app_action(ctx)
         )
@@ -2407,6 +2701,10 @@ async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
 
     if conversation_type != "personal" and not mentioned and not targeted and not should_observe_unmentioned_messages():
         record_teams_diag({"event": "ignoredUnmentionedMessage", "conversationId": conversation_id, "conversationType": conversation_type})
+        return
+
+    if learning_command(teams_prompt_text(ctx.activity)):
+        await handle_learning_command(ctx)
         return
 
     has_attachments = has_file_attachments(ctx.activity)
@@ -2761,7 +3059,6 @@ async def run_agent_runtime_for_teams(
                 "attachments": [
                     item.metadata() for item in (attachments or [])
                 ],
-                "maxRecords": 0 if attachments else 3,
             },
             auth_context=auth_context,
             on_delta=emit_delta if show_public_progress else None,
@@ -2983,6 +3280,23 @@ async def run_agent_runtime_for_teams(
             if memory_session_key:
                 remember_teams_event(memory_session_key, agent_memory_record(visible_response or _NO_RESPONSE))
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
+        if owner_personal_chat(ctx.activity) and not attachments:
+            try:
+                await send_owner_learning_digest(
+                    ctx,
+                    conversation_id=conversation_id,
+                    delivery_reference=delivery_reference,
+                    only_new=True,
+                )
+            except Exception as digest_exc:
+                record_teams_diag(
+                    {
+                        "event": "learningDigestFailed",
+                        "conversationId": conversation_id,
+                        "type": digest_exc.__class__.__name__,
+                        "message": str(digest_exc),
+                    }
+                )
     except Exception as exc:
         if status_reaction_message_id:
             await delete_message_reaction(ctx, status_reaction_message_id, "1f440_eyes")

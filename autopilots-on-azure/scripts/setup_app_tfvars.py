@@ -103,6 +103,7 @@ def build_tfvars(
     data_volume_name: str,
     previous: dict[str, Any],
     deployer_principal_id: str = "",
+    worker_owner_id: str = "",
     api_server_key: str = "",
     runtime_image: str = "",
     runtime_disk_source_image: str = "",
@@ -141,6 +142,8 @@ def build_tfvars(
     tfvars: dict[str, Any] = dict(previous)
     if deployer_principal_id:
         tfvars["deployer_principal_id"] = str(uuid.UUID(deployer_principal_id))
+    if worker_owner_id:
+        tfvars["worker_owner_id"] = str(uuid.UUID(worker_owner_id))
     tfvars.update(
         {
             "autopilot_name": autopilot_name,
@@ -286,6 +289,10 @@ def main() -> None:
         "--deployer-principal-id", default="",
         help="Stable original deployment principal object ID; preserved on updates.",
     )
+    parser.add_argument(
+        "--worker-owner-id", default="",
+        help="Entra object ID of the Worker owner (Agent Identity sponsor); only this user receives the learning digest.",
+    )
     parser.add_argument("--data-volume-name", default="")
     parser.add_argument("--api-server-key", default="", help="Hermes API_SERVER_KEY. Generated when omitted.")
     parser.add_argument("--role-blueprint", default="", help="Hermes Role Blueprint name.")
@@ -378,6 +385,7 @@ def main() -> None:
 
     tfvars = build_tfvars(
         deployer_principal_id=deployer_principal_id,
+        worker_owner_id=args.worker_owner_id,
         runtime=runtime,
         autopilot_name=autopilot_name,
         data_volume_name=data_volume_name,

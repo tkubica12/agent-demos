@@ -1,0 +1,3 @@
+name: azure
+version: '1.0.0'
+description: Hermes cron scheduler that schedules job fires as Service Bus messages

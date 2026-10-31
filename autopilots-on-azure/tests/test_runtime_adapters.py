@@ -18,13 +18,12 @@ import bridge.runtime.hermes as hermes_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.hermes import (
+    OWNER_DIGEST_REFERENCE_KEY,
+    PRIVATE_SESSION_PREFIX,
     HermesRuntimeAdapter,
     bridge_instructions,
     dream_prompt,
-    explicit_learning_instructions,
-    explicit_learning_prompt,
-    parse_provenance_block,
-    quarantine_recovery_instructions,
+    runtime_error_detail,
     session_reset_command,
 )
 from scripts.sandbox_runtime import (
@@ -35,8 +34,6 @@ from scripts.sandbox_runtime import (
     runtime_labels,
 )
 
-
-SCENARIOS_JSON = json.dumps(json.loads(hermes_runtime.PROVENANCE_SHAPE_EXAMPLE)["agentProposedScenarios"])
 
 
 class RuntimeAdapterTests(unittest.TestCase):
@@ -75,13 +72,8 @@ class RuntimeAdapterTests(unittest.TestCase):
             await adapter._collective_learning_request(
                 "GET", "/internal/collective-learning/pending"
             )
-            await adapter._begin_learning_turn("https://hermes.example", "api-key")
-            await adapter._reconcile_learning_turn(
-                "https://hermes.example", "api-key", "turn-1", []
-            )
-            await adapter._abort_learning_turn(
-                "https://hermes.example", "api-key", "turn-1"
-            )
+            await adapter.learning_digest()
+            await adapter.undo_learning(entry_id="abcdef123456", decided_by="owner-1")
 
         with (
             patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}),
@@ -159,38 +151,6 @@ class RuntimeAdapterTests(unittest.TestCase):
             "unsupported_scope",
         )
         reset.assert_not_awaited()
-
-    def test_hermes_cancellation_aborts_learning_transaction(self):
-        adapter = HermesRuntimeAdapter()
-        request = AgentRequest(
-            prompt="Update the document",
-            conversation_id="conversation-1",
-            user_id="user-1",
-            source="teams_personal",
-            must_answer=True,
-        )
-        invoke = AsyncMock(side_effect=asyncio.CancelledError())
-        abort = AsyncMock()
-
-        async def run() -> None:
-            with (
-                patch.object(adapter, "_invoke_hermes", invoke),
-                patch.object(adapter, "_abort_learning_turn", abort),
-            ):
-                with self.assertRaises(asyncio.CancelledError):
-                    await adapter._invoke_hermes_with_abort(
-                        "https://sandbox.example",
-                        "key",
-                        request,
-                        "snapshot-1",
-                    )
-
-        asyncio.run(run())
-        abort.assert_awaited_once_with(
-            "https://sandbox.example",
-            "key",
-            "snapshot-1",
-        )
 
     def test_gateway_reaches_runtime_only_through_its_native_url(self):
         for module in (bridge_app, hermes_runtime):
@@ -317,7 +277,6 @@ class RuntimeAdapterTests(unittest.TestCase):
         ]
         self.assertEqual(len(post_urls), 1)
         self.assertTrue(post_urls[0].endswith("/chat"))
-        self.assertTrue(any(call["url"].endswith("/internal/learning/abort") for call in calls))
 
     def test_hermes_adapter_creates_missing_native_session(self):
         calls = []
@@ -533,340 +492,123 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(payload["recovered_after_status"], 500)
         self.assertEqual(sleep.await_count, 19)
 
-    def test_hermes_normal_turn_reconciles_native_skill_provenance(self):
-        calls: list[dict] = []
-        post_responses = [
-            (
-                200,
-                {
-                    "output": (
-                        "I created the reusable procedure."
-                        "<LEARNING_PROVENANCE_RECORDS>"
-                        '[{"classification":"candidate_improvement",'
-                        '"artifactPath":"skills/candidates/action-ownership","action":"create",'
-                        '"title":"Require action ownership","generalizedLearning":"Require an accountable owner.",'
-                        '"rationale":"Ownership prevents ambiguity.",'
-                        '"evidence":[{"sourceType":"private_session","summary":"A generalized correction established the rule."}],'
-                        f'"agentProposedScenarios":{SCENARIOS_JSON},'
-                        '"confidence":0.9,"sourceStage":"foreground"}]'
-                        "</LEARNING_PROVENANCE_RECORDS>"
-                    )
-                },
-            )
-        ]
+    def runtime_adapter(self, handler):
+        requests: list[httpx.Request] = []
 
+        def record(request):
+            requests.append(request)
+            return handler(request)
 
-        previous = {
-            "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
-            "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY": os.environ.get(
-                "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"
-            ),
-        }
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        os.environ["COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"] = base64.b64encode(
-            b"\x01" * 32
-        ).decode("ascii")
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
-            )
-            result = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="Learn this reusable procedure.",
-                        conversation_id="session-1",
-                        user_id="user-1",
-                        source="teams_personal",
-                        must_answer=True,
-                    )
-                )
-            )
-        finally:
-            restore_env(previous)
-
-        begin_post = next(call for call in calls if call["url"].endswith("/internal/learning/turns"))
-        reconcile_post = next(call for call in calls if call["url"].endswith("/internal/learning/reconcile"))
-        gateway_post = next(
-            call
-            for call in calls
-            if call["method"] == "POST"
-            and call["url"].endswith("/chat")
+        adapter = HermesRuntimeAdapter(
+            runtime_url_factory=lambda: "https://hermes.example",
+            client_factory=lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(record), **kwargs),
         )
-        self.assertEqual(begin_post["json"], {})
-        self.assertEqual(result.text, "I created the reusable procedure.")
+        adapter._wait_for_health = AsyncMock()
+        return adapter, requests
+
+    @staticmethod
+    def native_session_handler(request):
+        if request.method == "GET" and request.url.path == "/api/sessions":
+            return httpx.Response(200, json={"data": []})
+        if request.method == "GET":
+            return httpx.Response(404, json={"error": "missing"})
+        if request.url.path == "/api/sessions":
+            return httpx.Response(201, json={"session": {"id": json.loads(request.content)["id"]}})
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Answer."}})
+
+    def test_private_turns_use_a_marked_native_session_and_ordinary_turns_do_not(self):
+        adapter, requests = self.runtime_adapter(self.native_session_handler)
+
+        async def run():
+            for metadata in ({}, {"attachmentsPrivate": True}, {"persistenceDisabled": True}):
+                response = await adapter.invoke(AgentRequest(
+                    prompt="Summarize", conversation_id="conversation-1", user_id="user-1",
+                    source="teams_personal", must_answer=True, metadata=metadata,
+                ))
+                self.assertEqual(response.text, "Answer.")
+                self.assertEqual(response.raw["privateSession"], bool(metadata))
+
+        with patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}):
+            asyncio.run(run())
+        chats = [request for request in requests if request.url.path.endswith("/chat")]
+        session_ids = [request.headers["X-Hermes-Session-Id"] for request in chats]
+        self.assertFalse(session_ids[0].startswith(PRIVATE_SESSION_PREFIX))
+        self.assertEqual(session_ids[1], PRIVATE_SESSION_PREFIX + session_ids[0])
+        self.assertEqual(session_ids[2], session_ids[1])
         self.assertEqual(
-            reconcile_post["json"]["provenance"][0]["artifactPath"],
-            "skills/candidates/action-ownership",
+            {request.headers["X-Hermes-Session-Key"] for request in chats}, {chats[0].headers["X-Hermes-Session-Key"]},
         )
-        self.assertEqual(result.raw["learningReconciliation"]["accepted"][0]["recordId"], "lr-test")
-        self.assertIn("active Role Blueprint SOUL.md", gateway_post["json"]["instructions"])
-        self.assertIn("<LEARNING_PROVENANCE_RECORDS>", gateway_post["json"]["instructions"])
+        self.assertNotIn("<LEARNING_PROVENANCE", json.loads(chats[0].content)["instructions"])
 
-
-
-    def test_learn_command_runs_one_constrained_transactional_turn(self):
-        calls: list[dict] = []
-        post_responses = [
-            (
-                200,
-                {
-                    "output": (
-                        "I saved the reusable procedure."
-                        "<LEARNING_PROVENANCE_RECORDS>"
-                        '[{"classification":"candidate_improvement",'
-                        '"artifactPath":"skills/candidates/action-ownership","action":"create",'
-                        '"title":"Require action ownership","generalizedLearning":"Require an accountable owner.",'
-                        '"rationale":"Ownership prevents ambiguity.",'
-                        '"evidence":[{"sourceType":"private_session","summary":"A generalized correction established the rule."}],'
-                        f'"agentProposedScenarios":{SCENARIOS_JSON},'
-                        '"confidence":0.9,"sourceStage":"foreground"}]'
-                        "</LEARNING_PROVENANCE_RECORDS>"
-                    )
-                },
-            ),
-        ]
-        reconciliation_responses = [
-            {
-                "accepted": [{"recordId": "lr-learning"}],
-                "rejected": [],
-                "privatePlaybooksChanged": [],
-                "governedArtifactsChanged": ["skills/candidates/action-ownership"],
-                "rolledBack": False,
-            },
-        ]
-
-
-        previous = {
-            "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
-            "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY": os.environ.get(
-                "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"
-            ),
-        }
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        os.environ["COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"] = base64.b64encode(
-            b"\x01" * 32
-        ).decode("ascii")
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(
-                    calls,
-                    post_responses,
-                    reconciliation_response=reconciliation_responses,
-                    **kwargs,
-                ),
-            )
-            result = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="/learn Require an accountable owner for every reusable action.",
-                        conversation_id="session-1",
-                        user_id="user-1",
-                        source="teams_personal",
-                        must_answer=True,
-                    )
-                )
-            )
-        finally:
-            restore_env(previous)
-
-        session_posts = [
-            call
-            for call in calls
-            if call["method"] == "POST"
-            and call["url"].endswith("/chat")
-        ]
-        turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
-        reconcile_posts = [call for call in calls if call["url"].endswith("/internal/learning/reconcile")]
-        self.assertEqual(result.text, "I saved the reusable procedure.")
-        self.assertEqual(len(turn_posts), 1)
-        self.assertEqual(len(session_posts), 1)
+    def test_learn_command_is_an_ordinary_native_turn(self):
+        adapter, requests = self.runtime_adapter(self.native_session_handler)
+        with patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}):
+            asyncio.run(adapter.invoke(AgentRequest(
+                prompt="/learn Always confirm the timezone.", conversation_id="conversation-1", user_id="user-1",
+                source="teams_personal", must_answer=True,
+            )))
+        chat = next(request for request in requests if request.url.path.endswith("/chat"))
+        body = json.loads(chat.content)
+        self.assertEqual(body["input"], "/learn Always confirm the timezone.")
         self.assertEqual(
-            session_posts[0]["json"]["input"],
-            "Require an accountable owner for every reusable action.",
+            body["instructions"],
+            bridge_instructions(AgentRequest(
+                prompt="", conversation_id="conversation-1", user_id="user-1",
+                source="teams_personal", must_answer=True,
+            )),
         )
-        self.assertIn("explicit /learn request", session_posts[0]["json"]["instructions"])
-        self.assertEqual(reconcile_posts[0]["json"]["provenance"][0]["sourceStage"], "foreground")
-        self.assertEqual(result.raw["learningReconciliation"]["accepted"][0]["recordId"], "lr-learning")
+        self.assertFalse(any("/internal/learning" in request.url.path for request in requests))
 
-    def test_ordinary_remember_request_does_not_start_fallback_turn(self):
-        calls: list[dict] = []
+    def test_dream_is_a_native_turn_and_returns_the_owner_digest(self):
+        def handler(request):
+            if request.url.path == "/internal/learning/digest":
+                return httpx.Response(200, json={"changes": [{"entryId": "e1"}], "pending": [], "governed": []})
+            return self.native_session_handler(request)
 
+        adapter, requests = self.runtime_adapter(handler)
+        with patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}):
+            result = asyncio.run(adapter.dream(DreamRequest(session_id="dream-1", focus="recent work", max_records=2)))
+        chat = next(request for request in requests if request.url.path.endswith("/chat"))
+        prompt = json.loads(chat.content)["input"]
+        self.assertIn("at most 2 skills", prompt)
+        self.assertIn("skill_manage", prompt)
+        self.assertNotIn("provenance", prompt.lower())
+        self.assertEqual(result.learning_digest["changes"][0]["entryId"], "e1")
+        digest = next(request for request in requests if request.url.path == "/internal/learning/digest")
+        self.assertEqual(digest.url.params["markPresented"], "false")
 
-        previous = os.environ.get("API_SERVER_KEY")
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(
-                    calls,
-                    [(200, {"output": "I understand."})],
-                    **kwargs,
-                ),
-            )
-            result = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="Remember this preference for later.",
-                        conversation_id="session-1",
-                        user_id="user-1",
-                        source="teams_personal",
-                        must_answer=True,
-                    )
+    def test_learning_decisions_call_the_secured_runtime_routes(self):
+        def handler(request):
+            if request.url.path == "/internal/learning/share":
+                return httpx.Response(409, json={"detail": "skills/role/x changed after the digest was shown."})
+            if request.url.path == "/internal/cron/delivery-reference" and request.method == "GET":
+                return httpx.Response(404, json={"detail": "Delivery reference was not found."})
+            return httpx.Response(200, json={"receiptId": "r", "path": request.url.path})
+
+        adapter, requests = self.runtime_adapter(handler)
+
+        async def run():
+            await adapter.learning_digest(mark_presented=True, limit=5)
+            await adapter.undo_learning(entry_id="abcdef123456", decided_by="owner-1")
+            await adapter.decide_learning_pending(pending_id="1234abcd", approve=False, decided_by="owner-1")
+            with self.assertRaises(httpx.HTTPStatusError) as conflict:
+                await adapter.share_learning(
+                    skill="skills/role/x", choice="share", decided_by="owner-1", artifact_hash="a" * 64,
                 )
-            )
-        finally:
-            if previous is None:
-                os.environ.pop("API_SERVER_KEY", None)
-            else:
-                os.environ["API_SERVER_KEY"] = previous
+            self.assertEqual(runtime_error_detail(conflict.exception), "skills/role/x changed after the digest was shown.")
+            await adapter.remember_owner_delivery({"referenceKey": "teams-x", "boundary": "one_to_one",
+                                                   "conversation": {"conversation_reference": {}}})
+            self.assertIsNone(await adapter.owner_delivery_reference())
 
-        session_posts = [
-            call
-            for call in calls
-            if call["method"] == "POST"
-            and call["url"].endswith("/chat")
-        ]
-        turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
-        self.assertEqual(result.text, "I understand.")
-        self.assertEqual(len(session_posts), 1)
-        self.assertEqual(len(turn_posts), 1)
-
-    def test_malformed_provenance_block_preserves_visible_answer_and_reports_failure(self):
-        calls: list[dict] = []
-        post_responses = [
-            (
-                200,
-                {
-                    "output": (
-                        "The user-visible answer."
-                        "<LEARNING_PROVENANCE_RECORDS>{}</LEARNING_PROVENANCE_RECORDS>"
-                    )
-                },
-            )
-        ]
-
-
-        previous = {
-            "API_SERVER_KEY": os.environ.get("API_SERVER_KEY"),
-            "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY": os.environ.get(
-                "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"
-            ),
-        }
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        os.environ["COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY"] = base64.b64encode(
-            b"\x01" * 32
-        ).decode("ascii")
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
-            )
-            result = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="Answer this question.",
-                        conversation_id="session-1",
-                        user_id="user-1",
-                        source="teams_personal",
-                        must_answer=True,
-                    )
-                )
-            )
-        finally:
-            restore_env(previous)
-
-        self.assertIn("The user-visible answer.", result.text)
-        self.assertIn("Local learning was not saved.", result.text)
-        self.assertIn("JSON array", result.raw["learningCaptureError"])
-        self.assertFalse(
-            any(
-                "/learning%3A" in call["url"]
-                for call in calls
-                if call["method"] == "POST"
-                and call["url"].endswith("/chat")
-            )
-        )
-
-    def test_hermes_dream_uses_isolated_session_reconciles_dream_provenance_and_returns_status(self):
-        calls: list[dict] = []
-        post_responses = [
-            (
-                200,
-                {
-                    "output": (
-                        "Dream complete"
-                        "<LEARNING_PROVENANCE_RECORDS>"
-                        '[{"classification":"candidate_improvement",'
-                        '"artifactPath":"skills/candidates/action-ownership","action":"create",'
-                        '"title":"Require action ownership","generalizedLearning":"Require an accountable owner.",'
-                        '"rationale":"Ownership prevents ambiguity.",'
-                        '"evidence":[{"sourceType":"private_session","summary":"Generalized action gaps recurred."}],'
-                        f'"agentProposedScenarios":{SCENARIOS_JSON},'
-                        '"confidence":0.9,"sourceStage":"dream"}]'
-                        "</LEARNING_PROVENANCE_RECORDS>"
-                    )
-                },
-            )
-        ]
-
-
-        previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "AUTOPILOT_NAME"]}
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        os.environ["AUTOPILOT_NAME"] = "hermes-worker"
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(calls, post_responses, **kwargs),
-            )
-            result = asyncio.run(
-                adapter.dream(
-                    DreamRequest(
-                        session_id="dream:hermes-worker",
-                        focus="delivery follow-up",
-                        max_records=3,
-                    )
-                )
-            )
-        finally:
-            restore_env(previous_env)
-
-        dream_post = next(
-            call
-            for call in calls
-            if call["method"] == "POST"
-            and call["url"].endswith("/chat")
-        )
-        reconcile_post = next(call for call in calls if call["url"].endswith("/internal/learning/reconcile"))
-        status_get = next(call for call in calls if call["url"].endswith("/internal/learning/status"))
-        self.assertRegex(
-            dream_post["url"],
-            (
-                r"^https://hermes\.example/api/sessions/"
-                r"dream%3A[0-9a-f]{24}%3A\d{8}T\d{2}/chat$"
-            ),
-        )
-        self.assertIn("delivery follow-up", dream_post["json"]["input"])
-        self.assertEqual(reconcile_post["json"]["provenance"][0]["sourceStage"], "dream")
-        self.assertEqual(status_get["headers"]["X-Autopilot-Key"], "api-key-1")
-        self.assertEqual(result.agent.text, "Dream complete")
-        self.assertEqual(result.learning_status["status"], "ok")
-
-    def test_parse_provenance_block_rejects_non_arrays_and_partial_markers(self):
-        with self.assertRaisesRegex(ValueError, "JSON array"):
-            parse_provenance_block("answer<LEARNING_PROVENANCE_RECORDS>{}</LEARNING_PROVENANCE_RECORDS>")
-        with self.assertRaisesRegex(ValueError, "one complete learning provenance block"):
-            parse_provenance_block("answer<LEARNING_PROVENANCE_RECORDS>[]")
-        with self.assertRaisesRegex(ValueError, "one complete learning provenance block"):
-            parse_provenance_block("answer</LEARNING_PROVENANCE_RECORDS>")
-
-    def test_explicit_learning_prompt_accepts_only_learn_command(self):
-        self.assertEqual(explicit_learning_prompt("/learn retain this rule"), "retain this rule")
-        self.assertEqual(explicit_learning_prompt("  /LEARN\tretain this rule  "), "retain this rule")
-        self.assertEqual(explicit_learning_prompt("/learn"), "")
-        self.assertIsNone(explicit_learning_prompt("Remember this rule"))
-        self.assertIsNone(explicit_learning_prompt("/learner retain this rule"))
+        with patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}):
+            asyncio.run(run())
+        self.assertTrue(all(request.headers["X-Autopilot-Key"] == "api-key" for request in requests))
+        self.assertEqual(requests[0].url.params["markPresented"], "true")
+        self.assertEqual(json.loads(requests[1].content), {"entryId": "abcdef123456", "decidedBy": "owner-1"})
+        self.assertEqual(json.loads(requests[2].content)["approve"], False)
+        self.assertEqual(json.loads(requests[3].content)["artifactHash"], "a" * 64)
+        self.assertEqual(json.loads(requests[4].content)["referenceKey"], OWNER_DIGEST_REFERENCE_KEY)
+        self.assertEqual(requests[5].url.params["referenceKey"], OWNER_DIGEST_REFERENCE_KEY)
 
     def test_hermes_instructions_defer_classification_to_active_soul(self):
         ordinary = bridge_instructions(
@@ -887,40 +629,22 @@ class RuntimeAdapterTests(unittest.TestCase):
                 must_answer=True,
             )
         )
-        explicit = bridge_instructions(
-            AgentRequest(
-                prompt="Retain this rule.",
-                conversation_id="learn-1",
-                user_id="user-1",
-                source="teams_personal",
-                must_answer=True,
-                metadata={"learningIntent": "explicit"},
-            )
-        )
-
         for instructions in (
             ordinary,
             dream,
-            explicit,
-            quarantine_recovery_instructions(),
             dream_prompt(DreamRequest(session_id="dream-1", focus="recent work", max_records=2)),
         ):
             self.assertIn("active Role Blueprint SOUL.md", instructions)
             self.assertIn("sole authority", instructions)
-
-        duplicated_taxonomy = (
+        for phrase in (
             "compact critical facts use Hermes USER.md or MEMORY.md",
             "rich assignment-specific knowledge or procedure",
             "generalized correction to existing role behavior",
             "new generalized reusable procedure",
-        )
-        for phrase in duplicated_taxonomy:
+        ):
             self.assertNotIn(phrase, ordinary)
-            self.assertNotIn(phrase, explicit)
-            self.assertNotIn(phrase, quarantine_recovery_instructions())
-        self.assertEqual(explicit, explicit_learning_instructions())
 
-    def test_bridge_keeps_governed_learning_protocol_outside_soul(self):
+    def test_learning_instructions_point_approvals_to_the_owner_digest(self):
         instructions = bridge_instructions(
             AgentRequest(
                 prompt="Do the work.",
@@ -930,30 +654,11 @@ class RuntimeAdapterTests(unittest.TestCase):
                 must_answer=True,
             )
         )
-
-        self.assertIn("<LEARNING_PROVENANCE_RECORDS>", instructions)
-        self.assertIn("at most 3 provenance objects", instructions)
-        self.assertIn("Private Playbook changes have no provenance object", instructions)
-        self.assertIn("Never edit learning/records.jsonl directly", instructions)
-
-    def test_learning_prompts_require_declarative_scenarios(self):
-        from runtimes.hermes.learning import validate_agent_proposed_scenarios
-
-        example = json.loads(hermes_runtime.PROVENANCE_SHAPE_EXAMPLE)
-        validate_agent_proposed_scenarios(example["agentProposedScenarios"])
-        request = AgentRequest(
-            prompt="Improve the role.", conversation_id="conversation", user_id="user",
-            source="teams_personal", must_answer=True,
-        )
-        for instructions in (
-            bridge_instructions(request), explicit_learning_instructions(),
-            quarantine_recovery_instructions(), dream_prompt(DreamRequest(session_id="dream")),
-        ):
-            self.assertIn("agentProposedScenarios", instructions)
-            self.assertIn("response.text", instructions)
-            self.assertIn("not_contains", instructions)
-            self.assertIn("independent regression/holdout", instructions)
-            self.assertNotIn("create, patch, or delete", instructions)
+        self.assertIn("learning digest with Undo", instructions)
+        self.assertIn("never mention CLI commands", instructions)
+        for removed in ("provenance", "records.jsonl", "agentProposedScenarios"):
+            self.assertNotIn(removed, instructions)
+            self.assertNotIn(removed, dream_prompt(DreamRequest(session_id="dream")))
 
     def test_group_history_is_shared_but_memory_keys_remain_per_user(self):
         first = AgentRequest(
@@ -1052,9 +757,9 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(len(operation_calls[2]["json"]["receipt"]["signature"]), 88)
         self.assertNotIn("sandboxId", prepared)
         self.assertTrue(approved["approved"])
-        self.assertEqual(exported["packet"]["packetVersion"], "2.0")
+        self.assertEqual(exported["packet"]["packetVersion"], "3.0")
 
-    def test_hermes_serializes_complete_learning_transactions(self):
+    def test_hermes_serializes_runtime_turns(self):
         calls: list[dict] = []
         active = 0
         maximum_active = 0
@@ -1065,18 +770,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         try:
             adapter = HermesRuntimeAdapter(
                 runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(
-                    calls,
-                    [],
-                    reconciliation_response={
-                        "accepted": [],
-                        "rejected": [],
-                        "privatePlaybooksChanged": [],
-                        "governedArtifactsChanged": [],
-                        "rolledBack": False,
-                    },
-                    **kwargs,
-                ),
+                client_factory=lambda **kwargs: FakeHermesClient(calls, [], **kwargs),
             )
 
             async def invoke_hermes(base_url, api_key, request):
@@ -1085,7 +779,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                 maximum_active = max(maximum_active, active)
                 await asyncio.sleep(0.02)
                 active -= 1
-                return "sessions", {"output": "Done.<LEARNING_PROVENANCE_RECORDS>[]</LEARNING_PROVENANCE_RECORDS>"}
+                return "sessions", {"output": "Done."}
 
             adapter._invoke_hermes = invoke_hermes
 
@@ -1119,137 +813,6 @@ class RuntimeAdapterTests(unittest.TestCase):
                 os.environ["API_SERVER_KEY"] = previous
 
         self.assertEqual(maximum_active, 1)
-
-    def test_next_bridge_turn_reconciles_quarantined_cli_candidate(self):
-        calls: list[dict] = []
-        provenance = (
-            "<LEARNING_PROVENANCE_RECORDS>"
-            '[{"classification":"candidate_improvement",'
-            '"artifactPath":"skills/candidates/meeting-decision-record","action":"create",'
-            '"title":"Meeting decision record",'
-            '"generalizedLearning":"Record the decision, owner, effective date, and affected commitments.",'
-            '"rationale":"Complete decision records improve follow-through.",'
-            '"evidence":[{"sourceType":"tool_result","summary":"A direct CLI skill write was quarantined for review."}],'
-            f'"agentProposedScenarios":{SCENARIOS_JSON},'
-            '"confidence":0.9,"sourceStage":"operator"}]'
-            "</LEARNING_PROVENANCE_RECORDS>"
-        )
-        post_responses = [
-            (200, {"output": f"Recovered.{provenance}"}),
-            (
-                200,
-                {
-                    "output": (
-                        "Normal answer."
-                        "<LEARNING_PROVENANCE_RECORDS>[]</LEARNING_PROVENANCE_RECORDS>"
-                    )
-                },
-            ),
-        ]
-        reconciliation_responses = [
-            {
-                "accepted": [{"recordId": "lr-recovered"}],
-                "rejected": [],
-                "privatePlaybooksChanged": [],
-                "governedArtifactsChanged": ["skills/candidates/meeting-decision-record"],
-                "rolledBack": False,
-            },
-            {
-                "accepted": [],
-                "rejected": [],
-                "privatePlaybooksChanged": [],
-                "governedArtifactsChanged": [],
-                "rolledBack": False,
-            },
-        ]
-
-
-        previous = os.environ.get("API_SERVER_KEY")
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(
-                    calls,
-                    post_responses,
-                    reconciliation_response=reconciliation_responses,
-                    recovered_unprovenanced=[
-                        "skills/candidates/meeting-decision-record/SKILL.md"
-                    ],
-                    **kwargs,
-                ),
-            )
-            result = asyncio.run(
-                adapter.invoke(
-                    AgentRequest(
-                        prompt="Continue with an ordinary task.",
-                        conversation_id="session-1",
-                        user_id="user-1",
-                        source="teams_personal",
-                        must_answer=True,
-                    )
-                )
-            )
-        finally:
-            if previous is None:
-                os.environ.pop("API_SERVER_KEY", None)
-            else:
-                os.environ["API_SERVER_KEY"] = previous
-
-        turn_posts = [call for call in calls if call["url"].endswith("/internal/learning/turns")]
-        session_posts = [
-            call
-            for call in calls
-            if call["method"] == "POST"
-            and call["url"].endswith("/chat")
-        ]
-        self.assertEqual(len(turn_posts), 2)
-        self.assertEqual(len(session_posts), 2)
-        self.assertIn("learning/quarantine", session_posts[0]["json"]["instructions"])
-        self.assertEqual(
-            result.raw["quarantineRecovery"]["accepted"][0]["recordId"],
-            "lr-recovered",
-        )
-        self.assertEqual(result.text, "Normal answer.")
-
-    def test_hermes_aborts_learning_transaction_when_model_invocation_fails(self):
-        calls: list[dict] = []
-
-
-        previous = os.environ.get("API_SERVER_KEY")
-        os.environ["API_SERVER_KEY"] = "api-key-1"
-        try:
-            adapter = HermesRuntimeAdapter(
-                runtime_url_factory=lambda: "https://hermes.example",
-                client_factory=lambda **kwargs: FakeHermesClient(
-                    calls,
-                    [(500, {"error": "model failed"})],
-                    **kwargs,
-                ),
-            )
-            with (
-                patch.dict(os.environ, {"HERMES_SESSION_RECOVERY_TIMEOUT_SECONDS": "1"}),
-                self.assertRaises(httpx.HTTPStatusError),
-            ):
-                asyncio.run(
-                    adapter.invoke(
-                        AgentRequest(
-                            prompt="Ordinary task.",
-                            conversation_id="session-1",
-                            user_id="user-1",
-                            source="teams_personal",
-                            must_answer=True,
-                        )
-                    )
-                )
-        finally:
-            if previous is None:
-                os.environ.pop("API_SERVER_KEY", None)
-            else:
-                os.environ["API_SERVER_KEY"] = previous
-
-        abort = next(call for call in calls if call["url"].endswith("/internal/learning/abort"))
-        self.assertEqual(abort["json"], {"token": "lt-test-1"})
 
     def test_hermes_sandbox_config_can_be_built_without_starting_runtime(self):
         config = hermes_sandbox_config(
@@ -1507,21 +1070,10 @@ class FakeHermesClient:
         self,
         calls: list[dict],
         post_responses: list[tuple[int, dict]],
-        reconciliation_response: dict | list[dict] | None = None,
-        recovered_unprovenanced: list[str] | None = None,
         **kwargs,
     ):
         self.calls = calls
         self.post_responses = post_responses
-        self.reconciliation_response = reconciliation_response or {
-            "accepted": [{"recordId": "lr-test"}],
-            "rejected": [],
-            "privatePlaybooksChanged": [],
-            "governedArtifactsChanged": ["skills/candidates/action-ownership"],
-            "rolledBack": False,
-        }
-        self.recovered_unprovenanced = list(recovered_unprovenanced or [])
-        self.begin_count = 0
         self.kwargs = kwargs
 
     async def __aenter__(self):
@@ -1558,7 +1110,7 @@ class FakeHermesClient:
             payload = {"approved": True, "packetDigest": "b" * 64}
         elif url.endswith("/internal/collective-learning/export"):
             payload = {
-                "packet": {"packetVersion": "2.0", "improvements": []},
+                "packet": {"packetVersion": "3.0", "improvements": []},
                 "receipt": {"approved": True},
             }
         else:
@@ -1567,38 +1119,6 @@ class FakeHermesClient:
 
     async def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
-        if url.endswith("/internal/learning/turns"):
-            self.begin_count = sum(
-                1
-                for call in self.calls
-                if call["url"].endswith("/internal/learning/turns")
-            )
-            recovered = self.recovered_unprovenanced if self.begin_count == 1 else []
-            return httpx.Response(
-                200,
-                json={
-                    "token": f"lt-test-{self.begin_count}",
-                    "recoveredUnprovenancedFiles": recovered,
-                },
-                request=httpx.Request("POST", url),
-            )
-        if url.endswith("/internal/learning/reconcile"):
-            reconciliation_response = (
-                self.reconciliation_response.pop(0)
-                if isinstance(self.reconciliation_response, list)
-                else self.reconciliation_response
-            )
-            return httpx.Response(
-                200,
-                json=reconciliation_response,
-                request=httpx.Request("POST", url),
-            )
-        if url.endswith("/internal/learning/abort"):
-            return httpx.Response(
-                200,
-                json={"aborted": True, "token": json["token"]},
-                request=httpx.Request("POST", url),
-            )
         status_code, payload = self.post_responses.pop(0)
         return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
 

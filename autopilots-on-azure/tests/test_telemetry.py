@@ -263,31 +263,31 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(sys, "path", [str(runtime_dir), *sys.path]):
             start_hermes = importlib.import_module("start_hermes")
 
-        def fire_job(*args, **kwargs):
-            with telemetry.tool_span("cronjob"):
-                return {"status": "completed"}
+        def claim(*args, **kwargs):
+            with telemetry.tool_span("interaction_claim"):
+                return {"claimed": True}
 
         runtime = start_hermes.create_health_app(runtime_dir, runtime_dir, None, None)
         self.assertIn(start_hermes.flush_telemetry, runtime.router.on_shutdown)
         with (
             patch.dict(os.environ, {"API_SERVER_KEY": "runtime-test-key"}),
-            patch.object(start_hermes, "fire_cron_job", fire_job),
+            patch.object(start_hermes, "claim_interaction", claim),
             telemetry.operation_span("invoke_agent", session_id="private-session", operation_id="job:revision"),
         ):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=runtime), base_url="http://runtime"
             ) as client:
                 response = await client.post(
-                    "/internal/cron/fire",
+                    "/internal/interactions/claim",
                     headers={
                         **telemetry.runtime_trace_headers(),
                         "X-Autopilot-Key": "runtime-test-key",
                     },
-                    json={"jobId": "private-job", "revision": "private-revision"},
+                    json={"interactionId": "private-interaction", "choiceId": "c", "expiresAtUnix": 4102444800},
                 )
         self.assertEqual(response.status_code, 200)
         tool, boundary, invocation = self.exporter.get_finished_spans()
-        self.assertEqual(boundary.name, "POST /internal/cron/fire")
+        self.assertEqual(boundary.name, "POST /internal/interactions/claim")
         self.assertEqual(boundary.parent.span_id, invocation.context.span_id)
         self.assertEqual(tool.parent.span_id, boundary.context.span_id)
         self.assertEqual(

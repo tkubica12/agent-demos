@@ -21,10 +21,9 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from runtime_keepalive import PLUGIN_NAME as KEEPALIVE_PLUGIN_NAME, get_keepalive
+from runtime_keepalive import get_keepalive
 from bridge.hermes_telemetry import (
     GatewayTraceConflictError,
-    PLUGIN_NAME as TELEMETRY_PLUGIN_NAME,
     gateway_trace_context,
     install_gateway_telemetry,
 )
@@ -48,45 +47,12 @@ from blueprint import (
     install_or_refresh_role_release,
     role_release_settings_from_environment,
 )
-from collective_learning import (
-    CollectiveLearningError,
-    approved_learning_packet,
-    attest_learning_packet,
-    attest_refresh_rejection,
-    pending_learning_packet,
-    pending_refresh_rejection,
-    prepare_learning_packet,
-    prepare_refresh_rejection,
-    worker_refresh_readiness,
-)
-from learning import (
-    validate_learning_journal,
-    abort_learning_turn,
-    begin_learning_turn,
-    build_learning_status,
-    ensure_learning_state,
-    initialize_governed_state,
-    reconcile_learning_turn,
-    validate_skill_namespaces,
-)
-from cron_runtime import (
-    acknowledge_cron_delivery,
-    bind_cron_delivery,
-    bind_cron_local,
-    checkpoint_system_schedule,
-    claim_system_schedule,
-    complete_system_schedule,
-    cron_diagnostics,
-    cron_delivery_receipt_status,
-    fire_cron_job,
-    get_delivery_reference,
-    get_system_schedule_checkpoint,
-    ensure_system_dream_schedule,
-    enqueue_system_dream_now,
-    list_cron_jobs,
-    reconcile_cron_provider,
-    upsert_delivery_reference,
-)
+PLUGIN_NAME = "autopilots"
+RETIRED_PLUGINS = ("keepalive", "autopilots-telemetry")
+HERMES_ACCOUNT = "hermes"
+UPSTREAM_STAGE2 = "/opt/hermes/docker/stage2-hook.sh"
+UPSTREAM_HERMES = "/opt/hermes/bin/hermes"
+S6_COMMANDS = "/command:/package/admin/s6/command"
 
 WORKIQ_MCP_ENVIRONMENTS = {
     "workiq-mail": "WORKIQ_MAIL_MCP_URL",
@@ -125,17 +91,13 @@ def gateway_port() -> int:
     return int(os.getenv("HERMES_GATEWAY_PORT", str(DEFAULT_GATEWAY_PORT)))
 
 
-def gateway_api_port() -> int:
-    return gateway_port() if bool_env("HERMES_HEALTH_WRAPPER", False) else api_server_port()
-
-
 def write_env_file(home: Path) -> Path:
     configure_model_environment()
     env_path = home / ".env"
     values = {
         "API_SERVER_ENABLED": os.getenv("API_SERVER_ENABLED", "true"),
-        "API_SERVER_HOST": os.getenv("API_SERVER_HOST", "0.0.0.0"),
-        "API_SERVER_PORT": str(gateway_api_port()),
+        "API_SERVER_HOST": "127.0.0.1",
+        "API_SERVER_PORT": str(gateway_port()),
         "API_SERVER_KEY": os.getenv("API_SERVER_KEY", ""),
         "HERMES_HOME": str(home),
         "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL", ""),
@@ -189,22 +151,31 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, Any]:
     configure_model_environment()
-    api_port = gateway_api_port()
     runtime_config: dict[str, Any] = {
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
             "default": os.getenv("HERMES_MODEL", "gpt-6-1-sol"),
             "api_mode": "codex_responses",
         },
-        "memory": {"nudge_interval": 0},
-        "skills": {"creation_nudge_interval": 0},
+        "memory": {"nudge_interval": int(os.getenv("HERMES_MEMORY_NUDGE_INTERVAL", "10"))},
+        "skills": {
+            "creation_nudge_interval": int(os.getenv("HERMES_SKILL_NUDGE_INTERVAL", "10")),
+            "ledger": True,
+            "write_approval": bool_env("HERMES_SKILL_WRITE_APPROVAL", False),
+        },
+        "auxiliary": {"background_review": {"enabled": True}},
         "curator": {"enabled": False},
+        "cron": {"misfire_grace_minutes": 0},
+        "plugins": {"auto_update_check_hours": 0},
+        "updates": {"check": False},
+        "telemetry": {"shared_metrics": {"enabled": False, "send": False}},
+        "security": {"allow_lazy_installs": False},
         "gateway": {
             "platforms": {
                 "api_server": {
-                    "enabled": bool_env("API_SERVER_ENABLED", True),
-                    "host": os.getenv("API_SERVER_HOST", "0.0.0.0"),
-                    "port": api_port,
+                    "enabled": True,
+                    "host": "127.0.0.1",
+                    "port": gateway_port(),
                     "api_key": os.getenv("API_SERVER_KEY", ""),
                 }
             }
@@ -253,20 +224,19 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     if mcp_servers:
         runtime_config["mcp_servers"] = mcp_servers
     if bool_env("USER_SCHEDULING_ENABLED", False):
-        runtime_config["cron"] = {
-            "provider": "azure",
-            "mirror_delivery": False,
-        }
+        runtime_config["cron"].update({"provider": "azure", "mirror_delivery": False})
     config = _deep_merge(base or {}, runtime_config)
+    if not bool_env("USER_SCHEDULING_ENABLED", False):
+        for inherited in ("provider", "mirror_delivery"):
+            config["cron"].pop(inherited, None)
     plugins = dict(config.get("plugins") or {})
-    for required_plugin in (TELEMETRY_PLUGIN_NAME, KEEPALIVE_PLUGIN_NAME):
-        if required_plugin in (plugins.get("disabled") or []):
-            raise ValueError(f"Hermes native {required_plugin} plugin must not be disabled.")
+    if PLUGIN_NAME in (plugins.get("disabled") or []):
+        raise ValueError(f"Hermes {PLUGIN_NAME} plugin must not be disabled.")
     enabled_plugins = plugins.get("enabled") or []
     if not isinstance(enabled_plugins, list):
         raise ValueError("Hermes plugins.enabled must be a list.")
     plugins["enabled"] = list(dict.fromkeys([
-        *enabled_plugins, TELEMETRY_PLUGIN_NAME, KEEPALIVE_PLUGIN_NAME,
+        *(name for name in enabled_plugins if name not in RETIRED_PLUGINS), PLUGIN_NAME,
     ]))
     config["plugins"] = plugins
     config["model"].pop("name", None)
@@ -285,19 +255,56 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
     return config
 
 
-def install_runtime_plugins(profile_home: Path) -> None:
-    source_root = Path("/app/runtime_plugins")
-    if not source_root.is_dir():
-        return
+
+
+def install_runtime_plugins(profile_home: Path, source_root: Path = Path("/app/runtime_plugins")) -> None:
+    """Replace image-owned plugins exactly, so files removed from the image disappear from the profile."""
     destination_root = profile_home / "plugins"
     destination_root.mkdir(parents=True, exist_ok=True)
+    for name in RETIRED_PLUGINS:
+        shutil.rmtree(destination_root / name, ignore_errors=True)
+    if not source_root.is_dir():
+        return
     for source in source_root.iterdir():
         if source.is_dir():
-            shutil.copytree(
-                source,
-                destination_root / source.name,
-                dirs_exist_ok=True,
-            )
+            shutil.rmtree(destination_root / source.name, ignore_errors=True)
+            shutil.copytree(source, destination_root / source.name)
+
+
+def hermes_account() -> tuple[int, int]:
+    import pwd
+
+    entry = pwd.getpwnam(HERMES_ACCOUNT)
+    return entry.pw_uid, entry.pw_gid
+
+
+def own_profile(profile_home: Path, uid: int, gid: int) -> None:
+    """Give the unprivileged Hermes account the profile; a full walk only runs after a 0.19 root-owned layout."""
+    if profile_home.stat().st_uid == uid:
+        targets = [profile_home / name for name in ("config.yaml", ".env", "plugins", "workspace", ".telemetry")]
+    else:
+        targets = [profile_home]
+    for target in targets:
+        if not target.exists():
+            continue
+        for root, directories, files in os.walk(target):
+            for name in [*directories, *files]:
+                path = Path(root) / name
+                if not path.is_symlink():
+                    os.chown(path, uid, gid)
+        os.chown(target, uid, gid)
+
+
+def as_hermes(uid: int, gid: int) -> dict[str, Any]:
+    return {"user": uid, "group": gid, "extra_groups": []}
+
+
+def run_upstream_stage2(profile_home: Path) -> None:
+    """Run the official image bootstrap (ownership, seed directories, bundled skills) as Hermes' non-PID-1 path does."""
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(profile_home)
+    env["PATH"] = f"{S6_COMMANDS}:{env.get('PATH', '')}"
+    subprocess.run([UPSTREAM_STAGE2], env=env, check=True)
 
 
 def configure_model_environment() -> None:
@@ -313,7 +320,7 @@ def configure_model_environment() -> None:
         os.environ.setdefault("HERMES_INFERENCE_MODEL", model)
 
 
-def start_agent_mcp_proxy() -> subprocess.Popen | None:
+def start_agent_mcp_proxy(**account: Any) -> subprocess.Popen | None:
     if not os.getenv("AGENT_MCP_SERVERS_JSON"):
         print("AGENT_MCP_SERVERS_JSON is not set; Agent Identity MCP adapter is disabled.", flush=True)
         return None
@@ -331,10 +338,11 @@ def start_agent_mcp_proxy() -> subprocess.Popen | None:
             port,
         ],
         env=os.environ.copy(),
+        **account,
     )
 
 
-def start_m365_collaboration_mcp() -> subprocess.Popen | None:
+def start_m365_collaboration_mcp(**account: Any) -> subprocess.Popen | None:
     if not os.getenv("M365_COLLABORATION_MCP_URL", "").strip():
         return None
     port = os.getenv(
@@ -355,6 +363,7 @@ def start_m365_collaboration_mcp() -> subprocess.Popen | None:
             "autopilots_identity.collaboration_mcp",
         ],
         env=env,
+        **account,
     )
 
 
@@ -384,26 +393,16 @@ def write_config(home: Path) -> Path:
     return config_path
 
 
-def activate_profile(home: Path, name: str) -> Path:
-    active_path = home / "active_profile"
-    temporary = active_path.with_suffix(".tmp")
-    temporary.write_text(f"{name}\n", encoding="utf-8")
-    temporary.replace(active_path)
-    os.environ["HERMES_PROFILE"] = name
-    return active_path
-
-
-def start_gateway(profile_home: Path) -> subprocess.Popen:
+def start_gateway(profile_home: Path, **account: Any) -> subprocess.Popen:
     env = os.environ.copy()
     env["HERMES_HOME"] = str(profile_home)
-    command = [
-        "hermes",
-        "gateway",
-        "run",
-        "--replace",
-        "--accept-hooks",
-    ]
-    return subprocess.Popen(command, env=env)
+    env["HOME"] = str(profile_home / "home")
+    return subprocess.Popen(
+        [UPSTREAM_HERMES, "gateway", "run", "--replace", "--accept-hooks"],
+        env=env,
+        cwd=str(profile_home),
+        **account,
+    )
 
 
 def create_health_app(
@@ -441,7 +440,6 @@ def create_health_app(
             "runtime": "hermes",
             "hermesHome": str(home),
             "profileHome": str(profile_home),
-            "profileName": os.getenv("HERMES_PROFILE", "default"),
             "configExists": (profile_home / "config.yaml").exists(),
             "envExists": (profile_home / ".env").exists(),
             "roleRelease": role_release_health,
@@ -460,55 +458,6 @@ def create_health_app(
         supplied = request.headers.get("x-autopilot-key", "")
         if not expected or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
-
-    @app.get("/internal/learning/status")
-    def learning_status(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        return build_learning_status(profile_home)
-
-    @app.post("/internal/learning/turns")
-    async def begin_turn(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        return begin_learning_turn(
-            profile_home,
-            attachment_private=bool(
-                payload.get("attachmentPrivate")
-                if isinstance(payload, dict)
-                else False
-            ),
-        )
-
-    @app.post("/internal/learning/reconcile")
-    async def reconcile_turn(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        token = payload.get("token") if isinstance(payload, dict) else None
-        provenance = payload.get("provenance") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token:
-            raise HTTPException(status_code=400, detail="token must be a non-empty string.")
-        if not isinstance(provenance, list) or len(provenance) > 10:
-            raise HTTPException(status_code=400, detail="provenance must be an array with at most 10 items.")
-        try:
-            return reconcile_learning_turn(
-                profile_home,
-                token=token,
-                provenance=provenance,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/learning/abort")
-    async def abort_turn(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        token = payload.get("token") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token:
-            raise HTTPException(status_code=400, detail="token must be a non-empty string.")
-        try:
-            return abort_learning_turn(profile_home, token=token)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/internal/documents/pending")
     async def document_pending(request: Request) -> dict[str, Any]:
@@ -685,83 +634,6 @@ def create_health_app(
                 detail=str(exc),
             ) from exc
 
-    @app.post("/internal/collective-learning/prepare")
-    def prepare_collective_learning(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return prepare_learning_packet(profile_home)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/internal/collective-learning/pending")
-    def pending_collective_learning(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return pending_learning_packet(profile_home)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/collective-learning/attest")
-    async def attest_collective_learning(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        receipt = payload.get("receipt") if isinstance(payload, dict) else None
-        if not isinstance(receipt, dict):
-            raise HTTPException(status_code=400, detail="receipt must be one JSON object.")
-        try:
-            return attest_learning_packet(profile_home, receipt=receipt)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/internal/collective-learning/export")
-    def export_collective_learning(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return approved_learning_packet(profile_home)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/collective-learning/prepare-rejection")
-    def prepare_rejection(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return prepare_refresh_rejection(profile_home)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/internal/collective-learning/pending-rejection")
-    def pending_rejection(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return pending_refresh_rejection(profile_home)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/collective-learning/attest-rejection")
-    async def attest_rejection(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        receipt = payload.get("receipt") if isinstance(payload, dict) else None
-        if not isinstance(receipt, dict):
-            raise HTTPException(status_code=400, detail="receipt must be one JSON object.")
-        try:
-            return attest_refresh_rejection(profile_home, receipt=receipt)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/internal/collective-learning/refresh-ready")
-    def refresh_ready(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return worker_refresh_readiness(profile_home)
-        except CollectiveLearningError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.get("/internal/cron/jobs")
-    def cron_jobs(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        return {"jobs": list_cron_jobs(profile_home)}
-
     @app.post("/internal/interactions/claim")
     async def interaction_claim(request: Request) -> dict[str, Any]:
         require_internal_key(request)
@@ -782,231 +654,6 @@ def create_health_app(
                 status_code=400,
                 detail=str(exc),
             ) from exc
-
-    @app.post("/internal/cron/reconcile")
-    async def cron_reconcile(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        return await asyncio.to_thread(reconcile_cron_provider, profile_home)
-
-    @app.get("/internal/cron/diagnostics")
-    async def cron_diagnostic_status(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        return await asyncio.to_thread(cron_diagnostics, profile_home)
-
-    @app.post("/internal/cron/delivery-reference")
-    async def cron_delivery_reference(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        try:
-            return upsert_delivery_reference(
-                profile_home,
-                reference_key=str(payload.get("referenceKey") or ""),
-                conversation=payload.get("conversation") or {},
-                boundary=str(payload.get("boundary") or ""),
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=str(exc),
-            ) from exc
-
-    @app.get("/internal/cron/delivery-reference")
-    async def cron_get_delivery_reference(
-        request: Request,
-        referenceKey: str,
-    ) -> dict[str, Any]:
-        require_internal_key(request)
-        reference = get_delivery_reference(
-            profile_home,
-            referenceKey,
-        )
-        if not isinstance(reference, dict):
-            raise HTTPException(
-                status_code=404,
-                detail="Delivery reference was not found.",
-            )
-        return {
-            "referenceKey": referenceKey,
-            "deliveryReference": reference,
-        }
-
-    @app.post("/internal/cron/bind-delivery")
-    async def cron_bind_delivery(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        job_ids = payload.get("jobIds")
-        if not isinstance(job_ids, list) or not all(isinstance(value, str) for value in job_ids):
-            raise HTTPException(status_code=400, detail="jobIds must be an array of strings.")
-        try:
-            return bind_cron_delivery(
-                profile_home,
-                job_ids=job_ids,
-                reference_key=str(payload.get("referenceKey") or ""),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/bind-local")
-    async def cron_bind_local(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        job_ids = payload.get("jobIds")
-        if not isinstance(job_ids, list) or not all(isinstance(value, str) for value in job_ids):
-            raise HTTPException(status_code=400, detail="jobIds must be an array of strings.")
-        try:
-            return bind_cron_local(profile_home, job_ids=job_ids)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/fire")
-    async def cron_fire(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        try:
-            return await asyncio.to_thread(
-                fire_cron_job,
-                profile_home,
-                job_id=str(payload.get("jobId") or ""),
-                revision=str(payload.get("revision") or ""),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "type": exc.__class__.__name__,
-                    "message": str(exc)[:2000],
-                },
-            ) from exc
-
-    @app.post("/internal/cron/system/claim")
-    async def cron_system_claim(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        try:
-            return await asyncio.to_thread(
-                claim_system_schedule,
-                profile_home,
-                job_id=str(payload.get("jobId") or ""),
-                revision=str(payload.get("revision") or ""),
-                occurrence_id=str(
-                    payload.get("occurrenceId")
-                    or payload.get("revision")
-                    or ""
-                ),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/system/run-now")
-    async def cron_system_run_now(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        try:
-            return await asyncio.to_thread(
-                enqueue_system_dream_now,
-                profile_home,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/system/checkpoint/read")
-    async def cron_system_checkpoint_read(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Checkpoint request must be an object.")
-        try:
-            return await asyncio.to_thread(
-                get_system_schedule_checkpoint,
-                profile_home,
-                job_id=str(payload.get("jobId") or ""),
-                revision=str(payload.get("revision") or ""),
-                occurrence_id=str(payload.get("occurrenceId") or ""),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/system/checkpoint")
-    async def cron_system_checkpoint(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        if not isinstance(payload, dict) or not isinstance(payload.get("payload"), dict):
-            raise HTTPException(status_code=400, detail="Checkpoint payload must be an object.")
-        try:
-            return await asyncio.to_thread(
-                checkpoint_system_schedule,
-                profile_home,
-                job_id=str(payload.get("jobId") or ""),
-                revision=str(payload.get("revision") or ""),
-                occurrence_id=str(payload.get("occurrenceId") or ""),
-                owner_token=str(payload.get("ownerToken") or ""),
-                expected_phase=str(payload.get("expectedPhase") or ""),
-                phase=str(payload.get("phase") or ""),
-                payload=payload["payload"],
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/system/complete")
-    async def cron_system_complete(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        try:
-            return await asyncio.to_thread(
-                complete_system_schedule,
-                profile_home,
-                job_id=str(payload.get("jobId") or ""),
-                revision=str(payload.get("revision") or ""),
-                occurrence_id=str(
-                    payload.get("occurrenceId")
-                    or payload.get("revision")
-                    or ""
-                ),
-                success=bool(payload.get("success")),
-                error=str(payload.get("error") or ""),
-                summary=payload.get("summary")
-                if isinstance(payload.get("summary"), dict)
-                else {},
-                owner_token=str(payload.get("ownerToken") or ""),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.post("/internal/cron/ack-delivery")
-    async def cron_ack_delivery(request: Request) -> dict[str, Any]:
-        require_internal_key(request)
-        payload = await request.json()
-        try:
-            return await asyncio.to_thread(
-                acknowledge_cron_delivery,
-                profile_home,
-                job_id=str(payload.get("jobId") or ""),
-                revision=str(payload.get("revision") or ""),
-                delivery_activity_id=str(
-                    payload.get("deliveryActivityId") or ""
-                ),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.get("/internal/cron/delivery-receipt/{job_id}/{revision}")
-    async def cron_delivery_receipt(
-        job_id: str,
-        revision: str,
-        request: Request,
-    ) -> dict[str, Any]:
-        require_internal_key(request)
-        return await asyncio.to_thread(
-            cron_delivery_receipt_status,
-            profile_home,
-            job_id=job_id,
-            revision=revision,
-        )
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
@@ -1052,6 +699,8 @@ def create_health_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except httpx.HTTPStatusError as exc:
             response = exc.response
+        except httpx.ConnectError as exc:
+            raise HTTPException(status_code=503, detail="Hermes native API is not accepting requests yet.") from exc
         if response.headers.get("content-type", "").startswith("application/json"):
             return JSONResponse(content=response.json(), status_code=response.status_code)
         raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -1070,7 +719,6 @@ def main() -> None:
     if role_release_settings:
         role_release = install_or_refresh_role_release(home, role_release_settings)
         profile_home = role_release.profile_home
-        activate_profile(home, role_release_settings.role_blueprint)
         action = "refreshed" if role_release.changed else "reused"
         print(
             f"Hermes Role Release {action}: "
@@ -1078,37 +726,25 @@ def main() -> None:
             flush=True,
         )
     profile_home.mkdir(parents=True, exist_ok=True)
+    (profile_home / "home").mkdir(exist_ok=True)
+    (profile_home / "workspace").mkdir(exist_ok=True)
     install_runtime_plugins(profile_home)
     install_gateway_telemetry(profile_home)
     os.environ["HERMES_HOME"] = str(profile_home)
-    (profile_home / "workspace").mkdir(parents=True, exist_ok=True)
-    if role_release:
-        validate_learning_journal(profile_home)
-        ensure_learning_state(profile_home)
-        initialize_governed_state(profile_home)
-        validate_skill_namespaces(profile_home)
     env_path = write_env_file(profile_home)
     config_path = write_config(profile_home)
-    system_dream_schedule = ensure_system_dream_schedule(
-        profile_home,
-        enabled=bool_env("SERVICEBUS_DREAM_ENABLED", False),
-        schedule=os.getenv(
-            "SERVICEBUS_DREAM_CRON_EXPRESSION",
-            "0 2 * * *",
-        ),
-    )
-    print(f"Hermes home: {home}", flush=True)
-    print(f"Hermes profile home: {profile_home}", flush=True)
-    print(f"Hermes env: {env_path}", flush=True)
-    print(f"Hermes config: {config_path}", flush=True)
-    print(f"System Dreaming schedule: {system_dream_schedule}", flush=True)
+    uid, gid = hermes_account()
+    own_profile(profile_home, uid, gid)
+    print(f"Hermes profile home: {profile_home}; env {env_path}; config {config_path}", flush=True)
 
+    account = as_hermes(uid, gid)
     mcp_proxy = None
     collaboration_mcp = None
     gateway = None
     try:
-        mcp_proxy = start_agent_mcp_proxy()
-        collaboration_mcp = start_m365_collaboration_mcp()
+        mcp_proxy = start_agent_mcp_proxy(**account)
+        collaboration_mcp = start_m365_collaboration_mcp(**account)
+        run_upstream_stage2(profile_home)
         if mcp_proxy:
             wait_for_loopback(mcp_proxy, int(os.getenv("AGENT_MCP_PROXY_PORT", str(DEFAULT_AGENT_MCP_PROXY_PORT))))
         if collaboration_mcp:
@@ -1116,22 +752,16 @@ def main() -> None:
                 collaboration_mcp,
                 int(os.getenv("M365_COLLABORATION_MCP_PORT", str(DEFAULT_M365_COLLABORATION_MCP_PORT))),
             )
-        if bool_env("HERMES_START_GATEWAY", True):
-            gateway = start_gateway(profile_home)
-            print(f"Started Hermes gateway pid={gateway.pid}", flush=True)
-
-        if bool_env("HERMES_HEALTH_WRAPPER", False) or gateway is None:
-            app = create_health_app(home, profile_home, role_release, gateway)
-            uvicorn.run(app, host=os.getenv("API_SERVER_HOST", "0.0.0.0"), port=api_server_port())
-            return
-
-        raise SystemExit(gateway.wait())
+        gateway = start_gateway(profile_home, **account)
+        print(f"Started Hermes gateway pid={gateway.pid}", flush=True)
+        os.setgroups([])
+        os.setgid(gid)
+        os.setuid(uid)
+        os.environ["HOME"] = str(profile_home / "home")
+        app = create_health_app(home, profile_home, role_release, gateway)
+        uvicorn.run(app, host="0.0.0.0", port=api_server_port())
     finally:
-        for process in (
-            gateway,
-            collaboration_mcp,
-            mcp_proxy,
-        ):
+        for process in (gateway, collaboration_mcp, mcp_proxy):
             if process and process.poll() is None:
                 process.terminate()
                 try:

@@ -64,4 +64,4 @@ class DreamRequest:
 @dataclass(frozen=True)
 class DreamResponse:
     agent: AgentResponse
-    learning_status: dict[str, Any]
+    learning_digest: dict[str, Any]

@@ -56,6 +56,7 @@ class SandboxServicesTests(unittest.TestCase):
             "user_scheduling_enabled": True, "document_retry_enabled": True,
             "user_scheduling_lock_renewal_seconds": 1800, "user_scheduling_max_delivery_count": 5,
             "hermes_role_blueprint": "junior-project-manager",
+            "worker_owner_id": "owner-object",
         })
         return values
 
@@ -120,6 +121,7 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertFalse(any(key.startswith("WORKIQ_") for key in env))
         self.assertEqual(env["GENERATED_APPS_SANDBOX_GROUP"], "worker-generated-apps")
         self.assertEqual(env["AZURE_CLIENT_ID"], "gateway-client")
+        self.assertEqual(env["WORKER_OWNER_ID"], "owner-object")
         self.assertNotIn("ACR_NAME", env)
         self.assertNotIn("AGENT_RUNTIME_REGISTRY_IDENTITY_RESOURCE_ID", env)
         self.assertEqual(env["CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE"], "FederatedCredentials")

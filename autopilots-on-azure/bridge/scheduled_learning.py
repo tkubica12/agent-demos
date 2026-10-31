@@ -243,11 +243,19 @@ class ScheduledLearningCoordinator:
                     if operation else await adapter.dream(request)
                 )
             dream = completed["dream"]
+            digest = dream.learning_digest
+            governed = digest.get("governed") or []
             dream_summary = {
                 "sessionId": session_id,
-                "recordCount": len(dream.learning_status.get("records") or []),
-                "rejectedRecordCount": len(dream.learning_status.get("rejectedRecords") or []),
-                "roleRelease": dream.learning_status.get("roleRelease"),
+                "skillChangeCount": len(digest.get("changes") or []),
+                "pendingApprovalCount": len(digest.get("pending") or []),
+                "governedChangeCount": len(governed),
+                "sharedChangeCount": sum(
+                    1 for item in governed
+                    if (item.get("choice") or {}).get("choice") == "share"
+                    and (item.get("choice") or {}).get("current")
+                ),
+                "worker": digest.get("worker"),
             }
             if operation:
                 await adapter.checkpoint_system_schedule(
@@ -263,13 +271,14 @@ class ScheduledLearningCoordinator:
             packet_summary = saved.get("packet")
         else:
             packet_summary = None
-            if self.settings.prepare_packet and dream_summary["recordCount"]:
+            if self.settings.prepare_packet and dream_summary.get("sharedChangeCount"):
                 if "packet" not in completed:
                     completed["packet"] = await adapter.prepare_collective_learning()
                 packet = completed["packet"]
                 packet_summary = {
                     "packetDigest": packet.get("packetDigest"),
                     "improvementCount": len(packet.get("improvements") or []),
+                    "excludedCount": len(packet.get("excluded") or []),
                     "roleRelease": packet.get("roleRelease"),
                     "approvalRequired": packet.get("approvalRequired"),
                 }

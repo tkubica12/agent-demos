@@ -64,7 +64,7 @@ class IdentityMcpProxyTests(unittest.TestCase):
         self.assertEqual(headers["mcp-session-id"], "session-1")
         self.assertNotIn("host", headers)
 
-    def test_startup_prefetches_each_distinct_token_without_failing_the_proxy(self) -> None:
+    def test_startup_warms_every_upstream_without_failing_the_proxy(self) -> None:
         servers = load_server_configs(
             """
             {
@@ -74,14 +74,16 @@ class IdentityMcpProxyTests(unittest.TestCase):
             }
             """
         )
-        fetch = AsyncMock(side_effect=["user-token", RuntimeError("entra unavailable")])
+        warm = AsyncMock(side_effect=[405, 400, RuntimeError("entra unavailable")])
         with (
             patch.object(mcp_proxy, "server_configs", return_value=servers),
-            patch.object(mcp_proxy, "access_token", fetch),
+            patch.object(mcp_proxy, "warm_upstream", warm),
             self.assertLogs(mcp_proxy.logger, level="WARNING") as logs,
         ):
             asyncio.run(mcp_proxy.prefetch_tokens())
-        self.assertEqual([call.args[0].scope for call in fetch.await_args_list], ["m365/.default", "api://private/.default"])
+        self.assertEqual([call.args[0] for call in warm.await_args_list], ["word", "mail", "private"])
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("private", logs.output[0])
         self.assertIn("entra unavailable", logs.output[0])
 
 

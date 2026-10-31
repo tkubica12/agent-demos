@@ -1,45 +1,15 @@
 import asyncio
-import copy
-import json
 import os
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
-from jsonschema import Draft202012Validator
 
 from bridge import app as bridge_app
-from tests import test_hermes_runtime as runtime_tests
 
 
 class CollectiveLearningRouteTests(unittest.TestCase):
-    def test_published_provenance_schema_matches_current_runtime_contract(self):
-        schema_path = Path(__file__).resolve().parents[1] / "blueprints" / "junior-project-manager" / "schemas" / "skill-provenance.schema.json"
-        schema = json.loads(schema_path.read_text())
-        Draft202012Validator.check_schema(schema)
-        validator = Draft202012Validator(schema)
-        artifact = "skills/candidates/deadline-verification"
-        record = {
-            **runtime_tests.HermesRuntimeTests()._provenance(artifact),
-            "schemaVersion": "3.0", "recordId": "lr-example", "createdAt": "2026-09-06T00:00:00Z",
-            "artifact": {"path": artifact, "beforeHash": None, "afterHash": "a" * 64,
-                         "changedFiles": [artifact + "/SKILL.md"]},
-            "roleRelease": {"roleBlueprint": "junior-project-manager", "release": "3.2.0", "commit": "b" * 40},
-            "worker": {"workerId": "worker", "assignmentScope": "team"},
-            "privacy": {"redactionStatus": "passed", "warnings": []},
-        }
-        validator.validate(record)
-        for field, value in (("schemaVersion", "2.0"), ("action", "delete"), ("agentProposedScenarios", [])):
-            with self.subTest(field=field):
-                self.assertFalse(validator.is_valid({**record, field: value}))
-        unsafe = copy.deepcopy(record)
-        unsafe["agentProposedScenarios"][0]["command"] = "arbitrary executable command"
-        self.assertFalse(validator.is_valid(unsafe))
-        del record["agentProposedScenarios"]
-        self.assertFalse(validator.is_valid(record))
-
     def test_operator_routes_forward_to_runtime_and_reject_missing_authentication(self):
         adapter = SimpleNamespace(
             runtime_kind="hermes",

@@ -29,6 +29,7 @@ output "deployment_config" {
     hermes_role_release                      = var.hermes_role_release
     hermes_role_release_commit               = var.hermes_role_release_commit
     worker_assignment_scope                  = var.worker_assignment_scope
+    worker_owner_id                          = var.worker_owner_id
     collective_learning_approval_private_key = var.collective_learning_approval_private_key
     collective_learning_approval_public_key  = var.collective_learning_approval_public_key
     user_scheduling_enabled                  = var.user_scheduling_enabled

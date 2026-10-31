@@ -1,1 +1,0 @@
-from runtime_keepalive import register

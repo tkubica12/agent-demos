@@ -1,4 +1,4 @@
-"""Hermes 0.19 native execution middleware and local subprocess trace handoff.
+"""Hermes native execution middleware and local subprocess trace handoff.
 
 The native gateway drops ContextVars at run_in_executor and has no W3C ingress
 hook. The wrapper lends its context to one awaited, explicit-session request.
@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -33,7 +34,6 @@ from bridge.telemetry import (
 )
 
 
-PLUGIN_NAME = "autopilots-telemetry"
 CONTEXT_DIRECTORY_ENV = "AUTOPILOTS_TRACE_CONTEXT_DIR"
 _HANDOFF_HEADERS = frozenset({
     "traceparent", "tracestate", "x-autopilot-otel-session", "x-autopilot-otel-operation",
@@ -45,25 +45,20 @@ class GatewayTraceConflictError(ValueError):
 
 
 def install_gateway_telemetry(profile_home: Path) -> Path:
-    """Install an opt-in native plugin; caller must enable PLUGIN_NAME in config.
+    """Create the per-generation trace handoff directory used by the autopilots plugin.
 
     Call once per wrapper startup, before starting the gateway. A new directory
     isolates this gateway generation from cancelled requests of older processes.
-    The subprocess must inherit CONTEXT_DIRECTORY_ENV and be able to import bridge.
+    The gateway must inherit CONTEXT_DIRECTORY_ENV; the autopilots plugin calls register.
     """
-    directory = profile_home / ".telemetry" / uuid.uuid4().hex
+    root = profile_home / ".telemetry"
+    if root.is_dir():
+        for previous in root.iterdir():
+            if previous.is_dir() and not previous.is_symlink():
+                shutil.rmtree(previous)
+    directory = root / uuid.uuid4().hex
     directory.mkdir(parents=True, mode=0o700)
     os.environ[CONTEXT_DIRECTORY_ENV] = str(directory.resolve())
-    plugin = profile_home / "plugins" / PLUGIN_NAME
-    plugin.mkdir(parents=True, exist_ok=True)
-    (plugin / "plugin.yaml").write_text(
-        f"name: {PLUGIN_NAME}\nversion: '1.0.0'\n"
-        "description: Metadata-only native model and tool execution tracing\n",
-        encoding="utf-8",
-    )
-    (plugin / "__init__.py").write_text(
-        "from bridge.hermes_telemetry import register\n", encoding="utf-8",
-    )
     return directory
 
 

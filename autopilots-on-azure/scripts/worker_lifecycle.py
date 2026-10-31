@@ -289,6 +289,7 @@ def bootstrap(args: argparse.Namespace) -> None:
         sponsor_upn = args.sponsor_upn or str(
             graph.request("GET", "/me?$select=userPrincipalName")["userPrincipalName"]
         )
+        sponsor_id = str(graph.request("GET", f"/users/{sponsor_upn}?$select=id")["id"])
         agent_upn = f"{state_name}@{args.upn_domain or initial_domain(graph)}"
         client_app_id = args.client_app_id or agent365_cli_app_id(graph)
 
@@ -347,6 +348,7 @@ def bootstrap(args: argparse.Namespace) -> None:
             "--state-name", state_name,
             "--autopilot-name", state_name,
             "--assignment-scope", args.assignment_scope or f"{state_name}-bootstrap",
+            "--worker-owner-id", sponsor_id,
             "--no-user-scheduling-enabled",
             "--no-servicebus-dream-enabled",
             "--no-scheduled-learning-enabled",

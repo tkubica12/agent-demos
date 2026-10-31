@@ -189,6 +189,7 @@ class AzureCronScheduler(CronScheduler):
         )
 
     def start(self, stop_event, *, adapters=None, loop=None, interval=60):
+        self._ensure_system_dream()
         self.reconcile()
 
     def stop(self) -> None:
@@ -197,23 +198,19 @@ class AzureCronScheduler(CronScheduler):
             self._client = None
 
     def on_jobs_changed(self) -> None:
-        if os.getenv("SERVICEBUS_DREAM_ENABLED", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            from cron.jobs import CRON_DIR
-            from cron_runtime import ensure_system_dream_schedule
-
-            ensure_system_dream_schedule(
-                CRON_DIR.parent,
-                enabled=True,
-                schedule=required_env(
-                    "SERVICEBUS_DREAM_CRON_EXPRESSION"
-                ),
-            )
+        self._ensure_system_dream()
         self.reconcile()
+
+    def _ensure_system_dream(self) -> None:
+        from cron.jobs import CRON_DIR
+        from cron_runtime import ensure_system_dream_schedule
+
+        enabled = os.getenv("SERVICEBUS_DREAM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        ensure_system_dream_schedule(
+            CRON_DIR.parent,
+            enabled=enabled,
+            schedule=os.getenv("SERVICEBUS_DREAM_CRON_EXPRESSION", "0 2 * * *"),
+        )
 
     def current_revision(self, job_id: str) -> str:
         from cron.jobs import get_job

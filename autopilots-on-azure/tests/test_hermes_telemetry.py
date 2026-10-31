@@ -48,9 +48,6 @@ class HermesTelemetryTests(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.context_directory = native.install_gateway_telemetry(self.home)
-        (self.home / "config.yaml").write_text(
-            f"plugins:\n  enabled:\n    - {native.PLUGIN_NAME}\n", encoding="utf-8",
-        )
         self.settings = telemetry.TelemetrySettings(
             agent_id="external-hermes", worker_id="private-worker", component="hermes-runtime",
         )
@@ -64,6 +61,14 @@ class HermesTelemetryTests(unittest.TestCase):
         settings_patch.start()
         self.addCleanup(tracer_patch.stop)
         self.addCleanup(settings_patch.stop)
+
+    def test_each_wrapper_start_replaces_dead_generations(self):
+        stale = self.context_directory
+        (stale / "lease.json").write_text("{}", encoding="utf-8")
+        current = native.install_gateway_telemetry(self.home)
+        self.assertFalse(stale.exists())
+        self.assertEqual(list((self.home / ".telemetry").iterdir()), [current])
+        self.assertEqual(os.environ[native.CONTEXT_DIRECTORY_ENV], str(current.resolve()))
 
     def test_execution_handoff_covers_native_executor_threads_and_session_rotation(self):
         request = {"messages": [{"content": "private prompt"}]}
@@ -242,6 +247,13 @@ class HermesTelemetryTests(unittest.TestCase):
 
     @unittest.skipUnless(_RUNTIME_PYTHON.is_file(), "Install the isolated Hermes runtime to exercise native plugins")
     def test_installed_hermes_plugin_executes_real_sdk_and_tool_in_separate_process(self):
+        plugin = self.home / "plugins" / "telemetry-under-test"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.yaml").write_text("name: telemetry-under-test\nversion: '1.0.0'\n", encoding="utf-8")
+        (plugin / "__init__.py").write_text("from bridge.hermes_telemetry import register\n", encoding="utf-8")
+        (self.home / "config.yaml").write_text(
+            "plugins:\n  enabled:\n    - telemetry-under-test\n", encoding="utf-8",
+        )
         fixture = self.home / "fixture.txt"
         fixture.write_text("private fixture contents", encoding="utf-8")
         program = r'''

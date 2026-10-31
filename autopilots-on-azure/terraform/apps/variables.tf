@@ -58,6 +58,17 @@ variable "worker_assignment_scope" {
   default = ""
 }
 
+variable "worker_owner_id" {
+  description = "Entra object ID of the Worker owner (Agent Identity sponsor) who receives the private learning digest."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.worker_owner_id == "" || can(regex("^[0-9a-fA-F-]{36}$", var.worker_owner_id))
+    error_message = "worker_owner_id must be empty or an Entra object ID."
+  }
+}
+
 variable "user_scheduling_enabled" {
   type    = bool
   default = false

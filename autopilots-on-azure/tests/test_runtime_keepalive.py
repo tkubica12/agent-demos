@@ -124,7 +124,8 @@ class KeepaliveConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "ADC_SANDBOX_ID": "446309e7-0bb8-42a8-a220-fef8baa0b22e",
             "ADC_PROXY_DNS_SUFFIX": "proxy.swedencentral.azuredevcompute.io",
-            "API_SERVER_PORT": "8642",
+            "RUNTIME_INGRESS_PORT": "8642",
+            "API_SERVER_PORT": "9119",
         }, clear=True):
             self.assertEqual(
                 runtime_keepalive.sandbox_health_url(),
@@ -145,7 +146,7 @@ class KeepaliveConfigurationTests(unittest.TestCase):
             {"ADC_SANDBOX_ID": base["ADC_SANDBOX_ID"]},
             {**base, "ADC_PROXY_DNS_SUFFIX": "host/path"},
             {**base, "ADC_SANDBOX_ID": "not-a-sandbox-id"},
-            {**base, "API_SERVER_PORT": "0"},
+            {**base, "RUNTIME_INGRESS_PORT": "0"},
         ):
             with self.subTest(values=values), patch.dict(os.environ, values, clear=True):
                 with self.assertRaises(ValueError):

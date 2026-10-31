@@ -405,7 +405,7 @@ def hermes_runtime_environment(
         "API_SERVER_ENABLED": "true",
         "API_SERVER_HOST": "0.0.0.0",
         "API_SERVER_PORT": str(HERMES_API_PORT),
-        "HERMES_HEALTH_WRAPPER": "true",
+        "RUNTIME_INGRESS_PORT": str(HERMES_API_PORT),
         "HERMES_GATEWAY_PORT": "9119",
         "HERMES_HOME": "/data/hermes",
         "PATH": "/app/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
