@@ -836,60 +836,61 @@ wheels = [
 
 [[package]]
 name = "microsoft-agents-activity"
-version = "1.1.0"
+version = "1.6.0"
 source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-activity/1.1/microsoft_agents_activity-1.1.0.tar.gz", hash = "sha256:ed930777677be683603dcfc5d470e66d15db4a261f878c193076b1742391777b" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-activity/1.6/microsoft_agents_activity-1.6.0.tar.gz", hash = "sha256:90872c28df83cb7c3cb2ab9e0e017c62d0b6972a465a3738c88d390cdb8362dd" }
 wheels = [
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-activity/1.1/microsoft_agents_activity-1.1.0-py3-none-any.whl", hash = "sha256:6bd5203bbb9abd876ea427bdfa99078528f414b3f2cf6b5a58ef5232743d7331" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-activity/1.6/microsoft_agents_activity-1.6.0-py3-none-any.whl", hash = "sha256:3ee03c598d564b379ac5f8b355485b59b4484680d4892559e501fe541a4c0957" },
 ]
 
 [[package]]
 name = "microsoft-agents-authentication-msal"
-version = "1.1.0"
+version = "1.6.0"
 source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
 dependencies = [
     { name = "microsoft-agents-hosting-core" },
     { name = "msal" },
     { name = "requests" },
 ]
-sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-authentication-msal/1.1/microsoft_agents_authentication_msal-1.1.0.tar.gz", hash = "sha256:6912e45aa57b02d747ffa61696b04f4e88e8e97cb7d276b781897cd66b58ebaf" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-authentication-msal/1.6/microsoft_agents_authentication_msal-1.6.0.tar.gz", hash = "sha256:755f92db8660a4739018b5ce2b980a1c3b0ecd1aec96914078ad8b7e94cd7f86" }
 wheels = [
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-authentication-msal/1.1/microsoft_agents_authentication_msal-1.1.0-py3-none-any.whl", hash = "sha256:c4ea4fc468390cccc3a763602590236d332764576b521eeba75eec8afd9194e5" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-authentication-msal/1.6/microsoft_agents_authentication_msal-1.6.0-py3-none-any.whl", hash = "sha256:c33320a16abb0e4f320322fae6d756bebeba75339e3d9ccaa764a052ee654cf3" },
 ]
 
 [[package]]
 name = "microsoft-agents-hosting-core"
-version = "1.1.0"
+version = "1.6.0"
 source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
 dependencies = [
-    { name = "azure-core" },
+    { name = "aiohttp" },
     { name = "isodate" },
     { name = "microsoft-agents-activity" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
     { name = "pyjwt" },
     { name = "python-dotenv" },
+    { name = "yarl" },
 ]
-sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-core/1.1/microsoft_agents_hosting_core-1.1.0.tar.gz", hash = "sha256:c609f7d5ea40350911dffa25383b8d9745786e89fb587da0443203d64ff476c6" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-core/1.6/microsoft_agents_hosting_core-1.6.0.tar.gz", hash = "sha256:a14b0467b218b5385e060e5c9cd7598a1b0b42251dc12a73435853b1437d7b0b" }
 wheels = [
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-core/1.1/microsoft_agents_hosting_core-1.1.0-py3-none-any.whl", hash = "sha256:747ab6f48b73ddb330ea85f6431ee4257c7b2faced7fa779ee3f149e60ec8e70" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-core/1.6/microsoft_agents_hosting_core-1.6.0-py3-none-any.whl", hash = "sha256:38ff9c350f4ff8d024cdd9ac3111e015f5d47745f6821ec91796e47e046f8b8c" },
 ]
 
 [[package]]
 name = "microsoft-agents-hosting-fastapi"
-version = "1.1.0"
+version = "1.6.0"
 source = { registry = "https://packagefeedproxy.microsoft.io/pypi/simple" }
 dependencies = [
     { name = "fastapi" },
     { name = "microsoft-agents-hosting-core" },
     { name = "starlette" },
 ]
-sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-fastapi/1.1/microsoft_agents_hosting_fastapi-1.1.0.tar.gz", hash = "sha256:9d7cb639f871420649befcd7cd241b8743163d36575b42aa5adae3519c42c964" }
+sdist = { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-fastapi/1.6/microsoft_agents_hosting_fastapi-1.6.0.tar.gz", hash = "sha256:fc4d8625e72d7d06664d7b556c0e086601b03771de08ef30f3b9eacd7d05a075" }
 wheels = [
-    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-fastapi/1.1/microsoft_agents_hosting_fastapi-1.1.0-py3-none-any.whl", hash = "sha256:3cd1da836d6ade0f9c5f4b879bbbe0f74af205bb1d0b98f18a0878762e33a893" },
+    { url = "https://ms-feed-25.pkgs.visualstudio.com/6f084628-a36d-42cb-934d-057357e379dc/_packaging/49d7402f-07bb-4b18-a9ce-086e6e98a554/pypi/download/microsoft-agents-hosting-fastapi/1.6/microsoft_agents_hosting_fastapi-1.6.0-py3-none-any.whl", hash = "sha256:3a740dcda33fb311b1e059a7fd149f77a56784976a51d74ae1aa7bc12ccb4672" },
 ]
 
 [[package]]
