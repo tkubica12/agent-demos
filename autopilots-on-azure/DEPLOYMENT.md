@@ -45,7 +45,7 @@ Both logins must complete in the same tenant; `setup_identity` rejects a tenant 
 | `.local\<worker>\agent365\` | Agent 365 configuration and identity discovery |
 | `terraform\apps\generated.*.auto.tfvars.json` | Active selected-workspace inputs |
 
-These files and Terraform state may contain sensitive material; never commit them. Preserve existing Worker names, identity state, release pins, volume names, and scheduling settings. `hermes2` enables user scheduling/Service Bus Dreaming; `hermes` disables both.
+These files and Terraform state may contain sensitive material; never commit them. Preserve existing Worker names, identity state, release pins, and scheduling settings. Both `hermes` and `hermes2` enable user scheduling and Service Bus Dreaming.
 
 Each Worker's `deployer_principal_id` pins the original deployment principal, independently of the current Azure CLI login. Fresh `setup_app_tfvars` runs record the initial signed-in user's object ID, or accept `--deployer-principal-id`. For an existing state that has no pin, read the original `principal_id` from that Worker's `azurerm_role_assignment.deployer_sandbox_data_owner` Terraform state and supply it explicitly. Never accept role-assignment replacements just because a different operator runs an image update.
 

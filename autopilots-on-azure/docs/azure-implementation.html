@@ -214,7 +214,7 @@
         <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Each Worker gets five Sandbox Groups; shared services stay in one resource group.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
         <div class="card-body">
           <p>The reference deployment runs two Workers, <code>hermes</code> and <code>hermes2</code>, in one resource group. Sandbox Groups, Foundry, and monitoring run in Sweden Central; Service Bus, Container Registry, and the workload VNet run in North Europe.</p>
-          <p>As of 2026-10-31, only <code>hermes2</code> runs the Hermes 0.22.5 runtime described here, with Memory suspend and Blob-volume backups. <code>hermes</code> keeps its previous Hermes 0.19 deployment, suspended to Disk with a Data Disk, until a one-time operator move.</p>
+          <p>Since 2026-10-31, both Workers run the Hermes 0.22.5 runtime described here, with Memory suspend and Blob-volume backups.</p>
           <p class="scope-note">Hover or focus a component to inspect it. Click, tap, or press Enter to pin its explanation; Escape dismisses it. Use <strong>Focus diagram</strong> for a larger view. The PDF lists every explanation in a component reference after the takeaway.</p>
           <div class="diagram-legend"><span class="legend-solid">Solid: connection in use</span><span class="legend-dashed">Dashed: optional connection or component</span></div>
           <figure class="architecture-figure" data-diagram id="diagram-azure">
@@ -302,7 +302,7 @@
             <div class="summary-item"><span class="summary-label">platform</span>Resource group, registry, Service Bus namespace, Foundry, monitoring, VNets, Express environment, private endpoint, and DNS.</div>
             <div class="summary-item"><span class="summary-label">apps</span>Per-Worker identities, Sandbox Groups, VNet connections, queue, and role assignments. Workspaces <code>autopilot-hermes</code> and <code>autopilot-hermes2</code>.</div>
           </div>
-          <p>Images are built and converted between the two applies, and the deployment script then creates the Sandboxes. <code>hermes2</code> enables user scheduling and the Service Bus Dream; <code>hermes</code> leaves them off.</p>
+          <p>Images are built and converted between the two applies, and the deployment script then creates the Sandboxes. Both Workers enable user scheduling and the Service Bus Dream, each on its own queue.</p>
           <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../DEPLOYMENT.md">Deployment commands</a> · <a href="../scripts/sandbox_services.py">Service deployment</a> · <a href="../scripts/sandbox_runtime.py">Runtime deployment</a></p></aside>
         </div>
       </article>

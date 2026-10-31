@@ -1,6 +1,6 @@
 # Hermes demonstration
 
-Use existing `hermes` and `hermes2` Workers after [deployment validation](DEPLOYMENT.md). They share a role but not identities or Worker homes. Steps 2–6 describe Hermes 0.22.5 native learning, which only `hermes2` runs today ([SPEC.md](SPEC.md#current-limitations)). Run personal-memory examples in **1:1 chats**, not shared groups. Use harmless synthetic facts throughout.
+Use existing `hermes` and `hermes2` Workers after [deployment validation](DEPLOYMENT.md). They share a role but not identities or Worker homes. Run personal-memory examples in **1:1 chats**, not shared groups. Use harmless synthetic facts throughout.
 
 Commands run from `autopilots-on-azure`. [SPEC.md](SPEC.md) defines boundaries and current limitations.
 

@@ -18,7 +18,7 @@ uv run python -m scripts.demo_ops smoke --state-name hermes2 `
   --message "Reply exactly: Hermes ready" --timeout 600
 ```
 
-The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. `hermes2` also runs user scheduling and Service Bus Dreaming; `hermes` does not. Hermes 0.22.5, native learning and the Memory-suspended runtime with Blob-volume backups run on `hermes2`; `hermes` intentionally retains its previous deployment.
+The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. Both Workers run Hermes 0.22.5 with native learning, user scheduling, Service Bus Dreaming and the Memory-suspended runtime with Blob-volume backups.
 
 ## Read next
 

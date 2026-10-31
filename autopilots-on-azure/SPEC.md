@@ -155,7 +155,7 @@ Proactive Teams work needs an existing bound conversation reference. A durable a
 
 Reserved `system.dream` uses fenced checkpoints for invocation, durable response, reconciliation, packet preparation, and completion. Persisted completed responses replay without new model/tool execution. An ambiguous `dream_started` stops for inspection. Operator run-now has a distinct occurrence and does not advance the production schedule. A no-change Dream can complete with `recordCount=0` and `packet=null`.
 
-Dreaming can prepare but cannot approve, export, promote, or merge. `hermes2` enables user scheduling and Service Bus Dreaming; `hermes` disables both.
+Dreaming can prepare but cannot approve, export, promote, or merge. Both `hermes` and `hermes2` enable user scheduling and Service Bus Dreaming, each on its own queue.
 
 ## Documents and interactive output
 
@@ -188,7 +188,7 @@ Native `llm_execution` and `tool_execution` callbacks are instrumented. A local 
 
 ## Current limitations
 
-Hermes 0.22.5, Memory suspend and Blob-volume backups are deployed to `hermes2` only. `hermes` still runs the previous Hermes 0.19 Disk and Data Disk deployment; the current scripts do not migrate it, so it needs a one-time operator move before its next update. A separate cold-response long tail remains: a non-streaming upstream model call can stall until Hermes' no-response watchdog retries. VM wake, native API readiness, model generation and Teams delivery are distinct timings; keepalive and UI streaming do not by themselves resolve that model-transport behavior.
+Both Workers run Hermes 0.22.5 with Memory suspend and Blob-volume backups. A cold-response long tail remains: a non-streaming upstream model call can stall until Hermes' no-response watchdog retries. VM wake, native API readiness, model generation and Teams delivery are distinct timings; keepalive and UI streaming do not by themselves resolve that model-transport behavior.
 
 | Area | Boundary |
 | --- | --- |
