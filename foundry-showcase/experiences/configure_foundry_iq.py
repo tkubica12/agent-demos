@@ -357,8 +357,8 @@ def create_knowledge_sources_and_base(
                     "kind": "azureOpenAI",
                     "azureOpenAIParameters": {
                         "resourceUri": openai_endpoint,
-                        "deploymentId": "gpt-5.4-mini",
-                        "modelName": "gpt-5.4-mini",
+                        "deploymentId": "gpt-5.6-luna",
+                        "modelName": "gpt-5.6-luna",
                     },
                 }
             ],

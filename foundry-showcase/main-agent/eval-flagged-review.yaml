@@ -3,7 +3,7 @@ agent:
     name: foundry-showcase-main
     kind: hosted
     version: "31"
-    model: gpt-5.4-mini
+    model: gpt-6.1-sol
     config: .agent_configs\baseline\metadata.yaml
 dataset:
     local_uri: datasets\flagged-review\flagged-review_dg.jsonl
@@ -11,5 +11,5 @@ evaluators:
     - builtin.task_adherence
     - builtin.intent_resolution
 options:
-    eval_model: gpt-5.4-mini
+    eval_model: gpt-6.1-sol
 max_samples: 1

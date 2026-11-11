@@ -84,7 +84,7 @@ def main() -> None:
         "--project-endpoint",
         default=os.getenv("FOUNDRY_PROJECT_ENDPOINT"),
     )
-    parser.add_argument("--model", default="gpt-5.4-mini")
+    parser.add_argument("--model", default="gpt-6-luna")
     parser.add_argument("--user", default="tomas@tomasonline.net")
     args = parser.parse_args()
     if not args.project_endpoint:

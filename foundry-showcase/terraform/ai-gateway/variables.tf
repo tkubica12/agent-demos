@@ -38,12 +38,12 @@ variable "foundry_name" {
 
 variable "model_name" {
   type    = string
-  default = "gpt-5.4-mini"
+  default = "gpt-6.1-terra"
 }
 
 variable "model_version" {
   type    = string
-  default = "2026-03-17"
+  default = "2026-10-26"
 }
 
 variable "model_capacity" {

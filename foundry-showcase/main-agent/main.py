@@ -47,7 +47,7 @@ from memory_store import store
 from runtime_probe import INSTANCE_ID, probe
 
 
-DEFAULT_MODEL_DEPLOYMENT = "gpt-5.4-mini"
+DEFAULT_MODEL_DEPLOYMENT = "gpt-6.1-sol"
 SERVICE_NAME = "foundry-showcase-main"
 _sessions: dict[str, AgentSession] = {}
 _telemetry_configured = False
@@ -63,10 +63,14 @@ class TrustedToolboxSkillsSource(SkillsSource):
         self._toolbox = toolbox
 
     async def get_skills(self, context: SkillsSourceContext) -> list[Skill]:
-        session = self._toolbox.session
-        if session is None:
+        connection = self._toolbox._connection
+        if connection is None:
+            await self._toolbox.connect()
+            connection = self._toolbox._connection
+        client = None if connection is None else connection.client or connection.session
+        if client is None:
             raise RuntimeError("Foundry Toolbox must be connected before skill discovery.")
-        return await MCPSkillsSource(client=session).get_skills(context)
+        return await MCPSkillsSource(client=client).get_skills(context)
 
 
 class PolicyA2AService:
@@ -109,7 +113,7 @@ class PolicyA2AService:
             except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                 continue
             for part in reversed(parts):
-                if part.get("kind") != "text" or not isinstance(part.get("text"), str):
+                if not isinstance(part.get("text"), str):
                     continue
                 try:
                     assessment = json.loads(part["text"])

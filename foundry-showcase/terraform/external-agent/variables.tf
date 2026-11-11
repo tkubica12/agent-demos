@@ -41,7 +41,7 @@ variable "acr_id" {
 
 variable "foundry_account_id" {
   type        = string
-  description = "Resource ID of the Foundry/Cognitive Services account that hosts gpt-5.4-mini."
+  description = "Resource ID of the Foundry/Cognitive Services account that hosts the model deployment."
 }
 
 variable "azure_openai_endpoint" {
@@ -52,7 +52,7 @@ variable "azure_openai_endpoint" {
 variable "azure_openai_deployment" {
   type        = string
   description = "Name of the model deployment to call."
-  default     = "gpt-5.4-mini"
+  default     = "gpt-6-luna"
 }
 
 variable "applicationinsights_connection_string" {

@@ -19,16 +19,12 @@ class FakeFunction:
     async def invoke(self, *, arguments):
         self.arguments = arguments
         task = {
-            "kind": "task",
-            "status": {"state": "completed"},
+            "id": "task_1",
+            "status": {"state": "TASK_STATE_COMPLETED"},
             "artifacts": [
                 {
-                    "parts": [
-                        {
-                            "kind": "text",
-                            "text": json.dumps(self.assessment),
-                        }
-                    ]
+                    "artifactId": "msg_1",
+                    "parts": [{"text": json.dumps(self.assessment)}],
                 }
             ],
         }

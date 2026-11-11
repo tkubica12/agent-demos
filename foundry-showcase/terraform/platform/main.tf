@@ -275,4 +275,5 @@ resource "azapi_resource" "deployer_table_data" {
       roleDefinitionId = "/subscriptions/${var.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"
     }
   }
+  replace_triggers_refs = ["properties.principalId"]
 }

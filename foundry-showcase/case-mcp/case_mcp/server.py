@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import AuthorizationError
 from fastmcp.server.auth.auth import AuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.middleware.authorization import AuthContext, AuthMiddleware
+from pydantic import Field
 from starlette.responses import JSONResponse
 
 from .repository import CaseRepository, create_repository
@@ -93,7 +94,7 @@ def search_cases(
     query: str = "",
     status: str | None = None,
     priority: str | None = None,
-    limit: int = 10,
+    limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> list[dict[str, Any]]:
     """Search support cases by free text, status, or priority."""
     return [

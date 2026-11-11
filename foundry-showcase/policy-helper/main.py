@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 
 AI_SCOPE = "https://ai.azure.com/.default"
-DEFAULT_MODEL = "gpt-5.4-mini"
+DEFAULT_MODEL = "gpt-6-luna"
 VALID_STATUSES = {"open", "pending_customer", "escalated", "resolved"}
 VALID_PRIORITIES = {"low", "medium", "high", "critical"}
 

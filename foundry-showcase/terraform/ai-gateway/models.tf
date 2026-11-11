@@ -45,20 +45,20 @@ resource "azapi_resource" "gateway_model" {
           type           = "requestRateLimit"
           callsPerPeriod = 5
           periodSeconds  = 60
-          counterKey     = "Identity"
+          counterKey     = ["identity"]
         },
         {
           type       = "tokenLimit"
           count      = 5000
           period     = "minute"
-          counterKey = "Identity"
+          counterKey = ["identity"]
         },
         {
           type       = "costLimit"
           id         = "showcase-daily-budget"
           amount     = 0.05
           period     = "day"
-          counterKey = "Identity"
+          counterKey = ["identity"]
         },
       ]
     }

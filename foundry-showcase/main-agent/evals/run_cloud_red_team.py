@@ -79,7 +79,7 @@ def main() -> int:
     parser.add_argument("--project-endpoint", required=True)
     parser.add_argument("--agent-name", default="foundry-showcase-main")
     parser.add_argument("--agent-version", required=True)
-    parser.add_argument("--model-deployment", default="gpt-5.4-mini")
+    parser.add_argument("--model-deployment", default="gpt-6.1-sol")
     parser.add_argument("--turns", type=int, default=3)
     parser.add_argument("--poll-seconds", type=int, default=10)
     parser.add_argument("--out", type=Path, required=True)

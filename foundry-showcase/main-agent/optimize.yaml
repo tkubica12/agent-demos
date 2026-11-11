@@ -2,9 +2,9 @@ name: foundry-showcase-optimize
 agent:
     name: foundry-showcase-optimize
     kind: hosted
-    version: "2"
+    version: "5"
     config: .agent_configs\baseline\metadata.yaml
-    model: gpt-5.4-mini
+    model: gpt-6.1-sol
 dataset:
     local_uri: datasets\foundry-showcase-phase5\foundry-showcase-phase5_dg.jsonl
 evaluators:
@@ -14,5 +14,5 @@ evaluators:
       version: "4"
       local_uri: evaluators\foundry-showcase-phase5\rubric_dimensions.json
 options:
-    eval_model: gpt-5.4-mini
+    eval_model: gpt-6.1-sol
 max_samples: 40

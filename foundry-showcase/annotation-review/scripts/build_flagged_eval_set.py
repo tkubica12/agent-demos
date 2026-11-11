@@ -108,7 +108,7 @@ def main() -> None:
     parser.add_argument("--name", default="flagged-review")
     parser.add_argument("--agent-name", default="foundry-showcase-main")
     parser.add_argument("--agent-version", default="")
-    parser.add_argument("--model", default="gpt-5.4-mini")
+    parser.add_argument("--model", default="gpt-6.1-sol")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--limit", type=int, default=500)
     args = parser.parse_args()

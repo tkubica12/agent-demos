@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import A2APreviewToolboxTool
+from azure.ai.projects.models import A2AProtocolVersion, A2AToolboxTool
 from azure.identity import DefaultAzureCredential
 
 
@@ -116,8 +116,10 @@ def publish_policy_toolbox(
     configured = bool(
         version is not None
         and len(version.tools) == 1
-        and version.tools[0].type == "a2a_preview"
+        and version.tools[0].type == "a2a"
+        and version.tools[0].a2a_version == A2AProtocolVersion.V1_0
         and version.tools[0].name == "assess_support_case_policy"
+        and version.tools[0].base_url is None
         and version.tools[0].project_connection_id == connection_id
         and version.tools[0].agent_card_path == "agentCard/v1.0"
         and version.tools[0].send_credentials_for_agent_card is True
@@ -131,7 +133,8 @@ def publish_policy_toolbox(
                 "policy helper."
             ),
             tools=[
-                A2APreviewToolboxTool(
+                A2AToolboxTool(
+                    a2a_version=A2AProtocolVersion.V1_0,
                     name="assess_support_case_policy",
                     description=(
                         "Assess a proposed support-case update for policy contradictions "
@@ -212,8 +215,29 @@ def grant_agent_consumer_role(
                 f"found {len(definitions)}."
             )
         role_definition_id = definitions[0]["id"]
+        response = client.get(
+            f"{scope}/providers/Microsoft.Authorization/roleAssignments",
+            params={"api-version": "2022-04-01", "$filter": "atScope()"},
+        )
+        response.raise_for_status()
+        granted = {
+            item["properties"]["principalId"]
+            for item in response.json().get("value", [])
+            if item["properties"]["roleDefinitionId"].lower()
+            == role_definition_id.lower()
+            and item["properties"]["scope"].lower() == scope.lower()
+        }
         assignments = []
         for principal_id in principal_ids:
+            if principal_id in granted:
+                assignments.append(
+                    {
+                        "principalId": principal_id,
+                        "role": "Foundry Agent Consumer",
+                        "scope": scope,
+                    }
+                )
+                continue
             assignment_id = uuid.uuid5(
                 uuid.NAMESPACE_URL,
                 f"{scope}|{principal_id}|{role_definition_id}",

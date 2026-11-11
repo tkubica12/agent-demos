@@ -1,14 +1,11 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
 
+name: foundry-showcase
 requiredVersions:
     extensions:
         azure.ai.agents: '>=1.0.0-beta.5'
-name: foundry-showcase
 services:
     foundry-showcase-main:
-        project: main-agent
-        host: azure.ai.agent
-        language: python
         codeConfiguration:
             entryPoint: main.py
             runtime: python_3_13
@@ -19,7 +16,7 @@ services:
         description: Support operations showcase using Microsoft Agent Framework, Foundry Memory, governed Toolbox tools and skills, observability, and evaluations.
         environmentVariables:
             - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
-              value: gpt-5.4-mini
+              value: gpt-6.1-sol
             - name: MEMORY_STORE_NAME
               value: foundry-showcase-main
             - name: MEMORY_UPDATE_DELAY_SECONDS
@@ -44,7 +41,9 @@ services:
               value: gen_ai_latest_experimental
             - name: AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING
               value: "true"
+        host: azure.ai.agent
         kind: hosted
+        language: python
         metadata:
             tags:
                 - Microsoft Agent Framework
@@ -58,15 +57,13 @@ services:
                 - A2A Delegation
                 - Prompt Agent Delegation
         name: foundry-showcase-main
+        project: main-agent
         protocols:
             - protocol: responses
               version: 2.0.0
             - protocol: invocations
               version: 1.0.0
     foundry-showcase-optimize:
-        project: main-agent
-        host: azure.ai.agent
-        language: python
         codeConfiguration:
             entryPoint: main.py
             runtime: python_3_13
@@ -79,7 +76,7 @@ services:
             - name: RESPONSES_ONLY
               value: "true"
             - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
-              value: gpt-5.4-mini
+              value: gpt-6.1-sol
             - name: MEMORY_STORE_NAME
               value: foundry-showcase-optimize
             - name: MEMORY_UPDATE_DELAY_SECONDS
@@ -104,7 +101,9 @@ services:
               value: gen_ai_latest_experimental
             - name: AZURE_EXPERIMENTAL_ENABLE_GENAI_TRACING
               value: "true"
+        host: azure.ai.agent
         kind: hosted
+        language: python
         metadata:
             tags:
                 - Microsoft Agent Framework
@@ -112,13 +111,11 @@ services:
                 - Responses Protocol
                 - Agent Optimizer Target
         name: foundry-showcase-optimize
+        project: main-agent
         protocols:
             - protocol: responses
               version: 2.0.0
     foundry-showcase-policy-helper:
-        project: policy-helper
-        host: azure.ai.agent
-        language: python
         codeConfiguration:
             entryPoint: main.py
             runtime: python_3_13
@@ -129,8 +126,10 @@ services:
         description: Bounded read-only LangGraph support-case policy helper exposed through Foundry A2A.
         environmentVariables:
             - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
-              value: gpt-5.4-mini
+              value: gpt-6-luna
+        host: azure.ai.agent
         kind: hosted
+        language: python
         metadata:
             tags:
                 - LangGraph
@@ -139,6 +138,7 @@ services:
                 - A2A
                 - Read Only
         name: foundry-showcase-policy-helper
+        project: policy-helper
         protocols:
             - protocol: responses
               version: 2.0.0

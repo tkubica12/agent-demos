@@ -18,8 +18,8 @@ class GatewayConfigurationTests(unittest.TestCase):
                       "resource_group_name": "showcase", "location": "swedencentral"},
             "gateway": {"name": "showcase-gateway", "publisher_name": "Demo",
                         "publisher_email": "demo@example.org"},
-            "foundry": {"name": "showcase-models", "model_name": "gpt-5.4-mini",
-                        "model_version": "2026-03-17", "model_capacity": 10},
+            "foundry": {"name": "showcase-models", "model_name": "gpt-6.1-terra",
+                        "model_version": "2026-10-26", "model_capacity": 10},
         })
         self.assertEqual(variables["gateway_name"], "showcase-gateway")
         self.assertEqual(variables["foundry_name"], "showcase-models")
@@ -71,7 +71,7 @@ class GatewayConfigurationTests(unittest.TestCase):
     def test_budget_probe_preserves_unrelated_policy_and_override_changes(self):
         policies = [
             {"type": "tokenLimit", "count": 5000},
-            {"type": "costLimit", "id": "showcase-daily-budget", "counterKey": "Identity", "amount": 0.05,
+            {"type": "costLimit", "id": "showcase-daily-budget", "counterKey": ["identity"], "amount": 0.05,
              "overrides": [{"apiKeyResourceId": "/other-key", "amount": 0.02}]},
         ]
         changed = budget_policies(policies, "/probe-key", 0.000001)
@@ -83,7 +83,7 @@ class GatewayConfigurationTests(unittest.TestCase):
         self.assertEqual(restored[1]["overrides"], policies[1]["overrides"])
 
     def test_removes_empty_probe_overrides_without_resetting_normal_budget(self):
-        baseline = [{"type": "costLimit", "id": "showcase-daily-budget", "counterKey": "Identity", "amount": 0.05}]
+        baseline = [{"type": "costLimit", "id": "showcase-daily-budget", "counterKey": ["identity"], "amount": 0.05}]
         self.assertEqual(budget_policies(budget_policies(baseline, "/probe", 0.000001), "/probe", None), baseline)
 
     def test_distinguishes_mcp_block_from_unpublished_http_rejection(self):

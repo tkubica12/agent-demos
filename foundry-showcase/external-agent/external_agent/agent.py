@@ -1,4 +1,4 @@
-"""Support triage agent: calls gpt-5.4-mini via managed identity and emits OTel traces."""
+"""Support triage agent: calls gpt-6-luna via managed identity and emits OTel traces."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _build_client() -> AzureOpenAI:
     token_provider = get_bearer_token_provider(credential, AI_SCOPE)
     return AzureOpenAI(
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4-mini"),
+        azure_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-luna"),
         azure_ad_token_provider=token_provider,
         api_version="2025-04-01-preview",
     )
@@ -38,7 +38,7 @@ def _build_client() -> AzureOpenAI:
 def answer_triage_question(question: str) -> dict[str, Any]:
     """Answer a triage question, return text and token counts."""
     client = _build_client()
-    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.4-mini")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-6-luna")
 
     with tracer.start_as_current_span("create_agent") as agent_span:
         agent_span.set_attribute("gen_ai.operation.name", "create_agent")

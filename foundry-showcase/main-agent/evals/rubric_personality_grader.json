@@ -1,7 +1,7 @@
 {
   "type": "score_model",
   "name": "personality_style_rubric",
-  "model": "gpt-5.4-mini",
+  "model": "gpt-6.1-sol",
   "input": [
     {
       "role": "developer",

@@ -16,14 +16,14 @@ This project demonstrates Microsoft Foundry agent capabilities through one inspe
 | Portal experiences | Complete with explicit preview boundaries | Stored Completions, persistent Memory, PII and Task Adherence guardrails, rich Foundry IQ content, workflows, monitoring, and fine-tuning are live; trace curation, continuous session retrieval, and secretless Work IQ are blocked upstream |
 | Session scaling | Complete | Sandbox identity probe, three-mode load lab, measured shared, pooled, and isolated results, and verified session stop and resume |
 | Human feedback loop | Complete | In-app thumbs up/down, business reviewer app outside the Foundry portal, flagged answers rebuilt into a pinned evaluation set |
-| Dedicated AI Gateway | Deployed and live; separate governance path | Actual `AIGateway` SKU, isolated GPT-5.4-mini through managed identity, rate rejection, per-key cost-budget rejection, MCP selection/blocking, and native OTLP logs/traces/token/cost metrics. Existing agents still call shared Foundry directly. See [ADR 0001](adr/0001-dedicated-ai-gateway.md). |
+| Dedicated AI Gateway | Deployed and live; separate governance path | Actual `AIGateway` SKU, isolated GPT-6.1 Terra through managed identity, rate rejection, per-key cost-budget rejection, MCP selection/blocking, and native OTLP logs/traces/token/cost metrics. Existing agents still call shared Foundry directly. See [ADR 0001](adr/0001-dedicated-ai-gateway.md). |
 
 Current immutable assets:
 
-- Hosted Agent `foundry-showcase-main`, active and only retained version 33;
-- Hosted Agent `foundry-showcase-policy-helper`, active version 2;
-- Hosted Agent `foundry-showcase-optimize`, active version 2, the optimizer target;
-- Prompt Agent `foundry-showcase-knowledge-expert`, active version 2;
+- Hosted Agent `foundry-showcase-main`, active version 38 on `gpt-6.1-sol`;
+- Hosted Agent `foundry-showcase-policy-helper`, active version 3 on `gpt-6-luna`;
+- Hosted Agent `foundry-showcase-optimize`, active version 5 on `gpt-6.1-sol`, the optimizer target;
+- Prompt Agent `foundry-showcase-knowledge-expert`, active version 3 on `gpt-6-luna`;
 - External Agent `foundry-showcase-external-triage`, version 1;
 - Toolbox `foundry-showcase-support`, default version 3;
 - Toolbox `foundry-showcase-policy-tools`, default version 1;
@@ -38,9 +38,9 @@ Current immutable assets:
 - 12 Stored Completions and runtime-aligned persistent memories for Tomas;
 - Guardrail `foundry-showcase-sensitive-data`;
 - Task Adherence resource `cs-task-foundry-showcase-vz5kj8`;
-- Azure AI Search `srch-foundry-iq-vz5kj8` and knowledge base `foundry-showcase-knowledge`;
+- Azure AI Search `srch-foundry-iq-vz5kj8` and knowledge base `foundry-showcase-knowledge`, planning with `gpt-5.6-luna` because knowledge bases reject GPT-6 models;
 - Application Insights `appi-foundry-showcase-vz5kj8`, workspace `log-foundry-showcase-vz5kj8`, and Task Adherence score alert;
-- daily evaluation schedule `foundry-showcase-daily-evaluation` and continuous rule `foundry-showcase-continuous-live`;
+- daily evaluation schedule `foundry-showcase-daily-evaluation` and continuous rule `foundry-showcase-continuous-prompt` on the Prompt Agent, because evaluation rules reject Hosted and External Agents;
 - Qwen SFT job `ftjob-d6e97df9e4cd4766ba81e754c848b635` and retained model `qwen3-32b.ft-d6e97df9e4cd4766ba81e754c848b635-foundry-showcase`;
 - two Content Understanding-processed PDF knowledge assets;
 - portal red-team run `7627b190-4823-44f6-b265-2cb33da7836f`, containing six real attacks and two ungrounded-attribute findings.
@@ -286,7 +286,7 @@ Configure the Activity bridge, Bot Service Teams channel, Agent 365 permissions,
 ```powershell
 uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\configure_agent365.py `
   --project-endpoint $projectEndpoint `
-  --agent-version 33 `
+  --agent-version 38 `
   --foundry-account-name "<foundry-account-name>" `
   --foundry-project-name "<foundry-project-name>" `
   --publish-version 1.0.2 `
@@ -351,7 +351,7 @@ uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\pub
 
 uv run --project foundry-showcase\experiences python foundry-showcase\experiences\configure_monitoring.py `
   --project-endpoint $projectEndpoint `
-  --agent-version 33 `
+  --agent-version 38 `
   --skip-continuous-wait
 
 uv run --project foundry-showcase\experiences python foundry-showcase\experiences\run_qwen_finetuning.py `
@@ -399,13 +399,13 @@ Pop-Location
 
 azd ai agent invoke foundry-showcase-main `
   "Use the case tools to get CASE-1001." `
-  --version 33 `
+  --version 38 `
   --protocol responses `
   --new-session `
   -C foundry-showcase
 
 azd ai agent invoke foundry-showcase-main `
-  --version 33 `
+  --version 38 `
   --protocol invocations `
   --input-file foundry-showcase\main-agent\smoke-invocation.json `
   --new-session `
@@ -413,12 +413,12 @@ azd ai agent invoke foundry-showcase-main `
 
 azd ai agent eval run `
   --config eval.yaml `
-  --name foundry-showcase-v33-final `
+  --name foundry-showcase-v38-final `
   --no-prompt `
   -C foundry-showcase\main-agent
 uv run --project foundry-showcase\experiences python foundry-showcase\experiences\run_local_red_team.py `
   --project-endpoint $projectEndpoint `
-  --agent-version 33 `
+  --agent-version 38 `
   --out .artifacts\foundry-showcase-red-team
 
 uv run --project foundry-showcase\main-agent python foundry-showcase\scripts\session_scaling_lab.py `

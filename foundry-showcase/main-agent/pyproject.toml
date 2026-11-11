@@ -9,7 +9,7 @@ dependencies = [
     "agent-framework-foundry>=1.2.2",
     "agent-framework-foundry-hosting",
     "azure-ai-evaluation",
-    "azure-ai-projects>=2.3.0",
+    "azure-ai-projects>=2.5.0",
     "azure-ai-agentserver-optimization",
     "azure-identity>=1.25.0",
     "azure-monitor-opentelemetry",

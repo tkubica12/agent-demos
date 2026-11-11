@@ -277,8 +277,29 @@ def grant_agent_consumer_role(
                 f"found {len(definitions)}."
             )
         role_definition_id = definitions[0]["id"]
+        response = client.get(
+            f"{scope}/providers/Microsoft.Authorization/roleAssignments",
+            params={"api-version": "2022-04-01", "$filter": "atScope()"},
+        )
+        response.raise_for_status()
+        granted = {
+            item["properties"]["principalId"]
+            for item in response.json().get("value", [])
+            if item["properties"]["roleDefinitionId"].lower()
+            == role_definition_id.lower()
+            and item["properties"]["scope"].lower() == scope.lower()
+        }
         assignments = []
         for principal_id in principal_ids:
+            if principal_id in granted:
+                assignments.append(
+                    {
+                        "principalId": principal_id,
+                        "role": "Foundry Agent Consumer",
+                        "scope": scope,
+                    }
+                )
+                continue
             assignment_id = uuid.uuid5(
                 uuid.NAMESPACE_URL,
                 f"{scope}|{principal_id}|{role_definition_id}",
@@ -323,7 +344,7 @@ def main() -> int:
     parser.add_argument("--account-name", required=True)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--agent-name", default="foundry-showcase-knowledge-expert")
-    parser.add_argument("--model", default="gpt-5.4-mini")
+    parser.add_argument("--model", default="gpt-6-luna")
     parser.add_argument("--knowledge-connection-name", default="foundry-showcase-knowledge")
     parser.add_argument("--connection-name", default="foundry-showcase-knowledge-a2a")
     parser.add_argument("--toolbox-name", default="foundry-showcase-knowledge-tools")

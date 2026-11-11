@@ -11,6 +11,6 @@ publisher_email = "tomas@tomasonline.net"
 
 [foundry]
 name = "fshow-aigw-models-si4ons"
-model_name = "gpt-5.4-mini"
-model_version = "2026-03-17"
+model_name = "gpt-6.1-terra"
+model_version = "2026-10-26"
 model_capacity = 10

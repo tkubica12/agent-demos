@@ -276,7 +276,7 @@ def demo(gateway: Gateway) -> dict[str, Any]:
 def budget_policies(policies: list[dict[str, Any]], key_id: str, amount: float | None) -> list[dict[str, Any]]:
     updated = deepcopy(policies)
     budgets = [policy for policy in updated if policy.get("type") == "costLimit"
-               and policy.get("id") == "showcase-daily-budget" and policy.get("counterKey") == "Identity"]
+               and policy.get("id") == "showcase-daily-budget" and policy.get("counterKey") == ["identity"]]
     if len(budgets) != 1:
         raise ValueError("Expected exactly one showcase per-identity budget policy.")
     budget = budgets[0]
