@@ -19,4 +19,6 @@ def register(ctx) -> None:
     runtime_keepalive.register(ctx)
     native_learning.register_attachment_privacy(ctx)
     profile_home = Path(os.environ["HERMES_HOME"])
-    ctx.register_platform_handler("api_server", lambda native, adapter: register_routes(native, profile_home))
+    ctx.register_platform_handler(
+        "api_server", lambda native, adapter: register_routes(native, profile_home, adapter=adapter),
+    )

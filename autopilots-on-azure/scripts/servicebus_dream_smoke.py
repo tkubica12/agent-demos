@@ -2,19 +2,67 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import time
 from typing import Any
 
-import httpx
+from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
+from azure.identity import AzureCliCredential
 
-from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
+from scripts.setup_app_tfvars import runtime_outputs_path
 from scripts.tf_helpers import PLATFORM_DIR, terraform_output
 from scripts.user_schedule_smoke import (
     az_json,
-    require_awake_gateway,
-    request_with_retry,
+    require_native_gateway,
     runtime_state,
-    wait_until,
 )
+from scripts.demo_ops import worker_sandbox
+
+
+MANAGEMENT_DREAM = r"""
+import json,os,sys
+from pathlib import Path
+config=json.load(open('/app/.sandbox-service.json'))
+environment=config['environment']
+os.environ.update({key:str(value) for key,value in environment.items()})
+for variable in ('PYTHONPATH','AUTOPILOTS_PLUGIN_PATH'):
+ for path in reversed([item for item in environment.get(variable,'').split(os.pathsep) if item]):
+  sys.path.insert(0,path)
+sys.path.insert(0,environment['AUTOPILOTS_APPLICATION_ROOT'])
+from cron_runtime import cron_diagnostics,enqueue_system_dream_now
+home=Path('/data/hermes')
+diagnostics=cron_diagnostics(home)
+def job():
+ matches=[item for item in diagnostics['jobs'] if item.get('name')=='Platform Dreaming']
+ if len(matches)!=1:
+  raise RuntimeError(f'Expected exactly one Platform Dreaming job; found {len(matches)}.')
+ return matches[0]
+def definition(item):
+ result={key:item.get(key) for key in ('id','schedule','enabled','paused','systemType')}
+ repeat=item.get('repeat')
+ result['repeat']={'times':repeat.get('times')} if isinstance(repeat,dict) else None
+ return result
+action=sys.argv[1]
+if action=='enqueue':
+ current=job()
+ active=[item for item in diagnostics['systemReceipts']
+  if item.get('jobId')==current.get('id') and item.get('state') not in ('completed','failed')]
+ if active:
+  raise RuntimeError('Platform Dreaming already has an unfinished occurrence.')
+ print(json.dumps({'schedule':definition(current),'occurrence':enqueue_system_dream_now(home)}))
+elif action=='receipt':
+ job_id,revision,occurrence_id=sys.argv[2:5]
+ result=next((item for item in cron_diagnostics(home)['systemReceipts']
+  if item.get('jobId')==job_id and item.get('revision')==revision
+  and item.get('occurrenceId')==occurrence_id),{'state':'pending'})
+ if result.get('state')=='completed' and result.get('success') is not True:
+  raise RuntimeError(f'Queue-driven Dreaming failed: {result!r}')
+ print(json.dumps(result))
+elif action=='schedule':
+ print(json.dumps({'schedule':definition(job())}))
+else:
+ raise ValueError('Unsupported management action.')
+""".strip()
 
 
 def system_job(diagnostics: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +90,29 @@ def completed_receipt(receipt: dict[str, Any]) -> bool:
     return receipt.get("state") == "completed"
 
 
+def run_in_runtime(outputs: dict[str, Any], action: str, *arguments: str) -> dict[str, Any]:
+    runtime = worker_sandbox(outputs, "runtime")
+    command = "/app/.venv/bin/python -c " + shlex.quote(MANAGEMENT_DREAM)
+    command += " " + " ".join(shlex.quote(value) for value in (action, *arguments))
+    with AzureCliCredential(subscription=str(outputs["subscription_id"])) as credential:
+        with SandboxGroupClient(
+            endpoint_for_region(outputs["sandbox_location"]),
+            credential,
+            subscription_id=outputs["subscription_id"],
+            resource_group=outputs["resource_group_name"],
+            sandbox_group=outputs["sandbox_groups"]["runtime"]["name"],
+        ) as group:
+            sandbox = group.get_sandbox_client(runtime["id"])
+            sandbox.ensure_running(timeout=600)
+            result = sandbox.exec(command)
+    if result.exit_code != 0:
+        raise RuntimeError(f"Runtime management command failed: {result.stderr}")
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, dict):
+        raise ValueError("Runtime management command returned a non-object result.")
+    return payload
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run an ad-hoc queue-driven Dreaming occurrence without modifying its production schedule."
@@ -49,12 +120,9 @@ def main() -> None:
     parser.add_argument("--state-name", default="hermes2")
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args()
+    if args.timeout < 1:
+        raise ValueError("--timeout must be positive.")
 
-    tfvars = json.loads(
-        runtime_app_tfvars_path("hermes", args.state_name).read_text(
-            encoding="utf-8"
-        )
-    )
     outputs = json.loads(
         runtime_outputs_path("hermes", args.state_name).read_text(
             encoding="utf-8"
@@ -64,14 +132,12 @@ def main() -> None:
     if not outputs.get("servicebus_dream_enabled"):
         raise RuntimeError("Queue-driven Dreaming is not enabled.")
 
-    key = str(tfvars["api_server_key"])
-    runtime_url = str(outputs["runtime_url"]).rstrip("/")
-    operator_headers = {"X-Autopilot-Key": key}
     resource_group = str(platform["resource_group_name"])
     namespace = str(platform["scheduler_servicebus_namespace_name"])
     queue = str(outputs["scheduler_servicebus_queue_name"])
-    gateway_before = require_awake_gateway(outputs)
-    job_id = ""
+    if not queue:
+        raise RuntimeError("The Worker scheduling queue is not configured.")
+    gateway_before = require_native_gateway(outputs)
 
     def queue_counts() -> dict[str, Any]:
         return az_json(
@@ -81,83 +147,43 @@ def main() -> None:
 
     counts_before = queue_counts()
 
-    with httpx.Client(timeout=900) as client:
-        diagnostics = request_with_retry(
-            client,
-            "GET",
-            f"{runtime_url}/internal/cron/diagnostics",
-            headers=operator_headers,
-            timeout=120,
-        )
-        diagnostics.raise_for_status()
-        job = system_job(diagnostics.json())
-        schedule_before = schedule_definition(job)
-        job_id = str(job["id"])
-        enqueued = client.post(
-            f"{runtime_url}/internal/cron/system/run-now",
-            headers=operator_headers,
-            json={},
-            timeout=120,
-        )
-        enqueued.raise_for_status()
-        revision = str(enqueued.json()["revision"])
-        occurrence_id = str(enqueued.json()["occurrenceId"])
+    scheduled = run_in_runtime(outputs, "enqueue")
+    schedule_before = scheduled["schedule"]
+    enqueued = scheduled["occurrence"]
+    job_id = str(enqueued["jobId"])
+    revision = str(enqueued["revision"])
+    occurrence_id = str(enqueued["occurrenceId"])
+    deadline = time.monotonic() + args.timeout
+    receipt: dict[str, Any] = {"state": "pending"}
+    while time.monotonic() < deadline:
+        receipt = run_in_runtime(outputs, "receipt", job_id, revision, occurrence_id)
+        if completed_receipt(receipt):
+            break
+        time.sleep(15)
+    else:
+        raise TimeoutError(f"Queue-driven Dreaming did not finish; last receipt: {receipt!r}")
+    if receipt.get("success") is not True:
+        raise RuntimeError(f"Queue-driven Dreaming failed: {receipt!r}")
+    result = {
+        "ok": True,
+        "workerId": outputs["worker_id"],
+        "jobId": job_id,
+        "gatewayBefore": gateway_before,
+        "gatewayAfter": require_native_gateway(outputs),
+        "runtimeStateAfter": runtime_state(outputs),
+        "receipt": receipt,
+    }
 
-        def receipt_probe() -> dict[str, Any]:
-            response = request_with_retry(
-                client,
-                "GET",
-                f"{runtime_url}/internal/cron/diagnostics",
-                headers=operator_headers,
-                attempts=2,
-                timeout=120,
-            )
-            response.raise_for_status()
-            return next(
-                (
-                    receipt
-                    for receipt in response.json()["systemReceipts"]
-                    if receipt.get("jobId") == job_id
-                    and receipt.get("revision") == revision
-                    and receipt.get("occurrenceId") == occurrence_id
-                ),
-                {"state": "pending"},
-            )
-
-        receipt = wait_until(
-            receipt_probe,
-            completed_receipt,
-            timeout=args.timeout,
-            interval=15,
-        )
-        if receipt.get("success") is not True:
-            raise RuntimeError(
-                f"Queue-driven Dreaming failed: {receipt!r}"
-            )
-        result = {
-            "ok": True,
-            "workerId": outputs["worker_id"],
-            "jobId": job_id,
-            "gatewayBefore": gateway_before,
-            "gatewayAfter": require_awake_gateway(outputs),
-            "runtimeStateAfter": runtime_state(outputs),
-            "receipt": receipt,
-        }
-
-        counts_after = queue_counts()
-        if int(counts_after.get("deadLetterMessageCount") or 0) > int(counts_before.get("deadLetterMessageCount") or 0):
-            raise RuntimeError("A new dead-letter message appeared during the Dreaming smoke.")
-        result["queueCounts"] = counts_after
-        observed = request_with_retry(
-            client, "GET", f"{runtime_url}/internal/cron/diagnostics", headers=operator_headers, timeout=120,
-        )
-        observed.raise_for_status()
-        schedule_after = schedule_definition(system_job(observed.json()))
-        if schedule_before != schedule_after:
-            raise RuntimeError("The live production Dreaming schedule changed during the smoke; no schedule has been overwritten.")
-        result["productionScheduleUnchanged"] = True
-        result["productionSchedule"] = schedule_after
-        print(json.dumps(result, indent=2), flush=True)
+    counts_after = queue_counts()
+    if int(counts_after.get("deadLetterMessageCount") or 0) > int(counts_before.get("deadLetterMessageCount") or 0):
+        raise RuntimeError("A new dead-letter message appeared during the Dreaming smoke.")
+    result["queueCounts"] = counts_after
+    schedule_after = run_in_runtime(outputs, "schedule")["schedule"]
+    if schedule_before != schedule_after:
+        raise RuntimeError("The live production Dreaming schedule changed during the smoke; no schedule has been overwritten.")
+    result["productionScheduleUnchanged"] = True
+    result["productionSchedule"] = schedule_after
+    print(json.dumps(result, indent=2), flush=True)
 
 
 if __name__ == "__main__":

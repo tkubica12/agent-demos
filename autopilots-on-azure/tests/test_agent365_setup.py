@@ -108,7 +108,9 @@ class Agent365SetupTests(unittest.TestCase):
             patch("sys.argv", ["setup_agent365", "--state-name", "hermes", "--tenant-id", "tenant",
                                "--messaging-endpoint", "https://native.example", "--update-endpoint"]),
             patch.object(agent365.Path, "mkdir"),
-            patch.object(agent365, "endpoint_update_config", return_value={"tenantId": "tenant"}),
+            patch.object(agent365, "endpoint_update_config", return_value={
+                "tenantId": "tenant", "agentName": "Existing Worker",
+            }),
             patch.object(agent365, "require_endpoint_update_owner", side_effect=PermissionError("not an owner")) as preflight,
             patch.object(agent365, "write_json") as write,
             patch.object(agent365, "maybe_run") as run,
@@ -131,7 +133,9 @@ class Agent365SetupTests(unittest.TestCase):
                     patch("sys.argv", argv),
                     patch.object(agent365.Path, "mkdir"),
                     patch.object(agent365.Path, "exists", return_value=False),
-                    patch.object(agent365, "endpoint_update_config", return_value={"tenantId": "tenant"}),
+                    patch.object(agent365, "endpoint_update_config", return_value={
+                        "tenantId": "tenant", "agentName": "Existing Worker",
+                    }),
                     patch.object(agent365, "require_endpoint_update_owner", side_effect=lambda _: events.append("owner")) as preflight,
                     patch.object(agent365, "write_json", side_effect=lambda *_: events.append("write")),
                     patch.object(agent365, "print_command"),
@@ -141,7 +145,8 @@ class Agent365SetupTests(unittest.TestCase):
                 if update:
                     self.assertEqual(events, [
                         "owner", "write",
-                        ["a365", "setup", "blueprint", "--update-endpoint", "https://native.example/api/messages"],
+                        ["a365", "setup", "blueprint", "--update-endpoint", "https://native.example/api/messages",
+                         "--agent-name", "Existing Worker", "--tenant-id", "tenant"],
                     ])
                 else:
                     preflight.assert_not_called()

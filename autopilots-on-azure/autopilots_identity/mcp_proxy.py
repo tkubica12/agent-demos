@@ -144,7 +144,10 @@ app = FastAPI(title="Autopilots Agent Identity MCP adapter", lifespan=lifespan)
 
 @app.get("/health")
 def health() -> JSONResponse:
-    return JSONResponse({"status": "ok", "servers": sorted(server_configs())})
+    return JSONResponse({
+        "status": "ok", "servers": sorted(server_configs()),
+        "tokenCache": token_provider().cache_status(),
+    })
 
 
 @app.api_route(

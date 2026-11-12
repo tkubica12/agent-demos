@@ -61,9 +61,9 @@ class SetupAppTfvarsTests(unittest.TestCase):
                     self.assertEqual(setup_app_tfvars.load_agent365_auth("hermes", "worker-one"),
                                      {"client_id": "blueprint"})
 
-    def test_all_service_image_digest_and_disk_source_pairs_persist(self):
+    def test_runtime_image_digest_and_disk_source_pair_persist(self):
         values = {}
-        for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
+        for prefix in ("runtime",):
             values[f"{prefix}_image"] = f"registry.example/{prefix}@sha256:digest"
             values[f"{prefix}_disk_source_image"] = f"registry.example/{prefix}:build-1"
         kwargs = dict(runtime="hermes", autopilot_name="worker",
@@ -75,7 +75,7 @@ class SetupAppTfvarsTests(unittest.TestCase):
             self.assertEqual(reused[key], value)
 
     def test_changed_image_never_silently_reuses_old_disk_source(self):
-        for prefix in ("runtime", "bridge", "private_mcp", "public_shipments_mcp"):
+        for prefix in ("runtime",):
             kwargs = dict(runtime="hermes", autopilot_name="worker",
                           role_blueprint="jpm", role_blueprint_source="https://example.com/roles.git",
                           role_release="3.0.0", role_release_commit="a" * 40)
@@ -106,8 +106,6 @@ class SetupAppTfvarsTests(unittest.TestCase):
             previous={},
             api_server_key="api-key",
             runtime_image="registry.example/hermes-runtime@sha256:test",
-            bridge_image="registry.example/bridge@sha256:test",
-            private_mcp_image="registry.example/mcp@sha256:test",
             agent365_client_id="blueprint-id",
             agent365_tenant_id="tenant-id",
             role_blueprint="junior-project-manager",
@@ -125,8 +123,8 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertNotIn("runtime_data_volume_name", tfvars)
         self.assertEqual(tfvars["api_server_key"], "api-key")
         self.assertEqual(tfvars["runtime_image"], "registry.example/hermes-runtime@sha256:test")
-        self.assertEqual(tfvars["bridge_image"], "registry.example/bridge@sha256:test")
-        self.assertEqual(tfvars["private_mcp_image"], "registry.example/mcp@sha256:test")
+        self.assertNotIn("bridge_image", tfvars)
+        self.assertNotIn("private_mcp_image", tfvars)
         self.assertEqual(tfvars["runtime_disk_image_name"], "hermes-api-server-image")
         self.assertEqual(tfvars["agent365_client_id"], "blueprint-id")
         self.assertNotIn("agent365_client_secret", tfvars)
@@ -137,9 +135,9 @@ class SetupAppTfvarsTests(unittest.TestCase):
         self.assertEqual(tfvars["worker_assignment_scope"], "team-alpha")
         self.assertEqual(tfvars["collective_learning_approval_private_key"], "approval-private")
         self.assertEqual(tfvars["collective_learning_approval_public_key"], "approval-public")
-        self.assertFalse(tfvars["scheduled_learning_enabled"])
-        self.assertEqual(tfvars["scheduled_learning_interval_seconds"], 86_400)
-        self.assertTrue(tfvars["scheduled_learning_prepare_packet"])
+        self.assertNotIn("scheduled_learning_enabled", tfvars)
+        self.assertNotIn("scheduled_learning_interval_seconds", tfvars)
+        self.assertNotIn("scheduled_learning_prepare_packet", tfvars)
         self.assertFalse(tfvars["servicebus_dream_enabled"])
         self.assertEqual(tfvars["servicebus_dream_cron_expression"], "0 2 * * *")
 
@@ -153,14 +151,10 @@ class SetupAppTfvarsTests(unittest.TestCase):
             role_blueprint_source="https://example.com/roles.git",
             role_release="3.2.0",
             role_release_commit="a" * 40,
-            scheduled_learning_enabled=True,
-            scheduled_learning_initial_delay_seconds=10,
-            scheduled_learning_interval_seconds=3_600,
             scheduled_learning_focus="review delivery handoffs",
             scheduled_learning_max_records=2,
             scheduled_learning_retry_limit=4,
             scheduled_learning_retry_backoff_seconds=15,
-            scheduled_learning_prepare_packet=False,
             servicebus_dream_enabled=True,
             servicebus_dream_cron_expression="15 3 * * *",
         )
@@ -175,14 +169,12 @@ class SetupAppTfvarsTests(unittest.TestCase):
             role_release_commit="a" * 40,
         )
 
-        self.assertTrue(reused["scheduled_learning_enabled"])
-        self.assertEqual(reused["scheduled_learning_initial_delay_seconds"], 10)
-        self.assertEqual(reused["scheduled_learning_interval_seconds"], 3_600)
+        self.assertNotIn("scheduled_learning_enabled", reused)
         self.assertEqual(reused["scheduled_learning_focus"], "review delivery handoffs")
         self.assertEqual(reused["scheduled_learning_max_records"], 2)
         self.assertEqual(reused["scheduled_learning_retry_limit"], 4)
         self.assertEqual(reused["scheduled_learning_retry_backoff_seconds"], 15)
-        self.assertFalse(reused["scheduled_learning_prepare_packet"])
+        self.assertNotIn("scheduled_learning_prepare_packet", reused)
         self.assertTrue(reused["servicebus_dream_enabled"])
         self.assertEqual(reused["servicebus_dream_cron_expression"], "15 3 * * *")
 

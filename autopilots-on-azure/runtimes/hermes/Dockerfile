@@ -52,17 +52,10 @@ RUN uv pip install --python /opt/hermes/.venv/bin/python --target /opt/autopilot
         --no-deps --require-hashes -r /opt/autopilots/hermes-site.txt \
     && /opt/hermes/.venv/bin/python -c "import sys; sys.path.append('/opt/autopilots/hermes-site'); import azure.servicebus, azure.monitor.opentelemetry.exporter, yaml"
 
-COPY runtimes/hermes/start_hermes.py runtimes/hermes/runtime_keepalive.py runtimes/hermes/runtime_routes.py runtimes/hermes/runtime_backup.py ./
-COPY runtimes/hermes/blueprint.py runtimes/hermes/collective_learning.py runtimes/hermes/native_learning.py ./
-COPY runtimes/hermes/azure_cron_provider.py runtimes/hermes/cron_runtime.py ./
-COPY runtimes/hermes/plugins ./runtime_plugins
-COPY runtimes/hermes/runtime_skills ./runtime_skills
 COPY --from=minimax-skills /source/skills/minimax-docx ./runtime_skills/minimax-docx
 COPY --from=minimax-skills /source/skills/minimax-xlsx ./runtime_skills/minimax-xlsx
 COPY --from=minimax-skills /source/skills/pptx-generator ./runtime_skills/pptx-generator
 COPY --from=minimax-skills /source/skills/minimax-pdf ./runtime_skills/minimax-pdf
-COPY autopilots_identity ./autopilots_identity
-COPY bridge/__init__.py bridge/telemetry.py bridge/telemetry_http.py bridge/hermes_telemetry.py ./bridge/
 COPY --from=office-helper /out/office-collaboration /usr/local/bin/office-collaboration
 COPY --from=minimax-docx /out/MiniMaxAIDocx.Cli /usr/local/bin/minimax-docx
 
@@ -77,4 +70,4 @@ ENV PORT=8642
 
 EXPOSE 8642
 
-ENTRYPOINT ["/app/.venv/bin/python", "/app/start_hermes.py"]
+ENTRYPOINT ["/bin/sleep", "infinity"]

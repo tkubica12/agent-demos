@@ -1,0 +1,1373 @@
+<!doctype html>
+<html lang="en" data-default-accent="blue" data-default-theme="light" data-paper="a4">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Azure Bot Service - Teams gateway security</title>
+<meta name="description" content="Classic Azure Bot Service Connector token validation, bot-specific audience, Teams tenant restrictions, private agent backends and gateway egress.">
+<meta name="doc-id" content="azure-bot-messaging-security-en-20261024">
+<script data-doc-bootstrap>
+/* Inline in the head before styles with sync-head.js. No deferred bootstrap. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const params = new URLSearchParams(location.search);
+  const id = document.querySelector('meta[name="doc-id"]')?.content ||
+    location.pathname.replace(/\.standalone(?=\.html$)/i, "");
+  const prefix = "html-docs:" + id + ":";
+  const choices = { theme: ["light", "dark"], accent: ["blue", "red", "green", "yellow"] };
+  const read = (name) => {
+    try { return localStorage.getItem(prefix + name); }
+    catch { return null; /* Storage may be unavailable for local files. */ }
+  };
+  const write = (name, value) => {
+    try { localStorage.setItem(prefix + name, value); }
+    catch { /* The current view still works without persistence. */ }
+  };
+  function refresh() {
+    for (const name of Object.keys(choices)) {
+      const current = root.getAttribute("data-" + name);
+      const next = choices[name][(choices[name].indexOf(current) + 1) % choices[name].length];
+      document.querySelectorAll('[data-action="toggle-' + name + '"]').forEach(button => {
+        button.textContent = name === "theme" ? (next === "dark" ? "Dark" : "Light") :
+          "Accent: " + current[0].toUpperCase() + current.slice(1);
+        button.setAttribute("aria-label", name === "theme" ? "Switch to " + next + " theme" :
+          "Accent: " + current + ". Switch to " + next);
+      });
+    }
+  }
+  for (const [name, values] of Object.entries(choices)) {
+    const fallback = name === "theme" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : values[0];
+    const value = [params.get(name), read(name), root.getAttribute("data-default-" + name), fallback]
+      .map(candidate => name === "accent" && candidate === "orange" ? "red" : candidate)
+      .find(candidate => values.includes(candidate));
+    root.setAttribute("data-" + name, value);
+  }
+  root.classList.add("js");
+  if (["slides", "sheet"].includes(params.get("view"))) root.setAttribute("data-view", params.get("view"));
+
+  // Print what is on screen. data-print selects the matching print stylesheet.
+  const printTarget = () => {
+    if (document.querySelector(".deck-stage")) return "slides";
+    const view = root.getAttribute("data-view");
+    if (view === "slides" || (view === "sheet" && document.querySelector(".sheet"))) return view;
+    return document.querySelector(".doc") || !document.querySelector(".sheet") ? "read" : "sheet";
+  };
+  let printing = null;
+  addEventListener("beforeprint", () => {
+    if (root.hasAttribute("data-print")) return; // Set by an automated export.
+    const target = printTarget();
+    printing = document.title;
+    root.setAttribute("data-print", target);
+    // The browser proposes the title as the PDF file name.
+    if (target !== "read" && document.querySelector(".doc")) {
+      document.title += target === "slides" ? " - Slides" : " - Sheet";
+    }
+  });
+  addEventListener("afterprint", () => {
+    if (printing === null) return;
+    root.removeAttribute("data-print");
+    document.title = printing;
+    printing = null;
+  });
+
+  // Keep the display awake while presenting, like presentation software does.
+  let lock = null;
+  let awake = false;
+  async function holdScreen() {
+    if (!awake || lock || document.visibilityState !== "visible" || !navigator.wakeLock) return;
+    try {
+      const sentinel = await navigator.wakeLock.request("screen");
+      if (!awake || lock) { sentinel.release(); return; }
+      lock = sentinel;
+      root.setAttribute("data-awake", "");
+      sentinel.addEventListener("release", () => {
+        if (lock !== sentinel) return;
+        lock = null;
+        root.removeAttribute("data-awake");
+      });
+    } catch { /* Denied by battery saver or an embedding policy; retried on input. */ }
+  }
+  function keepAwake(on) {
+    awake = !!on;
+    if (awake) holdScreen();
+    else if (lock) lock.release();
+  }
+  // The browser drops the lock when the tab is hidden; some require a gesture.
+  document.addEventListener("visibilitychange", holdScreen);
+  document.addEventListener("pointerdown", holdScreen);
+  document.addEventListener("keydown", holdScreen);
+
+  window.HtmlDocs = { read, write, refresh, keepAwake };
+  document.addEventListener("DOMContentLoaded", refresh);
+  document.addEventListener("click", event => {
+    if (event.target.closest('[data-action="print"]')) window.print();
+  });
+  document.addEventListener("click", event => {
+    const button = event.target.closest('[data-action="toggle-theme"], [data-action="toggle-accent"]');
+    if (!button) return;
+    const name = button.getAttribute("data-action").slice(7);
+    const values = choices[name];
+    const next = values[(values.indexOf(root.getAttribute("data-" + name)) + 1) % values.length];
+    root.setAttribute("data-" + name, next);
+    write(name, next);
+    // Replace a URL override too, so reloading preserves a deliberate change.
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.set(name, next);
+      history.replaceState(null, "", url.href);
+    }
+    refresh();
+  });
+})();
+</script>
+<style data-doc-tokens>
+/* Canonical tokens. Inline with sync-head.js; one accent family at a time. */
+:root {
+  color-scheme: light;
+  --bg: #fafafa; --surface: #ffffff; --surface-2: #f2f2f2; --surface-3: #e8e8e8;
+  --border: #dedede; --border-strong: #b8b8b8;
+  --text: #161616; --text-muted: #565656; --text-faint: #686868;
+  --accent-light: #006da0; --accent-dark: #00a4ef;
+  --accent: var(--accent-light);
+  --accent-strong: var(--accent);
+  --accent-quiet: var(--accent);
+  --accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  --accent-border: color-mix(in srgb, var(--accent) 36%, var(--bg));
+  --warn: var(--accent); --warn-soft: var(--accent-soft); --warn-border: var(--accent-border);
+  --code-bg: var(--surface-2); --code-border: var(--border);
+  --focus: var(--accent);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.04), 0 12px 28px rgba(0,0,0,.06);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+/* Screen only: every PDF and printout uses the light palette. */
+@media screen {
+  [data-theme="dark"], :root:not([data-theme])[data-default-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101010; --surface: #191919; --surface-2: #232323; --surface-3: #2c2c2c;
+    --border: #363636; --border-strong: #595959;
+    --text: #f2f2f2; --text-muted: #b5b5b5; --text-faint: #a0a0a0;
+    --accent: var(--accent-dark);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-2: 0 2px 4px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.4);
+  }
+}
+[data-accent="red"], :root:not([data-accent])[data-default-accent="red"],
+[data-accent="orange"], :root:not([data-accent])[data-default-accent="orange"] {
+  --accent-light: #bc3a16; --accent-dark: #f25022;
+}
+[data-accent="green"], :root:not([data-accent])[data-default-accent="green"] {
+  --accent-light: #4c7100; --accent-dark: #7fba00;
+}
+[data-accent="yellow"], :root:not([data-accent])[data-default-accent="yellow"] {
+  --accent-light: #805b00; --accent-dark: #ffb900;
+}
+</style>
+<style>
+/* =========================================================================
+   html-docs / article runtime
+   Shared stylesheet for dynamic articles. Never edit per page.
+
+   Requires canonical tokens inline in the head. Presentation is in slides.css.
+   ========================================================================= */
+
+/* ---------- base ---------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 24px 96px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.62;
+  counter-reset: card;
+}
+
+.doc {
+  max-width: var(--canvas);
+  margin: 0 auto;
+}
+
+p { margin: 0 0 1em; }
+p:last-child { margin-bottom: 0; }
+
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:hover { color: var(--accent-strong); }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+h1, h2, h3, h4 { line-height: 1.24; font-weight: 650; }
+
+hr { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+
+ul, ol { margin: 0 0 1em; padding-left: 1.3em; }
+li { margin: 0.28em 0; }
+
+strong { font-weight: 650; }
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+:not(pre) > code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.08em 0.34em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1em;
+  font-size: 0.96em;
+}
+th, td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ---------- controls bar -------------------------------------------- */
+
+.controls {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 40;
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  backdrop-filter: blur(8px);
+}
+
+.ctrl {
+  font: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.ctrl:hover { background: var(--surface-2); color: var(--text); }
+.ctrl[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+/* ---------- header, nav, toc ---------------------------------------- */
+
+.doc-header { padding: 84px 0 8px; }
+
+.eyebrow {
+  margin: 0 0 14px;
+  font-size: 0.74rem;
+  font-weight: 620;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.doc-header h1 {
+  margin: 0 0 14px;
+  font-size: clamp(2.1rem, 4.6vw, 3.1rem);
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin: 0 0 14px;
+  max-width: 74ch;
+  font-size: 1.14rem;
+  color: var(--text-muted);
+}
+
+.meta {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-faint);
+}
+
+.doc-nav, .doc-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 18px 0;
+  font-size: 0.9rem;
+}
+.doc-nav { border-bottom: 1px solid var(--border); margin-bottom: 44px; }
+.doc-footer {
+  border-top: 1px solid var(--border);
+  margin-top: 64px;
+  color: var(--text-muted);
+}
+
+.toc {
+  margin: 0 0 48px;
+  padding: 20px 24px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.toc-label {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.toc ol { margin: 0; padding-left: 1.2em; }
+.toc li { margin: 0.2em 0; }
+
+/* ---------- chapter -------------------------------------------------- */
+
+.chapter { margin: 0 0 56px; }
+
+.chapter-label {
+  margin: 0 0 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.76rem;
+  font-weight: 620;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ---------- card ------------------------------------------------------ */
+
+.card {
+  margin: 0 0 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+}
+.card:last-child { margin-bottom: 0; }
+.card[data-open] { box-shadow: var(--shadow-2); }
+
+.card:not(.card--lead) { counter-increment: card; }
+
+.card-head { margin: 0; font-size: 1rem; }
+
+.card-toggle {
+  display: grid;
+  grid-template-columns: 46px 1fr 18px 24px;
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  padding: 18px 20px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.card-toggle:hover { background: var(--surface-2); }
+
+.card-num {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  padding-top: 0.34em;
+}
+.card:not(.card--lead) .card-num:empty::before {
+  content: counter(card, decimal-leading-zero);
+}
+.card--lead .card-toggle { grid-template-columns: 46px 1fr 18px 24px; }
+
+/* Read marker. Space is reserved whether or not the card is marked, so
+   marking one never shifts the layout. Unread is invisible until the head is
+   hovered, which hints that the mark exists without decorating every row. */
+.card-read {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  margin-top: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.card-head:hover .card-read { opacity: 0.3; }
+.card[data-read="true"] .card-read,
+.card[data-read="true"] .card-head:hover .card-read {
+  opacity: 1;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+/* Drawn rather than typed: a check glyph in this range reads as an emoji to
+   text extractors, and drawing it keeps the weight matched to the border. */
+.card[data-read="true"] .card-read::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 2px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(42deg);
+}
+
+.card-titles { display: block; min-width: 0; }
+
+.card-title {
+  display: block;
+  font-size: 1.22rem;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.card-sub {
+  display: block;
+  margin-top: 5px;
+  font-size: 0.96rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.card-mark {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  margin-top: 4px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.card-mark::before, .card-mark::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 1.5px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.card-mark::after { transform: translate(-50%, -50%) rotate(90deg); }
+.card[data-open] .card-mark { border-color: var(--accent-border); color: var(--accent); }
+.card[data-open] .card-mark::after { opacity: 0; transform: translate(-50%, -50%) rotate(0deg); }
+
+.card-body { padding: 0 20px 22px 78px; }
+
+.js .card-body { display: none; }
+.js .card[data-open] > .card-body { display: block; animation: doc-open 0.18s ease; }
+
+@keyframes doc-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.card-body > h4 {
+  margin: 26px 0 10px;
+  font-size: 1.02rem;
+  letter-spacing: 0.01em;
+}
+.card-body > h4:first-child { margin-top: 0; }
+
+/* ---------- reveal ---------------------------------------------------- */
+
+.reveal {
+  margin: 20px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.reveal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 0.98rem;
+  text-align: left;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.reveal-toggle::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.18s ease;
+}
+.reveal[data-open] > .reveal-toggle::before { transform: rotate(45deg); }
+.reveal-toggle:hover { background: var(--surface-3); }
+
+.reveal-body {
+  padding: 2px 16px 16px 33px;
+  font-size: 1rem;
+}
+.js .reveal-body { display: none; }
+.js .reveal[data-open] > .reveal-body { display: block; animation: doc-open 0.18s ease; }
+
+/* ---------- tabs ------------------------------------------------------ */
+
+.tabs { margin: 22px 0; }
+
+.tablist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: -1px;
+}
+
+.tablist [role="tab"] {
+  font: inherit;
+  font-size: 0.92rem;
+  padding: 9px 15px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+}
+.tablist [role="tab"]:hover { color: var(--text); background: var(--surface-2); }
+.tablist [role="tab"][aria-selected="true"] {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  border-bottom-color: var(--accent-soft);
+  font-weight: 600;
+}
+
+.tabpanel {
+  padding: 18px 20px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) var(--radius-sm);
+}
+
+html:not(.js) .tablist { display: none; }
+html:not(.js) .tabpanel[hidden] { display: block; }
+html:not(.js) .tabpanel { margin-bottom: 8px; border-radius: var(--radius-sm); }
+html:not(.js) .tabpanel[data-tab-label]::before {
+  content: attr(data-tab-label);
+  display: block;
+  margin-bottom: 10px;
+  font-size: 0.74rem;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+/* ---------- detail grid ---------------------------------------------- */
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.detail-tile {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.detail-open {
+  display: block;
+  width: 100%;
+  padding: 16px 18px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.detail-open:hover { background: var(--surface-3); }
+
+.detail-title {
+  display: block;
+  font-size: 1.02rem;
+  font-weight: 620;
+  margin-bottom: 5px;
+}
+.detail-summary { display: block; color: var(--text-muted); font-size: 0.98rem; }
+.detail-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.detail-more::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.6px solid currentColor;
+  border-top: 1.6px solid currentColor;
+  transform: rotate(45deg);
+}
+html:not(.js) .detail-more { display: none; }
+
+.detail-body { padding: 0 18px 16px; }
+.js .detail-body { display: none; }
+
+/* ---------- dialog ---------------------------------------------------- */
+
+.doc-dialog {
+  width: min(720px, calc(100vw - 40px));
+  max-height: calc(100vh - 80px);
+  padding: 0;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+}
+.doc-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+
+.doc-dialog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 12px;
+}
+.doc-dialog-head h2 { margin: 0; font-size: 1.2rem; }
+
+.doc-dialog-body {
+  padding: 0 22px 24px;
+  overflow: auto;
+  max-height: calc(100vh - 190px);
+}
+.js .doc-dialog-body .detail-body { display: block; padding: 0; }
+
+.doc-dialog-close {
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.doc-dialog-close:hover { color: var(--text); background: var(--surface-2); }
+
+/* ---------- sequence -------------------------------------------------- */
+
+.sequence {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: seq;
+}
+.sequence > li {
+  position: relative;
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-quiet);
+  border-radius: var(--radius-sm);
+}
+.sequence > li:last-child { border-left-color: var(--accent-strong); background: var(--accent-soft); }
+.sequence > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -9px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid var(--border-strong);
+  border-top: 1.6px solid var(--border-strong);
+  transform: translateY(-50%) rotate(45deg);
+}
+.seq-title {
+  display: block;
+  font-weight: 620;
+  font-size: 0.98rem;
+  margin-bottom: 4px;
+}
+.seq-note { display: block; font-size: 0.9rem; color: var(--text-muted); }
+
+/* ---------- steps ------------------------------------------------------ */
+
+.steps {
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.steps > li {
+  position: relative;
+  counter-increment: step;
+  margin: 0 0 14px;
+  padding-left: 46px;
+}
+.steps > li:last-child { margin-bottom: 0; }
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+}
+.steps h3, .steps h4 { margin: 4px 0 4px; font-size: 1.02rem; }
+
+/* ---------- summary grid ---------------------------------------------- */
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.summary-item {
+  padding: 16px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.summary-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* ---------- arrow list -------------------------------------------------- */
+
+.arrow-list {
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+.arrow-list > li {
+  position: relative;
+  margin: 0 0 9px;
+  padding-left: 28px;
+}
+.arrow-list > li::before {
+  content: "\2192";
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* ---------- callouts ---------------------------------------------------- */
+
+.callout {
+  margin: 22px 0;
+  padding: 14px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.98rem;
+}
+.callout-label {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.callout--warning {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  border-left-color: var(--warn);
+}
+.callout--warning .callout-label { color: var(--warn); }
+.callout--verdict { background: var(--accent-soft); border-color: var(--accent-border); border-left-color: var(--accent-strong); }
+.callout--source, .callout--author { border-left-color: var(--border-strong); }
+.callout--source .callout-label, .callout--author .callout-label { color: var(--text-muted); }
+.callout--source { font-size: 0.92rem; color: var(--text-muted); }
+
+/* note is the base appearance; the modifier exists so that every callout in a
+   document names its meaning explicitly */
+.callout--note { border-left-color: var(--accent); }
+.callout--rule { border-left-color: var(--text); background: var(--surface-3); }
+.callout--rule .callout-label { color: var(--text); }
+
+/* ---------- code -------------------------------------------------------- */
+
+.code { margin: 22px 0; }
+
+.code-label {
+  margin: 0 0 -1px;
+  display: inline-block;
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.code pre {
+  margin: 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+.code pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.code:not(:has(.code-label)) pre { border-radius: var(--radius-sm); }
+
+/* ---------- figures ------------------------------------------------------ */
+
+.figure { margin: 24px 0; }
+.figure a.zoom {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+  line-height: 0;
+}
+.figure img { display: block; width: 100%; height: auto; }
+.figure figcaption {
+  margin-top: 9px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ---------- lightbox ------------------------------------------------------ */
+
+.lightbox {
+  width: 100vw;
+  max-width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+}
+.lightbox::backdrop { background: rgba(0, 0, 0, 0.9); }
+
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.lightbox-stage[data-panning] { cursor: grabbing; }
+.lightbox-stage img {
+  max-width: 96vw;
+  max-height: 92vh;
+  transform: translate(var(--lb-x, 0px), var(--lb-y, 0px)) scale(var(--lb-scale, 1));
+  transform-origin: center center;
+  transition: transform 0.08s linear;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lightbox-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-2);
+}
+.lightbox-bar button {
+  font: inherit;
+  font-size: 0.8rem;
+  min-width: 38px;
+  padding: 7px 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.lightbox-bar button:hover { background: var(--surface-2); color: var(--text); }
+
+.lightbox-caption {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(80ch, 90vw);
+  padding: 8px 14px;
+  font-size: 0.86rem;
+  text-align: center;
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.lightbox-caption:empty { display: none; }
+
+/* ---------- takeaway ------------------------------------------------------ */
+
+.takeaway {
+  margin: 56px 0 0;
+  padding: 28px 32px;
+  font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+  line-height: 1.45;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* ---------- responsive ------------------------------------------------------ */
+
+@media (max-width: 760px) {
+  body { padding: 0 16px 72px; font-size: 16px; }
+  .doc-header { padding-top: 96px; }
+  .card-toggle { grid-template-columns: 28px 1fr 16px 22px; gap: 9px; padding: 15px 14px; }
+  .card-body { padding: 0 16px 18px 16px; }
+  .detail-grid, .summary-grid { grid-template-columns: minmax(0, 1fr); }
+  .sequence { grid-auto-flow: row; }
+  .sequence > li:not(:last-child)::after {
+    top: auto; right: auto; bottom: -9px; left: 22px;
+    transform: rotate(135deg);
+  }
+  .controls { top: auto; bottom: 12px; right: 12px; left: 12px; justify-content: center; flex-wrap: wrap; }
+}
+
+/* ---------- motion, print -------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Reading PDF: the full reference. Browser headers are replaced by page numbers
+   where margin boxes are supported. Other targets live in slides/sheet CSS. */
+@page {
+  size: A4;
+  margin: 16mm 17mm 18mm;
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    font: 8pt -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #686868;
+  }
+}
+@page read-letter {
+  size: letter;
+  margin: 16mm 17mm 18mm;
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    font: 8pt -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #686868;
+  }
+}
+@media print {
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { padding: 0; font-size: 11pt; background: var(--surface); }
+  .doc-header { padding-top: 0; }
+  :root[data-paper="letter"]:not([data-print="slides"]):not([data-print="sheet"]) .doc { page: read-letter; }
+  .controls, .slide-ui, .doc-nav, .doc-footer { display: none; }
+  .js .card-body, .js .reveal-body, .js .detail-body { display: block !important; }
+  html:not(.js) .tabpanel[hidden], .tabpanel[hidden] { display: block !important; }
+  .card { box-shadow: none; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+  figure, svg, pre, .callout, .reveal-toggle, tr, .detail-tile { break-inside: avoid; }
+  p, li { orphans: 3; widows: 3; }
+  .card-head, .chapter-label, h1, h2, h3, h4 { break-after: avoid; }
+  .card-mark, .card-read, .detail-more { display: none; }
+  a { color: inherit; text-decoration: underline; }
+}
+</style>
+<style>
+/* =========================================================================
+   html-docs / sheet
+   Fixed-page documents: one-pagers, datasheets, briefs. Shared stylesheet;
+   never edit per page. Each .sheet-page is exactly one printed page, so the
+   screen preview is the layout the PDF receives.
+
+   Standalone sheet: the only content of the document, always visible.
+   Companion sheet: a third depth beside an article, shown by the Sheet view.
+   ========================================================================= */
+
+html:not(.js) .controls { display: none; }
+
+.sheet { display: none; }
+body:not(:has(> .doc)) > .sheet,
+[data-view="sheet"] .sheet { display: block; }
+[data-view="sheet"] .doc { display: none; }
+[data-view="sheet"] .ctrl:is([data-action="expand-all"], [data-action="collapse-all"], [data-action="clear-read"]) { display: none; }
+
+.sheet { padding: 72px 0 40px; overflow-x: auto; }
+
+.sheet-page {
+  /* A hair under the paper height, so rounding never spills a blank page. */
+  --sheet-w: 210mm; --sheet-h: 297mm;
+  width: var(--sheet-w); height: calc(var(--sheet-h) - .5mm);
+  margin: 0 auto 32px; padding: 14mm 16mm 11mm;
+  display: flex; flex-direction: column;
+  overflow: hidden; outline: none;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); box-shadow: var(--shadow-2);
+  font-family: var(--font-sans); font-size: 10.5pt; line-height: 1.45;
+}
+[data-paper="letter"] .sheet-page { --sheet-w: 8.5in; --sheet-h: 11in; }
+.sheet-page > :last-child { margin-bottom: 0; }
+
+/* One class of specificity: beats article.css element rules, while every
+   component class below, declared later, sets its own spacing. */
+.sheet-page :where(p, ul, ol) { margin: 0 0 2mm; }
+.sheet-page :where(li) { margin: 0 0 1mm; }
+.sheet-page strong { font-weight: 650; }
+.sheet-page sup { font-size: .68em; line-height: 0; }
+.sheet-page a { color: inherit; text-decoration-color: var(--accent-border); }
+
+/* ---------- head ------------------------------------------------------ */
+
+.sheet-head { margin-bottom: 6mm; }
+.sheet-kicker {
+  margin: 0 0 3mm; font-size: 8pt; font-weight: 650;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--accent);
+}
+.sheet-title {
+  margin: 0 0 3mm; font-size: 27pt; line-height: 1.06;
+  letter-spacing: -.035em; font-weight: 700;
+}
+.sheet-title em { font-style: normal; color: var(--accent); }
+.sheet-lead { margin: 0; max-width: 62em; font-size: 11pt; color: var(--text); }
+
+/* ---------- blocks ---------------------------------------------------- */
+
+.sheet-grid {
+  display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+  gap: 7mm 8mm; margin-bottom: 6mm;
+}
+.sheet-grid--3 { --cols: 3; }
+.sheet-block { border-top: 2px solid var(--accent); padding-top: 3mm; }
+.sheet-block h3, .sheet-actions h3, .sheet-section-title {
+  margin: 0 0 2mm; font-size: 12.5pt; line-height: 1.2; font-weight: 650;
+}
+.sheet-section-title { margin-bottom: 3mm; }
+
+.sheet-stats {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  gap: 6mm; margin: 0 0 6mm; padding: 0; list-style: none;
+}
+.sheet-stats li { margin: 0; border-left: 2px solid var(--accent); padding-left: 3mm; }
+.sheet-stat-value {
+  display: block; font-size: 21pt; line-height: 1.05; font-weight: 700;
+  letter-spacing: -.03em; color: var(--accent);
+}
+.sheet-stat-label { display: block; margin-top: 1mm; font-size: 8.5pt; line-height: 1.3; color: var(--text-muted); }
+
+.sheet-figure { margin: 0 0 6mm; }
+.sheet-figure svg, .sheet-figure img { display: block; width: 100%; height: auto; }
+.sheet-figure figcaption { margin-top: 2mm; font-size: 8pt; color: var(--text-muted); }
+
+/* ---------- comparison matrix ----------------------------------------- */
+
+.sheet-matrix { width: 100%; border-collapse: collapse; margin: 0 0 2mm; font-size: 9pt; line-height: 1.35; }
+.sheet-matrix th, .sheet-matrix td {
+  padding: 2mm 2.5mm 2mm 0; text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.sheet-matrix thead th {
+  font-size: 7.5pt; font-weight: 650; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-muted); border-bottom: 2px solid var(--accent);
+}
+.sheet-matrix tbody th {
+  font-size: inherit; font-weight: 650; letter-spacing: normal; text-transform: none; color: var(--text);
+}
+.sheet-matrix tbody th span { display: block; font-weight: 400; color: var(--text-muted); }
+
+/* Drawn, not typed: glyphs in this range render as emoji on some systems. */
+.mark {
+  display: inline-block; width: .8em; height: .8em; margin-right: .35em;
+  vertical-align: -.06em; flex: none; border-radius: 50%;
+  background: var(--accent);
+}
+.mark[data-mark="part"] {
+  background: linear-gradient(90deg, var(--accent) 50%, transparent 50%);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.mark[data-mark="none"] {
+  width: .75em; height: 2px; border-radius: 1px; vertical-align: .22em;
+  background: var(--text-muted);
+}
+.mark[data-mark="plus"], .mark[data-mark="minus"] { border-radius: 2px; }
+.mark[data-mark="plus"] {
+  background:
+    linear-gradient(var(--surface), var(--surface)) center / 58% 2px no-repeat,
+    linear-gradient(var(--surface), var(--surface)) center / 2px 58% no-repeat,
+    var(--accent);
+}
+.mark[data-mark="minus"] {
+  background:
+    linear-gradient(var(--surface), var(--surface)) center / 58% 2px no-repeat,
+    var(--text);
+}
+.sheet-legend {
+  display: flex; flex-wrap: wrap; gap: 1mm 6mm; margin: 0 0 6mm; padding: 0; list-style: none;
+  font-size: 7.5pt; color: var(--text-muted);
+}
+.sheet-legend li { margin: 0; }
+
+/* ---------- actions, closing, notes ------------------------------------ */
+
+.sheet-actions { margin: 0 0 5mm; padding: 4.5mm 5mm; background: var(--surface-2); break-inside: avoid; }
+.sheet-actions ul { margin: 0; padding-left: 1.2em; }
+.sheet-actions li:last-child { margin-bottom: 0; }
+.sheet-close { margin: 0 0 3mm; font-size: 14pt; line-height: 1.25; font-weight: 650; }
+.sheet-close em { font-style: normal; color: var(--accent); }
+.sheet-notes {
+  margin-top: auto; padding-top: 2mm; border-top: 1px solid var(--border);
+  font-size: 7.5pt; line-height: 1.35; color: var(--text-muted);
+}
+.sheet-notes p { margin: 0; }
+
+@media screen and (max-width: 860px) {
+  .sheet { padding-top: 64px; }
+}
+
+/* ---------- print ------------------------------------------------------ */
+
+@page sheet-a4 { size: A4; margin: 0; @bottom-right { content: none; } }
+@page sheet-letter { size: letter; margin: 0; @bottom-right { content: none; } }
+@media print {
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  :root[data-print="sheet"] body,
+  body:not(:has(> .doc)) { padding: 0; background: var(--surface); }
+  :root[data-print="sheet"] body > :not(.sheet),
+  body:not(:has(> .doc)) > :not(.sheet) { display: none !important; }
+  :root[data-print="sheet"] .sheet,
+  body:not(:has(> .doc)) > .sheet { display: block !important; padding: 0; overflow: visible; }
+  :root:not([data-print="sheet"]) body:has(> .doc) > .sheet { display: none !important; }
+  .sheet-page { page: sheet-a4; margin: 0; border: 0; box-shadow: none; }
+  .sheet-page + .sheet-page { break-before: page; }
+  [data-paper="letter"] .sheet-page { page: sheet-letter; }
+}
+</style>
+<script>
+(function () {
+  function boot() {
+/* html-docs / sheet view: switches a companion sheet on and off, and reports
+   pages that no longer fit their paper. Content stays in the HTML. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const sheet = document.querySelector(".sheet");
+  const toggle = document.querySelector('[data-action="toggle-sheet"]');
+  const pages = sheet ? Array.from(sheet.querySelectorAll(".sheet-page")) : [];
+
+  function measure() {
+    if (!sheet || !sheet.offsetParent) return;
+    pages.forEach((page, i) => {
+      if (page.scrollHeight > page.clientHeight + 1 || page.scrollWidth > page.clientWidth + 1) {
+        console.warn("html-docs: sheet page " + (i + 1) + " overflows its paper. Shorten it or add a page: #" + (page.id || "sheet"));
+      }
+    });
+  }
+
+  if (!sheet || !toggle) {
+    if (root.dataset.view === "sheet") root.removeAttribute("data-view");
+    if (sheet) addEventListener("load", measure);
+    return;
+  }
+
+  const inSheet = () => root.dataset.view === "sheet";
+  function syncUrl() {
+    const url = new URL(location.href);
+    if (inSheet()) url.searchParams.set("view", "sheet");
+    else if (url.searchParams.get("view") === "sheet") url.searchParams.delete("view");
+    history.replaceState(null, "", url.href);
+  }
+  function setSheet(on) {
+    if (on && root.dataset.view === "slides") document.querySelector('[data-action="toggle-slides"]')?.click();
+    if (on) {
+      root.dataset.view = "sheet";
+      scrollTo(0, 0);
+    } else if (inSheet()) {
+      root.removeAttribute("data-view");
+    }
+    toggle.setAttribute("aria-pressed", String(on));
+    syncUrl();
+    requestAnimationFrame(measure);
+  }
+
+  toggle.addEventListener("click", () => setSheet(!inSheet()));
+  document.addEventListener("html-docs:present", () => toggle.setAttribute("aria-pressed", "false"));
+  document.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || !inSheet() || document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    setSheet(false);
+    toggle.focus({ preventScroll: true });
+  });
+  addEventListener("load", measure);
+  if (inSheet()) setSheet(true);
+})();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else { boot(); }
+})();
+</script>
+</head>
+<body>
+<div class="controls" role="group" aria-label="Appearance and print">
+  <button type="button" class="ctrl" data-action="print" aria-label="Save PDF or print">PDF</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+  <button type="button" class="ctrl" data-action="toggle-accent">Accent: Blue</button>
+</div>
+<section class="sheet" aria-label="Classic Azure Bot Service Teams gateway security">
+  <article class="sheet-page" id="page-summary">
+    <header class="sheet-head">
+      <p class="sheet-kicker">Azure Bot Service + Teams · public cloud · 24 October 2026</p>
+      <h1 class="sheet-title">Verify <em>Connector tokens.</em></h1>
+      <p class="sheet-lead">Enforce the classic Connector profile at the edge. Retain Microsoft Agents SDK validation and application authorization in the gateway.</p>
+    </header>
+    <table class="sheet-matrix">
+      <thead><tr><th scope="col">JWT / SDK</th><th scope="col">Classic Connector profile</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Crypto/time</th><td>Bearer JWT; <code>RS256</code>, valid <code>exp</code>/<code>nbf</code>. Trusted metadata: <code>https://login.botframework.com/v1/.well-known/openidconfiguration</code>; use its <code>jwks_uri</code> and refresh keys.</td></tr>
+        <tr><th scope="row"><code>iss</code></th><td>Exactly <code>https://api.botframework.com</code>: the Connector issuer, not your Entra tenant. Do not require the native Agent 365 <code>tid</code>/<code>azp</code> profile.</td></tr>
+        <tr><th scope="row"><code>aud</code></th><td>Exactly the bot's <code>MicrosoftAppId</code> from Azure Bot Configuration / its app registration. Stable for that registration's lifetime; per-bot isolation requires distinct app IDs.</td></tr>
+        <tr><th scope="row">Channel/URL</th><td>SDK: match the token's service-URL claim to activity <code>serviceUrl</code>; check signing-key channel endorsements where required. Keep these classic checks separate from native Agent 365 behavior.</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Tenant isolation:</strong> valid Connector authentication, including <code>aud=MicrosoftAppId</code>, binds delivery to your bot, not the Teams conversation's tenant. After authentication, enforce a tenant allowlist in the gateway using <code>channelData.tenant.id</code>; reject missing or unapproved tenants before bot logic, then authorize users/operations. Unlike native Agent 365, this is activity metadata, not a customer-tenant <code>tid</code> claim in the Connector JWT.</p>
+    <div class="sheet-grid">
+      <section class="sheet-block">
+        <h3>Only the edge exposes messages</h3>
+        <p>HTTPS/443, <code>POST /api/messages</code>; backend ingress only from the edge. Require JWT validation, not a regex. Edge egress: <code>login.botframework.com:443</code> for metadata/JWKS. Bound body size, rate, concurrency and queues.</p>
+      </section>
+      <section class="sheet-block">
+        <h3>Teams IPs are not a channel contract</h3>
+        <p>Optional Teams-only IP filter: <code>52.112.0.0/14</code>, <code>52.122.0.0/15</code>. Shared ranges neither identify your tenant nor cover other channels. Production Bot Service inbound IP allowlisting is unsupported. Handle IPv6 and trusted proxy sources explicitly.</p>
+      </section>
+      <section class="sheet-block">
+        <h3>Sending uses outbound HTTPS</h3>
+        <p>Gateway to <code>login.microsoftonline.com:443</code> for single-tenant bot tokens, <code>login.botframework.com:443</code> for validation, and validated <code>serviceUrl:443</code> for replies/proactive sends. For outbound restrictions on this <code>serviceUrl</code>, see the proxy rule below. Cache current context; approve extra destinations only for enabled features.</p>
+      </section>
+      <section class="sheet-block">
+        <h3>Agent backends remain private</h3>
+        <p>Gateway to Service Bus Private Endpoint asynchronously and a private HTTP(S) agent endpoint; private DNS + VNet routing. Only the agent calls MCP. Verify Sandbox private publishing separately from ordinary Container Apps Private Link.</p>
+      </section>
+    </div>
+    <p><strong>Optional Teams outbound proxy rule:</strong> <code>smba.trafficmanager.net:443</code>, optionally path <code>/{geo}/&lt;TENANT_ID&gt;/v3/*</code> with L7/TLS inspection. This is routing, not authorization; URLs can change. Sandbox egress supports similar rules. Other channels need separate destinations.</p>
+    <p class="sheet-close"></p>
+    <footer class="sheet-notes">
+      <p><strong>Useful links:</strong> <a href="https://learn.microsoft.com/azure/bot-service/rest-api/bot-framework-rest-connector-authentication">Connector authentication</a> · <a href="https://learn.microsoft.com/azure/bot-service/security-faq">Firewall / IP guidance</a> · <a href="https://learn.microsoft.com/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages">Teams serviceUrl</a> · <a href="https://learn.microsoft.com/azure/container-apps/sandboxes-egress-policies">Sandbox egress</a> · <a href="https://learn.microsoft.com/microsoft-365/enterprise/urls-and-ip-address-ranges#microsoft-teams">Teams IPs</a></p>
+    </footer>
+  </article>
+</section>
+</body>
+</html>
+<!--
+Runtime: MIT License
+Copyright (c) 2026 Tomáš Kubica
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->

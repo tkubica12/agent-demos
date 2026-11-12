@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import os
 import shutil
 import subprocess
@@ -21,7 +22,7 @@ from azure.containerapps.sandbox import (
 )
 from azure.containerapps.sandbox._models import PortAuthConfig
 from azure.core.credentials import TokenCredential
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential
 
 
 HERMES_API_PORT = 8642
@@ -213,8 +214,13 @@ def publish_final_backup(client: SandboxGroupClient, sandbox: Mapping[str, Any])
     sandbox_id = str(sandbox.get("id") or "")
     sandbox_client = client.get_sandbox_client(sandbox_id)
     sandbox_client.ensure_running(timeout=600)
+    application = json.loads(sandbox_client.read_file("/app/.sandbox-service.json"))
+    directory = str(application["workingDirectory"]).rstrip("/")
+    if directory != "/app" and not directory.startswith("/app/releases/"):
+        raise ValueError("The active runtime application directory is outside /app.")
     result = sandbox_client.exec(
-        f"/app/.venv/bin/python /app/runtime_backup.py --home {RUNTIME_HOME} --backup-dir {RUNTIME_BACKUP_DIR}"
+        "/app/.venv/bin/python " + shlex.quote(directory + "/runtime_backup.py")
+        + f" --home {RUNTIME_HOME} --backup-dir {RUNTIME_BACKUP_DIR}"
     )
     if result.exit_code != 0:
         detail = (result.stderr or result.stdout or "")[-2000:]
@@ -626,10 +632,12 @@ def create_agent_sandbox(
 def create_sandbox_group_client(config: AgentSandboxConfig, credential: TokenCredential | None = None) -> SandboxGroupClient:
     return SandboxGroupClient(
         endpoint_for_region(config.region),
-        credential or DefaultAzureCredential(),
+        credential or AzureCliCredential(subscription=config.subscription_id, process_timeout=150),
         subscription_id=config.subscription_id,
         resource_group=config.resource_group,
         sandbox_group=config.sandbox_group,
+        audience="https://management.azuredevcompute.io/.default",
+        read_timeout=1800,
     )
 
 

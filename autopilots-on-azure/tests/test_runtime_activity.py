@@ -1,0 +1,68 @@
+import sys
+import unittest
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+RUNTIME = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
+sys.path.insert(0, str(RUNTIME))
+import runtime_routes
+
+
+class RuntimeActivityTests(unittest.TestCase):
+    def observe(self, pending=0, inflight=0, live_task=False, workers=0, scopes=0):
+        adapter = SimpleNamespace(
+            _pending_agent_requests=pending, _inflight_agent_runs=inflight,
+            _active_run_tasks={"run": SimpleNamespace(done=lambda: not live_task)},
+        )
+        native = SimpleNamespace(api_worker_live_count=lambda: workers)
+        supervisor = SimpleNamespace(status=lambda: {"active": scopes})
+        with (
+            patch.dict(sys.modules, {"gateway.platforms.api_server_runs": native}),
+            patch("runtime_keepalive.get_keepalive", return_value=supervisor),
+        ):
+            return runtime_routes.native_activity(adapter)
+
+    def test_native_quiescence_covers_queued_tasks_and_live_executor_threads(self):
+        result = self.observe(pending=1, inflight=2, live_task=True, workers=3, scopes=1)
+        self.assertEqual(result["active"], 8)
+        self.assertEqual(result["nativeWorkerThreads"], 3)
+        self.assertEqual(result["liveRunTasks"], 1)
+
+    def test_an_idle_native_adapter_attests_zero_actual_work(self):
+        self.assertEqual(self.observe()["active"], 0)
+
+    def test_invalid_native_state_is_not_a_success_shaped_idle_fallback(self):
+        for value in (True, -1, "invalid"):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                self.observe(pending=value)
+
+
+class RuntimeActivityRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_authenticated_route_uses_live_adapter_without_profile_argument_injection(self):
+        adapter = SimpleNamespace(
+            _inflight_agent_runs=0, _active_run_tasks={},
+        )
+        native = SimpleNamespace(api_worker_live_count=lambda: 0)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict("os.environ", {"API_SERVER_KEY": "activity-unit-key"}),
+            patch.dict(sys.modules, {"gateway.platforms.api_server_runs": native}),
+            patch("runtime_keepalive.get_keepalive", return_value=None),
+        ):
+            app = web.Application()
+            runtime_routes.register_routes(app, Path(directory), adapter=adapter)
+            async with TestClient(TestServer(app)) as client:
+                denied = await client.get("/internal/runtime/activity")
+                self.assertEqual(denied.status, 401)
+                response = await client.get(
+                    "/internal/runtime/activity", headers={"X-Autopilot-Key": "activity-unit-key"},
+                )
+                self.assertEqual(response.status, 200)
+                status = await response.json()
+                self.assertEqual(status["active"], 0)
+                self.assertEqual(status["pendingAdmissions"], 0)

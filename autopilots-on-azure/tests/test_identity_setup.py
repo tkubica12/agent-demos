@@ -43,7 +43,7 @@ class IdentitySetupTests(unittest.TestCase):
                  "agentUserId": "agent-user", "agentUserPrincipalName": "agent@example.com"}
         with (
             patch.object(identity, "runtime_app_tfvars_path", return_value=path),
-            patch.object(identity, "load_json", return_value={"agent365_client_secret": "obsolete", "bridge_image": "pinned"}),
+            patch.object(identity, "load_json", return_value={"agent365_client_secret": "obsolete", "runtime_image": "pinned"}),
             patch.object(identity, "write_tfvars") as write,
         ):
             config = identity.update_runtime_tfvars(
@@ -55,7 +55,7 @@ class IdentitySetupTests(unittest.TestCase):
         self.assertEqual(config["agent365_client_id"], "blueprint")
         self.assertEqual(config["agent365_agent_identity_client_id"], "agent-client")
         self.assertEqual(config["agent365_agent_user_id"], "agent-user")
-        self.assertEqual(config["bridge_image"], "pinned")
+        self.assertEqual(config["runtime_image"], "pinned")
         self.assertEqual(write.call_count, 3)
 
     def test_worker_federation_configures_gateway_and_runtime(self) -> None:

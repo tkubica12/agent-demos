@@ -124,7 +124,7 @@ class ScheduledLearningTests(unittest.TestCase):
         self.assertFalse(calls[0]["success"])
         self.assertIn("interrupted", calls[0]["error"].lower())
         self.assertIn("will not be rerun automatically", result["reason"])
-    def test_dream_prepares_packet_when_owner_shared_changes_exist(self):
+    def test_dream_does_not_prepare_packet_even_for_owner_shared_changes(self):
         class Adapter:
             runtime_kind = "hermes"
 
@@ -142,25 +142,16 @@ class ScheduledLearningTests(unittest.TestCase):
                 )
 
             async def prepare_collective_learning(self):
-                return {
-                    "packetDigest": "a" * 64,
-                    "improvements": [{"artifactPath": "skills/candidates/example"}],
-                    "roleRelease": {"release": "3.2.0"},
-                    "approvalRequired": True,
-                }
+                raise AssertionError("Dreaming must not prepare a Learning Packet.")
 
         adapter = Adapter()
         coordinator = ScheduledLearningCoordinator(
             adapter_factory=lambda: adapter,
             settings=ScheduledLearningSettings(
-                enabled=True,
-                initial_delay_seconds=0,
-                interval_seconds=300,
                 focus="recent work",
                 max_records=2,
                 retry_limit=0,
                 retry_backoff_seconds=1,
-                prepare_packet=True,
             ),
             worker_id="worker-1",
         )
@@ -170,47 +161,8 @@ class ScheduledLearningTests(unittest.TestCase):
         self.assertEqual(adapter.request.focus, "recent work")
         self.assertEqual(result["dream"]["sharedChangeCount"], 1)
         self.assertEqual(result["dream"]["skillChangeCount"], 1)
-        self.assertEqual(result["packet"]["packetDigest"], "a" * 64)
-        self.assertTrue(result["packet"]["approvalRequired"])
+        self.assertNotIn("packet", result)
         self.assertEqual(coordinator.status()["successCount"], 1)
-
-    def test_no_packet_is_prepared_without_owner_shared_changes(self):
-        class Adapter:
-            runtime_kind = "hermes"
-
-            async def dream(self, request):
-                return DreamResponse(
-                    agent=AgentResponse(text="done", raw={}),
-                    learning_digest={
-                        "changes": [{"entryId": "e1"}],
-                        "pending": [],
-                        "governed": [{"artifactPath": "skills/role/example", "choice": None}],
-                    },
-                )
-
-            async def prepare_collective_learning(self):
-                raise AssertionError("Nothing the owner shared means no packet.")
-
-        coordinator = ScheduledLearningCoordinator(
-            adapter_factory=Adapter,
-            settings=ScheduledLearningSettings(
-                enabled=False,
-                initial_delay_seconds=0,
-                interval_seconds=300,
-                focus="recent work",
-                max_records=2,
-                retry_limit=0,
-                retry_backoff_seconds=1,
-                prepare_packet=True,
-            ),
-            worker_id="worker-1",
-        )
-
-        result = asyncio.run(coordinator.run_once())
-
-        self.assertIsNone(result["packet"])
-        self.assertEqual(coordinator.status()["lastDream"]["sharedChangeCount"], 0)
-        self.assertEqual(coordinator.status()["lastDream"]["governedChangeCount"], 1)
 
     def test_uncheckpointed_failure_does_not_blindly_repeat_inference(self):
         attempts = 0
@@ -237,14 +189,10 @@ class ScheduledLearningTests(unittest.TestCase):
         coordinator = ScheduledLearningCoordinator(
             adapter_factory=Adapter,
             settings=ScheduledLearningSettings(
-                enabled=True,
-                initial_delay_seconds=0,
-                interval_seconds=300,
                 focus="recent work",
                 max_records=2,
                 retry_limit=1,
                 retry_backoff_seconds=7,
-                prepare_packet=True,
             ),
             worker_id="worker-1",
             sleep=sleep,
@@ -257,42 +205,8 @@ class ScheduledLearningTests(unittest.TestCase):
         self.assertEqual(delays, [7])
         self.assertEqual(len(set(sessions)), 1)
 
-    def test_prepare_retry_does_not_repeat_successful_dream(self):
-        calls = {"dream": 0, "prepare": 0}
-
-        class Adapter:
-            runtime_kind = "hermes"
-
-            async def dream(self, request):
-                calls["dream"] += 1
-                return DreamResponse(
-                    agent=AgentResponse(text="done", raw={}),
-                    learning_digest={
-                        "changes": [{"entryId": "e1", "new": True}],
-                        "pending": [],
-                        "governed": [{"artifactPath": "skills/candidates/example",
-                                      "choice": {"choice": "share", "current": True}}],
-                        "worker": {"workerId": "worker-1", "roleRelease": "3.2.0"},
-                    },
-                )
-
-            async def prepare_collective_learning(self):
-                calls["prepare"] += 1
-                if calls["prepare"] == 1:
-                    raise RuntimeError("prepare unavailable")
-                return {"packetDigest": "digest", "approvalRequired": True}
-
-        coordinator = ScheduledLearningCoordinator(
-            adapter_factory=Adapter, worker_id="worker",
-            settings=ScheduledLearningSettings(True, 0, 300, "review", 2, 1, 1, True),
-            sleep=lambda _: asyncio.sleep(0),
-        )
-        result = asyncio.run(coordinator.run_once())
-        self.assertEqual(calls, {"dream": 1, "prepare": 2})
-        self.assertEqual(result["packet"]["packetDigest"], "digest")
-
     def test_durable_phase_survives_status_failure_and_coordinator_restart(self):
-        calls = {"model": 0, "status": 0, "prepare": 0}
+        calls = {"model": 0, "status": 0}
         with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
             profile = Path(directory)
             receipt = cron_runtime._new_system_operation(
@@ -339,25 +253,21 @@ class ScheduledLearningTests(unittest.TestCase):
                     )
 
                 async def prepare_collective_learning(self):
-                    calls["prepare"] += 1
-                    if calls["prepare"] == 1:
-                        raise RuntimeError("prepare unavailable")
-                    return {"packetDigest": "digest", "approvalRequired": True}
+                    raise AssertionError("Scheduled Dreaming must not prepare Learning Packets.")
 
             def coordinator():
                 return ScheduledLearningCoordinator(
                     adapter_factory=Adapter, worker_id="worker",
-                    settings=ScheduledLearningSettings(True, 0, 300, "review", 2, 0, 1, True),
+                    settings=ScheduledLearningSettings("review", 2, 0, 1),
                 )
 
             with self.assertRaisesRegex(RuntimeError, "status unavailable"):
                 asyncio.run(coordinator().run_once(operation=operation))
-            with self.assertRaisesRegex(RuntimeError, "prepare unavailable"):
-                asyncio.run(coordinator().run_once(operation=operation))
             result = asyncio.run(coordinator().run_once(operation=operation))
             replay = asyncio.run(coordinator().run_once(operation=operation))
-        self.assertEqual(calls, {"model": 1, "status": 2, "prepare": 2})
-        self.assertEqual(result["packet"], replay["packet"])
+        self.assertEqual(calls, {"model": 1, "status": 2})
+        self.assertNotIn("packet", result)
+        self.assertNotIn("packet", replay)
         self.assertEqual(result["dream"]["sessionId"], operation["sessionId"])
 
 

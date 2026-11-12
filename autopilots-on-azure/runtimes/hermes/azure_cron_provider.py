@@ -326,13 +326,14 @@ class AzureCronScheduler(CronScheduler):
             "revision": revision,
             "occurrenceId": revision,
             "dueAt": str(job["next_run_at"]),
+            "trace": trace_headers(),
         }
         message = ServiceBusMessage(
             canonical_json(body),
             message_id=f"{worker_id}:{job['id']}:{revision}",
             content_type="application/json",
             subject=message_type,
-            application_properties=trace_headers(),
+            application_properties=body["trace"],
         )
         with self._servicebus_client().get_queue_sender(
             required_env("SCHEDULER_SERVICEBUS_QUEUE")
@@ -366,6 +367,7 @@ class AzureCronScheduler(CronScheduler):
             else "hermes.cron.fire"
         )
         message_id = f"{worker_id}:{job['id']}:{occurrence_id}"
+        carrier = trace_headers()
         message = ServiceBusMessage(
             canonical_json({
                 "version": "1.0",
@@ -375,11 +377,12 @@ class AzureCronScheduler(CronScheduler):
                 "revision": revision,
                 "occurrenceId": occurrence_id,
                 "dueAt": datetime.now().astimezone().isoformat(),
+                "trace": carrier,
             }),
             message_id=message_id,
             content_type="application/json",
             subject=message_type,
-            application_properties=trace_headers(),
+            application_properties=carrier,
         )
         with self._servicebus_client().get_queue_sender(
             required_env("SCHEDULER_SERVICEBUS_QUEUE")

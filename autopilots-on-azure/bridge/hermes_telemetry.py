@@ -93,6 +93,7 @@ def _release_context(path: Path, lease: Path, owner: str) -> None:
 @contextmanager
 def gateway_trace_context(
     session_id: str, *, profile_home: Path | None = None, ttl_seconds: float = 900,
+    admission_id: str = "",
 ) -> Iterator[None]:
     """Lend the current trace to an awaited gateway call for an explicit session.
 
@@ -113,26 +114,38 @@ def gateway_trace_context(
     owner = uuid.uuid4().hex
     lease = path.with_suffix(".lease")
     pending = path.with_name(f"{path.stem}.{owner}.pending")
+    reused = False
     try:
         descriptor = os.open(lease, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as exc:
-        raise GatewayTraceConflictError(
-            "A gateway trace lease is already active; finish the turn or restart the worker."
-        ) from exc
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(owner)
-    published = False
+        if not admission_id:
+            raise GatewayTraceConflictError(
+                "A gateway trace lease is already active; finish the turn or restart the worker."
+            ) from exc
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing.get("admission_id") != admission_id or lease.read_text(encoding="utf-8") != existing.get("owner"):
+            raise GatewayTraceConflictError("The native trace lease belongs to a different admission.") from exc
+        owner = existing["owner"]
+        reused = True
+    if not reused:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(owner)
+    published = reused
     completed = False
     try:
-        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({
-                "owner": owner, "expires_at": time.time() + ttl_seconds, "headers": headers,
-            }, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(pending, path)
-        published = True
+        if not reused:
+            descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                record = {
+                    "owner": owner, "expires_at": time.time() + ttl_seconds, "headers": headers,
+                }
+                if admission_id:
+                    record["admission_id"] = admission_id
+                json.dump(record, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(pending, path)
+            published = True
         yield
         completed = True
     finally:

@@ -1,10 +1,10 @@
 # Hermes on Azure
 
-A Junior Project Manager digital Worker: Hermes 0.22.5 (official image) in Azure Container Apps Sandboxes, Microsoft Agent 365 for Teams and Microsoft 365, and Foundry `gpt-6.1-sol` with Entra-authenticated inference.
+A Junior Project Manager digital Worker: Hermes 0.22.6 in Memory-suspended Azure Container Apps Sandboxes, Microsoft Agent 365 for Teams and Microsoft 365, native Service Bus wake, and Foundry `gpt-6.1-sol` with Entra-authenticated inference.
 
 Each Worker owns its identity, persistent state, memory, and skills. Hermes learns natively; the Worker owner reviews each change, and local learning becomes shared behavior only through signed Learning Packets, human-reviewed Git Promotion, and Worker Refresh.
 
-![Architecture: Teams and Outlook reach the Worker through Agent 365 and the always-on gateway Sandbox; the gateway wakes the Hermes runtime Sandbox, which calls Foundry with Entra and MCP tools with Worker tokens; scheduled jobs flow through Service Bus.](docs/assets/architecture.svg)
+![Architecture: Agent 365 reaches a thin gateway, which handles the Teams turn and uses native Runs over OnDemand HTTPS. Service Bus is reserved for scheduling; the runtime calls Foundry and MCP directly.](docs/assets/architecture.svg)
 
 ## Start
 
@@ -14,11 +14,9 @@ From the repository root, with existing Worker state and an Azure login:
 Set-Location .\autopilots-on-azure
 uv sync --frozen
 uv run python -m scripts.demo_ops
-uv run python -m scripts.demo_ops smoke --state-name hermes2 `
-  --message "Reply exactly: Hermes ready" --timeout 600
 ```
 
-The no-argument command checks the `hermes` Worker; the smoke test asks `hermes2` for a real model reply. Both Workers run Hermes 0.22.5 with native learning, user scheduling, Service Bus Dreaming and the Memory-suspended runtime with Blob-volume backups.
+The no-argument command checks the `hermes` Worker. Validate model and tool behavior by messaging the Agent User in Teams; there is no general model-invocation HTTP endpoint. The deployment pins Hermes 0.22.6 with native learning, user scheduling, Service Bus Dreaming, scheduling receipts, and Blob-volume backups.
 
 ## Read next
 
@@ -52,4 +50,12 @@ node assets\export-pdf.js architecture.standalone.html
 
 ## Boundaries
 
-The gateway stays awake; runtime compute suspends to memory after five idle minutes and resumes Hermes in about two seconds. Its home lives on the Sandbox disk and is backed up with native `hermes backup` to a platform Blob volume, from which a replacement runtime restores it. Deployment creates runtime compute; the gateway only calls its URL, and OnDemand ingress wakes it. The `autopilots` Hermes plugin sends self-ingress only during model/tool execution; the wrapper also covers deterministic runtime requests. Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` creates and removes whole Workers; uploading the Teams package stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists all current limitations.
+Gateway, runtime, and both MCP services have a five-minute Memory-suspend threshold. Actual idle transitions are observed, not assumed. Teams activities are handled directly by the gateway, which calls native Runs over OnDemand HTTPS. The per-Worker Service Bus queue is only for Hermes cron, Dreaming, and deterministic document retries; no interactive activity-recovery queue exists.
+
+Routine source updates preserve compute IDs, URLs, and Agent 365 identities. Only the heavy runtime dependency base needs ACR; thin services use a pinned public Python image. Long model work enters through Agent 365/Teams rather than a separate operator API. Native backups recover the Worker home; a separate gateway journal preserves scheduling receipts and bounded conversation state. Stopped CPU/RAM is not a zero bill for storage, Service Bus, ACR, or monitoring.
+
+Managed source polling can take tens of seconds, so it is deliberately outside the normal chat path. [ADR 0015](docs/adr/0015-service-bus-backed-hermes-cron.md#receiver-timing) records why the slower request/result-queue design was rejected.
+
+On 2026-11-05, a real `hermes2` Teams warm check returned both MCP tool results in **26.7 s** and an exact model reply in **11.8 s**. These are observed end-to-end timings, not a model or platform SLA.
+
+Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` manages whole Workers; fresh Teams package upload stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists the remaining boundaries.

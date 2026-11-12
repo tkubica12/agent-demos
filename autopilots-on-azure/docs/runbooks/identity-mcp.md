@@ -28,7 +28,7 @@ Push-Location ".local\$worker\agent365"
 try { a365 query-entra inheritance } finally { Pop-Location }
 ```
 
-The helper reuses discovered applications/service principals, federation, and role assignments; requests missing Tooling permissions; and ensures Agent User delegated grants. Every listed resource must show effective inheritance. Apply the resulting tfvars before service deployment.
+The helper reuses discovered applications/service principals, federation, and role assignments; requests missing Tooling permissions; and ensures Agent User delegated grants. Inspect inherited permissions and direct Principal grants separately. An inheritance-only CLI summary does not describe the fixed Agent User's direct delegated grants or prove that a tool can execute. Apply the resulting tfvars before service deployment and require a real call under the intended principal.
 
 For an intentional permission change requiring consent reconciliation:
 
@@ -69,6 +69,8 @@ The helper recovers existing registrations/backing applications rather than dupl
 | Private MCP unreachable | Check Group VNet attachment, linked Express environment, Private Endpoint, and DNS. Do not publish the endpoint to bypass routing. |
 | Sandbox TLS trust failure | Keep egress inspection enabled; use the system CA bundle below. |
 | Tool works for operator but not Worker | Check Agent Identity/Agent User grants and actual selected principal, not human browser access. |
+| Graph `AADSTS65002` for Azure CLI `Chat.ReadWrite` | This is first-party preauthorization, not an expired login. A new device-code login does not fix it; use an authorized supported client for the real Teams test rather than bypassing consent. |
+| Native receiver history denied to operator | The connection creator is an additional boundary. Read as the original settling identity with explicitly scoped temporary read access; remove the grant afterwards. |
 
 Runtime TLS settings:
 
@@ -80,10 +82,7 @@ REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 ## Live checks
 
 ```powershell
-uv run python -m scripts.demo_ops smoke --state-name $worker `
-  --message "Use private incidents to list services and public shipments to list demo shipments." `
-  --timeout 600
-uv run python -m scripts.document_smoke --state-name $worker --timeout 1200
+uv run python -m scripts.demo_ops status --state-name $worker
 ```
 
-Require actual tool results under Worker identity. Keep tokens, private tool payloads, generated identity files, and consent caches out of committed diagnostics. Remove the Word smoke artifact after validation.
+For model and tool validation, message the Worker through the registered Agent 365/Teams endpoint and require actual tool results under Worker identity. The repository intentionally has no general HTTP model-invocation endpoint. Keep tokens, private tool payloads, generated identity files, and consent caches out of committed diagnostics.

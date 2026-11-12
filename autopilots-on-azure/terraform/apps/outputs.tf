@@ -86,9 +86,3 @@ output "servicebus_dream_enabled" {
 output "servicebus_dream_cron_expression" {
   value = var.servicebus_dream_cron_expression
 }
-output "scheduled_learning_enabled" {
-  value = var.scheduled_learning_enabled
-}
-output "scheduled_learning_interval_seconds" {
-  value = var.scheduled_learning_interval_seconds
-}

@@ -46,8 +46,9 @@ class WorkerLifecycleTests(unittest.TestCase):
 
         self.assertEqual(len(arguments), 2 * len(RELEASE_PIN_FLAGS))
         self.assertEqual(arguments[:2], ["--role-blueprint", "value-0"])
-        del tfvars["bridge_image"]
-        with self.assertRaisesRegex(ValueError, "bridge_image"):
+        self.assertNotIn("--bridge-image", arguments)
+        del tfvars["runtime_image"]
+        with self.assertRaisesRegex(ValueError, "runtime_image"):
             release_pin_arguments(tfvars)
 
     def test_inheritance_requires_every_resource(self):

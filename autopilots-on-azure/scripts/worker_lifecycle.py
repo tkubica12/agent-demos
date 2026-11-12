@@ -60,12 +60,6 @@ RELEASE_PIN_FLAGS = {
     "runtime_image": "--runtime-image",
     "runtime_disk_source_image": "--runtime-disk-source-image",
     "runtime_disk_image_name": "--runtime-disk-image-name",
-    "bridge_image": "--bridge-image",
-    "bridge_disk_source_image": "--bridge-disk-source-image",
-    "private_mcp_image": "--private-mcp-image",
-    "private_mcp_disk_source_image": "--private-mcp-disk-source-image",
-    "public_shipments_mcp_image": "--public-shipments-mcp-image",
-    "public_shipments_mcp_disk_source_image": "--public-shipments-mcp-disk-source-image",
 }
 
 
@@ -351,7 +345,6 @@ def bootstrap(args: argparse.Namespace) -> None:
             "--worker-owner-id", sponsor_id,
             "--no-user-scheduling-enabled",
             "--no-servicebus-dream-enabled",
-            "--no-scheduled-learning-enabled",
             *pins,
             "--runtime-only",
         )
@@ -371,7 +364,7 @@ def bootstrap(args: argparse.Namespace) -> None:
         "scripts.deploy_apps_runtime", "--state-name", state_name,
         "--apply", "--auto-approve", "--deploy-services", "--capture",
     )
-    run_module("scripts.demo_ops", "status", "--state-name", state_name, "--invoke")
+    run_module("scripts.demo_ops", "status", "--state-name", state_name)
 
     with azure_identity(admin):
         step(9, "Register the deployed messaging endpoint")

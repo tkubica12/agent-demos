@@ -108,6 +108,10 @@ class Keepalive:
             self._next_ping = 0.0
         return active
 
+    def status(self) -> dict[str, int]:
+        with self._lock:
+            return {"active": len(self._operations)}
+
     def _run(self) -> None:
         while not self._stop.is_set():
             self._wake.clear()

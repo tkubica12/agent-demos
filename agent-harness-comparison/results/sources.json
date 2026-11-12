@@ -1,0 +1,87 @@
+{
+  "consulted": [
+    {
+      "id": "D",
+      "title": "Deep Agents overview",
+      "url": "https://docs.langchain.com/oss/python/deepagents/overview",
+      "status_and_use": "Načteno; část rozsáhlé stránky zkrácena. Primitives a harness profiles; konkrétní API ověřeno i v instalovaném balíčku."
+    },
+    {
+      "id": "M",
+      "title": "Microsoft Agent Framework harness",
+      "url": "https://learn.microsoft.com/en-us/agent-framework/concepts/harness?pivots=programming-language-python",
+      "status_and_use": "Načteno celé. Factory, providers, compaction; rozlišení released, experimental a prerelease funkcí."
+    },
+    {
+      "id": "C",
+      "title": "Copilot SDK BYOK",
+      "url": "https://raw.githubusercontent.com/github/copilot-sdk/main/docs/auth/byok.md",
+      "status_and_use": "Načteno. Responses a bearer-token provider; obecný README měl užší, zastaralé tvrzení o API keys."
+    },
+    {
+      "id": "CI",
+      "title": "Copilot SDK managed identity",
+      "url": "https://raw.githubusercontent.com/github/copilot-sdk/main/docs/setup/azure-managed-identity.md",
+      "status_and_use": "Načteno. Entra callback; v demu se používá lokální Azure CLI identita, ne nasazená managed identity."
+    },
+    {
+      "id": "P",
+      "title": "Pi SDK",
+      "url": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/sdk.md",
+      "status_and_use": "Načteno. ModelRuntime, custom tools, in-memory sessions a explicitní resource loader."
+    },
+    {
+      "id": "PI",
+      "title": "Pi",
+      "url": "https://pi.dev/",
+      "status_and_use": "Načteno. Kontext produktu; implementace vychází z SDK dokumentace a typů."
+    },
+    {
+      "id": "W",
+      "title": "WebIQ MCP integration",
+      "url": "https://learn.microsoft.com/en-us/web-iq/integrations/mcp",
+      "status_and_use": "Načteno celé. Account-scoped discovery a autentizace; reálný účet exponoval web, images, videos, nikoli browse."
+    },
+    {
+      "id": "S",
+      "title": "Sol model documentation",
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "status_and_use": "Načteno. Responses pro nástroje, reasoning low a tokenové sazby."
+    },
+    {
+      "id": "A",
+      "title": "Azure OpenAI pricing",
+      "url": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
+      "status_and_use": "Přímé načtení timeout; sazby Global Standard ověřeny přes indexovanou WebIQ pasáž této primární stránky."
+    },
+    {
+      "id": "MS",
+      "title": "MAF streaming example",
+      "url": "https://learn.microsoft.com/agent-framework/agents/structured-outputs?pivots=programming-language-python",
+      "status_and_use": "Oficiální code-sample search: stream=True a get_final_response()."
+    },
+    {
+      "id": "CP",
+      "title": "Copilot Python SDK",
+      "url": "https://raw.githubusercontent.com/github/copilot-sdk/main/python/README.md",
+      "status_and_use": "Načteno se zkrácením; nativní typy a eventy ověřeny v instalovaném SDK."
+    },
+    {
+      "id": "CR",
+      "title": "Copilot SDK repository",
+      "url": "https://github.com/github/copilot-sdk",
+      "status_and_use": "Načten obecný přehled; pro Entra má přednost konkrétní BYOK dokumentace a skutečný průchod."
+    }
+  ],
+  "failed_or_unused": [
+    "WebIQ pricing page: timeout; Learn pricing search returned no evidence. WebIQ USD 0.007/call is the owner's estimate.",
+    "Guessed MAF _harness.py raw source URL: 404, not used. Actual installed _harness/_agent.py inspected.",
+    "Broad Learn search chunks not fully read were not treated as inspected evidence."
+  ],
+  "excluded": [
+    "Internal Microsoft 365 sources",
+    "Community sentiment",
+    "Long-context stress testing",
+    "Multi-agent delegation"
+  ]
+}

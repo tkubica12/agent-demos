@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "completed_on": "2026-10-23",
+  "source": "report\\comparison.html",
+  "standalone": "report\\comparison.standalone.html",
+  "paper": "report\\comparison.paper.pdf",
+  "views": ["read", "sheet"],
+  "chapters": 5,
+  "cards": 18,
+  "paper_pages": 6,
+  "standalone_sha256": "b782f849063c1b06e5f4ba2ebb0089310c2f14af2d1b71330bf31c04802d8a28",
+  "paper_sha256": "ad650d36d8916e3210b486684d49947b5e7a854d70c243c6be748ccca41f0f3e",
+  "unit_tests": 22,
+  "canonical_validation": [
+    {"viewport": "1440x900", "passed": 481, "total": 481},
+    {"viewport": "1920x1080", "passed": 481, "total": 481}
+  ],
+  "validation_scope": [
+    "Fresh export folder with only standalone HTML and validator",
+    "All eight light/dark and blue/red/green/yellow palettes",
+    "Offline and JavaScript-disabled reading",
+    "Read and Sheet print targets",
+    "Visual inspection of all six actual PDF pages",
+    "Visual inspection of opening, closing, and six sheet pages across both viewports and all eight palettes"
+  ],
+  "measurement_checks": "results\\checks.json",
+  "timing_evidence": "results\\timing.json",
+  "default_entrypoint": "uv run harness-lab",
+  "default_entrypoint_real_deliveries": 4,
+  "default_entrypoint_exit_code": 0,
+  "credential_matches_in_final_source_and_exports": 0,
+  "unclosed_ledger_operations": 0,
+  "remaining_campaign_workers": 0,
+  "omitted": [
+    "Slides",
+    "Application cloud deployment",
+    "Full-page browsing",
+    "Long-context compaction stress testing",
+    "Multi-agent delegation",
+    "Independent human quality judgments"
+  ]
+}

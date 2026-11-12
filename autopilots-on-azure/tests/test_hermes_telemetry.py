@@ -140,6 +140,20 @@ class HermesTelemetryTests(unittest.TestCase):
                     self.fail("A failed request's session was reassigned")
         self.assertEqual(len(list(self.context_directory.iterdir())), 2)
 
+    def test_exact_native_admission_can_resume_without_reassigning_trace(self):
+        with telemetry.operation_span("first"):
+            with self.assertRaises(TimeoutError):
+                with native.gateway_trace_context("native-session", admission_id="same-admission"):
+                    original = next(self.context_directory.glob("*.json")).read_text()
+                    raise TimeoutError("The native run may still be active.")
+        with telemetry.operation_span("resume"):
+            with self.assertRaisesRegex(native.GatewayTraceConflictError, "different admission"):
+                with native.gateway_trace_context("native-session", admission_id="another-admission"):
+                    self.fail("Another admission stole the original trace.")
+            with native.gateway_trace_context("native-session", admission_id="same-admission"):
+                self.assertEqual(next(self.context_directory.glob("*.json")).read_text(), original)
+        self.assertEqual(list(self.context_directory.iterdir()), [])
+
     def test_expired_handoff_stops_attribution_without_stealing_live_session(self):
         with telemetry.operation_span("runtime"):
             with native.gateway_trace_context("native-session", ttl_seconds=1):

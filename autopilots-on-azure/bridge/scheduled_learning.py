@@ -26,13 +26,6 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def bool_env(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
 def int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
     raw = os.getenv(name, str(default)).strip()
     value = int(raw)
@@ -43,31 +36,14 @@ def int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
 
 @dataclass(frozen=True)
 class ScheduledLearningSettings:
-    enabled: bool
-    initial_delay_seconds: int
-    interval_seconds: int
     focus: str
     max_records: int
     retry_limit: int
     retry_backoff_seconds: int
-    prepare_packet: bool
 
     @classmethod
     def from_environment(cls) -> "ScheduledLearningSettings":
         return cls(
-            enabled=bool_env("SCHEDULED_LEARNING_ENABLED"),
-            initial_delay_seconds=int_env(
-                "SCHEDULED_LEARNING_INITIAL_DELAY_SECONDS",
-                60,
-                minimum=0,
-                maximum=86_400,
-            ),
-            interval_seconds=int_env(
-                "SCHEDULED_LEARNING_INTERVAL_SECONDS",
-                86_400,
-                minimum=300,
-                maximum=2_592_000,
-            ),
             focus=os.getenv(
                 "SCHEDULED_LEARNING_FOCUS",
                 "Review recent meaningful work for reusable, privacy-safe Role Skill improvements.",
@@ -90,7 +66,6 @@ class ScheduledLearningSettings:
                 minimum=1,
                 maximum=3_600,
             ),
-            prepare_packet=bool_env("SCHEDULED_LEARNING_PREPARE_PACKET", True),
         )
 
 
@@ -108,10 +83,8 @@ class ScheduledLearningCoordinator:
         self.worker_id = worker_id
         self._sleep = sleep
         self._run_lock = asyncio.Lock()
-        self._stop = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
         self._status: dict[str, Any] = {
-            "enabled": settings.enabled,
+            "execution": "native-or-operator",
             "workerId": worker_id,
             "running": False,
             "runCount": 0,
@@ -122,43 +95,10 @@ class ScheduledLearningCoordinator:
             "lastSuccessAt": None,
             "lastError": None,
             "lastDream": None,
-            "lastPacket": None,
         }
 
     def status(self) -> dict[str, Any]:
         return dict(self._status)
-
-    async def start(self) -> None:
-        if not self.settings.enabled or self._task is not None:
-            return
-        self._task = asyncio.create_task(
-            self._loop(),
-            name=f"scheduled-learning-{self.worker_id}",
-        )
-
-    async def stop(self) -> None:
-        self._stop.set()
-        if self._task is None:
-            return
-        self._task.cancel()
-        await asyncio.gather(self._task, return_exceptions=True)
-        self._task = None
-
-    async def _loop(self) -> None:
-        if self.settings.initial_delay_seconds:
-            await self._wait_or_stop(self.settings.initial_delay_seconds)
-        while not self._stop.is_set():
-            try:
-                await self.run_once()
-            except RETRYABLE_ERRORS:
-                pass
-            await self._wait_or_stop(self.settings.interval_seconds)
-
-    async def _wait_or_stop(self, seconds: int) -> None:
-        try:
-            await asyncio.wait_for(self._stop.wait(), timeout=seconds)
-        except asyncio.TimeoutError:
-            return
 
     async def run_once(self, *, operation: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._run_lock.locked():
@@ -224,7 +164,7 @@ class ScheduledLearningCoordinator:
             raise RuntimeError("Scheduled Dreaming lost occurrence ownership.")
         phase = checkpoint.get("phase") or "pending"
         saved = checkpoint.get("checkpoint") or {}
-        if phase in {"status_completed", "prepared"}:
+        if phase == "status_completed":
             dream_summary = saved["dream"]
         else:
             request = DreamRequest(
@@ -267,34 +207,8 @@ class ScheduledLearningCoordinator:
                 )
         self._status["lastDream"] = dream_summary
 
-        if phase == "prepared":
-            packet_summary = saved.get("packet")
-        else:
-            packet_summary = None
-            if self.settings.prepare_packet and dream_summary.get("sharedChangeCount"):
-                if "packet" not in completed:
-                    completed["packet"] = await adapter.prepare_collective_learning()
-                packet = completed["packet"]
-                packet_summary = {
-                    "packetDigest": packet.get("packetDigest"),
-                    "improvementCount": len(packet.get("improvements") or []),
-                    "excludedCount": len(packet.get("excluded") or []),
-                    "roleRelease": packet.get("roleRelease"),
-                    "approvalRequired": packet.get("approvalRequired"),
-                }
-            if operation:
-                await adapter.checkpoint_system_schedule(
-                    **identity,
-                    owner_token=operation["ownerToken"],
-                    expected_phase="status_completed",
-                    phase="prepared",
-                    payload={"packet": packet_summary},
-                )
-        self._status["lastPacket"] = packet_summary
-
         return {
             "workerId": self.worker_id,
             "completedAt": utc_now(),
             "dream": dream_summary,
-            "packet": packet_summary,
         }

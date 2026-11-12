@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import tempfile
-import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -13,43 +12,21 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from bridge.local_state import locked_file
+
 
 SYSTEM_DREAM_JOB_NAME = "Platform Dreaming"
 SYSTEM_DREAM_PROMPT = "__AUTOPILOT_SYSTEM_DREAM__"
-_JSON_LOCKS: dict[str, threading.RLock] = {}
-_JSON_LOCKS_GUARD = threading.Lock()
 
 
 @contextmanager
 def json_transaction(path: Path):
     """Serialize a short read/modify/replace across runtime threads and processes."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _JSON_LOCKS_GUARD:
-        lock = _JSON_LOCKS.setdefault(str(path.resolve()), threading.RLock())
-    with lock, path.with_suffix(path.suffix + ".lock").open("a+b") as handle:
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0, os.SEEK_END)
-            if not handle.tell():
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            payload = read_json_object(path)
-            yield payload
-            atomic_write_json(path, payload)
-        finally:
-            if os.name == "nt":
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    with locked_file(path.with_suffix(path.suffix + ".lock")):
+        payload = read_json_object(path)
+        yield payload
+        atomic_write_json(path, payload)
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -316,7 +293,7 @@ def claim_system_schedule(
                 if started_at and time.time() - started_at < lease_seconds:
                     return {"status": "in_progress", "jobId": job_id}
                 if receipt.get("state") == "claiming" or receipt.get("phase") not in {
-                    "pending", "dream_completed", "status_completed", "prepared"
+                    "pending", "dream_completed", "status_completed"
                 }:
                     receipt["ownerToken"] = uuid.uuid4().hex
                     return {
@@ -414,7 +391,7 @@ def checkpoint_system_schedule(
     profile_home: Path, *, job_id: str, revision: str, occurrence_id: str,
     owner_token: str, expected_phase: str, phase: str, payload: dict[str, Any],
 ) -> dict[str, Any]:
-    phases = ["pending", "dream_started", "dream_completed", "status_completed", "prepared"]
+    phases = ["pending", "dream_started", "dream_completed", "status_completed"]
     if expected_phase not in phases or phase not in phases or (
         phases.index(phase) != phases.index(expected_phase) + 1
     ):
@@ -460,8 +437,8 @@ def complete_system_schedule(
             return {"status": "duplicate", "jobId": job_id}
         if not owner_token or receipt.get("ownerToken") != owner_token:
             raise RuntimeError("System schedule completion lost ownership.")
-        if success and receipt.get("phase") != "prepared":
-            raise RuntimeError("Successful system schedule completion requires the prepared checkpoint.")
+        if success and receipt.get("phase") != "status_completed":
+            raise RuntimeError("Successful system Dream completion requires its status checkpoint.")
         if receipt.get("state") != "completing":
             receipt.update({
                 "state": "completing",

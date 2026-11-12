@@ -2528,7 +2528,7 @@ body.architecture-focus-open { overflow: hidden; }
         <div class="card-body">
           <p>Hermes learns natively. An ordinary turn may update memory or skills, and a background review after the turn may add more; memory and skill nudges arrive every ten turns. Hermes' native <code>/learn</code> turns a request into a skill through <code>skill_manage</code>. The native skill ledger records every skill change with its actor, action, before/after hashes, and content.</p>
           <p>A useful local improvement can remain active in this Worker before any shared release. That local acceptance neither exports private data nor grants permission to publish the skill to other Workers.</p>
-          <p>Attachment and persistence-disabled turns run in a separate native session marked <code>private:</code>. A <code>pre_tool_call</code> hook blocks <code>memory</code>, <code>skill_manage</code>, and file writes into <code>skills/</code> or <code>memories/</code> there, including in the background review fork, which Hermes 0.22.5 cannot skip per request.</p>
+          <p>Attachment and persistence-disabled turns run in a separate native session marked <code>private:</code>. A <code>pre_tool_call</code> hook blocks <code>memory</code>, <code>skill_manage</code>, and file writes into <code>skills/</code> or <code>memories/</code> there, including in the background review fork. Separate native session identity is part of the privacy boundary, not a second shared memory.</p>
           <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../bridge/">Turn routing and learning instructions</a> · <a href="../runtimes/hermes/native_learning.py">Private-session hook</a></p></aside>
         </div>
       </article>
@@ -2540,7 +2540,7 @@ body.architecture-focus-open { overflow: hidden; }
             <li><span class="seq-title">Classify</span><span class="seq-note">Keep private context private; generalize reusable behavior.</span></li>
             <li><span class="seq-title">Write or skip</span><span class="seq-note">Use native memory and skill tools, or store nothing.</span></li>
           </ol>
-          <p>The reviewed Dream Role Skill guides reflection. A system schedule invokes it through the gateway and Service Bus. Durable fenced phases recover completed responses; an unknown interrupted model outcome stops rather than triggering a blind replay. Ad-hoc execution does not consume the production occurrence. After a Dream, the Worker owner receives the learning digest.</p>
+          <p>The reviewed Dream Role Skill guides reflection. A native Service Bus receiver wakes the suspended gateway for a system occurrence; no gateway timer or receive thread owns the wait. Durable fenced phases recover completed responses; an unknown interrupted model outcome stops rather than triggering a blind replay. Ad-hoc execution does not consume the production occurrence. After a Dream, the Worker owner receives the learning digest.</p>
           <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../blueprints/junior-project-manager/skills/role/dream-reflection/SKILL.md">Dream instructions</a> · <a href="../bridge/scheduled_learning.py">Durable coordinator</a></p></aside>
         </div>
       </article>

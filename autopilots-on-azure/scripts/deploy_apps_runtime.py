@@ -44,6 +44,33 @@ def activate_runtime_tfvars(runtime: str, state_name: str = "") -> dict[str, Any
     return tfvars
 
 
+def require_identity_preservation(plan: dict[str, Any]) -> None:
+    for resource in plan.get("resource_changes", []):
+        actions = resource.get("change", {}).get("actions", [])
+        if "delete" in actions and (
+            resource.get("type") == "azurerm_user_assigned_identity"
+            or str(resource.get("address", "")).startswith("azapi_resource.sandbox_group")
+        ):
+            raise RuntimeError(
+                f"Deployment would delete or replace Worker identity/state boundary {resource['address']}. "
+                "Check the selected workspace and pinned inputs; no apply was performed."
+            )
+
+
+def apply_infrastructure(state_name: str, *, auto_approve: bool) -> None:
+    plan_path = runtime_outputs_path("hermes", state_name).parent / "deployment.tfplan"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    run(["terraform", "plan", "-input=false", f"-out={plan_path}"], cwd=APPS_DIR)
+    plan = json.loads(run(
+        ["terraform", "show", "-json", str(plan_path)], cwd=APPS_DIR, capture=True,
+    ).stdout)
+    require_identity_preservation(plan)
+    if auto_approve:
+        run(["terraform", "apply", "-input=false", str(plan_path)], cwd=APPS_DIR)
+    else:
+        run(["terraform", "apply"], cwd=APPS_DIR)
+
+
 def capture_runtime_outputs(runtime: str, workspace: str, state_name: str = "", *, service_outputs: dict | None = None) -> Path:
     outputs = terraform_output(APPS_DIR)
     outputs.pop("deployment_config", None)
@@ -54,7 +81,9 @@ def capture_runtime_outputs(runtime: str, workspace: str, state_name: str = "", 
         previous = json.loads(output_path.read_text(encoding="utf-8"))
         if previous.get("sandbox_groups") == outputs.get("sandbox_groups"):
             for key, value in previous.items():
-                if key.endswith(("_url", "_fqdn", "_sandbox_id")) or key in {"sandbox_services", "runtime_disk_image_id"}:
+                if key.endswith(("_url", "_fqdn", "_sandbox_id")) or key in {
+                    "sandbox_services", "runtime_disk_image_id", "runtime_application_release", "native_transport",
+                }:
                     outputs[key] = value
     outputs["terraform_workspace"] = workspace
     outputs["captured_agent_runtime"] = runtime
@@ -95,17 +124,22 @@ def main() -> None:
     if args.plan:
         run(["terraform", "plan"], cwd=APPS_DIR)
     if args.apply:
-        command = ["terraform", "apply"]
-        if args.auto_approve:
-            command.append("-auto-approve")
-        run(command, cwd=APPS_DIR)
+        apply_infrastructure(state_name, auto_approve=args.auto_approve)
         args.capture = True
         args.deploy_services = not args.infrastructure_only
     service_outputs = None
     if args.deploy_services:
         from scripts.sandbox_services import deploy_sandbox_services
+        from scripts.native_transport import NativeTransportDeployer
 
-        service_outputs = deploy_sandbox_services(terraform_output(APPS_DIR), terraform_output(PLATFORM_DIR))
+        infrastructure = terraform_output(APPS_DIR)
+        service_outputs = deploy_sandbox_services(infrastructure, terraform_output(PLATFORM_DIR))
+        capture_runtime_outputs("hermes", workspace, state_name, service_outputs=service_outputs)
+        native = NativeTransportDeployer({**infrastructure, **service_outputs})
+        try:
+            service_outputs["native_transport"] = native.deploy()
+        finally:
+            native.close()
         args.capture = True
     if args.capture:
         capture_runtime_outputs("hermes", workspace, state_name, service_outputs=service_outputs)

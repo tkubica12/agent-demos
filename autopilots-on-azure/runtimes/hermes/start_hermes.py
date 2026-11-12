@@ -161,7 +161,7 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         "model": {
             "provider": os.getenv("HERMES_MODEL_PROVIDER", "azure-foundry"),
             "default": os.getenv("HERMES_MODEL", "gpt-6-1-sol"),
-            "api_mode": "codex_responses",
+            "api_mode": "responses",
         },
         "memory": {"nudge_interval": int(os.getenv("HERMES_MEMORY_NUDGE_INTERVAL", "10"))},
         "skills": {
@@ -201,7 +201,7 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
                 "entra": {
                     "scope": os.getenv(
                         "FOUNDRY_TOKEN_SCOPE",
-                        "https://cognitiveservices.azure.com/.default",
+                        "https://ai.azure.com/.default",
                     )
                 },
             }
@@ -422,9 +422,15 @@ def create_health_app(
     app.add_middleware(TelemetryMiddleware, runtime=True)
     app.router.add_event_handler("shutdown", flush_telemetry)
     keepalive = get_keepalive()
+    process_nonce = secrets.token_hex(16)
 
     @app.middleware("http")
     async def keep_runtime_request_active(request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and Path("/app/.application-maintenance").exists():
+            return JSONResponse(
+                {"error": "Runtime source maintenance; the request was not admitted."},
+                status_code=503, headers={"Retry-After": "10"},
+            )
         if keepalive is not None and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             with keepalive.activity("runtime-request"):
                 return await call_next(request)
@@ -444,6 +450,10 @@ def create_health_app(
         running = gateway is not None and gateway.poll() is None
         payload = {
             "status": "ok" if running else "gateway-unavailable",
+            "release": os.getenv("APPLICATION_RELEASE", ""),
+            "nativeRuns": True,
+            "processId": os.getpid(),
+            "memoryNonce": process_nonce,
             "runtime": "hermes",
             "hermesHome": str(home),
             "profileHome": str(profile_home),
@@ -466,6 +476,22 @@ def create_health_app(
         supplied = request.headers.get("x-autopilot-key", "")
         if not expected or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
+
+    @app.get("/internal/runtime/status")
+    async def runtime_status(request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        key = os.environ["API_SERVER_KEY"]
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"http://127.0.0.1:{gateway_port()}/internal/runtime/activity",
+                headers={"X-Autopilot-Key": key, "Authorization": "Bearer " + key},
+            )
+        response.raise_for_status()
+        native = response.json()
+        if not isinstance(native, dict) or not isinstance(native.get("active"), int):
+            raise HTTPException(status_code=502, detail="Native API did not attest its active work.")
+        wrapper = keepalive.status()["active"] if keepalive is not None else 0
+        return {"active": native["active"] + wrapper, "native": native, "wrapperOperations": wrapper}
 
     @app.post("/internal/documents/pending")
     async def document_pending(request: Request) -> dict[str, Any]:
@@ -744,7 +770,10 @@ def main() -> None:
     profile_home.mkdir(parents=True, exist_ok=True)
     (profile_home / "home").mkdir(exist_ok=True)
     (profile_home / "workspace").mkdir(exist_ok=True)
-    install_runtime_plugins(profile_home)
+    install_runtime_plugins(
+        profile_home,
+        source_root=Path(os.getenv("AUTOPILOTS_APPLICATION_ROOT", "/app")) / "runtime_plugins",
+    )
     install_gateway_telemetry(profile_home)
     os.environ["HERMES_HOME"] = str(profile_home)
     env_path = write_env_file(profile_home)

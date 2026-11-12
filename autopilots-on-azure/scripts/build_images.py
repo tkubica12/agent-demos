@@ -11,8 +11,8 @@ from scripts.tf_helpers import PLATFORM_DIR, REPO_ROOT, run, terraform_output, w
 
 
 HERMES_UPSTREAM_SOURCE = "docker.io/nousresearch/hermes-agent"
-HERMES_UPSTREAM_VERSION = "v0.22.5"
-HERMES_UPSTREAM_DIGEST = "sha256:9c5561579f3ffdf333401797094ac3a743738d6c25d40f4331c7bf77b694238d"
+HERMES_UPSTREAM_VERSION = "v0.22.6"
+HERMES_UPSTREAM_DIGEST = "sha256:9a31a97e38540562142c52f439c124325355f671f31ad10f9ebd1c7b55dab7ea"
 HERMES_UPSTREAM_REPOSITORY = "hermes-agent-upstream"
 
 
@@ -111,21 +111,6 @@ def main() -> None:
         "runtime_image": (
             runtime_repository,
             runtime_dockerfile,
-            ".",
-        ),
-        "bridge_image": (
-            "autopilot-bridge",
-            "bridge/Dockerfile",
-            ".",
-        ),
-        "private_mcp_image": (
-            "private-incidents-mcp",
-            "private-incidents-mcp/Dockerfile",
-            ".",
-        ),
-        "public_shipments_mcp_image": (
-            "public-shipments-mcp",
-            "public-shipments-mcp/Dockerfile",
             ".",
         ),
     }

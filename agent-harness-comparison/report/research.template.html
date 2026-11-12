@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en" data-default-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARTICLE TITLE</title>
+<meta name="description" content="ONE SENTENCE SUMMARY">
+<!-- Stable key for read-progress storage. Keep it if this document may be
+     served from more than one path; delete it and the pathname is used. -->
+<meta name="doc-id" content="SLUG">
+
+<!-- 1. Theme bootstrap. Must be the first script in <head>. -->
+<script data-doc-bootstrap>
+/* Inline in the head before styles with sync-head.js. No deferred bootstrap. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const params = new URLSearchParams(location.search);
+  const id = document.querySelector('meta[name="doc-id"]')?.content ||
+    location.pathname.replace(/\.standalone(?=\.html$)/i, "");
+  const prefix = "html-docs:" + id + ":";
+  const choices = { theme: ["light", "dark"], accent: ["blue", "red", "green", "yellow"] };
+  const read = (name) => {
+    try { return localStorage.getItem(prefix + name); }
+    catch { return null; /* Storage may be unavailable for local files. */ }
+  };
+  const write = (name, value) => {
+    try { localStorage.setItem(prefix + name, value); }
+    catch { /* The current view still works without persistence. */ }
+  };
+  function refresh() {
+    for (const name of Object.keys(choices)) {
+      const current = root.getAttribute("data-" + name);
+      const next = choices[name][(choices[name].indexOf(current) + 1) % choices[name].length];
+      document.querySelectorAll('[data-action="toggle-' + name + '"]').forEach(button => {
+        button.textContent = name === "theme" ? (next === "dark" ? "Dark" : "Light") :
+          "Accent: " + current[0].toUpperCase() + current.slice(1);
+        button.setAttribute("aria-label", name === "theme" ? "Switch to " + next + " theme" :
+          "Accent: " + current + ". Switch to " + next);
+      });
+    }
+  }
+  for (const [name, values] of Object.entries(choices)) {
+    const fallback = name === "theme" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : values[0];
+    const value = [params.get(name), read(name), root.getAttribute("data-default-" + name), fallback]
+      .map(candidate => name === "accent" && candidate === "orange" ? "red" : candidate)
+      .find(candidate => values.includes(candidate));
+    root.setAttribute("data-" + name, value);
+  }
+  root.classList.add("js");
+  if (["slides", "sheet"].includes(params.get("view"))) root.setAttribute("data-view", params.get("view"));
+
+  // Print what is on screen. data-print selects the matching print stylesheet.
+  const printTarget = () => {
+    if (document.querySelector(".deck-stage")) return "slides";
+    const view = root.getAttribute("data-view");
+    if (view === "slides" || (view === "sheet" && document.querySelector(".sheet"))) return view;
+    return document.querySelector(".doc") || !document.querySelector(".sheet") ? "read" : "sheet";
+  };
+  let printing = null;
+  addEventListener("beforeprint", () => {
+    if (root.hasAttribute("data-print")) return; // Set by an automated export.
+    const target = printTarget();
+    printing = document.title;
+    root.setAttribute("data-print", target);
+    // The browser proposes the title as the PDF file name.
+    if (target !== "read" && document.querySelector(".doc")) {
+      document.title += target === "slides" ? " - Slides" : " - Sheet";
+    }
+  });
+  addEventListener("afterprint", () => {
+    if (printing === null) return;
+    root.removeAttribute("data-print");
+    document.title = printing;
+    printing = null;
+  });
+
+  // Keep the display awake while presenting, like presentation software does.
+  let lock = null;
+  let awake = false;
+  async function holdScreen() {
+    if (!awake || lock || document.visibilityState !== "visible" || !navigator.wakeLock) return;
+    try {
+      const sentinel = await navigator.wakeLock.request("screen");
+      if (!awake || lock) { sentinel.release(); return; }
+      lock = sentinel;
+      root.setAttribute("data-awake", "");
+      sentinel.addEventListener("release", () => {
+        if (lock !== sentinel) return;
+        lock = null;
+        root.removeAttribute("data-awake");
+      });
+    } catch { /* Denied by battery saver or an embedding policy; retried on input. */ }
+  }
+  function keepAwake(on) {
+    awake = !!on;
+    if (awake) holdScreen();
+    else if (lock) lock.release();
+  }
+  // The browser drops the lock when the tab is hidden; some require a gesture.
+  document.addEventListener("visibilitychange", holdScreen);
+  document.addEventListener("pointerdown", holdScreen);
+  document.addEventListener("keydown", holdScreen);
+
+  window.HtmlDocs = { read, write, refresh, keepAwake };
+  document.addEventListener("DOMContentLoaded", refresh);
+  document.addEventListener("click", event => {
+    if (event.target.closest('[data-action="print"]')) window.print();
+  });
+  document.addEventListener("click", event => {
+    const button = event.target.closest('[data-action="toggle-theme"], [data-action="toggle-accent"]');
+    if (!button) return;
+    const name = button.getAttribute("data-action").slice(7);
+    const values = choices[name];
+    const next = values[(values.indexOf(root.getAttribute("data-" + name)) + 1) % values.length];
+    root.setAttribute("data-" + name, next);
+    write(name, next);
+    // Replace a URL override too, so reloading preserves a deliberate change.
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.set(name, next);
+      history.replaceState(null, "", url.href);
+    }
+    refresh();
+  });
+})();
+</script>
+
+<!-- 2. Canonical design tokens. Copied verbatim from assets/tokens.css.
+     Never edit these values in a page. -->
+<style data-doc-tokens>
+/* Canonical tokens. Inline with sync-head.js; one accent family at a time. */
+:root {
+  color-scheme: light;
+  --bg: #fafafa; --surface: #ffffff; --surface-2: #f2f2f2; --surface-3: #e8e8e8;
+  --border: #dedede; --border-strong: #b8b8b8;
+  --text: #161616; --text-muted: #565656; --text-faint: #686868;
+  --accent-light: #006da0; --accent-dark: #00a4ef;
+  --accent: var(--accent-light);
+  --accent-strong: var(--accent);
+  --accent-quiet: var(--accent);
+  --accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  --accent-border: color-mix(in srgb, var(--accent) 36%, var(--bg));
+  --warn: var(--accent); --warn-soft: var(--accent-soft); --warn-border: var(--accent-border);
+  --code-bg: var(--surface-2); --code-border: var(--border);
+  --focus: var(--accent);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.04), 0 12px 28px rgba(0,0,0,.06);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+/* Screen only: every PDF and printout uses the light palette. */
+@media screen {
+  [data-theme="dark"], :root:not([data-theme])[data-default-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101010; --surface: #191919; --surface-2: #232323; --surface-3: #2c2c2c;
+    --border: #363636; --border-strong: #595959;
+    --text: #f2f2f2; --text-muted: #b5b5b5; --text-faint: #a0a0a0;
+    --accent: var(--accent-dark);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-2: 0 2px 4px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.4);
+  }
+}
+[data-accent="red"], :root:not([data-accent])[data-default-accent="red"],
+[data-accent="orange"], :root:not([data-accent])[data-default-accent="orange"] {
+  --accent-light: #bc3a16; --accent-dark: #f25022;
+}
+[data-accent="green"], :root:not([data-accent])[data-default-accent="green"] {
+  --accent-light: #4c7100; --accent-dark: #7fba00;
+}
+[data-accent="yellow"], :root:not([data-accent])[data-default-accent="yellow"] {
+  --accent-light: #805b00; --accent-dark: #ffb900;
+}
+</style>
+
+<!-- 3. Shared assets. Adjust the relative path to the assets folder.
+     sheet.css/js serve an optional companion sheet; keep them either way. -->
+<link rel="stylesheet" href="assets/article.css">
+<link rel="stylesheet" href="assets/slides.css">
+<link rel="stylesheet" href="assets/sheet.css">
+<script src="assets/article.js" defer></script>
+<script src="assets/slides.js" defer></script>
+<script src="assets/sheet.js" defer></script>
+</head>
+
+<body>
+
+<!-- 4. Controls. Keep only the views this document offers: remove Slides when
+     it is reading-only; add the Sheet control with a companion sheet (11).
+     PDF prints whichever view is on screen. -->
+<div class="controls" role="group" aria-label="Article controls">
+  <button type="button" class="ctrl" data-action="expand-all">Expand all</button>
+  <button type="button" class="ctrl" data-action="collapse-all">Collapse all</button>
+  <button type="button" class="ctrl" data-action="toggle-slides" aria-pressed="false">Slides</button>
+  <!-- <button type="button" class="ctrl" data-action="toggle-sheet" aria-pressed="false">Sheet</button> -->
+  <button type="button" class="ctrl" data-action="print" aria-label="Save the current view as PDF or print it">PDF</button>
+  <button type="button" class="ctrl" data-action="toggle-theme">Dark</button>
+  <button type="button" class="ctrl" data-action="toggle-accent">Accent: Blue</button>
+</div>
+
+<div class="doc">
+
+  <!-- 5. Header -->
+  <header class="doc-header" id="opening">
+    <div class="slide-content slide-content--title">
+      <p class="slide-eyebrow">DECISION</p>
+      <h2 class="slide-title">State the claim.<br><em>Make it matter.</em></h2>
+      <p class="slide-lead">One short supporting line.</p>
+    </div>
+    <p class="eyebrow">EYEBROW</p>
+    <h1>ARTICLE TITLE</h1>
+    <p class="subtitle">One or two sentences that state what the reader gets and who it is for.</p>
+    <!-- Optional: add a supplied author or a relevant, accurate date here. -->
+  </header>
+
+  <!-- 6. Optional navigation: add only links to material that exists. -->
+
+  <!-- 7. Table of contents. Add it once the article has several chapters. -->
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-label">Contents</p>
+    <ol>
+      <li><a href="#ch-first">FIRST CHAPTER</a></li>
+    </ol>
+  </nav>
+
+  <!-- 8. Main content -->
+  <main>
+
+    <section class="chapter" id="ch-first">
+      <h2 class="chapter-label">FIRST CHAPTER</h2>
+
+      <!-- Lead card: unnumbered, open on load. Only this card carries data-open. -->
+      <article class="card card--lead" id="card-orientation" data-open>
+        <div class="slide-content">
+          <h2 class="slide-title">One idea.<br><em>Room to explain it.</em></h2>
+          <p class="slide-lead">The speaker supplies the connective reasoning.</p>
+        </div>
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="true">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">State the central claim</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>Set the scene in a few sentences. State the problem and the outcome.</p>
+        </div>
+      </article>
+
+      <!-- Numbered card. Numbers come from CSS; leave card-num empty. -->
+      <article class="card" id="card-first-point">
+        <div class="slide-content">
+          <h2 class="slide-title">State the conclusion.</h2>
+          <ul class="slide-points">
+            <li class="frag">One short supporting point.</li>
+            <li class="frag">One consequence.</li>
+          </ul>
+        </div>
+        <h3 class="card-head">
+          <button type="button" class="card-toggle" aria-expanded="false">
+            <span class="card-num" aria-hidden="true"></span>
+            <span class="card-titles">
+              <span class="card-title">First point</span>
+              <span class="card-sub">Optional line that stays visible while collapsed.</span>
+            </span>
+            <span class="card-mark" aria-hidden="true"></span>
+          </button>
+        </h3>
+        <div class="card-body">
+          <p>One card is one major idea. Keep the core path short.</p>
+
+          <div class="reveal">
+            <button type="button" class="reveal-toggle" aria-expanded="false">Show the evidence</button>
+            <div class="reveal-body">
+              <p>Depth, troubleshooting, screenshots, and side arguments live here.</p>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </section>
+
+  </main>
+
+  <!-- 9. Closing takeaway: one sentence, top level, after the last chapter. -->
+  <section class="takeaway" id="closing">
+    <p>End on the single point the reader should carry away.</p>
+    <div class="slide-content slide-content--end">
+      <p class="slide-eyebrow">The key message</p>
+      <h2 class="slide-title">End with<br><em>one clear idea.</em></h2>
+    </div>
+  </section>
+
+  <!-- 10. Footer -->
+  <footer class="doc-footer">
+    <span>Optional author or provenance.</span>
+  </footer>
+
+</div>
+
+<!-- 11. Optional companion sheet: a one-pager or datasheet, a third depth.
+     Copy <section class="sheet"> from sheet.template.html here, after .doc,
+     use h2 for its title (the article owns the h1), and enable the Sheet
+     control above. See references/sheet.md. -->
+
+</body>
+</html>

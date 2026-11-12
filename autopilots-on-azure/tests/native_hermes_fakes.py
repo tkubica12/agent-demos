@@ -1,4 +1,4 @@
-"""Small in-process stand-ins for the Hermes 0.22.5 native learning modules.
+"""Small in-process stand-ins for native Hermes learning modules.
 
 They follow the verified contracts of ``tools.skill_ledger`` (newest-first entries, content-addressed
 blobs, fail-closed ``rollback_entry`` with a ``pre-rollback`` safety entry), ``tools.write_approval``

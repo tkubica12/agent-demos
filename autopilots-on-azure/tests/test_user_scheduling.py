@@ -19,13 +19,8 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 
 import bridge.app as bridge_app
-import bridge.servicebus_scheduler as servicebus_scheduler
 from bridge.proactive_delivery import delivery_reference_key, send_proactive_activity
-from bridge.servicebus_scheduler import (
-    ServiceBusScheduleConsumer,
-    ServiceBusScheduleSender,
-    message_trace_headers,
-)
+from bridge.servicebus_scheduler import ServiceBusScheduleSender
 
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
@@ -34,43 +29,7 @@ sys.path.insert(0, str(RUNTIME_DIR))
 import cron_runtime  # noqa: E402
 
 
-class FakeReceivedMessage:
-    def __init__(self, payload: object, *, delivery_count: int = 1) -> None:
-        self.body = [json.dumps(payload).encode("utf-8")]
-        self.delivery_count = delivery_count
-
-
-class FakeReceiver:
-    def __init__(self) -> None:
-        self.completed = []
-        self.abandoned = []
-        self.dead_lettered = []
-
-    def complete_message(self, message) -> None:
-        self.completed.append(message)
-
-    def abandon_message(self, message) -> None:
-        self.abandoned.append(message)
-
-    def dead_letter_message(self, message, **kwargs) -> None:
-        self.dead_lettered.append((message, kwargs))
-
-
 class UserSchedulingTests(unittest.TestCase):
-    def test_document_retry_enables_consumer_without_user_cron(self):
-        with patch.dict(
-            os.environ,
-            {
-                "USER_SCHEDULING_ENABLED": "false",
-                "DOCUMENT_RETRY_ENABLED": "true",
-            },
-        ):
-            consumer = ServiceBusScheduleConsumer(
-                handler=lambda payload: asyncio.sleep(0)
-            )
-
-        self.assertTrue(consumer.status()["enabled"])
-
     def test_cron_provider_is_a_separate_exclusive_plugin_and_autopilots_is_standalone(self):
         plugins = RUNTIME_DIR / "plugins"
         self.assertEqual(sorted(path.name for path in plugins.iterdir() if path.is_dir()), ["autopilots", "azure"])
@@ -171,57 +130,6 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(sent[0].text, "Scheduled hello")
         self.assertEqual(result["activityId"], "activity-1")
 
-    def test_service_bus_message_completes_after_success(self):
-        handled = []
-        spans = []
-        handler_traces = []
-        tracer = TracerProvider().get_tracer("scheduler-test")
-        async def run():
-            previous = os.environ.get("WORKER_ID")
-            os.environ["WORKER_ID"] = "hermes2"
-            try:
-                async def handler(payload):
-                    handled.append(payload)
-                    handler_traces.append(trace.get_current_span().get_span_context().trace_id)
-                    return {"status": "completed"}
-                consumer = ServiceBusScheduleConsumer(handler=handler)
-                consumer._loop = asyncio.get_running_loop()
-                receiver = FakeReceiver()
-                message = FakeReceivedMessage({
-                    "version": "1.0",
-                    "type": "hermes.cron.fire",
-                    "workerId": "hermes2",
-                    "jobId": "job-1",
-                    "revision": "revision-1",
-                    "_traceCarrier": {"baggage": "must-not-be-forwarded"},
-                })
-                message.application_properties = {
-                    b"traceparent": b"00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-                }
-                with patch(
-                    "bridge.servicebus_scheduler.operation_span",
-                    wraps=servicebus_scheduler.operation_span,
-                ) as span, patch("bridge.telemetry.trace.get_tracer", return_value=tracer):
-                    await asyncio.to_thread(consumer._process, receiver, message)
-                    spans.append(span.call_args.kwargs)
-                return consumer, receiver
-            finally:
-                if previous is None:
-                    os.environ.pop("WORKER_ID", None)
-                else:
-                    os.environ["WORKER_ID"] = previous
-
-        consumer, receiver = asyncio.run(run())
-
-        self.assertEqual(len(receiver.completed), 1)
-        self.assertEqual(consumer.status()["completed"], 1)
-        self.assertEqual(receiver.abandoned, [])
-        self.assertEqual(spans[0]["carrier"], {
-            "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-        })
-        self.assertEqual(spans[0]["operation_id"], "job-1:revision-1")
-        self.assertEqual(handler_traces, [int("a" * 32, 16)])
-
     def test_document_retry_message_is_scheduled_with_identity(self):
         scheduled = []
         cancelled = []
@@ -309,84 +217,6 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(scheduled[0][0].application_properties, {
             "traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
         })
-
-    def test_service_bus_trace_carrier_excludes_baggage_and_nontext_values(self):
-        message = FakeReceivedMessage({})
-        message.application_properties = {
-            b"traceparent": b"00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-            "tracestate": "vendor=value",
-            b"baggage": b"private=user@example.test",
-            "Authorization": "secret",
-            b"another": 1,
-        }
-        self.assertEqual(message_trace_headers(message), {
-            "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
-            "tracestate": "vendor=value",
-        })
-        message.application_properties = {"traceparent": 12}
-        self.assertEqual(message_trace_headers(message), {})
-
-    def test_consumer_without_transport_carrier_starts_clean_root(self):
-        captured = []
-        tracer = TracerProvider().get_tracer("scheduler-test")
-
-        async def handler(payload):
-            captured.append(trace.get_current_span().get_span_context().trace_id)
-            return {"status": "completed"}
-
-        consumer = ServiceBusScheduleConsumer(handler=handler)
-        with (
-            patch("bridge.telemetry.trace.get_tracer", return_value=tracer),
-            tracer.start_as_current_span("unrelated") as unrelated,
-        ):
-            asyncio.run(consumer._invoke_handler({
-                "jobId": "job", "revision": "revision",
-                "_traceCarrier": {"traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01"},
-            }, {}))
-            unrelated_id = unrelated.get_span_context().trace_id
-        self.assertNotEqual(captured[0], unrelated_id)
-        self.assertNotEqual(captured[0], int("a" * 32, 16))
-
-    def test_consumer_span_closes_after_handler_error_or_timeout(self):
-        async def run(timeout):
-            spans = []
-            finished = asyncio.Event()
-
-            async def handler(payload):
-                spans.append(trace.get_current_span())
-                try:
-                    if timeout:
-                        await asyncio.sleep(10)
-                    raise RuntimeError("handler failure")
-                finally:
-                    finished.set()
-
-            consumer = ServiceBusScheduleConsumer(handler=handler)
-            consumer._loop = asyncio.get_running_loop()
-            receiver = FakeReceiver()
-            message = FakeReceivedMessage({
-                "version": "1.0", "type": "hermes.cron.fire", "workerId": "worker",
-                "jobId": "job", "revision": "revision",
-            })
-            await asyncio.to_thread(consumer._process, receiver, message)
-            await asyncio.wait_for(finished.wait(), timeout=2)
-            await asyncio.sleep(0)
-            return receiver, spans
-
-        for timeout in (False, True):
-            with self.subTest(timeout=timeout):
-                tracer = TracerProvider().get_tracer("scheduler-test")
-                with (
-                    patch.dict(os.environ, {
-                        "WORKER_ID": "worker", "SCHEDULER_MAX_LOCK_RENEWAL_SECONDS": "1",
-                        "SCHEDULER_MAX_DELIVERY_COUNT": "5",
-                    }),
-                    patch("bridge.telemetry.trace.get_tracer", return_value=tracer),
-                ):
-                    receiver, spans = asyncio.run(run(timeout))
-                self.assertEqual(len(receiver.abandoned), 1)
-                self.assertEqual(len(spans), 1)
-                self.assertFalse(spans[0].is_recording())
 
     def test_scheduled_document_lock_rearms_without_model_turn(self):
         class Adapter:
@@ -670,34 +500,6 @@ class UserSchedulingTests(unittest.TestCase):
                     },
                     "Scheduled hello",
                 ))
-
-    def test_invalid_service_bus_message_is_dead_lettered(self):
-        previous = os.environ.get("WORKER_ID")
-        os.environ["WORKER_ID"] = "hermes2"
-        try:
-            consumer = ServiceBusScheduleConsumer(
-                handler=lambda payload: asyncio.sleep(0)
-            )
-            receiver = FakeReceiver()
-            consumer._process(
-                receiver,
-                FakeReceivedMessage({
-                    "version": "2.0",
-                    "type": "hermes.cron.fire",
-                    "workerId": "hermes2",
-                }),
-            )
-        finally:
-            if previous is None:
-                os.environ.pop("WORKER_ID", None)
-            else:
-                os.environ["WORKER_ID"] = previous
-
-        self.assertEqual(len(receiver.dead_lettered), 1)
-        self.assertEqual(
-            receiver.dead_lettered[0][1]["reason"],
-            "invalid_schedule_message",
-        )
 
     def test_cron_execution_receipt_retries_delivery_without_rerunning(self):
         job = {
@@ -1419,7 +1221,7 @@ class UserSchedulingTests(unittest.TestCase):
 
     @staticmethod
     def _prepare_dream_checkpoint(profile, operation):
-        phases = ["pending", "dream_started", "dream_completed", "status_completed", "prepared"]
+        phases = ["pending", "dream_started", "dream_completed", "status_completed"]
         for before, after in zip(phases, phases[1:]):
             cron_runtime.checkpoint_system_schedule(
                 profile, job_id=operation["jobId"], revision=operation["revision"],
@@ -1446,7 +1248,7 @@ class UserSchedulingTests(unittest.TestCase):
             first = cron_runtime.checkpoint_system_schedule(profile, **arguments)
             retry = cron_runtime.checkpoint_system_schedule(profile, **arguments)
             self.assertEqual(first, retry)
-            with self.assertRaisesRegex(RuntimeError, "prepared checkpoint"):
+            with self.assertRaisesRegex(RuntimeError, "status checkpoint"):
                 cron_runtime.complete_system_schedule(
                     profile, job_id="dream-job", revision="revision", occurrence_id="occurrence",
                     owner_token=receipt["ownerToken"], success=True,

@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "failures": [],
+  "attempts": 144,
+  "quality_coverage": 144,
+  "operations": 214,
+  "estimated_envelope_usd": 125.3993288,
+  "primary_phase": "serial",
+  "primary_attempts": 112,
+  "minimum_observed_model_job_gap_seconds": 60.01091766357422,
+  "cooldown_clock": "Unix time: original result.json last-write time to next ledger start; no mixed-clock subtraction",
+  "timing_evidence": "results\\timing.json"
+}

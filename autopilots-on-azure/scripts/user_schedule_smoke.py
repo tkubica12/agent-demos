@@ -97,12 +97,16 @@ def wait_for_native_runtime(client: httpx.Client, runtime_url: str, api_key: str
     wait_until(status, lambda code: code == 200, timeout=timeout, interval=2)
 
 
-def require_awake_gateway(outputs: dict[str, Any]) -> dict[str, Any]:
+def require_native_gateway(outputs: dict[str, Any]) -> dict[str, Any]:
     gateway = worker_sandbox(outputs, "gateway")
     policy = (gateway.get("lifecycle") or {}).get("autoSuspendPolicy") or {}
-    if str(gateway.get("state") or "").lower() != "running" or policy.get("enabled") is not False:
-        raise RuntimeError("The gateway Sandbox must be running with auto-suspend disabled to receive Service Bus messages.")
-    return {"sandboxId": gateway["id"], "state": gateway["state"], "autoSuspendEnabled": False}
+    if (
+        str(gateway.get("state") or "").lower() not in {"running", "stopped", "suspended", "idle"}
+        or policy.get("enabled") is not True or policy.get("mode") != "Memory"
+        or not outputs.get("native_transport", {}).get("triggers")
+    ):
+        raise RuntimeError("The gateway requires native wake triggers and Memory auto-suspend.")
+    return {"sandboxId": gateway["id"], "state": gateway["state"], "autoSuspendEnabled": True}
 
 
 def runtime_state(outputs: dict[str, Any]) -> str:
@@ -121,10 +125,10 @@ def require_suspend_window(outputs: dict[str, Any], due_seconds: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run one real Hermes cron job through Service Bus with an always-awake Sandbox gateway."
+        description="Run one real Hermes cron job through native Service Bus wake and a sleeping gateway."
     )
     parser.add_argument("--state-name", default="hermes2")
-    parser.add_argument("--due-seconds", type=int, default=180)
+    parser.add_argument("--due-seconds", type=int, default=420)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--require-runtime-suspension", action="store_true", help="Observe the existing runtime idle policy before the job becomes due; never change that policy.")
     args = parser.parse_args()
@@ -140,7 +144,7 @@ def main() -> None:
     platform = terraform_output(PLATFORM_DIR)
     if not outputs.get("user_scheduling_enabled"):
         raise RuntimeError("User scheduling is not enabled for this Worker.")
-    gateway_before = require_awake_gateway(outputs)
+    gateway_before = require_native_gateway(outputs)
 
     runtime_url = str(outputs["runtime_url"]).rstrip("/")
     api_key = str(tfvars["api_server_key"])
@@ -224,11 +228,15 @@ def main() -> None:
                     lambda state: state.lower() in {"suspended", "stopped", "idle"},
                     timeout=max(1, int((due_at - datetime.now(UTC)).total_seconds()) - 15),
                 )
-            require_awake_gateway(outputs)
+            gateway_before_due = require_native_gateway(outputs)
             seconds_until_due = (due_at - datetime.now(UTC)).total_seconds()
+            if args.require_runtime_suspension and seconds_until_due > 15:
+                time.sleep(seconds_until_due - 15)
+                gateway_before_due = require_native_gateway(outputs)
+                seconds_until_due = (due_at - datetime.now(UTC)).total_seconds()
             if seconds_until_due > 0:
                 time.sleep(seconds_until_due + 30)
-            require_awake_gateway(outputs)
+            require_native_gateway(outputs)
             if args.require_runtime_suspension:
                 wait_until(lambda: runtime_state(outputs), lambda state: state.lower() == "running", timeout=300)
 
@@ -299,7 +307,8 @@ def main() -> None:
                 "jobId": job_id,
                 "dueAt": due_at.isoformat(),
                 "gatewayBefore": gateway_before,
-                "gatewayAfter": require_awake_gateway(outputs),
+                "gatewayBeforeDue": gateway_before_due,
+                "gatewayAfter": require_native_gateway(outputs),
                 "runtimeStateBeforeDue": before_due,
                 "runtimeSuspensionObserved": before_due.lower() in {"suspended", "stopped", "idle"},
                 "executionStatus": receipt["status"],

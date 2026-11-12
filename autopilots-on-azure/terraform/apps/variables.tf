@@ -119,31 +119,6 @@ variable "servicebus_dream_cron_expression" {
   }
 }
 
-variable "scheduled_learning_enabled" {
-  type    = bool
-  default = false
-}
-
-variable "scheduled_learning_initial_delay_seconds" {
-  type    = number
-  default = 60
-
-  validation {
-    condition     = var.scheduled_learning_initial_delay_seconds >= 0 && var.scheduled_learning_initial_delay_seconds <= 86400
-    error_message = "scheduled_learning_initial_delay_seconds must be between 0 and 86400."
-  }
-}
-
-variable "scheduled_learning_interval_seconds" {
-  type    = number
-  default = 86400
-
-  validation {
-    condition     = var.scheduled_learning_interval_seconds >= 300 && var.scheduled_learning_interval_seconds <= 2592000
-    error_message = "scheduled_learning_interval_seconds must be between 300 and 2592000."
-  }
-}
-
 variable "scheduled_learning_focus" {
   type    = string
   default = "Review recent meaningful work for reusable, privacy-safe Role Skill improvements."
@@ -179,12 +154,6 @@ variable "scheduled_learning_retry_backoff_seconds" {
   }
 }
 
-variable "scheduled_learning_prepare_packet" {
-  type    = bool
-  default = true
-}
-
-
 variable "collective_learning_approval_private_key" {
   type      = string
   default   = ""
@@ -209,33 +178,6 @@ variable "runtime_disk_source_image" {
 variable "runtime_disk_image_name" {
   type    = string
   default = "hermes-api-server-image"
-}
-
-variable "bridge_image" {
-  type = string
-}
-
-variable "bridge_disk_source_image" {
-  type    = string
-  default = ""
-}
-
-variable "private_mcp_image" {
-  type = string
-}
-
-variable "private_mcp_disk_source_image" {
-  type    = string
-  default = ""
-}
-
-variable "public_shipments_mcp_image" {
-  type = string
-}
-
-variable "public_shipments_mcp_disk_source_image" {
-  type    = string
-  default = ""
 }
 
 variable "api_server_key" {

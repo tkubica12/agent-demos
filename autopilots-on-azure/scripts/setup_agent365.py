@@ -266,8 +266,15 @@ def publish_command(*, agent_name: str, ai_teammate: bool) -> list[str]:
     return ["a365", "publish", "--agent-name", agent_name, "--use-blueprint"]
 
 
-def update_endpoint_command(messaging_endpoint: str) -> list[str]:
-    return ["a365", "setup", "blueprint", "--update-endpoint", messaging_endpoint]
+def update_endpoint_command(
+    messaging_endpoint: str, *, agent_name: str = "", tenant_id: str = "",
+) -> list[str]:
+    command = ["a365", "setup", "blueprint", "--update-endpoint", messaging_endpoint]
+    if agent_name:
+        command.extend(["--agent-name", agent_name])
+    if tenant_id:
+        command.extend(["--tenant-id", tenant_id])
+    return command
 
 
 def bump_manifest_patch_version(manifest: dict[str, Any]) -> None:
@@ -415,7 +422,9 @@ def main() -> None:
         config = merge_config(load_json(config_path), config)
     write_json(config_path, config)
 
-    endpoint_update = update_endpoint_command(messaging_endpoint)
+    endpoint_update = update_endpoint_command(
+        messaging_endpoint, agent_name=str(config["agentName"]), tenant_id=tenant_id,
+    )
     publish = publish_command(agent_name=branding.agent_name, ai_teammate=ai_teammate)
 
     print_command("Endpoint update command", endpoint_update, cwd=workspace)

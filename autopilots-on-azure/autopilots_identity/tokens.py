@@ -76,6 +76,7 @@ class AgentIdentityTokenProvider:
         self._client_factory = client_factory
         self._credential: TokenCredential | None = None
         self._cache: dict[tuple[str, str], tuple[str, float]] = {}
+        self._cache_metadata: dict[tuple[str, str], dict[str, int | float]] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     @classmethod
@@ -159,7 +160,10 @@ class AgentIdentityTokenProvider:
         token = str(payload.get("access_token", "")).strip()
         if not token:
             raise RuntimeError("Microsoft Entra token exchange returned no access_token.")
-        return token, int(payload.get("expires_in", 3600))
+        expires_in = payload.get("expires_in")
+        if isinstance(expires_in, bool) or not isinstance(expires_in, (str, int)) or int(expires_in) <= 0:
+            raise RuntimeError("Microsoft Entra token exchange returned no valid server lifetime.")
+        return token, int(expires_in)
 
     def _cached(self, key: tuple[str, str]) -> str:
         value = self._cache.get(key)
@@ -168,4 +172,17 @@ class AgentIdentityTokenProvider:
         return ""
 
     def _store(self, key: tuple[str, str], token: str, expires_in: int) -> None:
-        self._cache[key] = (token, time.time() + max(30, expires_in - 60))
+        acquired = time.time()
+        refresh_at = acquired + max(0, expires_in - 60)
+        self._cache[key] = (token, refresh_at)
+        self._cache_metadata[key] = {
+            "acquiredAt": acquired, "serverExpiresAt": acquired + expires_in,
+            "refreshAfter": refresh_at,
+            "acquisitions": int(self._cache_metadata.get(key, {}).get("acquisitions", 0)) + 1,
+        }
+
+    def cache_status(self) -> list[dict[str, Any]]:
+        return [
+            {"kind": key[0], "scope": key[1], **metadata}
+            for key, metadata in list(self._cache_metadata.items())
+        ]

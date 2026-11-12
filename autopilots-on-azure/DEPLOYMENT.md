@@ -60,7 +60,7 @@ terraform -chdir=terraform\platform init
 terraform -chdir=terraform\platform apply
 ```
 
-The platform (default Terraform workspace) supplies Foundry, ACR, networking, private DNS/Express ingress, the Service Bus namespace, and monitoring. Each Worker's apps workspace owns its Sandbox Groups, identities, and Service Bus queue. Verify the private-ingress environment before linking a Group: the link is irreversible.
+The platform supplies Foundry, the runtime dependency registry, networking, private DNS/Express ingress, Service Bus, and monitoring. Each apps workspace owns five groups/identities, one native receiver for its scheduling queue, and permanent roles. Verify private ingress before linking a Group: the link is irreversible. Deployment refuses a plan that deletes or replaces Worker identities or Sandbox Groups.
 
 ### 2. Apply infrastructure without services
 
@@ -80,17 +80,19 @@ Push-Location ".local\$worker\agent365"
 try { Invoke-AsAdmin { a365 query-entra inheritance } } finally { Pop-Location }
 ```
 
-`setup_identity` writes the blueprint federated credentials for the gateway and runtime identities (removing the obsolete `sandbox` credential), requests missing permissions without recreating identities, and writes and activates the Worker's identity tfvars. Every resource in the inheritance query must have effective inheritance. If Graph CAE requests reauthentication, repeat the admin device-code login before retrying.
+`setup_identity` writes the blueprint federated credentials for the gateway and runtime identities (removing the obsolete `sandbox` credential), requests missing permissions without recreating identities, and writes and activates the Worker's identity tfvars. Inspect inheritance together with direct Agent Identity roles and fixed Agent User delegated grants: an inheritance-only summary does not attest or disprove those direct grants. Require real tool execution under the intended principal. If Graph CAE requests reauthentication, repeat the admin device-code login before retrying.
 
 Reconcile every affected Worker after a `ToolingManifest.json` change before deploying or publishing. See the [identity runbook](docs/runbooks/identity-mcp.md).
 
-### 4. Build images
+### 4. Build the runtime dependency base only when needed
 
 ```powershell
 uv run python -m scripts.build_images --state-name hermes --state-name hermes2
 ```
 
-The selected states must already exist. This builds the Hermes runtime, gateway, private MCP, and public MCP images in ACR and writes their digest pins and matching tagged disk-conversion sources into each `.local\<worker>\apps\generated.app.auto.tfvars.json`; step 5 activates them.
+The selected states must exist. This builds only the heavy Hermes dependency image in ACR and writes its digest and conversion tag to those states. The registry also retains the pinned official upstream image as a server-side build cache; neither repository is a separate thin-service application image. Run the build for a changed Hermes pin, runtime lock, compiled Office helper, or installed dependency—not for ordinary Python source changes.
+
+Gateway and MCP services use a pinned public Python image. Their source archives contain exact file hashes and frozen requirements. Deployment prepares approved-feed wheels once, installs them offline into a lock/base-addressed environment, and reuses that environment on later source changes. The runtime verifies that its source release's dependency lock matches the selected image.
 
 ### 5. Apply and deploy services
 
@@ -102,15 +104,23 @@ uv run python -m scripts.deploy_apps_runtime `
 
 `--apply` implies `--deploy-services` and `--capture` unless `--infrastructure-only` is set. The apply propagates reconciled identity values into Terraform's `deployment_config`; `--deploy-services` without `--apply` reuses that output and is valid only when it is current.
 
-Each Sandbox Group converts images with its own managed identity (`AcrPull`, [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). A new role assignment can take minutes to propagate; a failed conversion stops the deployment. All four disk images are prepared before any service is created, and unchanged images are reused. The capture records native endpoints, `sandbox_services`, and disk image IDs.
+Only runtime private-image conversion needs its managed identity's `AcrPull`. Thin-service groups convert the public Python digest directly. A failed conversion stops deployment without a registry credential fallback. Prepare all four group-scoped images before services; reuse unchanged images. Capture records endpoints, loaded source-release hashes, compute IDs, and native connections/receivers.
 
-A changed image creates new gateway and MCP Sandboxes with new URLs; an environment-only change updates them in place. Service deployment then creates or reuses runtime compute with the gateway URL, waits for runtime `/health` through its OnDemand ingress, and only then writes `AGENT_RUNTIME_URL` into gateway settings. A changed gateway URL, MCP URL, runtime image or other runtime setting replaces runtime compute: deployment first runs a final `hermes backup` inside the old runtime and stops if it fails, then deletes it; the new runtime restores that backup from the `hermes-backups` volume before it starts Hermes. The first deployment creates that platform-managed `AzureBlob` volume in the runtime Sandbox Group. The capture adds `runtime_url` and `runtime_sandbox_id`.
+A source-only update reuses the existing Sandbox and URL. It verifies source bytes, enters gateway maintenance before touching the runtime, checks unfinished gateway work plus actual native tasks/executor threads, switches the supervised process, and requires health to attest the exact release hash. Completed/quarantined receipts may await settlement; unknown effects are not replayed. Failure restores the preceding application configuration.
 
-All service ports are OnDemand. The gateway never auto-suspends (post-ACK work, Service Bus receive). MCPs suspend to Disk after 1800 s idle and wake on their next request. The runtime suspends to Memory after 300 s and uses the native execution keepalive in the `autopilots` Hermes plugin. The gateway has no runtime Sandbox Group role; rerun this step if runtime compute is missing or `Failed`.
+A base-image, compute-setting, or Role Release change may replace runtime compute. Deployment first publishes a final native backup and stops if it fails. A new runtime restores its native Hermes home from the preserved volume. The separate gateway journal is restored with the gateway. Superseded gateway/MCP resources are captured as `superseded_sandbox_ids` for retirement only after real replacement validation.
+
+All service ports are OnDemand. Gateway, runtime, and both MCP services suspend to Memory after 300 idle seconds. Only active work sends self-ingress. Native receivers wait outside the actors, pass the whole encoded broker envelope to fixed callbacks, and never equate a callback receipt with broker ACK.
+
+The script creates the scheduling connection and receiver under the settling gateway MI, verifies immutable ownership, and removes temporary creation grants in `finally`. The native namespace MI receives and executes callbacks only on the gateway group; the gateway renews/completes through its own connection. Native trigger GET redacts authentication and normalizes method casing: only a real scheduled callback, checked journal, and successful settlement prove the live scheduling transport.
+
+Source polling remains platform-managed and can delay scheduled work. Teams turns are handled directly and call native Runs without Service Bus admission or settlement. During idle verification, inspect only management metadata: health requests, console execution, and file access can wake compute.
+
+Unknown scheduled effects are retained in the journal and dead-lettered through the original owning connection. This is terminal quarantine, not successful execution. Inspect the error and original schedule occurrence before any manual recovery; never clear the receipt or resubmit under a fresh identity to make an update pass.
 
 ### 6. Update the Agent 365 endpoint as its direct owner
 
-Required whenever step 5 replaced the gateway Sandbox (any gateway image change): its native URL changes, and Teams and email silently go to the old URL until this step runs. Check whether the registered endpoint is current:
+Required only if compute replacement changed the gateway URL, not for an ordinary source release. Teams and email continue to use the registered URL until its direct blueprint owner reconciles it. Check the real endpoints:
 
 ```powershell
 $bridge = (Get-Content ".local\$worker\apps\terraform-outputs.json" | ConvertFrom-Json).bridge_url
@@ -123,13 +133,13 @@ $registered = (Get-Content ".local\$worker\agent365\$worker-agent365-identifiers
 ```powershell
 Invoke-AsAdmin {
     uv run python -m scripts.setup_agent365 `
-      --state-name $worker --update-endpoint --capture
+      --state-name $worker --tenant-id $tenant --update-endpoint --capture
 }
 ```
 
-This registers `<bridge_url>/api/messages` and refreshes the identifiers file. Do not provision replacement identities for an existing-Worker update. If deletion succeeded but registration failed, repair the endpoint as the direct owner before resuming Teams validation.
+This registers the captured URL and preserves existing names/identities. The wrapper passes the existing agent name and explicit tenant to current `a365`; an unqualified CLI invocation can rename local config/generated files when it detects another active tenant. Never run setup in a mismatched context or create replacement identities. If deletion succeeded but registration failed, repair that same endpoint as its owner before Teams validation.
 
-### 7. Publish the Agent User package
+### 7. Publish only for a new Worker or changed manifest
 
 ```powershell
 $agentName = (Get-Content ".local\$worker\agent365\a365.config.json" | ConvertFrom-Json).agentName
@@ -176,38 +186,33 @@ uv run python -m unittest discover -s tests
 ### Deployed checks
 
 ```powershell
-uv run python -m scripts.demo_ops status --state-name $worker --invoke
-uv run python -m scripts.demo_ops smoke --state-name $worker --timeout 600
-uv run python -m scripts.demo_ops smoke --state-name $worker `
-  --message "Use private incidents to list services, then public shipments to list demo shipments." `
-  --timeout 600
+uv run python -m scripts.demo_ops status --state-name $worker
 uv run python -m scripts.deploy_apps_runtime `
   --state-name $worker --workspace $workspace --plan
 ```
 
-`status` requires a Running gateway with auto-suspend disabled and a healthy `/health`; `--invoke` adds the default smoke. The default smoke checks its reply marker; a custom `--message` is not checked automatically. Require a real model response, actual tool results, correct Worker/release health metadata, and a converged Terraform plan. Unauthenticated public MCP/operator requests must fail authentication; private MCP must not become publicly reachable. Health alone does not check tool authorization.
+`status` checks Sandbox state and bridge health; the health request intentionally wakes the gateway. Verify model and tool behavior by sending a real message through the registered Agent 365/Teams surface. The Service Bus checks below validate scheduled callbacks, not interactive Teams delivery.
 
 Feature-specific live checks:
 
 ```powershell
-uv run python -m scripts.document_smoke --state-name $worker --timeout 1200
-uv run python -m scripts.m365_actions_smoke `
-  --state-name $worker --recipient user@contoso.com
 uv run python -m scripts.user_schedule_smoke `
   --state-name hermes2 --due-seconds 180 --timeout 1200
 uv run python -m scripts.servicebus_dream_smoke `
   --state-name hermes2 --timeout 1800
 ```
 
-- Document smoke creates a real Agent User DOCX, reads a marker, adds/replies to a comment, and checks results. Remove the document afterward through its Microsoft 365 storage surface.
-- M365 actions smoke is a dry run until `--execute`; execution sends and reads back a real Agent User Teams message.
 - Schedule smoke checks native schedule/queue state, durable execution/delivery receipts, output hash, and DLQ, then removes the test job.
-- Dream smoke runs an ad-hoc occurrence without advancing production cron. A prepared no-change result may contain `packet=null`.
-- For resume, stop an otherwise idle runtime, invoke through the gateway, and verify the same Sandbox ID and an unchanged marker file in the Worker home. Deleting/recreating compute is a different operation.
-- For durability, read `backup` in runtime `/health` after a conversation: `lastArchive` changes within about a minute and `lastError` stays empty. For a restore drill, `demo_ops reset-sandbox --execute` publishes a final backup and deletes compute; rerun step 5 and compare session, message, skill and cron counts with the values before the reset.
+- Dream smoke runs an ad-hoc occurrence through the Sandbox management plane without advancing production cron or preparing a Learning Packet.
+- For resume, stop an otherwise idle runtime, send a real Teams message, and verify the same Sandbox ID and an unchanged marker file in the Worker home. Deleting/recreating compute is a different operation.
+- For durability, read `backup` in runtime `/health` after a Teams conversation: `lastArchive` changes within about a minute and `lastError` stays empty. For a restore drill, `demo_ops reset-sandbox --execute` publishes a final backup and deletes compute; rerun step 5 and compare session, message, skill and cron counts with the values before the reset.
 - For automatic idle/keepalive, run a native model/tool operation for longer than 300 s, then observe only Sandbox management metadata until it stops. Health polling, open ingress connections, execute calls and file reads reset idle time and invalidate this measurement. Repeat with the plugin disabled only in an isolated test Sandbox. Verify OnDemand wake directly as well as through the gateway; compare transport readiness separately from the model's first/final response.
 
 Use [DEMO.md](DEMO.md) for Teams attachments, comments, cards, app authorization, and learning evaluation.
+
+Previously recorded 2026-11-05 live checks validated Memory stop/wake, private/public MCP execution, Teams/email replies, user scheduling, and ad-hoc Dreaming. Those checks predate the current scheduling-only transport and removal of the model-invocation API; they do not prove the revised deployment. Re-run the deployed checks above after applying this architecture. The recorded timings are observations, not SLAs.
+
+A separate human-assisted channel check verified a real structured Agent User mention, a completed/settled native run, and the reply in Teams search and its thread under the demo tenant. The corporate operator WorkIQ connector was not used. Rich-editor text insertion required human assistance; the actual post contained only the unique marker, so the resulting clarification proves channel routing/delivery, not compliance with an exact-echo instruction. The marker was absent from all checked memory/skill Markdown files. Personal-chat success alone must never be treated as proof of group routing.
 
 ## Scheduling and release changes
 
@@ -216,14 +221,13 @@ To configure Service Bus Dreaming on an existing Worker:
 ```powershell
 uv run python -m scripts.setup_app_tfvars `
   --state-name $worker --autopilot-name $worker `
-  --no-scheduled-learning-enabled `
   --user-scheduling-enabled --servicebus-dream-enabled `
   --servicebus-dream-cron-expression "0 2 * * *" --runtime-only
 uv run python -m scripts.deploy_apps_runtime `
   --state-name $worker --workspace $workspace --apply --auto-approve --capture
 ```
 
-`setup_app_tfvars` preserves unspecified settings; `--apply` redeploys services from the updated settings. The bridge-owned interval timer and Service Bus Dreaming are mutually exclusive, and Service Bus Dreaming requires user scheduling. Manual Dreaming uses `scripts.demo_ops dream`; the interval timer has separate `scheduled-run`/`scheduled-status` commands.
+`setup_app_tfvars` preserves unspecified settings; `--apply` redeploys services from the updated settings. Service Bus Dreaming requires user scheduling. There is no bridge interval timer: native cron owns the schedule and wakes the gateway through its managed receiver. Manual Dreaming uses `scripts.servicebus_dream_smoke`, which enqueues a separate ad-hoc occurrence through Sandbox management and leaves production cron unchanged. Dreaming never prepares or exports a Learning Packet; run `scripts.collective_learning prepare` explicitly when desired.
 
 Only the Worker owner receives the learning digest and may undo, approve or share what the Worker learned. Set the owner's Entra object ID, normally the Agent Identity sponsor, the same way: `setup_app_tfvars --state-name $worker --autopilot-name $worker --worker-owner-id <object-id> --runtime-only`, then apply. Without it, nobody receives the digest.
 
@@ -266,6 +270,10 @@ uv run python -m scripts.register_foundry_external_agent `
 Both Workers report as `autopilots-hermes`; the OTel agent ID defaults to the agent name. Add `--apply` only to reconcile registration. After a real explicit-session turn, inspect Foundry traces for model/tool callbacks, timings/usage, opaque identifiers, and absent payload content.
 
 ## Cleanup
+
+For an in-place upgrade, do not tear down the Worker. Retire only captured `superseded_sandbox_ids` after real replacement validation and after the registered Agent 365 endpoint matches the new gateway. Protect current Sandbox/image IDs, all Worker identities/groups/volumes, generated apps, native home/backups, and the active gateway journal, including quarantined effects. A gateway's `/backup/transport` is current durable state, not an obsolete runtime journal.
+
+Delete unused converted images only after enumerating remaining Sandboxes and snapshots. `DiskImageHasDependents` is a real platform refusal even when the public inventory shows no matching dependent: retain and report that exact image; never delete the live Group, state, or permissions to force cleanup. Registry cleanup must preserve the active runtime digest/conversion tag and the pinned upstream build cache. Delete only unreferenced hashed application directories and installer archives, checking current configuration and process references first. Legacy runtime transport data is removable only when every old receipt is completed and settled; the active gateway's unknown/dead-lettered receipts are never part of that cleanup.
 
 Remove a whole Worker with one command. It previews by default:
 

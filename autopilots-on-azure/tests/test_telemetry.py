@@ -62,8 +62,8 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
         bridge = FastAPI()
         bridge.add_middleware(TelemetryMiddleware)
 
-        @bridge.post("/invoke")
-        async def invoke():
+        @bridge.post("/api/messages")
+        async def receive_activity():
             with telemetry.operation_span(
                 "invoke_agent",
                 session_id="private-session",
@@ -85,13 +85,13 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
             transport=httpx.ASGITransport(app=bridge), base_url="http://bridge"
         ) as client:
             response = await client.post(
-                "/invoke", headers={"traceparent": parent, "baggage": "prompt=private"}
+                "/api/messages", headers={"traceparent": parent, "baggage": "prompt=private"}
             )
         self.assertEqual(response.status_code, 200)
         spans = self.exporter.get_finished_spans()
         self.assertEqual(len(spans), 5)
         by_name = {span.name: span for span in spans}
-        incoming = by_name["POST /invoke"]
+        incoming = by_name["POST /api/messages"]
         invoke = by_name["invoke_agent"]
         runtime_span = by_name["POST /sessions/{session}"]
         model = by_name["chat"]
@@ -182,23 +182,14 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(spans[0].name, "HTTP GET")
         self.assertNotIn("http.route", spans[0].attributes)
 
-    async def test_real_bridge_invoke_uses_agent_span(self):
+    async def test_bridge_has_no_model_operator_or_polling_routes(self):
         import bridge.app as bridge_app
-        from bridge.runtime.base import AgentResponse
 
-        adapter = AsyncMock()
-        adapter.invoke.return_value = AgentResponse(text="done", raw={})
-        with patch.object(bridge_app, "runtime_adapter", return_value=adapter):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=bridge_app.app), base_url="http://bridge"
-            ) as client:
-                response = await client.post(
-                    "/invoke", json={"conversationId": "private-session", "message": "private prompt"}
-                )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            {span.name for span in self.exporter.get_finished_spans()}, {"invoke_agent", "POST /invoke"}
-        )
+        routes = {route.path for route in bridge_app.app.routes}
+        self.assertTrue({
+            "/invoke", "/invocations/{request_id}", "/internal/dream",
+            "/internal/scheduled-learning/run", "/internal/scheduled-learning/status",
+        }.isdisjoint(routes))
 
     async def test_invalid_incoming_correlation_is_not_exported(self):
         with telemetry.runtime_correlation_context({"x-autopilot-otel-session": "private session"}):

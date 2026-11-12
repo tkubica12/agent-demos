@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import unittest
+from unittest.mock import patch
 
 from azure.core.credentials import AccessToken
 
@@ -42,6 +43,28 @@ class FakeClient:
 
 
 class AgentIdentityTokenProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cache_status_exposes_server_lifetime_but_never_credentials(self) -> None:
+        provider = self.provider([], [])
+        key = ("agent_user", "mail-resource/.default")
+        with patch("autopilots_identity.tokens.time.time", return_value=1000):
+            provider._store(key, "private-example-token", 3600)
+        status = provider.cache_status()
+        self.assertEqual(status[0]["serverExpiresAt"], 4600)
+        self.assertEqual(status[0]["refreshAfter"], 4540)
+        self.assertEqual(status[0]["acquisitions"], 1)
+        self.assertNotIn("private-example-token", json.dumps(status))
+        with patch("autopilots_identity.tokens.time.time", return_value=5000):
+            provider._store(key, "new-private-example-token", 3600)
+        self.assertEqual(provider.cache_status()[0]["acquisitions"], 2)
+
+    async def test_short_server_lifetime_is_never_extended_by_cache_policy(self) -> None:
+        provider = self.provider([], [])
+        key = ("agent", "resource/.default")
+        with patch("autopilots_identity.tokens.time.time", return_value=1000):
+            provider._store(key, "short-lived-example", 5)
+            self.assertEqual(provider._cached(key), "")
+        self.assertEqual(provider.cache_status()[0]["serverExpiresAt"], 1005)
+
     def provider(self, calls: list[dict[str, str]], responses: list[str]) -> AgentIdentityTokenProvider:
         return AgentIdentityTokenProvider(
             AgentIdentityTokenConfig(

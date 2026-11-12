@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en" data-default-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness řídí práci. Důvěru vlastní aplikace.</title>
+<meta name="description" content="Praktické srovnání Deep Agents, Microsoft Agent Framework, GitHub Copilot SDK a Pi.">
+<!-- Stable key for read-progress storage. Keep it if this document may be
+     served from more than one path; delete it and the pathname is used. -->
+<meta name="doc-id" content="agent-harness-comparison-20261022">
+
+<!-- 1. Theme bootstrap. Must be the first script in <head>. -->
+<script data-doc-bootstrap>
+/* Inline in the head before styles with sync-head.js. No deferred bootstrap. */
+(() => {
+  "use strict";
+  const root = document.documentElement;
+  const params = new URLSearchParams(location.search);
+  const id = document.querySelector('meta[name="doc-id"]')?.content ||
+    location.pathname.replace(/\.standalone(?=\.html$)/i, "");
+  const prefix = "html-docs:" + id + ":";
+  const choices = { theme: ["light", "dark"], accent: ["blue", "red", "green", "yellow"] };
+  const read = (name) => {
+    try { return localStorage.getItem(prefix + name); }
+    catch { return null; /* Storage may be unavailable for local files. */ }
+  };
+  const write = (name, value) => {
+    try { localStorage.setItem(prefix + name, value); }
+    catch { /* The current view still works without persistence. */ }
+  };
+  function refresh() {
+    for (const name of Object.keys(choices)) {
+      const current = root.getAttribute("data-" + name);
+      const next = choices[name][(choices[name].indexOf(current) + 1) % choices[name].length];
+      document.querySelectorAll('[data-action="toggle-' + name + '"]').forEach(button => {
+        button.textContent = name === "theme" ? (next === "dark" ? "Dark" : "Light") :
+          "Accent: " + current[0].toUpperCase() + current.slice(1);
+        button.setAttribute("aria-label", name === "theme" ? "Switch to " + next + " theme" :
+          "Accent: " + current + ". Switch to " + next);
+      });
+    }
+  }
+  for (const [name, values] of Object.entries(choices)) {
+    const fallback = name === "theme" && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : values[0];
+    const value = [params.get(name), read(name), root.getAttribute("data-default-" + name), fallback]
+      .map(candidate => name === "accent" && candidate === "orange" ? "red" : candidate)
+      .find(candidate => values.includes(candidate));
+    root.setAttribute("data-" + name, value);
+  }
+  root.classList.add("js");
+  if (["slides", "sheet"].includes(params.get("view"))) root.setAttribute("data-view", params.get("view"));
+
+  // Print what is on screen. data-print selects the matching print stylesheet.
+  const printTarget = () => {
+    if (document.querySelector(".deck-stage")) return "slides";
+    const view = root.getAttribute("data-view");
+    if (view === "slides" || (view === "sheet" && document.querySelector(".sheet"))) return view;
+    return document.querySelector(".doc") || !document.querySelector(".sheet") ? "read" : "sheet";
+  };
+  let printing = null;
+  addEventListener("beforeprint", () => {
+    if (root.hasAttribute("data-print")) return; // Set by an automated export.
+    const target = printTarget();
+    printing = document.title;
+    root.setAttribute("data-print", target);
+    // The browser proposes the title as the PDF file name.
+    if (target !== "read" && document.querySelector(".doc")) {
+      document.title += target === "slides" ? " - Slides" : " - Sheet";
+    }
+  });
+  addEventListener("afterprint", () => {
+    if (printing === null) return;
+    root.removeAttribute("data-print");
+    document.title = printing;
+    printing = null;
+  });
+
+  // Keep the display awake while presenting, like presentation software does.
+  let lock = null;
+  let awake = false;
+  async function holdScreen() {
+    if (!awake || lock || document.visibilityState !== "visible" || !navigator.wakeLock) return;
+    try {
+      const sentinel = await navigator.wakeLock.request("screen");
+      if (!awake || lock) { sentinel.release(); return; }
+      lock = sentinel;
+      root.setAttribute("data-awake", "");
+      sentinel.addEventListener("release", () => {
+        if (lock !== sentinel) return;
+        lock = null;
+        root.removeAttribute("data-awake");
+      });
+    } catch { /* Denied by battery saver or an embedding policy; retried on input. */ }
+  }
+  function keepAwake(on) {
+    awake = !!on;
+    if (awake) holdScreen();
+    else if (lock) lock.release();
+  }
+  // The browser drops the lock when the tab is hidden; some require a gesture.
+  document.addEventListener("visibilitychange", holdScreen);
+  document.addEventListener("pointerdown", holdScreen);
+  document.addEventListener("keydown", holdScreen);
+
+  window.HtmlDocs = { read, write, refresh, keepAwake };
+  document.addEventListener("DOMContentLoaded", refresh);
+  document.addEventListener("click", event => {
+    if (event.target.closest('[data-action="print"]')) window.print();
+  });
+  document.addEventListener("click", event => {
+    const button = event.target.closest('[data-action="toggle-theme"], [data-action="toggle-accent"]');
+    if (!button) return;
+    const name = button.getAttribute("data-action").slice(7);
+    const values = choices[name];
+    const next = values[(values.indexOf(root.getAttribute("data-" + name)) + 1) % values.length];
+    root.setAttribute("data-" + name, next);
+    write(name, next);
+    // Replace a URL override too, so reloading preserves a deliberate change.
+    const url = new URL(location.href);
+    if (url.searchParams.has(name)) {
+      url.searchParams.set(name, next);
+      history.replaceState(null, "", url.href);
+    }
+    refresh();
+  });
+})();
+</script>
+
+<!-- 2. Canonical design tokens. Copied verbatim from assets/tokens.css.
+     Never edit these values in a page. -->
+<style data-doc-tokens>
+/* Canonical tokens. Inline with sync-head.js; one accent family at a time. */
+:root {
+  color-scheme: light;
+  --bg: #fafafa; --surface: #ffffff; --surface-2: #f2f2f2; --surface-3: #e8e8e8;
+  --border: #dedede; --border-strong: #b8b8b8;
+  --text: #161616; --text-muted: #565656; --text-faint: #686868;
+  --accent-light: #006da0; --accent-dark: #00a4ef;
+  --accent: var(--accent-light);
+  --accent-strong: var(--accent);
+  --accent-quiet: var(--accent);
+  --accent-soft: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  --accent-border: color-mix(in srgb, var(--accent) 36%, var(--bg));
+  --warn: var(--accent); --warn-soft: var(--accent-soft); --warn-border: var(--accent-border);
+  --code-bg: var(--surface-2); --code-border: var(--border);
+  --focus: var(--accent);
+  --shadow-1: 0 1px 2px rgba(0,0,0,.04);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.04), 0 12px 28px rgba(0,0,0,.06);
+  --radius: 10px; --radius-sm: 6px; --canvas: 1160px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", ui-monospace, Consolas, "SF Mono", "Liberation Mono", Menlo, monospace;
+}
+/* Screen only: every PDF and printout uses the light palette. */
+@media screen {
+  [data-theme="dark"], :root:not([data-theme])[data-default-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101010; --surface: #191919; --surface-2: #232323; --surface-3: #2c2c2c;
+    --border: #363636; --border-strong: #595959;
+    --text: #f2f2f2; --text-muted: #b5b5b5; --text-faint: #a0a0a0;
+    --accent: var(--accent-dark);
+    --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+    --shadow-2: 0 2px 4px rgba(0,0,0,.3), 0 12px 28px rgba(0,0,0,.4);
+  }
+}
+[data-accent="red"], :root:not([data-accent])[data-default-accent="red"],
+[data-accent="orange"], :root:not([data-accent])[data-default-accent="orange"] {
+  --accent-light: #bc3a16; --accent-dark: #f25022;
+}
+[data-accent="green"], :root:not([data-accent])[data-default-accent="green"] {
+  --accent-light: #4c7100; --accent-dark: #7fba00;
+}
+[data-accent="yellow"], :root:not([data-accent])[data-default-accent="yellow"] {
+  --accent-light: #805b00; --accent-dark: #ffb900;
+}
+</style>
+
+<!-- 3. Shared assets. Adjust the relative path to the assets folder.
+     sheet.css/js serve an optional companion sheet; keep them either way. -->
+<link rel="stylesheet" href="assets/article.css">
+<link rel="stylesheet" href="assets/slides.css">
+<link rel="stylesheet" href="assets/sheet.css">
+<script src="assets/article.js" defer></script>
+<script src="assets/slides.js" defer></script>
+<script src="assets/sheet.js" defer></script>
+</head>
+
+<body><!--
+MIT License
+
+Copyright (c) 2026 Tomáš Kubica
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--><div class="controls" role="group" aria-label="Document controls"><button type="button" class="ctrl" data-action="expand-all">Expand all</button><button type="button" class="ctrl" data-action="collapse-all">Collapse all</button><button type="button" class="ctrl" data-action="toggle-sheet" aria-pressed="false">Sheet</button><button type="button" class="ctrl" data-action="print">PDF</button><button type="button" class="ctrl" data-action="toggle-theme">Dark</button><button type="button" class="ctrl" data-action="toggle-accent">Accent: Blue</button></div><div class="doc"><header class="doc-header" id="opening"><p class="eyebrow">RESEARCH / EVIDENCE / DECISION</p><h1>Harness řídí práci. Důvěru vlastní aplikace.</h1><p class="subtitle">Praktické srovnání Deep Agents, Microsoft Agent Framework, GitHub Copilot SDK a Pi.</p></header><main><section class="chapter" id="ch-application"><h2 class="chapter-label">Aplikace</h2><article class="card card--lead" id="card-thesis" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Harness řídí práci. Důvěru vlastní aplikace.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>144 zaznamenaných pokusů; 144 zaslepených hodnocení. Hlavní srovnání: 112 sériových pokusů; původních 32 paralelních zvlášť.</p><p>Porovnáváme dva směry sbližování: framework rozšířený o harness a hotový harness použitý jako součást aplikace. Oba musí projít stejnou hranicí schopností, důkazů a publikace.</p><figure class="sheet-figure"><svg viewBox="0 0 760 180" role="img"
+aria-label="Dvě cesty vedou ke společné důvěryhodné aplikaci">
+<g fill="var(--surface-2)" stroke="var(--border-strong)" stroke-width="1.5">
+<rect x="2" y="3" width="240" height="72" rx="9"/>
+<rect x="2" y="102" width="240" height="72" rx="9"/>
+<rect x="288" y="38" width="254" height="104" rx="9" stroke="var(--accent)"/>
+<rect x="587" y="53" width="170" height="76" rx="9"/></g>
+<g fill="none" stroke="var(--accent)" stroke-width="2">
+<path d="M243 39H266V75H285M243 138H266V105H285M543 91H584"/>
+<path d="m278 68 7 7-7 7m0 16 7 7-7 7m299-28 7 7-7 7"/></g>
+<g fill="var(--text)" font-family="Segoe UI, sans-serif" font-size="17" text-anchor="middle">
+<text x="122" y="31">Framework → harness</text>
+<text x="122" y="57" font-size="14">Deep Agents · Agent Framework</text>
+<text x="122" y="130">Harness → aplikace</text>
+<text x="122" y="156" font-size="14">Copilot SDK · Pi</text>
+<text x="415" y="72">Trusted host</text>
+<text x="415" y="99" font-size="14">identity · tools · budget</text>
+<text x="415" y="121" font-size="14">validace · publikace</text>
+<text x="672" y="85">HTML + PDF</text>
+<text x="672" y="109" font-size="14">ověřitelný podklad</text>
+</g></svg><figcaption>Agent vybírá další krok; aplikace rozhoduje, co smí vykonat a vydat.</figcaption></figure></div></article><article class="card" id="card-scenario" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Rozhodovací brief potřebuje hledání i opravy</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><div class="sheet-grid"><section class="sheet-block"><h3>Explorace není pevný workflow</h3><p>Agent zvolí dotazy, prohlédne nalezené pasáže, hledá protiargument a opraví draft. Dopředu neznáme konkrétní zdroje ani potřebná navazující ověření.</p></section><section class="sheet-block"><h3>Publikace není agentská improvizace</h3><p>Host přijímá jen strukturovaný brief. Ověří zdroje, doslovné citace, různorodost a délku; bezpečně vykreslí šablonu a přes Chromium vytvoří PDF.</p></section><section class="sheet-block"><h3>Stejný model, reálné služby</h3><p>Všechny varianty používají gpt-6-1-sol v existujícím Foundry přes Entra a stejný WebIQ MCP. Zadání jsou hypotetická; dotazy, odpovědi a artefakty jsou skutečné.</p></section><section class="sheet-block"><h3>Důvěra má omezený význam</h3><p>Validní citace není automaticky správný závěr. WebIQ účet vrací indexované pasáže, ne plné stránky. Aplikace nevykonává doporučené nasazení ani obchodní rozhodnutí.</p></section></div></div></article><article class="card" id="card-boundary" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Pět úzkých nástrojů stačí na skutečnou rešeršní smyčku</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p><code>search_web → inspect_source → save_draft → validate_report → publish_report</code>. Šipky popisují obvyklý průchod, nikoli ručně napsanou agentskou smyčku. Další dotaz i opravu volí příslušný nativní harness. WebIQ klíč zůstává v procesu hosta; model jej nedostává.</p><p>Nejvýše 6 hledání, 5 různých čtených zdrojů, 18 společných tool calls a 360 sekund. Modelový limit je 24; Deep jej kontroluje callbackem, MAF limitem iterací a Node runtimes po assistant response. Nejde o totožný pre-request mechanismus. Nativní TODO není společný aplikační tool call. Shell ani agentem dodané HTML nebo výstupní cesty nejsou přípustné.</p><p>Trvale uložený SQLite ledger hlídá 240 operací, odhad 200 USD a 10 000 WebIQ volání. Neúspěch s neúplnou usage ponechá rezervu 3,25 USD. Read-only WebIQ HTTP 429/502/503/504 má jediný zaznamenaný retry; případné opakované search volání se znovu účtuje.</p></div></article></section><section class="chapter" id="ch-primitives"><h2 class="chapter-label">Primitives</h2><article class="card" id="card-matrix" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Rozdíl je v zabalení smyčky, ne v odpovědnosti aplikace</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><table><thead><tr><th scope="col">Primitivum</th><th scope="col">Deep Agents</th><th scope="col">MAF</th><th scope="col">Copilot SDK</th><th scope="col">Pi</th></tr></thead><tbody><tr><th scope="row">Nativní exekuce</th><td>LangGraph agent</td><td>Harness agent</td><td>CLI runtime</td><td>Node session</td></tr><tr><th scope="row">App tools</th><td>StructuredTool</td><td>@tool</td><td>Tool + handler</td><td>customTools</td></tr><tr><th scope="row">Plán v tomto profilu</th><td>TODO middleware</td><td>TODO provider</td><td>Konverzace</td><td>Konverzace</td></tr><tr><th scope="row">Usage</th><td>Message metadata</td><td>Response aggregate</td><td>Usage events</td><td>Message events</td></tr><tr><th scope="row">Kde běží host</th><td>Python</td><td>Python</td><td>Python + runtime</td><td>Python + Node bridge</td></tr></tbody></table><p>Tabulka popisuje skutečně použitý profil, nikoli úplný katalog produktů. MCP připojení je záměrně ve společném hostu; neměříme zde kvalitu čtyř různých MCP konektorů. Filesystem, shell, delegace a skills nejsou cílem tohoto úzkého scénáře.</p></div></article><article class="card" id="card-effort" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Krátký factory call nenahrazuje integrační práci</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><table><thead><tr><th scope="col">Nativní adaptér</th><th scope="col">Neprázdné řádky včetně instrumentace</th></tr></thead><tbody><tr><th scope="row">LangChain Deep Agents</th><td>50</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>36</td></tr><tr><th scope="row">GitHub Copilot SDK</th><td>89</td></tr><tr><th scope="row">Pi</th><td>149</td></tr></tbody></table><p>Společná aplikace: 621 neprázdných Python řádků. Pi zahrnuje i Node driver a JSONL bridge; ostatní adaptéry také zahrnují identity, limity a observability. Testy, benchmark, report generator a vendored html-docs assets nejsou v tomto čísle. LOC charakterizuje tento profil, ne obecnou produktivitu.</p></div></article></section><section class="chapter" id="ch-runtimes"><h2 class="chapter-label">Čtyři cesty</h2><article class="card" id="card-deepagents" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Deep Agents přidává harness do Python aplikace</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><h4>Jak funguje</h4><p>ChatOpenAI používá Responses se streamováním a Entra tokenem. create_deep_agent sestaví nativní LangGraph smyčku; společné nástroje jsou StructuredTool.</p><h4>Silná stránka</h4><p>Výslovné middleware a harness profiles umožňují vysvětlit plánování, práci s kontextem a omezení nástrojů na jednom místě. TODO přidává nativní TodoListMiddleware.</p><h4>Nevýhoda</h4><p>Přichází širší middleware stack a jeho instrukce. Graph recursion limit není totéž co počet modelových volání; příliš nízký limit v pilotu zastavil i validní rozpracovaný report.</p><h4>Rozsah důkazu</h4><p>Profil vylučuje filesystem, shell a task/subagents. Využíváme nativní agentní smyčku a dostupné TODO; dlouhý kontext, checkpoint recovery ani delegaci tento benchmark neověřuje.</p><pre><code>model = ChatOpenAI(..., use_responses_api=True)
+agent = create_deep_agent(
+    model=model, tools=research_tools,
+    middleware=[TodoListMiddleware()],
+)
+result = await agent.ainvoke(messages, config=limits)</code></pre><p>Schéma API zapojení; plný runnable kód: <code>harness_lab\adapters.py</code>. Dokumentace: <a href="#source-D">[D]</a>.</p></div></article><article class="card" id="card-maf" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Agent Framework skládá harness z providers</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><h4>Jak funguje</h4><p>OpenAIChatClient z agent-framework-openai obaluje Responses klienta. create_harness_agent přidá nativní providers; agent.run vrátí finální AgentResponse a agregovanou usage.</p><h4>Silná stránka</h4><p>Agent, tools, sessions a harness zůstávají v jednom Python modelu. Nativní function invocation configuration a agregovaná usage se snadno propojí s hostitelskou aplikací.</p><h4>Nevýhoda</h4><p>Verze core a connectoru musí souhlasit. Výchozí plan mode vyžadoval schválení člověkem; unattended úloha jej musí vědomě vypnout, nikoli čekání vydávat za dokončený běh.</p><h4>Rozsah důkazu</h4><p>Používáme disable_mode=True, bez file memory a bez vlastního web search provideru. TODO provider zůstává nativní. Filesystem, background work a další experimentální providers nejsou naměřeným důkazem.</p><pre><code>agent = create_harness_agent(
+    client=client, tools=research_tools,
+    disable_mode=True,
+    disable_file_memory=True,
+    disable_web_search=True,
+)
+response = await agent.run(prompt, session=session)</code></pre><p>Schéma API zapojení; plný runnable kód: <code>harness_lab\adapters.py</code>. Dokumentace: <a href="#source-M">[M]</a>.</p></div></article><article class="card" id="card-copilot" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Copilot SDK dělá z runtime součást aplikace</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><h4>Jak funguje</h4><p>Python host spustí existující schválený Copilot runtime přes stdio. Session používá BYOK Responses, bearer_token_provider a pět aplikačních tools, ne GitHub Copilot předplatné pro modelové účtování.</p><h4>Silná stránka</h4><p>Aplikace integruje hotovou agentní exekuci, session události a permission boundary. Nemusí implementovat model-tool smyčku ani vlastní správu konverzace.</p><h4>Nevýhoda</h4><p>Další runtime proces, verzování CLI a Python SDK a explicitní izolace konfigurace. Tool allowlist není OS sandbox. Nativní event obsahuje i vnořené dataclasses; usage se musí bezpečně normalizovat.</p><h4>Rozsah důkazu</h4><p>mode=empty, discovery vypnuto, systémové instrukce nahrazeny, host git operations a session store vypnuty. Všechny nativní permission requests jsou odmítnuty; pět úzkých app tools má explicitní povolení.</p><pre><code>client = CopilotClient(connection=stdio_runtime, mode=&quot;empty&quot;)
+session = await client.create_session(
+    provider=foundry_with_bearer_callback,
+    tools=research_tools,
+    available_tools=research_tool_names,
+    on_permission_request=deny_permission,
+)
+message = await session.send_and_wait(prompt)</code></pre><p>Schéma API zapojení; plný runnable kód: <code>harness_lab\adapters.py</code>. Dokumentace: <a href="#source-C">[C]</a>.</p></div></article><article class="card" id="card-pi" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Pi ponechává malý core a explicitní rozšíření</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><h4>Jak funguje</h4><p>Nativní Node SDK registruje Foundry jako openai-responses provider a zavolá createAgentSession. Pět custom tools posílá požadavky Python hostu přes úzký JSONL bridge.</p><h4>Silná stránka</h4><p>Přímý SDK přístup, vlastní tools, in-memory session a explicitní resource loader. Je vidět, co agent skutečně dostal; není nutné přebírat uživatelovy skills nebo globální konfiguraci.</p><h4>Nevýhoda</h4><p>V Python aplikaci přibude Node a mezijazykový bridge. Pi input nezahrnuje cacheRead/cacheWrite; bez normalizace by stejné položky vytvářely zavádějící srovnání i zápornou cenu.</p><h4>Rozsah důkazu</h4><p>Žádné defaultní shell/file tools, skills ani extensions. Nativní agentní smyčka a compaction zůstávají v SDK; kompakce však v malém workloadu není samostatně stress-testována.</p><pre><code>runtime.registerProvider(&quot;foundry&quot;, responses_provider)
+const { session } = await createAgentSession({
+  modelRuntime: runtime, customTools,
+  tools: researchToolNames,
+  sessionManager: SessionManager.inMemory(cwd),
+  resourceLoader: explicitLoader,
+})
+await session.prompt(prompt)</code></pre><p>Schéma API zapojení; plný runnable kód: <code>harness_lab\adapters.py</code> a <code>pi.mjs</code>. Dokumentace: <a href="#source-P">[P]</a>.</p></div></article></section><section class="chapter" id="ch-results"><h2 class="chapter-label">Měření</h2><article class="card" id="card-results" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Úspěch, rychlost a kvalita musí zůstat oddělené</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p><strong>144 zaznamenaných pokusů; 144 zaslepených hodnocení. Hlavní srovnání: 112 sériových pokusů; původních 32 paralelních zvlášť.</strong></p><table><thead><tr><th scope="col">Varianta</th><th scope="col">Úspěch</th><th scope="col">p50 úspěch</th><th scope="col">Vstup / výstup</th><th scope="col">USD / úspěch</th><th scope="col">Kvalita / 4</th></tr></thead><tbody><tr><th scope="row">LangChain Deep Agents</th><td>25/28</td><td>72,3 s</td><td>69 087 / 1 830</td><td>0,068</td><td>3,41</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>27/28</td><td>83,0 s</td><td>67 610 / 2 014</td><td>0,074</td><td>3,69</td></tr><tr><th scope="row">GitHub Copilot SDK</th><td>27/28</td><td>62,5 s</td><td>40 953 / 1 632</td><td>0,064</td><td>3,61</td></tr><tr><th scope="row">Pi</th><td>27/28</td><td>62,7 s</td><td>40 995 / 1 668</td><td>0,065</td><td>3,66</td></tr></tbody></table><p>Tabulka a statistiky čtyř variant používají pouze hlavní sériovou kohortu: 112/112 zaznamenaných pokusů. Rychlost je medián end-to-end času pouze úspěšných pokusů. Tokeny jsou mediány úspěšných pokusů s usage; vstup zahrnuje cache read i cache write. Cena je průměr modelového a WebIQ odhadu za úspěch, nikoli cena garance úspěšného dodání. Kvalita je průměr pěti kritérií 0–4 přes všechny hodnocené pokusy; neúspěchy mají nulu. Plánovaný 60sekundový odstup mezi úlohami není zahrnut v latenci jednotlivého pokusu.</p></div></article><article class="card" id="card-quota-phase" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Paralelní fáze je diagnostika sdílené kvóty</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>Původních 32 pokusů v 8 celých skupinách: 11 úspěšných, 17 selhaných a 4 operátorem přerušených. Čtyři workery sdílely Foundry limit 100 000 tokenů a 100 požadavků za minutu. Byly potvrzeny HTTP 429 token-rate chyby, ale ne každé selhání lze připsat kvótě; objevily se i chyby spuštění Azure CLI. Přerušení při zastavení kampaně nejsou nativními chybami SDK. Žádný z těchto pokusů nebyl nahrazen.</p><table><thead><tr><th scope="col">Varianta</th><th scope="col">Úspěch</th><th scope="col">p50 úspěch</th><th scope="col">Vstup / výstup</th><th scope="col">USD / úspěch</th><th scope="col">Kvalita / 4</th></tr></thead><tbody><tr><th scope="row">LangChain Deep Agents</th><td>1/8</td><td>77,7 s</td><td>50 498 / 1 724</td><td>0,065</td><td>0,50</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>1/8</td><td>89,7 s</td><td>64 471 / 3 091</td><td>0,070</td><td>0,47</td></tr><tr><th scope="row">GitHub Copilot SDK</th><td>6/8</td><td>98,2 s</td><td>37 627 / 1 600</td><td>0,065</td><td>2,90</td></tr><tr><th scope="row">Pi</th><td>3/8</td><td>72,6 s</td><td>34 306 / 1 586</td><td>0,064</td><td>1,40</td></tr></tbody></table><p>Tato tabulka není čistý test intrinsic výkonu harnessů. Výsledky a nulová hodnocení neúspěchů zůstávají zachovány, ale neovlivňují hlavní sériovou tabulku.</p></div></article><article class="card" id="card-delivery-errors" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Přesvědčivá odpověď ještě není dodaný report</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><table><thead><tr><th scope="col">Sériová varianta</th><th scope="col">Zaznamenaný typ selhání</th><th scope="col">Počet</th></tr></thead><tbody><tr><th scope="row">GitHub Copilot SDK</th><td>TimeoutError</td><td>1</td></tr><tr><th scope="row">LangChain Deep Agents</th><td>ConnectError</td><td>1</td></tr><tr><th scope="row">LangChain Deep Agents</th><td>CredentialUnavailableError</td><td>1</td></tr><tr><th scope="row">LangChain Deep Agents</th><td>TimeoutError</td><td>1</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>ConnectError</td><td>1</td></tr><tr><th scope="row">Pi</th><td>PublicationMissing</td><td>1</td></tr></tbody></table><p>PublicationMissing znamená, že harness skončil bez ověřené HTML/PDF publikace. Je to výsledek na aplikační hranici, nikoli automatická diagnóza SDK nebo kvóty. I užitečně znějící konverzační odpověď bez artefaktů zůstává neúspěchem; host ji nevydává za dokončenou práci. Neúspěšné pokusy mají ve zmrazené evaluaci nulu.</p></div></article><article class="card" id="card-host-suspension" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Hibernace hosta není pomalý harness</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>Windows zaznamenal uspání a pozdější návrat z hibernace i během experimentu. Intervaly 33 342 sekund u neúspěšného Deep Agents a 3 216 sekund u úspěšného Copilotu nelze interpretovat jako rychlost nativních SDK. Oba původní výsledky, usage i rezervy zůstávají beze změny; pokusy nebyly nahrazeny. V původním časovém okně scheduler po probuzení další modelovou práci nezahájil; pokračování vyžadovalo nové schválení vlastníka.</p><table><thead><tr><th scope="col">Běh</th><th scope="col">Uspání UTC</th><th scope="col">Návrat UTC</th></tr></thead><tbody><tr><th scope="row">deepagents-3ed152b4c39d</th><td>2026-10-22T18:44:38.322059+00:00</td><td>2026-10-23T03:59:03.530806+00:00</td></tr><tr><th scope="row">copilot-18183b4c0fa1</th><td>2026-10-23T05:23:40.339907+00:00</td><td>2026-10-23T06:16:56.763615+00:00</td></tr></tbody></table><p>Důkaz: Microsoft-Windows-Kernel-Power, události 42 a 507. Jde o provozní omezení lokálního experimentu, ne srovnávací vlastnost harnessu. Timeout se nemůže vyhodnotit, když host neběží. Časy perf_counter a systémové hodiny se po hibernaci rozešly; cooldown proto kontrolujeme mezi časem zápisu původního result.json a startem dalšího ledger řádku, obojí v Unix čase. Neodečítáme nesouměřitelné hodiny ani neodstraňujeme pomalé výsledky z tabulky.</p></div></article><article class="card" id="card-method" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Párované pořadí omezuje, ale neodstraňuje vnější šum</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>12 zmrazených briefů × 3 opakování × 4 varianty. Seed 20261022 promíchá 36 skupin i pořadí variant uvnitř nich. Po schválené změně protokolu běží zbývající buňky sériově se 60sekundovým odstupem; stejně se dávkuje evaluace. Celé skupiny zůstaly uvnitř jedné fáze. Model, SDK, per-job limity, společné tools, workload a rubric se nezměnily; změna scheduleru má uchovanou historii fingerprintů. Počet opakování briefů v hlavní kohortě nemusí být stejný, ale pro všechny čtyři varianty je totožný.</p><p>Sdílejí Azure kvótu, síť, lokální CPU a přirozeně zahřátou provider cache; další provoz na deploymentu nelze vyloučit. Nejde o izolovaný cold-cache ani univerzální kapacitní test. Zdrojový cutoff je instrukce předaná modelu; host neprokazuje historický snapshot živého WebIQ indexu k tomuto datu.</p><table><thead><tr><th scope="col">Varianta</th><th scope="col">p50 konfigurace harnessu</th><th scope="col">p50 export</th><th scope="col">Usage úspěchů</th><th scope="col">Hodnocení</th></tr></thead><tbody><tr><th scope="row">LangChain Deep Agents</th><td>4,8 s</td><td>5,4 s</td><td>25/25</td><td>28/28</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>1,8 s</td><td>5,1 s</td><td>27/27</td><td>28/28</td></tr><tr><th scope="row">GitHub Copilot SDK</th><td>2,2 s</td><td>5,1 s</td><td>27/27</td><td>28/28</td></tr><tr><th scope="row">Pi</th><td>4,7 s</td><td>5,2 s</td><td>27/27</td><td>28/28</td></tr></tbody></table><p>Konfigurace harnessu je čas od startu hosta k markeru harness_ready; lazy autentizace může následovat až při prvním požadavku. Agentní interval zahrnuje tools i export, proto tyto časy nelze prostě sčítat. Import cache procesu a native retry policy nejsou mezi SDK dokonale totožné. Zachováváme neúspěchy i jejich časy, žádné tiché náhrady.</p></div></article><article class="card" id="card-quality" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Slepý modelový soud není nezávislá pravda</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>Každá skupina dostane náhodné anonymní štítky A–D. Stejný Sol hodnotí rozhodovací užitečnost, entailment z dodaných pasáží, protiargumenty, nejistotu a splnění instrukcí. Nevidí názvy runtime, náklady ani latenci. Přesné citace a formát kontroluje navíc deterministický host. Selhaný pokus dostává pět nul, ne výjimku z průměru.</p><table><thead><tr><th scope="col">Varianta</th><th scope="col">Použitelnost</th><th scope="col">Podpora zdrojů</th><th scope="col">Protiargument</th><th scope="col">Nejistota</th><th scope="col">Instrukce</th></tr></thead><tbody><tr><th scope="row">LangChain Deep Agents</th><td>3,57</td><td>3,07</td><td>3,36</td><td>3,57</td><td>3,46</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>3,86</td><td>3,21</td><td>3,68</td><td>3,86</td><td>3,82</td></tr><tr><th scope="row">GitHub Copilot SDK</th><td>3,86</td><td>3,18</td><td>3,61</td><td>3,75</td><td>3,64</td></tr><tr><th scope="row">Pi</th><td>3,82</td><td>3,21</td><td>3,71</td><td>3,82</td><td>3,75</td></tr></tbody></table><p>Rozpad kritérií patří pouze sériové kohortě a zahrnuje i nulová hodnocení selhání.</p><table><thead><tr><th scope="col">Varianta</th><th scope="col">Kvalita úspěšných briefů / 4</th><th scope="col">Včetně nulových selhání / 4</th></tr></thead><tbody><tr><th scope="row">LangChain Deep Agents</th><td>3,82</td><td>3,41</td></tr><tr><th scope="row">Microsoft Agent Framework</th><td>3,82</td><td>3,69</td></tr><tr><th scope="row">GitHub Copilot SDK</th><td>3,74</td><td>3,61</td></tr><tr><th scope="row">Pi</th><td>3,80</td><td>3,66</td></tr></tbody></table><p>Podmíněné skóre úspěchů nenahrazuje hlavní skóre včetně selhání. Odděluje kvalitu dodaného obsahu od spolehlivosti celé aplikace; DNS a uspání hosta nejsou samy o sobě vlastností kvality nativního harnessu.</p><p>Autor a soudce jsou stejná rodina modelu. Malý technický workload, promptové rozdíly nativních harnessů a změny živého web indexu omezují zobecnitelnost. Test neprokazuje odolnost vůči všem prompt injections, OS izolaci, restart conversation state ani kvalitu kompakce dlouhého kontextu.</p></div></article><article class="card" id="card-cost" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Odhad účtování musí přiznat cache i chybějící usage</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>Global Standard, short context: USD 2 / 0.1 / 2.5 / 10 za milion uncached input / cache read / cache write / output tokenů. Vzorec nejprve z celkového vstupu oddělí obě cache složky. WebIQ USD 0,007/volání je odhad vlastníka, ne ověřený veřejný tarif. Bez Azure faktury nejde o skutečně vyúčtované náklady.</p><p>Ledger v době sestavení: 214 operací včetně pilotů a evaluací, 571 WebIQ volání; konzervativní obálka 125,40 USD včetně 35 rezerv pro neúplnou usage. Raw evidence zůstává lokálně v ignorovaném runs; bezpečný agregát a hashe jsou v results.</p></div></article></section><section class="chapter" id="ch-evidence"><h2 class="chapter-label">Důkazy a rozhodnutí</h2><article class="card" id="card-choice" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Vyberte integrační hranici, ne vítěze názvu</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>Pro existující Python aplikaci začněte Deep Agents nebo MAF a porovnejte, který model middleware/providers lépe odpovídá potřebné kontrole. Pro aplikaci nad hotovým runtime zvažte Copilot SDK; pro explicitní malý Node SDK core Pi. V tomto Python scénáři se do ceny Pi započítává i mezijazykové propojení.</p><p>Rozhodující není samotné slovo harness. Rozhodující je, kdo vlastní execution, credentials, povolené schopnosti, perzistenci a konečné rozhodnutí o publikaci.</p></div></article><article class="card" id="card-sources" data-open><h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="true"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Tvrzení mají dohledatelný rozsah důkazů</span></span><span class="card-mark" aria-hidden="true"></span></button></h3><div class="card-body"><p>Stav dokumentace a zdrojový cutoff: 22. 10. 2026. Verze balíčků jsou zmrazené lockfiles a fingerprintem experimentu. Sol deployment byl ověřen přes existující Foundry účet: gpt-6.1-sol, verze 2026-09-29; lokální autentizace používá Entra.</p><table><thead><tr><th scope="col">Komponenta</th><th scope="col">Zmrazená verze</th></tr></thead><tbody><tr><th scope="row">deepagents</th><td>0.7.25</td></tr><tr><th scope="row">agent-framework-core</th><td>1.21.0</td></tr><tr><th scope="row">agent-framework-openai</th><td>1.16.0</td></tr><tr><th scope="row">github-copilot-sdk</th><td>1.0.22</td></tr><tr><th scope="row">mcp</th><td>1.30.0</td></tr><tr><th scope="row">openai</th><td>3.31.0</td></tr><tr><th scope="row">python</th><td>3.12.9</td></tr><tr><th scope="row">copilot_cli</th><td>1.0.99-2</td></tr><tr><th scope="row">pi_sdk</th><td>1.2.0</td></tr></tbody></table><ol><li id="source-D"><a href="https://docs.langchain.com/oss/python/deepagents/overview">[D] Deep Agents overview</a>. Načteno; část rozsáhlé stránky zkrácena. Primitives a harness profiles; konkrétní API ověřeno i v instalovaném balíčku.</li><li id="source-M"><a href="https://learn.microsoft.com/en-us/agent-framework/concepts/harness?pivots=programming-language-python">[M] Microsoft Agent Framework harness</a>. Načteno celé. Factory, providers, compaction; rozlišení released, experimental a prerelease funkcí.</li><li id="source-C"><a href="https://raw.githubusercontent.com/github/copilot-sdk/main/docs/auth/byok.md">[C] Copilot SDK BYOK</a>. Načteno. Responses a bearer-token provider; obecný README měl užší, zastaralé tvrzení o API keys.</li><li id="source-CI"><a href="https://raw.githubusercontent.com/github/copilot-sdk/main/docs/setup/azure-managed-identity.md">[CI] Copilot SDK managed identity</a>. Načteno. Entra callback; v demu se používá lokální Azure CLI identita, ne nasazená managed identity.</li><li id="source-P"><a href="https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/sdk.md">[P] Pi SDK</a>. Načteno. ModelRuntime, custom tools, in-memory sessions a explicitní resource loader.</li><li id="source-PI"><a href="https://pi.dev/">[PI] Pi</a>. Načteno. Kontext produktu; implementace vychází z SDK dokumentace a typů.</li><li id="source-W"><a href="https://learn.microsoft.com/en-us/web-iq/integrations/mcp">[W] WebIQ MCP integration</a>. Načteno celé. Account-scoped discovery a autentizace; reálný účet exponoval web, images, videos, nikoli browse.</li><li id="source-S"><a href="https://developers.openai.com/api/docs/models/gpt-6.1-sol">[S] Sol model documentation</a>. Načteno. Responses pro nástroje, reasoning low a tokenové sazby.</li><li id="source-A"><a href="https://azure.microsoft.com/en-us/pricing/details/azure-openai/">[A] Azure OpenAI pricing</a>. Přímé načtení timeout; sazby Global Standard ověřeny přes indexovanou WebIQ pasáž této primární stránky.</li><li id="source-MS"><a href="https://learn.microsoft.com/agent-framework/agents/structured-outputs?pivots=programming-language-python">[MS] MAF streaming example</a>. Oficiální code-sample search: stream=True a get_final_response().</li><li id="source-CP"><a href="https://raw.githubusercontent.com/github/copilot-sdk/main/python/README.md">[CP] Copilot Python SDK</a>. Načteno se zkrácením; nativní typy a eventy ověřeny v instalovaném SDK.</li><li id="source-CR"><a href="https://github.com/github/copilot-sdk">[CR] Copilot SDK repository</a>. Načten obecný přehled; pro Entra má přednost konkrétní BYOK dokumentace a skutečný průchod.</li></ol><p>WebIQ pricing page nedostupná; pokus o odhadnutou MAF source URL skončil 404 a nebyl použit. Nepročtené široké search výsledky nejsou důkaz. Community sentiment, interní M365 obsah a cloud deployment jsou mimo rozsah. Úplný kompaktní manifest: <code>results\sources.json</code>.</p></div></article></section></main><section class="takeaway" id="closing"><p>Rozhodnuti patri aplikaci; agent pripravuje overitelne podklady.</p></section></div><section class="sheet" aria-label="Šestistránkový comparison paper"><article class="sheet-page" id="sheet-intro"><header class="sheet-head"><p class="sheet-kicker">1 / 6 · Praktický experiment</p><h2 class="sheet-title">Dvě cesty k agentní aplikaci</h2><p class="sheet-lead">Deep Agents, Agent Framework, Copilot SDK a Pi nad stejným Foundry Sol a WebIQ.</p></header><figure class="sheet-figure"><svg viewBox="0 0 760 180" role="img"
+aria-label="Dvě cesty vedou ke společné důvěryhodné aplikaci">
+<g fill="var(--surface-2)" stroke="var(--border-strong)" stroke-width="1.5">
+<rect x="2" y="3" width="240" height="72" rx="9"/>
+<rect x="2" y="102" width="240" height="72" rx="9"/>
+<rect x="288" y="38" width="254" height="104" rx="9" stroke="var(--accent)"/>
+<rect x="587" y="53" width="170" height="76" rx="9"/></g>
+<g fill="none" stroke="var(--accent)" stroke-width="2">
+<path d="M243 39H266V75H285M243 138H266V105H285M543 91H584"/>
+<path d="m278 68 7 7-7 7m0 16 7 7-7 7m299-28 7 7-7 7"/></g>
+<g fill="var(--text)" font-family="Segoe UI, sans-serif" font-size="17" text-anchor="middle">
+<text x="122" y="31">Framework → harness</text>
+<text x="122" y="57" font-size="14">Deep Agents · Agent Framework</text>
+<text x="122" y="130">Harness → aplikace</text>
+<text x="122" y="156" font-size="14">Copilot SDK · Pi</text>
+<text x="415" y="72">Trusted host</text>
+<text x="415" y="99" font-size="14">identity · tools · budget</text>
+<text x="415" y="121" font-size="14">validace · publikace</text>
+<text x="672" y="85">HTML + PDF</text>
+<text x="672" y="109" font-size="14">ověřitelný podklad</text>
+</g></svg><figcaption>Agent vybírá další krok; aplikace rozhoduje, co smí vykonat a vydat.</figcaption></figure><div class="sheet-grid"><section class="sheet-block"><h3>Explorace není pevný workflow</h3><p>Agent zvolí dotazy, prohlédne nalezené pasáže, hledá protiargument a opraví draft. Dopředu neznáme konkrétní zdroje ani potřebná navazující ověření.</p></section><section class="sheet-block"><h3>Publikace není agentská improvizace</h3><p>Host přijímá jen strukturovaný brief. Ověří zdroje, doslovné citace, různorodost a délku; bezpečně vykreslí šablonu a přes Chromium vytvoří PDF.</p></section><section class="sheet-block"><h3>Stejný model, reálné služby</h3><p>Všechny varianty používají gpt-6-1-sol v existujícím Foundry přes Entra a stejný WebIQ MCP. Zadání jsou hypotetická; dotazy, odpovědi a artefakty jsou skutečné.</p></section><section class="sheet-block"><h3>Důvěra má omezený význam</h3><p>Validní citace není automaticky správný závěr. WebIQ účet vrací indexované pasáže, ne plné stránky. Aplikace nevykonává doporučené nasazení ani obchodní rozhodnutí.</p></section></div><aside class="sheet-actions"><h3>Stav experimentu</h3><p>144 zaznamenaných pokusů; 144 zaslepených hodnocení. Hlavní srovnání: 112 sériových pokusů; původních 32 paralelních zvlášť.</p></aside><p class="sheet-close">Agent zkoumá. Aplikace drží hranice.</p><footer class="sheet-notes"><p>22. 10. 2026. Hypotetické briefy, reálné API a artefakty. [D, M, C, P, W, S] Odkazy a metodika jsou v Read view stejného HTML.</p></footer></article><article class="sheet-page" id="sheet-compare"><header class="sheet-head"><p class="sheet-kicker">2 / 6 · Primitives a výsledky</p><h2 class="sheet-title">Smyčka není hranice důvěry</h2><p class="sheet-lead">Stejných pět aplikačních nástrojů; různé nativní instrukce, plánování a integrační náklady.</p></header><table class="sheet-matrix"><thead><tr><th scope="col">Primitivum</th><th scope="col">Deep Agents</th><th scope="col">MAF</th><th scope="col">Copilot SDK</th><th scope="col">Pi</th></tr></thead><tbody><tr><th scope="row">Nativní exekuce</th><td>LangGraph agent</td><td>Harness agent</td><td>CLI runtime</td><td>Node session</td></tr><tr><th scope="row">App tools</th><td>StructuredTool</td><td>@tool</td><td>Tool + handler</td><td>customTools</td></tr><tr><th scope="row">Plán v tomto profilu</th><td>TODO middleware</td><td>TODO provider</td><td>Konverzace</td><td>Konverzace</td></tr><tr><th scope="row">Usage</th><td>Message metadata</td><td>Response aggregate</td><td>Usage events</td><td>Message events</td></tr><tr><th scope="row">Kde běží host</th><td>Python</td><td>Python</td><td>Python + runtime</td><td>Python + Node bridge</td></tr></tbody></table><h3 class="sheet-section-title">Sériová kohorta: 112 pokusů</h3><table class="sheet-matrix"><thead><tr><th scope="col">Varianta</th><th scope="col">Úspěch</th><th scope="col">p50 úspěch</th><th scope="col">Vstup / výstup</th><th scope="col">USD / úspěch</th><th scope="col">Kvalita / 4</th></tr></thead><tbody><tr><th scope="row">Deep Agents</th><td>25/28</td><td>72,3 s</td><td>69 087 / 1 830</td><td>0,068</td><td>3,41</td></tr><tr><th scope="row">MAF</th><td>27/28</td><td>83,0 s</td><td>67 610 / 2 014</td><td>0,074</td><td>3,69</td></tr><tr><th scope="row">Copilot</th><td>27/28</td><td>62,5 s</td><td>40 953 / 1 632</td><td>0,064</td><td>3,61</td></tr><tr><th scope="row">Pi</th><td>27/28</td><td>62,7 s</td><td>40 995 / 1 668</td><td>0,065</td><td>3,66</td></tr></tbody></table><p>p50: sekundy pouze úspěšných dodání. Vstup/výstup: medián tokenů úspěchů; vstup zahrnuje cache. USD: průměr úspěchů včetně WebIQ. Kvalita: 0–4 přes všechny hodnocené pokusy; neúspěch = 0. N/A znamená chybějící měření, nikoli nulu.</p><figure class="sheet-figure"><svg viewBox="0 0 760 118" role="img"
+aria-label="Dvě oddělené fáze stejného plánu 144 pokusů">
+<g fill="var(--surface-2)" stroke="var(--border-strong)" stroke-width="1.5">
+<rect x="2" y="34" width="167" height="38" rx="6"/>
+<rect x="175" y="34" width="583" height="38" rx="6" stroke="var(--accent)"/></g>
+<g fill="var(--text)" font-family="Segoe UI, sans-serif" font-size="16" text-anchor="middle">
+<text x="85.5" y="21">4 souběžné úlohy</text>
+<text x="85.5" y="59">32 pokusů</text>
+<text x="85.5" y="97">8 skupin · diagnostika</text>
+<text x="467.5" y="21">1 úloha + 60 s odstup</text>
+<text x="467.5" y="59">112 pokusů</text>
+<text x="467.5" y="97">28 skupin · hlavní srovnání</text>
+</g></svg><figcaption>Rozdělení stejného plánu; fáze se neslévají do výkonového žebříčku.</figcaption></figure><p class="sheet-close">Host je společný. Native overhead není skryt.</p><footer class="sheet-notes"><p>144 zaznamenaných pokusů; 144 zaslepených hodnocení. Hlavní srovnání: 112 sériových pokusů; původních 32 paralelních zvlášť. Celkem 12 briefů × 3 opakování. Latence neobsahuje odstupy mezi úlohami; síť, cache a sdílený deployment omezují zobecnitelnost.</p></footer></article><article class="sheet-page" id="sheet-deepagents"><header class="sheet-head"><p class="sheet-kicker">3 / 6 · LangChain Deep Agents</p><h2 class="sheet-title">Deep Agents přidává harness do Python aplikace</h2><p class="sheet-lead">StructuredTool + middleware</p></header><ul class="sheet-stats"><li><span class="sheet-stat-value">25/28</span><span class="sheet-stat-label">Sériová úspěšná dodání</span></li><li><span class="sheet-stat-value">72,3 s</span><span class="sheet-stat-label">p50 úspěšného běhu</span></li><li><span class="sheet-stat-value">3,41</span><span class="sheet-stat-label">Kvalita / 4 včetně selhání</span></li><li><span class="sheet-stat-value">50</span><span class="sheet-stat-label">Adaptér LOC včetně instrumentace</span></li></ul><div class="sheet-grid"><section class="sheet-block"><h3>Jak funguje</h3><p>ChatOpenAI používá Responses se streamováním a Entra tokenem. create_deep_agent sestaví nativní LangGraph smyčku; společné nástroje jsou StructuredTool.</p></section><section class="sheet-block"><h3>V čem je silný</h3><p>Výslovné middleware a harness profiles umožňují vysvětlit plánování, práci s kontextem a omezení nástrojů na jednom místě. TODO přidává nativní TodoListMiddleware.</p></section><section class="sheet-block"><h3>Co stojí integrace</h3><p>Přichází širší middleware stack a jeho instrukce. Graph recursion limit není totéž co počet modelových volání; příliš nízký limit v pilotu zastavil i validní rozpracovaný report.</p></section><section class="sheet-block"><h3>Co test opravdu pokrývá</h3><p>Profil vylučuje filesystem, shell a task/subagents. Využíváme nativní agentní smyčku a dostupné TODO; dlouhý kontext, checkpoint recovery ani delegaci tento benchmark neověřuje.</p></section></div><pre><code>model = ChatOpenAI(..., use_responses_api=True)
+agent = create_deep_agent(
+    model=model, tools=research_tools,
+    middleware=[TodoListMiddleware()],
+)
+result = await agent.ainvoke(messages, config=limits)</code></pre><p class="sheet-close">Důvěryhodnou publikaci zajišťuje host.</p><footer class="sheet-notes"><p>[D] Stav 22. 10. 2026. API schéma, nikoli samostatný runnable snippet. Plný kód: harness_lab\adapters.py. Modelový soud není lidská validace; neověřujeme dlouhý kontext ani více agentů.</p></footer></article><article class="sheet-page" id="sheet-maf"><header class="sheet-head"><p class="sheet-kicker">4 / 6 · Microsoft Agent Framework</p><h2 class="sheet-title">Agent Framework skládá harness z providers</h2><p class="sheet-lead">@tool + harness providers</p></header><ul class="sheet-stats"><li><span class="sheet-stat-value">27/28</span><span class="sheet-stat-label">Sériová úspěšná dodání</span></li><li><span class="sheet-stat-value">83,0 s</span><span class="sheet-stat-label">p50 úspěšného běhu</span></li><li><span class="sheet-stat-value">3,69</span><span class="sheet-stat-label">Kvalita / 4 včetně selhání</span></li><li><span class="sheet-stat-value">36</span><span class="sheet-stat-label">Adaptér LOC včetně instrumentace</span></li></ul><div class="sheet-grid"><section class="sheet-block"><h3>Jak funguje</h3><p>OpenAIChatClient z agent-framework-openai obaluje Responses klienta. create_harness_agent přidá nativní providers; agent.run vrátí finální AgentResponse a agregovanou usage.</p></section><section class="sheet-block"><h3>V čem je silný</h3><p>Agent, tools, sessions a harness zůstávají v jednom Python modelu. Nativní function invocation configuration a agregovaná usage se snadno propojí s hostitelskou aplikací.</p></section><section class="sheet-block"><h3>Co stojí integrace</h3><p>Verze core a connectoru musí souhlasit. Výchozí plan mode vyžadoval schválení člověkem; unattended úloha jej musí vědomě vypnout, nikoli čekání vydávat za dokončený běh.</p></section><section class="sheet-block"><h3>Co test opravdu pokrývá</h3><p>Používáme disable_mode=True, bez file memory a bez vlastního web search provideru. TODO provider zůstává nativní. Filesystem, background work a další experimentální providers nejsou naměřeným důkazem.</p></section></div><pre><code>agent = create_harness_agent(
+    client=client, tools=research_tools,
+    disable_mode=True,
+    disable_file_memory=True,
+    disable_web_search=True,
+)
+response = await agent.run(prompt, session=session)</code></pre><p class="sheet-close">Důvěryhodnou publikaci zajišťuje host.</p><footer class="sheet-notes"><p>[M] Stav 22. 10. 2026. API schéma, nikoli samostatný runnable snippet. Plný kód: harness_lab\adapters.py. Modelový soud není lidská validace; neověřujeme dlouhý kontext ani více agentů.</p></footer></article><article class="sheet-page" id="sheet-copilot"><header class="sheet-head"><p class="sheet-kicker">5 / 6 · GitHub Copilot SDK</p><h2 class="sheet-title">Copilot SDK dělá z runtime součást aplikace</h2><p class="sheet-lead">Runtime + session + Tool</p></header><ul class="sheet-stats"><li><span class="sheet-stat-value">27/28</span><span class="sheet-stat-label">Sériová úspěšná dodání</span></li><li><span class="sheet-stat-value">62,5 s</span><span class="sheet-stat-label">p50 úspěšného běhu</span></li><li><span class="sheet-stat-value">3,61</span><span class="sheet-stat-label">Kvalita / 4 včetně selhání</span></li><li><span class="sheet-stat-value">89</span><span class="sheet-stat-label">Adaptér LOC včetně instrumentace</span></li></ul><div class="sheet-grid"><section class="sheet-block"><h3>Jak funguje</h3><p>Python host spustí existující schválený Copilot runtime přes stdio. Session používá BYOK Responses, bearer_token_provider a pět aplikačních tools, ne GitHub Copilot předplatné pro modelové účtování.</p></section><section class="sheet-block"><h3>V čem je silný</h3><p>Aplikace integruje hotovou agentní exekuci, session události a permission boundary. Nemusí implementovat model-tool smyčku ani vlastní správu konverzace.</p></section><section class="sheet-block"><h3>Co stojí integrace</h3><p>Další runtime proces, verzování CLI a Python SDK a explicitní izolace konfigurace. Tool allowlist není OS sandbox. Nativní event obsahuje i vnořené dataclasses; usage se musí bezpečně normalizovat.</p></section><section class="sheet-block"><h3>Co test opravdu pokrývá</h3><p>mode=empty, discovery vypnuto, systémové instrukce nahrazeny, host git operations a session store vypnuty. Všechny nativní permission requests jsou odmítnuty; pět úzkých app tools má explicitní povolení.</p></section></div><pre><code>client = CopilotClient(connection=stdio_runtime, mode=&quot;empty&quot;)
+session = await client.create_session(
+    provider=foundry_with_bearer_callback,
+    tools=research_tools,
+    available_tools=research_tool_names,
+    on_permission_request=deny_permission,
+)
+message = await session.send_and_wait(prompt)</code></pre><p class="sheet-close">Důvěryhodnou publikaci zajišťuje host.</p><footer class="sheet-notes"><p>[C] Stav 22. 10. 2026. API schéma, nikoli samostatný runnable snippet. Plný kód: harness_lab\adapters.py. Modelový soud není lidská validace; neověřujeme dlouhý kontext ani více agentů.</p></footer></article><article class="sheet-page" id="sheet-pi"><header class="sheet-head"><p class="sheet-kicker">6 / 6 · Pi</p><h2 class="sheet-title">Pi ponechává malý core a explicitní rozšíření</h2><p class="sheet-lead">createAgentSession + customTools</p></header><ul class="sheet-stats"><li><span class="sheet-stat-value">27/28</span><span class="sheet-stat-label">Sériová úspěšná dodání</span></li><li><span class="sheet-stat-value">62,7 s</span><span class="sheet-stat-label">p50 úspěšného běhu</span></li><li><span class="sheet-stat-value">3,66</span><span class="sheet-stat-label">Kvalita / 4 včetně selhání</span></li><li><span class="sheet-stat-value">149</span><span class="sheet-stat-label">Adaptér LOC včetně instrumentace</span></li></ul><div class="sheet-grid"><section class="sheet-block"><h3>Jak funguje</h3><p>Nativní Node SDK registruje Foundry jako openai-responses provider a zavolá createAgentSession. Pět custom tools posílá požadavky Python hostu přes úzký JSONL bridge.</p></section><section class="sheet-block"><h3>V čem je silný</h3><p>Přímý SDK přístup, vlastní tools, in-memory session a explicitní resource loader. Je vidět, co agent skutečně dostal; není nutné přebírat uživatelovy skills nebo globální konfiguraci.</p></section><section class="sheet-block"><h3>Co stojí integrace</h3><p>V Python aplikaci přibude Node a mezijazykový bridge. Pi input nezahrnuje cacheRead/cacheWrite; bez normalizace by stejné položky vytvářely zavádějící srovnání i zápornou cenu.</p></section><section class="sheet-block"><h3>Co test opravdu pokrývá</h3><p>Žádné defaultní shell/file tools, skills ani extensions. Nativní agentní smyčka a compaction zůstávají v SDK; kompakce však v malém workloadu není samostatně stress-testována.</p></section></div><pre><code>runtime.registerProvider(&quot;foundry&quot;, responses_provider)
+const { session } = await createAgentSession({
+  modelRuntime: runtime, customTools,
+  tools: researchToolNames,
+  sessionManager: SessionManager.inMemory(cwd),
+  resourceLoader: explicitLoader,
+})
+await session.prompt(prompt)</code></pre><p class="sheet-close">Důvěryhodnou publikaci zajišťuje host.</p><footer class="sheet-notes"><p>[P] Stav 22. 10. 2026. API schéma, nikoli samostatný runnable snippet. Plný kód: harness_lab\adapters.py + pi.mjs. Modelový soud není lidská validace; neověřujeme dlouhý kontext ani více agentů.</p></footer></article></section></body></html>

@@ -31,7 +31,6 @@ from cron_runtime import (
     complete_system_schedule,
     cron_delivery_receipt_status,
     cron_diagnostics,
-    enqueue_system_dream_now,
     fire_cron_job,
     get_delivery_reference,
     get_system_schedule_checkpoint,
@@ -98,7 +97,31 @@ def _endpoint(handler: Handler, errors: dict[type[Exception], int] | None = None
     return wrapped
 
 
-def register_routes(app: web.Application, profile_home: Path) -> None:
+def native_activity(adapter: Any) -> dict[str, int]:
+    from gateway.platforms.api_server_runs import api_worker_live_count
+    from runtime_keepalive import get_keepalive
+
+    pending = getattr(adapter, "_pending_agent_requests", 0)
+    inflight = adapter._inflight_agent_runs
+    tasks = adapter._active_run_tasks
+    if (
+        any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (pending, inflight))
+        or not isinstance(tasks, dict)
+    ):
+        raise RuntimeError("The pinned native API adapter returned invalid activity state.")
+    supervisor = get_keepalive()
+    counts = {
+        "pendingAdmissions": pending, "inflightNativeTurns": inflight,
+        "liveRunTasks": sum(not task.done() for task in tasks.values()),
+        "nativeWorkerThreads": api_worker_live_count(),
+        "modelToolScopes": supervisor.status()["active"] if supervisor is not None else 0,
+    }
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts.values()):
+        raise RuntimeError("Native activity counters are invalid; refusing to attest quiescence.")
+    return {**counts, "active": sum(counts.values())}
+
+
+def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = None) -> None:
     """Expose cron, system schedule and collective-learning operations next to the native Hermes API."""
 
     def threaded(function: Callable[..., Any], **kwargs: Any) -> Awaitable[Any]:
@@ -115,6 +138,9 @@ def register_routes(app: web.Application, profile_home: Path) -> None:
 
     async def jobs(request: web.Request) -> Any:
         return {"jobs": list_cron_jobs(profile_home)}
+
+    async def activity(request: web.Request) -> Any:
+        return native_activity(adapter)
 
     async def upsert_reference(request: web.Request) -> Any:
         payload = await _json_object(request)
@@ -244,6 +270,7 @@ def register_routes(app: web.Application, profile_home: Path) -> None:
     collective_errors = {CollectiveLearningError: 400}
     learning_errors = {LearningDecisionError: 400, LearningConflictError: 409}
     routes: list[tuple[str, str, Handler, dict[type[Exception], int] | None]] = [
+        ("GET", "/internal/runtime/activity", activity, None),
         ("GET", "/internal/cron/jobs", jobs, None),
         ("POST", "/internal/cron/reconcile", lambda request: threaded(reconcile_cron_provider), None),
         ("GET", "/internal/cron/diagnostics", lambda request: threaded(cron_diagnostics), None),
@@ -253,7 +280,6 @@ def register_routes(app: web.Application, profile_home: Path) -> None:
         ("POST", "/internal/cron/bind-local", bind_local, None),
         ("POST", "/internal/cron/fire", fire, None),
         ("POST", "/internal/cron/system/claim", system_claim, None),
-        ("POST", "/internal/cron/system/run-now", lambda request: threaded(enqueue_system_dream_now), None),
         ("POST", "/internal/cron/system/checkpoint/read", system_checkpoint_read, None),
         ("POST", "/internal/cron/system/checkpoint", system_checkpoint, {RuntimeError: 409}),
         ("POST", "/internal/cron/system/complete", system_complete, {RuntimeError: 409}),

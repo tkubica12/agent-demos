@@ -9,6 +9,27 @@ from scripts.deploy_apps_runtime import load_runtime_tfvars, terraform_workspace
 
 
 class DeployAppsRuntimeTests(unittest.TestCase):
+    def test_workspace_mismatch_cannot_replace_worker_identity_or_backup_group(self):
+        for resource_type, address in (
+            ("azurerm_user_assigned_identity", 'azurerm_user_assigned_identity.workload["runtime"]'),
+            ("azapi_resource", 'azapi_resource.sandbox_group["runtime"]'),
+        ):
+            with self.subTest(address=address), self.assertRaisesRegex(RuntimeError, "no apply"):
+                deploy_apps_runtime.require_identity_preservation({
+                    "resource_changes": [{
+                        "type": resource_type, "address": address,
+                        "change": {"actions": ["delete", "create"]},
+                    }],
+                })
+
+    def test_removing_superseded_access_is_not_an_identity_replacement(self):
+        deploy_apps_runtime.require_identity_preservation({
+            "resource_changes": [{
+                "type": "azurerm_role_assignment", "address": "azurerm_role_assignment.old",
+                "change": {"actions": ["delete"]},
+            }],
+        })
+
     def test_workspace_name_is_worker_scoped(self):
         self.assertEqual(terraform_workspace_name(), "autopilot-hermes")
         self.assertEqual(terraform_workspace_name("hermes"), "autopilot-hermes")

@@ -16,8 +16,6 @@ from microsoft_agents_a365.notifications import AgentNotificationActivity
 
 import bridge.app as bridge_app
 from bridge.app import (
-    DreamRunRequest,
-    InvokeRequest,
     _teams_memory,
     _teams_diag,
     bot_is_mentioned,
@@ -61,7 +59,6 @@ from bridge.document_cards import (
 from bridge.runtime.base import (
     AgentAuthContext,
     AgentResponse,
-    DreamResponse,
 )
 
 
@@ -608,31 +605,6 @@ class TeamsBridgeTests(unittest.TestCase):
                 )
             self.assertEqual(ctx.send_activity.await_count, expected_sends)
 
-    def test_operator_invoke_propagates_persistence_disabled_boundary(self):
-        request = InvokeRequest.model_validate(
-            {
-                "conversationId": "private-smoke",
-                "message": "validate",
-                "persistenceDisabled": True,
-            }
-        )
-        invoke_runtime = AsyncMock(
-            return_value=AgentResponse(text="ok", raw={})
-        )
-
-        with patch.object(
-            bridge_app,
-            "invoke_agent_runtime",
-            invoke_runtime,
-        ):
-            response = asyncio.run(bridge_app.invoke(request))
-
-        self.assertEqual(response.response, "ok")
-        self.assertEqual(
-            invoke_runtime.await_args.kwargs["metadata"],
-            {"persistenceDisabled": True},
-        )
-
     def tearDown(self):
         _teams_memory.clear()
         _teams_diag.clear()
@@ -656,54 +628,7 @@ class TeamsBridgeTests(unittest.TestCase):
                 else:
                     os.environ[name] = value
 
-    def test_internal_dream_requires_operator_key_and_returns_learning_digest(self):
-        class Adapter:
-            runtime_kind = "hermes"
-
-            async def dream(self, request):
-                self.request = request
-                return DreamResponse(
-                    agent=AgentResponse(
-                        text="Dream complete",
-                        raw={"runtimeUrl": "https://hermes.example"},
-                    ),
-                    learning_digest={"digestVersion": "1.0", "changes": [], "newCount": 0},
-                )
-
-        adapter = Adapter()
-        original_adapter = bridge_app.runtime_adapter
-        previous_key = os.environ.get("API_SERVER_KEY")
-        previous_worker = os.environ.get("WORKER_ID")
-        os.environ["API_SERVER_KEY"] = "operator-key"
-        os.environ["WORKER_ID"] = "worker-1"
-        bridge_app.runtime_adapter = lambda: adapter
-        request = ns(headers={"x-autopilot-key": "operator-key"})
-        try:
-            with patch.dict(os.environ, {"WORKER_OWNER_ID": ""}):
-                result = asyncio.run(
-                    bridge_app.dream(
-                        DreamRunRequest(focus="recent delivery work", maxRecords=2),
-                        request,
-                    )
-                )
-        finally:
-            bridge_app.runtime_adapter = original_adapter
-            if previous_key is None:
-                os.environ.pop("API_SERVER_KEY", None)
-            else:
-                os.environ["API_SERVER_KEY"] = previous_key
-            if previous_worker is None:
-                os.environ.pop("WORKER_ID", None)
-            else:
-                os.environ["WORKER_ID"] = previous_worker
-
-        self.assertTrue(adapter.request.session_id.startswith("dream:worker-1:"))
-        self.assertEqual(result.learning_digest["digestVersion"], "1.0")
-        self.assertEqual(result.learning_digest_delivery, {"status": "owner_not_configured"})
-        self.assertEqual(result.response, "Dream complete")
-        self.assertNotIn("sandboxId", result.model_dump(by_alias=True))
-
-    def test_internal_dream_rejects_wrong_operator_key(self):
+    def test_learning_operator_key_rejects_wrong_key(self):
         previous = os.environ.get("API_SERVER_KEY")
         os.environ["API_SERVER_KEY"] = "expected"
         try:

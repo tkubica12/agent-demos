@@ -8,8 +8,6 @@ Commands run from `autopilots-on-azure`. [SPEC.md](SPEC.md) defines boundaries a
 
 ```powershell
 uv run python -m scripts.demo_ops status --state-name hermes2
-uv run python -m scripts.demo_ops smoke --state-name hermes2 `
-  --message "Reply exactly: Hermes ready" --timeout 600
 ```
 
 In Teams, send a personal message or explicitly mention the Worker:
@@ -89,24 +87,14 @@ Create an ordinary observation:
 Analyze this pattern without changing memory or skills: three handoffs accepted dates copied from notes; one lacked a timezone, another an accountable confirmer, and the third a traceable source. What should future handoffs verify?
 ```
 
-Then:
-
-```powershell
-uv run python -m scripts.demo_ops dream --state-name hermes2 `
-  --focus "Review recent handoff failures for a reusable, privacy-safe procedure." `
-  --max-records 1 --timeout 900
-```
-
-Expect a private memory/playbook change, a governed create/patch recorded in the native ledger, or no change when already represented; the owner receives the learning digest afterwards. Dreaming is not required to invent a skill.
-
-Run an ad-hoc queue-backed Dream without changing production cron:
+Then run an ad-hoc queue-backed Dream without changing production cron:
 
 ```powershell
 uv run python -m scripts.servicebus_dream_smoke `
   --state-name hermes2 --timeout 1800
 ```
 
-Expect fenced phase/receipt completion and optional packet preparation. A successful no-change result can report `recordCount=0`, `packet=null`. It cannot approve/export learning.
+Expect a private memory/playbook change, a governed create/patch recorded in the native ledger, or no change when already represented; the owner receives the learning digest afterwards. Dreaming is not required to invent a skill. The smoke uses the Sandbox management plane to enqueue a distinct occurrence on the existing scheduling queue; it does not change production cron or prepare a Learning Packet.
 
 ## 5. Prepare, review, approve, export
 
@@ -166,7 +154,7 @@ uv run python -m scripts.evaluate_learning `
   --hermes-python $hermesPython --output .local\evaluation\result.json
 ```
 
-Keep `AZURE_CONFIG_DIR` pointing to the existing operator cache when using an isolated profile; do not copy credentials. The runner makes actual model calls on the independent suite. Its scope is response-text behavior with skill content in the prompt, so the Hermes version matters little: 0.19.0 is the newest on the approved package feed, and the runtime image's `/opt/hermes/.venv/bin/python` provides 0.22.5.
+Keep `AZURE_CONFIG_DIR` pointing to the existing operator cache when using an isolated profile; do not copy credentials. The runner makes actual model calls on the independent suite. Its scope is response-text behavior with skill content in the prompt, not full native skill/tool discovery. Use the same pinned Hermes version for both profiles; the deployed dependency base provides Hermes 0.22.6 through `/app/.venv/bin/python`. Do not infer approved-feed package availability from the upstream image version.
 
 Run central review against compatible packets:
 
@@ -207,7 +195,7 @@ Run scheduled-hello-demo now.
 Remove scheduled-hello-demo.
 ```
 
-Expect proactive output in the originating conversation and durable execution/delivery receipts. Only scheduling metadata enters Service Bus; the prompt stays in the Worker home. The gateway remains awake while runtime compute may suspend. Remove the demonstration task afterward.
+Expect proactive output in the originating conversation and durable execution/delivery receipts. Only scheduling metadata enters Service Bus; the prompt stays in the Worker home. A native receiver owns waiting, so the gateway, runtime, and both MCP services can all suspend to Memory. Delivery can lag the due time because managed source polling is not instantaneous. Remove the demonstration task afterward.
 
 Automated deployed check:
 
@@ -218,15 +206,19 @@ uv run python -m scripts.user_schedule_smoke `
 
 ## 8. Documents and Agent User collaboration
 
-```powershell
-uv run python -m scripts.document_smoke --state-name hermes2 --timeout 1200
-uv run python -m scripts.m365_actions_smoke `
-  --state-name hermes2 --recipient user@contoso.com
+Validate through the real Agent User in Teams; there is no operator model endpoint. In a personal chat, ask Hermes to create a private Word document with a unique harmless marker, add a comment and reply, and return its URL. Then request a separate read-only read-back of the body, comment, and reply. Inspect and remove the test document through its Microsoft 365 storage surface afterward.
+
+To validate proactive Teams delivery, use a personal chat and explicitly identify the intended recipient:
+
+```text
+Use workiq-teams to create or reuse a one-to-one chat with <recipient UPN>,
+then send this exact harmless test message: "Autopilot validation <unique marker>".
+Return the chat and message identifiers only after both operations succeed.
 ```
 
-Word smoke creates a real document, reads a marker, adds a comment/reply, and validates its URL. Remove its artifact afterward. Add `--execute` to the reviewed M365 actions command to send/read back an actual Agent User Teams message.
+Confirm the message in the intended chat. This sends a real Teams message.
 
-In a personal chat, attach a small DOCX containing recognizable text and a comment:
+To validate attachment handling, attach a small DOCX containing recognizable text and a comment:
 
 ```text
 Summarize this document and list its comments. Do not store its contents in memory or skills.

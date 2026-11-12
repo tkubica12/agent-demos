@@ -6,12 +6,6 @@ output "deployment_config" {
     runtime_image                            = var.runtime_image
     runtime_disk_source_image                = var.runtime_disk_source_image
     runtime_disk_image_name                  = local.runtime_disk_image_name
-    bridge_image                             = var.bridge_image
-    bridge_disk_source_image                 = var.bridge_disk_source_image
-    private_mcp_image                        = var.private_mcp_image
-    private_mcp_disk_source_image            = var.private_mcp_disk_source_image
-    public_shipments_mcp_image               = var.public_shipments_mcp_image
-    public_shipments_mcp_disk_source_image   = var.public_shipments_mcp_disk_source_image
     private_mcp_api_audience                 = var.private_mcp_api_audience
     public_shipments_mcp_api_audience        = var.public_shipments_mcp_api_audience
     api_server_key                           = var.api_server_key
@@ -38,14 +32,10 @@ output "deployment_config" {
     user_scheduling_lock_renewal_seconds     = var.user_scheduling_lock_renewal_seconds
     servicebus_dream_enabled                 = var.servicebus_dream_enabled
     servicebus_dream_cron_expression         = var.servicebus_dream_cron_expression
-    scheduled_learning_enabled               = var.scheduled_learning_enabled
-    scheduled_learning_initial_delay_seconds = var.scheduled_learning_initial_delay_seconds
-    scheduled_learning_interval_seconds      = var.scheduled_learning_interval_seconds
     scheduled_learning_focus                 = var.scheduled_learning_focus
     scheduled_learning_max_records           = var.scheduled_learning_max_records
     scheduled_learning_retry_limit           = var.scheduled_learning_retry_limit
     scheduled_learning_retry_backoff_seconds = var.scheduled_learning_retry_backoff_seconds
-    scheduled_learning_prepare_packet        = var.scheduled_learning_prepare_packet
     workiq_mail_mcp_url                      = var.workiq_mail_mcp_url
     workiq_mail_mcp_scope                    = var.workiq_mail_mcp_scope
     workiq_word_mcp_url                      = var.workiq_word_mcp_url

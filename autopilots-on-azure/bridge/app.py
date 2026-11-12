@@ -78,28 +78,26 @@ from bridge.learning_cards import (
     learning_result_message,
     worker_owner_id,
 )
-from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse, DreamRequest
+from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse
 from bridge.runtime.hermes import HermesRuntimeAdapter, runtime_error_detail
 from bridge.proactive_delivery import (
     delivery_reference_metadata,
     send_proactive_activity,
     stored_conversation_id,
 )
-from bridge.servicebus_scheduler import (
-    ServiceBusScheduleConsumer,
-    ServiceBusScheduleSender,
-)
+from bridge.servicebus_scheduler import ServiceBusScheduleSender
 from bridge.scheduled_learning import (
-    RETRYABLE_ERRORS,
     ScheduledLearningCoordinator,
     ScheduledLearningSettings,
 )
 from bridge.telemetry import configure_telemetry, flush_telemetry, operation_span
 from bridge.telemetry_http import TelemetryMiddleware
+from bridge import durable_transport, event_worker
 
 
 app = FastAPI(title="Autopilot Azure Container Apps bridge")
 app.add_middleware(TelemetryMiddleware)
+PROCESS_NONCE = uuid.uuid4().hex
 
 
 def agent365_auth_configured() -> bool:
@@ -113,20 +111,22 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
         connection_manager = MsalConnectionManager(**configuration)
         adapter = CloudAdapter(connection_manager=connection_manager)
         authorization = Authorization(storage, connection_manager, **configuration)
-        agent = AgentApplication[TurnState](
+        agent = AgentApplication(
             storage=storage,
             adapter=adapter,
             authorization=authorization,
             start_typing_timer=False,
+            long_running_messages=False,
             **configuration,
         )
         return agent, adapter
 
     adapter = CloudAdapter()
-    agent = AgentApplication[TurnState](
+    agent = AgentApplication(
         storage=storage,
         adapter=adapter,
         start_typing_timer=False,
+        long_running_messages=False,
     )
     return agent, adapter
 
@@ -147,9 +147,6 @@ scheduled_learning = ScheduledLearningCoordinator(
     worker_id=os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "worker")),
 )
 
-schedule_consumer = ServiceBusScheduleConsumer(
-    handler=lambda payload: process_scheduled_message(payload)
-)
 schedule_sender = ServiceBusScheduleSender()
 
 
@@ -166,32 +163,6 @@ def generated_apps_manager() -> GeneratedAppsManager:
     )
 
 
-class InvokeRequest(BaseModel):
-    conversation_id: str = Field(alias="conversationId", min_length=1)
-    message: str = Field(min_length=1)
-    persistence_disabled: bool = Field(
-        default=False,
-        alias="persistenceDisabled",
-    )
-
-
-class InvokeResponse(BaseModel):
-    conversation_id: str = Field(alias="conversationId")
-    response: str
-
-
-class DreamRunRequest(BaseModel):
-    focus: str = Field(default="", max_length=2000)
-    max_records: int = Field(default=5, alias="maxRecords", ge=1, le=10)
-
-
-class DreamRunResponse(BaseModel):
-    session_id: str = Field(alias="sessionId")
-    response: str
-    learning_digest: dict[str, Any] = Field(alias="learningDigest")
-    learning_digest_delivery: dict[str, Any] = Field(alias="learningDigestDelivery")
-
-
 class CollectiveLearningApprovalRequest(BaseModel):
     packet_digest: str = Field(alias="packetDigest", min_length=64, max_length=64)
     approved_by: str = Field(alias="approvedBy", min_length=1, max_length=200)
@@ -204,16 +175,12 @@ class CollectiveLearningRejectionRequest(BaseModel):
 
 
 @app.on_event("startup")
-async def start_scheduled_learning() -> None:
+async def configure_bridge_telemetry() -> None:
     configure_telemetry("bridge")
-    await scheduled_learning.start()
-    schedule_consumer.start(asyncio.get_running_loop())
 
 
 @app.on_event("shutdown")
-async def stop_scheduled_learning() -> None:
-    await asyncio.to_thread(schedule_consumer.stop)
-    await scheduled_learning.stop()
+async def flush_bridge_telemetry() -> None:
     await asyncio.to_thread(flush_telemetry)
 
 
@@ -622,6 +589,12 @@ def truncate_text(value: str, limit: int) -> str:
 def teams_memory(session_key: str) -> deque[dict[str, Any]]:
     max_events = env_int("AUTOPILOT_TEAMS_MEMORY_MAX_EVENTS", 30)
     memory = _teams_memory.get(session_key)
+    if memory is None and durable_transport.enabled():
+        saved = durable_transport.journal().load_state("teams:" + session_key)
+        if saved is not None:
+            if not isinstance(saved, list) or any(not isinstance(item, dict) for item in saved):
+                raise ValueError("The durable Teams conversation history is invalid.")
+            memory = deque(saved, maxlen=max_events)
     if memory is None or memory.maxlen != max_events:
         memory = deque(list(memory or [])[-max_events:], maxlen=max_events)
         _teams_memory[session_key] = memory
@@ -634,6 +607,8 @@ def remember_teams_event(session_key: str, event: dict[str, Any]) -> None:
         stored["text"] = truncate_text(stored["text"], env_int("AUTOPILOT_TEAMS_MEMORY_EVENT_CHARS", 1200))
     stored.setdefault("ts", time.time())
     teams_memory(session_key).append(stored)
+    if durable_transport.enabled():
+        durable_transport.journal().save_state("teams:" + session_key, list(teams_memory(session_key)))
 
 
 def context_window_size(signal_type: str, response_contract: str) -> int:
@@ -797,8 +772,14 @@ def runtime_adapter() -> HermesRuntimeAdapter:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "release": os.getenv("APPLICATION_RELEASE", ""),
+        "transport": "managed-scheduling" if durable_transport.enabled() else "local",
+        "processId": os.getpid(),
+        "memoryNonce": PROCESS_NONCE,
+    }
 
 
 @app.post("/api/messages")
@@ -908,67 +889,11 @@ def teams_diag() -> JSONResponse:
     )
 
 
-@app.post("/invoke", response_model=InvokeResponse, response_model_by_alias=True)
-async def invoke(request: InvokeRequest) -> InvokeResponse:
-    try:
-        response = await invoke_agent_runtime(
-            conversation_id=request.conversation_id,
-            session_key=f"bridge:{request.conversation_id}",
-            message=request.message,
-            source="invoke",
-            user_id="invoke",
-            must_answer=True,
-            metadata=(
-                {"persistenceDisabled": True}
-                if request.persistence_disabled
-                else None
-            ),
-        )
-        return invoke_response_from_agent_response(request.conversation_id, response)
-    except Exception as exc:
-        detail = {"message": str(exc)}
-        if os.getenv("AUTOPILOT_BRIDGE_DEBUG", "").lower() in {"1", "true", "yes"}:
-            detail["type"] = exc.__class__.__name__
-        raise HTTPException(status_code=500, detail=detail) from exc
-
-
 def require_operator_key(request: Request) -> None:
     expected = os.getenv("API_SERVER_KEY", "")
     supplied = request.headers.get("x-autopilot-key", "")
     if not expected or expected == "not-configured" or not secrets.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
-
-
-@app.post("/internal/dream", response_model=DreamRunResponse, response_model_by_alias=True)
-async def dream(request: DreamRunRequest, http_request: Request) -> DreamRunResponse:
-    require_operator_key(http_request)
-    adapter = runtime_adapter()
-    worker_id = os.getenv("WORKER_ID", os.getenv("AUTOPILOT_NAME", "hermes"))
-    session_id = f"dream:{worker_id}:{uuid.uuid4().hex}"
-    try:
-        with operation_span(
-            "invoke_agent",
-            session_id=session_id,
-            attributes={
-                "gen_ai.operation.name": "invoke_agent",
-                "autopilots.invocation.source": "dream",
-            },
-        ):
-            result = await adapter.dream(
-                DreamRequest(
-                    session_id=session_id,
-                    focus=request.focus,
-                    max_records=request.max_records,
-                )
-            )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"message": str(exc)}) from exc
-    return DreamRunResponse(
-        sessionId=session_id,
-        response=result.agent.text,
-        learningDigest=result.learning_digest,
-        learningDigestDelivery=await deliver_learning_digest_to_owner(),
-    )
 
 
 @app.post("/internal/collective-learning/prepare")
@@ -1036,29 +961,22 @@ async def export_collective_learning(http_request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
 
 
-@app.post("/internal/scheduled-learning/run")
-async def run_scheduled_learning(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
-    try:
-        result = await scheduled_learning.run_once()
-    except RETRYABLE_ERRORS as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={"type": exc.__class__.__name__, "message": str(exc)},
-        ) from exc
-    return {**result, "learningDigestDelivery": await deliver_learning_digest_to_owner()}
-
-
-@app.get("/internal/scheduled-learning/status")
-async def scheduled_learning_status(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
-    return scheduled_learning.status()
-
-
 @app.get("/internal/user-scheduling/status")
 async def user_scheduling_status(http_request: Request) -> dict[str, Any]:
     require_operator_key(http_request)
-    return schedule_consumer.status()
+    queue = os.getenv("SCHEDULER_SERVICEBUS_QUEUE", "").strip()
+    if not durable_transport.enabled() or not queue:
+        return {"enabled": False, "delivery": "unconfigured"}
+    from contextlib import closing
+
+    with closing(durable_transport.journal().connect()) as connection:
+        phases = [
+            dict(row) for row in connection.execute(
+                "SELECT phase,count(*) AS count,sum(1-settled) AS unsettled "
+                "FROM deliveries WHERE queue=? GROUP BY phase", (queue,),
+            )
+        ]
+    return {"enabled": True, "delivery": "native-receiver", "queue": queue, "phases": phases}
 
 
 @app.post("/internal/generated-apps/deploy")
@@ -1461,10 +1379,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 "completion": completion,
                 **({"reason": str(exc)} if getattr(exc, "status", None) == "uncertain" else {}),
             }
-        summary = {
-            "dream": result.get("dream"),
-            "packet": result.get("packet"),
-        }
+        summary = {"dream": result.get("dream")}
         completion = await adapter.complete_system_schedule(
             job_id=job_id,
             revision=revision,
@@ -3396,8 +3311,6 @@ async def invoke_agent_runtime(
         return await runtime_adapter().invoke(request)
 
 
-def invoke_response_from_agent_response(conversation_id: str, response: AgentResponse) -> InvokeResponse:
-    return InvokeResponse(
-        conversationId=conversation_id,
-        response=response.text,
-    )
+event_worker.attach(
+    app, schedule_handler=process_scheduled_message,
+)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
 
 from fastmcp import FastMCP
@@ -11,6 +12,8 @@ from fastmcp.server.middleware.authorization import AuthContext, AuthMiddleware
 from starlette.responses import JSONResponse
 
 from .shipments import TrackingId, shipment_ids, shipment_status
+
+PROCESS_NONCE = uuid.uuid4().hex
 
 
 def split_csv(value: str | None) -> list[str]:
@@ -74,7 +77,12 @@ def get_shipment_status(tracking_id: TrackingId) -> dict[str, Any]:
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "server": "public-shipments"})
+    return JSONResponse({
+        "status": "ok", "server": "public-shipments",
+        "release": os.getenv("APPLICATION_RELEASE", ""),
+        "processId": os.getpid(),
+        "memoryNonce": PROCESS_NONCE,
+    })
 
 
 app = mcp.http_app(

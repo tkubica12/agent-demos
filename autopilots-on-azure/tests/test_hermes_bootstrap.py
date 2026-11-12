@@ -169,10 +169,10 @@ class HermesBootstrapTests(unittest.TestCase):
             model = config["model"]
             self.assertEqual(model["auth_mode"], "entra_id")
             self.assertEqual(model["default"], "gpt-6-1-sol")
-            self.assertEqual(model["api_mode"], "codex_responses")
+            self.assertEqual(model["api_mode"], "responses")
             self.assertNotIn("name", model)
             self.assertEqual(model["base_url"], "https://example.services.ai.azure.com/openai/v1")
-            self.assertEqual(model["entra"]["scope"], "https://cognitiveservices.azure.com/.default")
+            self.assertEqual(model["entra"]["scope"], "https://ai.azure.com/.default")
             self.assertNotIn("OPENAI_API_KEY", os.environ)
             self.assertNotIn("AZURE_FOUNDRY_API_KEY", os.environ)
             self.assertNotIn("obsolete-placeholder", (home / ".env").read_text(encoding="utf-8"))

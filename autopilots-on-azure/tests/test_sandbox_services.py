@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import os
 import unittest
+import shlex
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from scripts.sandbox_services import (
     BOOTSTRAP,
@@ -22,15 +24,47 @@ from scripts.sandbox_services import (
     worker_settings,
 )
 from scripts.sandbox_runtime import AgentSandboxConfig, config_from_environment, runtime_telemetry_environment
+from scripts.application_releases import ApplicationRelease, PYTHON_BASE_IMAGE
 
 
 class SandboxServicesTests(unittest.TestCase):
+    def setUp(self):
+        self.release = ApplicationRelease("gateway", "f" * 64, b"release")
+        for target, value in (
+            ("scripts.sandbox_services.build_release", self.release),
+            ("scripts.sandbox_services.install_release", self.release.directory),
+        ):
+            item = patch(target, return_value=value)
+            item.start()
+            self.addCleanup(item.stop)
+
     def group(self, role="gateway"):
         return {
             "name": f"worker-{role}", "identity_client_id": f"{role}-client",
             "identity_resource_id": f"/identities/{role}",
             "vnet_connection_name": "private-tools" if role in {"runtime", "gateway"} else "",
         }
+
+    def test_remote_bootstrap_and_quiescence_commands_are_valid_python(self):
+        from scripts.sandbox_services import require_quiescent_service
+        from scripts.application_releases import INSTALL_RELEASE
+        from scripts.native_transport import CALLBACK
+
+        for source in (BOOTSTRAP, INSTALL_RELEASE, CALLBACK):
+            ast.parse(source)
+        sandbox = Mock()
+        def execute(command):
+            script = shlex.split(command)[2]
+            ast.parse(script)
+            self.assertIn("TRANSPORT_ROLE", script)
+            self.assertIn("TRANSPORT_JOURNAL_PATH", script)
+            self.assertIn("127.0.0.1:8000", script)
+            self.assertNotIn("TRANS8000", script)
+            return SimpleNamespace(exit_code=0, stderr="")
+        sandbox.exec.side_effect = execute
+        require_quiescent_service(
+            sandbox, {"environment": {"TRANSPORT_CONNECTION_ID": "/connection"}}, 8000,
+        )
 
     def config(self):
         values = dict.fromkeys([
@@ -40,13 +74,7 @@ class SandboxServicesTests(unittest.TestCase):
         values.update({
             "agent_runtime": "hermes", "autopilot_name": "worker",
             "runtime_image": "registry/hermes@sha256:123",
-            "bridge_image": "registry/bridge@sha256:abc",
-            "bridge_disk_source_image": "registry/bridge:build123",
             "runtime_disk_image_name": "hermes-release",
-            "private_mcp_image": "registry/private@sha256:456",
-            "private_mcp_disk_source_image": "registry/private:build123",
-            "public_shipments_mcp_image": "registry/public@sha256:789",
-            "public_shipments_mcp_disk_source_image": "registry/public:build123",
             "api_server_key": "runtime-test-key", "agent365_tenant_id": "tenant",
             "agent365_client_id": "existing-blueprint",
             "agent365_agent_identity_client_id": "existing-agent-client",
@@ -54,6 +82,10 @@ class SandboxServicesTests(unittest.TestCase):
             "agent365_agent_user_id": "existing-agent-user",
             "private_mcp_api_audience": "api://incidents", "public_shipments_mcp_api_audience": "api://shipments",
             "user_scheduling_enabled": True, "document_retry_enabled": True,
+            "servicebus_dream_enabled": True, "servicebus_dream_cron_expression": "15 3 * * *",
+            "scheduled_learning_focus": "review delivery handoffs",
+            "scheduled_learning_max_records": 2, "scheduled_learning_retry_limit": 4,
+            "scheduled_learning_retry_backoff_seconds": 15,
             "user_scheduling_lock_renewal_seconds": 1800, "user_scheduling_max_delivery_count": 5,
             "hermes_role_blueprint": "junior-project-manager",
             "worker_owner_id": "owner-object",
@@ -67,12 +99,18 @@ class SandboxServicesTests(unittest.TestCase):
             "resource_group_name": "resources", "sandbox_location": "swedencentral",
             "scheduler_servicebus_queue_name": "worker-schedule",
             "foundry_agent_name": "autopilots-hermes",
+            "transport": {
+                "connection_ids": {"gateway": "/connections/gateway"},
+                "namespace": "schedule.servicebus.windows.net",
+            },
         }
 
-    def test_gateway_is_awake_with_native_anonymous_ingress(self):
-        service = SandboxService("gateway", "image", 8000, ("python3",), {}, auto_suspend=False)
+    def test_gateway_uses_memory_suspend_and_native_on_demand_ingress(self):
+        service = SandboxService("gateway", "image", 8000, ("python3",), {}, release=self.release)
         body = service_body(service, self.group(), "disk", "worker")
-        self.assertFalse(body["lifecycle"]["autoSuspendPolicy"]["enabled"])
+        self.assertTrue(body["lifecycle"]["autoSuspendPolicy"]["enabled"])
+        self.assertEqual(body["lifecycle"]["autoSuspendPolicy"]["mode"], "Memory")
+        self.assertEqual(body["lifecycle"]["autoSuspendPolicy"]["interval"], 300)
         self.assertEqual(body["ports"][0]["auth"], {"anonymous": True})
         self.assertEqual(body["ports"][0]["activationMode"], "OnDemand")
         self.assertEqual(body["customerVnetConnectionName"], "private-tools")
@@ -80,8 +118,9 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertTrue(all(len(value) <= 63 for value in body["labels"].values()))
         self.assertEqual(body["resources"], {"cpu": "500m", "memory": "1024Mi", "disk": "10Gi"})
         self.assertNotIn("keepalive", BOOTSTRAP)
-        self.assertIn('os.open("/app/.sandbox-service.log"', BOOTSTRAP)
-        self.assertIn("os.dup2(log, 2)", BOOTSTRAP)
+        self.assertIn('open("/app/.sandbox-service.log", "a")', BOOTSTRAP)
+        self.assertIn("stderr=subprocess.STDOUT", BOOTSTRAP)
+        self.assertIn("subprocess.Popen", BOOTSTRAP)
 
     def test_private_and_public_mcp_keep_distinct_authorization(self):
         private = mcp_service("private-mcp", self.config(), self.infrastructure())
@@ -129,8 +168,13 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertEqual(env["AGENT365_BLUEPRINT_CLIENT_ID"], "existing-blueprint")
         self.assertEqual(env["APPLICATIONINSIGHTS_CONNECTION_STRING"], "instrumentation-identifier")
         self.assertEqual(env["FOUNDRY_AGENT_NAME"], "autopilots-hermes")
-        self.assertEqual(env["OTEL_CONTAINER_IMAGE"], "registry/bridge@sha256:abc")
-        self.assertEqual(env["OTEL_SERVICE_VERSION"], "sha256:abc")
+        self.assertEqual(env["OTEL_CONTAINER_IMAGE"], PYTHON_BASE_IMAGE)
+        self.assertEqual(env["OTEL_SERVICE_VERSION"], PYTHON_BASE_IMAGE.split("@")[-1])
+        self.assertEqual(env["SERVICEBUS_DREAM_ENABLED"], "true")
+        self.assertEqual(env["SERVICEBUS_DREAM_CRON_EXPRESSION"], "15 3 * * *")
+        self.assertEqual(env["SCHEDULED_LEARNING_FOCUS"], "review delivery handoffs")
+        self.assertEqual(env["SCHEDULED_LEARNING_MAX_RECORDS"], "2")
+        self.assertNotIn("SCHEDULED_LEARNING_PREPARE_PACKET", env)
         self.assertFalse(any("CLIENTSECRET" in key or "REGISTRY_PASSWORD" in key for key in env))
 
     def test_runtime_telemetry_uses_runtime_image_not_gateway_image(self):
@@ -177,17 +221,25 @@ class SandboxServicesTests(unittest.TestCase):
         with (
             patch("scripts.sandbox_services.deploy_agent_sandbox", return_value=runtime) as deploy,
             patch("scripts.sandbox_services.require_runtime_ready", return_value=9.5) as ready,
+            patch("scripts.sandbox_services.require_service_health"),
+            patch("scripts.sandbox_services.SandboxGroupClient") as group_factory,
         ):
+            group = group_factory.return_value.__enter__.return_value
+            group.get_sandbox_client.return_value.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
             result = deploy_runtime(settings, "https://gateway.example", "credential")
         config = deploy.call_args.args[0]
         self.assertEqual(config.environment["AUTOPILOT_BRIDGE_URL"], "https://gateway.example")
         self.assertEqual(deploy.call_args.kwargs, {"credential": "credential"})
         ready.assert_called_once_with("https://runtime.example")
-        self.assertEqual(result, {"runtime_url": "https://runtime.example", "runtime_sandbox_id": "runtime-1"})
+        self.assertEqual(result, {
+            "runtime_url": "https://runtime.example", "runtime_sandbox_id": "runtime-1",
+            "runtime_application_release": self.release.digest,
+        })
 
     def test_gateway_settings_receive_runtime_url_derived_from_gateway_url(self):
-        service = SandboxService("gateway", "image@sha256:123", 8000, ("python3",), {}, False)
+        service = SandboxService("gateway", "image@sha256:123", 8000, ("python3",), {}, release=self.release)
         client = Mock()
+        client.list_volumes.return_value = []
         client._group_path = "/group"
         client._dp_get.return_value = []
         client._dp_put.return_value = {"id": "sandbox"}
@@ -211,8 +263,9 @@ class SandboxServicesTests(unittest.TestCase):
 
     def test_native_url_supplied_before_gateway_process_starts(self):
         service = SandboxService("gateway", "image@sha256:123", 8000, ("python3", "-m", "server"), {}, False,
-                                 disk_source_image="image:build123")
+                                 disk_source_image="image:build123", release=self.release)
         client = Mock()
+        client.list_volumes.return_value = []
         client._group_path = "/group"
         client._dp_get.return_value = []
         client.list_disk_images.return_value = []
@@ -230,11 +283,12 @@ class SandboxServicesTests(unittest.TestCase):
         client.begin_create_disk_image.assert_not_called()
         self.assertEqual(client._dp_put.call_args.args[1]["sourcesRef"]["diskImage"]["id"], "disk")
         self.assertEqual(result["image"], "image@sha256:123")
-        health.assert_called_once_with(sandbox, 8000)
+        health.assert_called_once_with(sandbox, 8000, self.release.digest)
 
     def test_failed_configuration_update_restores_previous_settings(self):
-        service = SandboxService("gateway", "image", 8000, ("python3",), {"RELEASE": "new"}, False)
+        service = SandboxService("gateway", "image", 8000, ("python3",), {"RELEASE": "new"}, release=self.release)
         client = Mock()
+        client.list_volumes.return_value = []
         client._group_path = "/group"
         client._dp_get.return_value = [{
             "id": "sandbox", "labels": service_body(service, self.group(), "disk", "worker")["labels"],
@@ -244,17 +298,20 @@ class SandboxServicesTests(unittest.TestCase):
             state="Running", ports=[SimpleNamespace(port=8000, url="https://native.adcproxy.io")]
         )
         sandbox.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
-        previous = {"environment": {"RELEASE": "old"}, "command": ["python3"]}
+        previous = {
+            "environment": {"RELEASE": "old", "TRANSPORT_CONNECTION_ID": "/connections/gateway"},
+            "command": ["python3"],
+        }
         sandbox.read_file.return_value = json.dumps(previous)
         with patch("scripts.sandbox_services.require_service_health", side_effect=TimeoutError("unhealthy")):
             with self.assertRaisesRegex(TimeoutError, "unhealthy"):
                 deploy_service(client, service, self.group(), "worker", disk_image_id="disk")
         self.assertEqual(json.loads(sandbox.write_file.call_args.args[1]), previous)
-        self.assertEqual(sandbox.begin_stop.call_count, 2)
+        sandbox.begin_stop.assert_not_called()
         sandbox.begin_delete.assert_not_called()
 
     def test_changed_bootstrap_replaces_stopped_service_without_stopping_it_again(self):
-        service = SandboxService("private-mcp", "image", 8765, ("python3",), {})
+        service = SandboxService("private-mcp", "image", 8765, ("python3",), {}, release=self.release)
         client = Mock()
         client._group_path = "/group"
         client._dp_get.return_value = [{
@@ -272,14 +329,15 @@ class SandboxServicesTests(unittest.TestCase):
             result = deploy_service(client, service, self.group("private-mcp"), "worker", disk_image_id="disk")
         self.assertEqual(result["sandbox_id"], "new")
         old.begin_stop.assert_not_called()
-        old.begin_delete.assert_called_once()
+        old.begin_delete.assert_not_called()
+        self.assertEqual(result["superseded_sandbox_ids"], ["old"])
         self.assertIn("deployment", client._dp_put.call_args.args[1]["labels"])
 
     def test_failed_service_is_replaced_even_when_deployment_labels_match(self):
         for matching_labels in (True, False):
             for healthy_replacement in (True, False):
                 with self.subTest(matching_labels=matching_labels, healthy_replacement=healthy_replacement):
-                    service = SandboxService("private-mcp", "image", 8765, ("python3",), {})
+                    service = SandboxService("private-mcp", "image", 8765, ("python3",), {}, release=self.release)
                     client = Mock()
                     client._group_path = "/group"
                     labels = service_body(service, self.group("private-mcp"), "disk", "worker")["labels"]
@@ -307,7 +365,8 @@ class SandboxServicesTests(unittest.TestCase):
                                 client, service, self.group("private-mcp"), "worker", disk_image_id="disk"
                             )
                             self.assertEqual(result["sandbox_id"], "replacement")
-                            old.begin_delete.assert_called_once()
+                            old.begin_delete.assert_not_called()
+                            self.assertEqual(result["superseded_sandbox_ids"], ["failed"])
                             new.begin_delete.assert_not_called()
                     client._dp_put.assert_called_once()
                     old.ensure_running.assert_not_called()
@@ -316,7 +375,7 @@ class SandboxServicesTests(unittest.TestCase):
     def test_current_stopped_or_suspended_service_resumes_without_replacement(self):
         for state in ("Stopped", "Suspended"):
             with self.subTest(state=state):
-                service = SandboxService("private-mcp", "image", 8765, ("python3",), {})
+                service = SandboxService("private-mcp", "image", 8765, ("python3",), {}, release=self.release)
                 client = Mock()
                 client._group_path = "/group"
                 client._dp_get.return_value = [{
@@ -328,7 +387,16 @@ class SandboxServicesTests(unittest.TestCase):
                 sandbox.get.return_value = SimpleNamespace(
                     state=state, ports=[SimpleNamespace(port=8765, url="https://native.adcproxy.io")]
                 )
-                sandbox.read_file.return_value = json.dumps({"environment": {}, "command": ["python3"]})
+                sandbox.read_file.return_value = json.dumps({
+                    "environment": {
+                        "APPLICATION_RELEASE": self.release.digest,
+                        "OTEL_SERVICE_VERSION": self.release.digest,
+                    },
+                    "command": [self.release.directory + "/.venv/bin/python"],
+                    "workingDirectory": self.release.directory,
+                    "release": self.release.digest,
+                })
+                sandbox.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
                 with patch("scripts.sandbox_services.require_service_health"):
                     result = deploy_service(client, service, self.group("private-mcp"), "worker", disk_image_id="disk")
                 self.assertEqual(result["sandbox_id"], "existing")

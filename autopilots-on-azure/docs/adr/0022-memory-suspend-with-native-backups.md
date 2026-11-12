@@ -8,6 +8,8 @@ Suspend the runtime Sandbox to **Memory** and keep the Hermes home on its root d
 - Deployment runs a final backup inside a runtime before deleting it for an image, setting or Role Release change. A `Failed` runtime cannot run it; its replacement restores the newest automatic backup.
 - Startup never overwrites an existing home. A damaged archive, another Worker's archive or an unreadable volume stops startup instead of starting a fresh Worker.
 
+The gateway recovery journal follows the same filesystem boundary. Live SQLite and its cross-thread/process checkpoint lock stay on local disk. A checkpoint takes and integrity-checks a local snapshot, then copies and renames a uniquely staged file onto the Blob volume. Publication is serialized so an older concurrent snapshot cannot replace a newer checkpoint. Restore copies it locally before opening SQLite; the Blob mount is never a live database. Native API session/run state stays with the runtime home, not another custom actor journal.
+
 ## Evidence
 
 Measured on 2026-10-31 in Sweden Central with 2 vCPU and 2 GiB:

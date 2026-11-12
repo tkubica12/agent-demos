@@ -6,11 +6,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 from datetime import datetime, timezone
 
 import httpx
@@ -18,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
 from bridge.telemetry import runtime_trace_headers
+from bridge.hermes_telemetry import CONTEXT_DIRECTORY_ENV, gateway_trace_context
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
 ROLE_POLICY_REFERENCE = (
@@ -38,6 +41,14 @@ logger = logging.getLogger(__name__)
 
 
 class DreamExecutionUncertainError(RuntimeError):
+    status = "uncertain"
+
+
+class NativeRunFailedError(RuntimeError):
+    status = "failed"
+
+
+class NativeRunInterventionError(RuntimeError):
     status = "uncertain"
 
 
@@ -143,9 +154,9 @@ def private_session_id(transcript_id: str) -> str:
 
 
 def _endpoint_mode() -> str:
-    value = _env_optional("HERMES_BRIDGE_ENDPOINT_MODE", default="sessions").strip().lower()
-    if value != "sessions":
-        raise ValueError("HERMES_BRIDGE_ENDPOINT_MODE supports only 'sessions'; implicit endpoint fallbacks are disabled.")
+    value = _env_optional("HERMES_BRIDGE_ENDPOINT_MODE", default="runs").strip().lower()
+    if value != "runs":
+        raise ValueError("HERMES_BRIDGE_ENDPOINT_MODE supports only 'runs'; implicit endpoint fallbacks are disabled.")
     return value
 
 
@@ -306,6 +317,8 @@ class HermesRuntimeAdapter:
         return base_url, api_key
 
     async def invoke(self, request: AgentRequest) -> AgentResponse:
+        from bridge import durable_transport
+
         if session_reset_command(request.prompt):
             if request.source != "teams_personal":
                 return AgentResponse(
@@ -343,14 +356,32 @@ class HermesRuntimeAdapter:
         )
 
     async def _invoke_turn(self, request: AgentRequest) -> AgentResponse:
+        from bridge import durable_transport
+
         base_url, api_key = await self._ready_runtime()
         cron_jobs_before: dict[str, str] = {}
         delivery_reference = request.metadata.get("deliveryReference")
         if _configured_env("USER_SCHEDULING_ENABLED") == "true":
-            cron_jobs_before = {
-                str(job.get("id") or ""): str(job.get("revision") or "")
-                for job in await self._cron_jobs(base_url, api_key)
-            }
+            correlation = durable_transport.delivery_identity.get()
+            snapshot_key = "cron-before:" + correlation
+            saved = (
+                durable_transport.journal().load_state(snapshot_key)
+                if correlation and durable_transport.enabled() else None
+            )
+            if saved is not None:
+                if not isinstance(saved, dict):
+                    raise ValueError("The queued cron comparison snapshot is invalid.")
+                cron_jobs_before = saved
+            else:
+                cron_jobs_before = {
+                    str(job.get("id") or ""): str(job.get("revision") or "")
+                    for job in await self._cron_jobs(base_url, api_key)
+                }
+                if correlation and durable_transport.enabled():
+                    durable_transport.journal().save_state(snapshot_key, cron_jobs_before)
+                    from bridge.event_worker import checkpoint
+
+                    await checkpoint()
             if isinstance(delivery_reference, dict):
                 await self._cron_request(
                     base_url,
@@ -426,6 +457,7 @@ class HermesRuntimeAdapter:
                 "runtimeUrl": base_url,
                 "hermesEndpoint": endpoint,
                 "payload": payload,
+                "transportMessageId": durable_transport.delivery_identity.get(),
                 "privateSession": _private_context_enabled(request),
                 "scheduledJobs": scheduled_jobs,
             },
@@ -459,7 +491,7 @@ class HermesRuntimeAdapter:
                     **identity, owner_token=operation["ownerToken"],
                     expected_phase="pending", phase="dream_started", payload={},
                 )
-            elif phase in {"dream_completed", "status_completed", "prepared"}:
+            elif phase in {"dream_completed", "status_completed"}:
                 saved_agent = (checkpoint.get("checkpoint") or {}).get("agent")
                 if not isinstance(saved_agent, dict) or not isinstance(saved_agent.get("raw"), dict):
                     raise DreamExecutionUncertainError(
@@ -986,51 +1018,116 @@ class HermesRuntimeAdapter:
 
     async def _invoke_hermes(self, base_url: str, api_key: str, request: AgentRequest) -> tuple[str, dict[str, Any]]:
         _endpoint_mode()
-        return "sessions", await self._session_chat(base_url, api_key, request)
+        return "runs", await self._native_run(base_url, api_key, request)
 
-    async def _session_chat(self, base_url: str, api_key: str, request: AgentRequest) -> dict[str, Any]:
-        transcript_id = await self._resolve_transcript_id(
-            base_url,
-            api_key,
-            request,
+    async def _native_run(self, base_url: str, api_key: str, request: AgentRequest) -> dict[str, Any]:
+        from bridge import durable_transport
+
+        correlation = durable_transport.delivery_identity.get()
+        snapshot_key = "native-transcript:" + correlation
+        transcript_id = (
+            durable_transport.journal().load_state(snapshot_key)
+            if correlation and durable_transport.enabled() else None
         )
-        if _private_context_enabled(request):
-            transcript_id = private_session_id(transcript_id)
-        baseline_message_count = await self._ensure_session(
+        if transcript_id is not None and not isinstance(transcript_id, str):
+            raise ValueError("The queued native transcript identity is invalid.")
+        if transcript_id is None:
+            transcript_id = await self._resolve_transcript_id(base_url, api_key, request)
+            if _private_context_enabled(request):
+                transcript_id = private_session_id(transcript_id)
+            if correlation and durable_transport.enabled():
+                durable_transport.journal().save_state(snapshot_key, transcript_id)
+                from bridge.event_worker import checkpoint
+
+                await checkpoint()
+        await self._ensure_session(
             base_url,
             api_key,
             request,
             transcript_id,
         )
-        session_id = quote(transcript_id, safe="")
         body = {
             "input": request.prompt,
             "instructions": bridge_instructions(request),
+            "session_id": transcript_id,
         }
-        async with self._client_factory(timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))) as client:
+        receipt = None
+        native_scope = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        if correlation and durable_transport.enabled():
+            queue = durable_transport.delivery_queue.get()
+            if not queue:
+                raise NativeRunInterventionError("Durable native admission has no owning work queue.")
+            receipt = durable_transport.journal().get(queue, correlation)
+            if receipt["native_scope"] and (
+                receipt["native_scope"] != native_scope
+                or (not receipt["native_run_id"] and time.time() - receipt["admission_at"] >= 86400)
+            ):
+                raise NativeRunInterventionError(
+                    "Native admission crossed credential rotation or idempotency expiry; inspect its outcome."
+                )
+            if not receipt["native_scope"]:
+                durable_transport.journal().update(
+                    queue, correlation, native_scope=native_scope, admission_at=time.time(),
+                )
+                from bridge.event_worker import checkpoint
+
+                await checkpoint()
+        run_id = receipt["native_run_id"] if receipt else ""
+        key = "autopilots-" + (correlation or uuid.uuid4().hex)
+        async with AsyncExitStack() as resources:
+            if os.getenv(CONTEXT_DIRECTORY_ENV):
+                resources.enter_context(gateway_trace_context(transcript_id, admission_id=key))
+            client = await resources.enter_async_context(self._client_factory(
+                timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600")),
+            ))
             headers = self._headers(
                 api_key,
                 request,
                 transcript_id,
             )
-            response = await client.post(
-                f"{base_url}/api/sessions/{session_id}/chat",
-                headers=headers,
-                json=body,
-            )
-            if response.status_code >= 500:
-                recovered = await self._recover_session_response(
-                    client,
-                    base_url,
-                    session_id,
-                    headers,
-                    baseline_message_count,
-                    response.status_code,
+            if not run_id:
+                response = await client.post(
+                    f"{base_url}/v1/runs", headers={**headers, "Idempotency-Key": key}, json=body,
                 )
-                if recovered is not None:
-                    return recovered
-            response.raise_for_status()
-            return response.json()
+                response.raise_for_status()
+                admitted = response.json()
+                run_id = admitted.get("run_id")
+                if response.status_code != 202 or not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", run_id):
+                    raise NativeRunInterventionError("Hermes did not return durable 202/run_id admission.")
+                if receipt is not None:
+                    durable_transport.journal().update(
+                        queue, correlation, native_run_id=run_id,
+                    )
+                    await checkpoint()
+            deadline = time.monotonic() + int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600"))
+            terminal_error = None
+            while time.monotonic() < deadline:
+                response = await client.get(f"{base_url}/v1/runs/{run_id}", headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                if result.get("run_id") != run_id:
+                    raise ValueError("Native status returned a different run identity.")
+                status = result.get("status")
+                if status == "completed":
+                    if not isinstance(result.get("output"), str) or not result["output"].strip():
+                        terminal_error = NativeRunFailedError("Native completed run has no final response.")
+                        break
+                    return result
+                if status in {"failed", "cancelled", "interrupted"}:
+                    terminal_error = NativeRunFailedError(
+                        f"Native run {run_id} ended: {status}: {result.get('error', '')}"
+                    )
+                    break
+                if status in {"unknown", "waiting_for_approval", "waiting_for_clarification"}:
+                    raise NativeRunInterventionError(
+                        f"Native run {run_id} ended or requires intervention: {status}: {result.get('error', '')}"
+                    )
+                await asyncio.sleep(2)
+            if terminal_error is None:
+                from bridge.event_worker import InvocationPendingError
+
+                raise InvocationPendingError(f"Native run {run_id} remains unfinished; automatic new-run retry is forbidden.")
+        raise terminal_error
 
     async def _ensure_session(
         self,
@@ -1120,63 +1217,6 @@ class HermesRuntimeAdapter:
         )
         return str(latest.get("id") or base_id)
 
-    async def _recover_session_response(
-        self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        session_id: str,
-        headers: dict[str, str],
-        baseline_message_count: int,
-        failed_status: int,
-    ) -> dict[str, Any] | None:
-        interval_seconds = 2
-        recovery_timeout = int(
-            _env_optional(
-                "HERMES_SESSION_RECOVERY_TIMEOUT_SECONDS",
-                default="120",
-            )
-        )
-        attempts = max(1, recovery_timeout // interval_seconds)
-        for attempt in range(attempts):
-            response = await client.get(
-                f"{base_url}/api/sessions/{session_id}/messages",
-                headers=headers,
-            )
-            if response.status_code == 200:
-                payload = response.json()
-                messages = (
-                    payload.get("data")
-                    if isinstance(payload, dict)
-                    else None
-                )
-                if (
-                    isinstance(messages, list)
-                    and len(messages) > baseline_message_count
-                ):
-                    for message in reversed(
-                        messages[baseline_message_count:]
-                    ):
-                        if (
-                            isinstance(message, dict)
-                            and message.get("role") == "assistant"
-                            and isinstance(message.get("content"), str)
-                            and message["content"].strip()
-                        ):
-                            return {
-                                "object": (
-                                    "hermes.session.chat.recovered"
-                                ),
-                                "session_id": unquote(session_id),
-                                "message": {
-                                    "role": "assistant",
-                                    "content": message["content"],
-                                },
-                                "recovered_after_status": failed_status,
-                            }
-            if attempt < attempts - 1:
-                await asyncio.sleep(interval_seconds)
-        return None
-
     @staticmethod
     def _response_text(payload: dict[str, Any]) -> str:
         session_message = payload.get("message")
@@ -1220,4 +1260,4 @@ class HermesRuntimeAdapter:
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-        return "No reply from Hermes."
+        raise ValueError("Hermes returned no usable final response.")

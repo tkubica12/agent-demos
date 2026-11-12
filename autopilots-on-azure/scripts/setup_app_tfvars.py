@@ -98,12 +98,6 @@ def build_tfvars(
     runtime_image: str = "",
     runtime_disk_source_image: str = "",
     runtime_disk_image_name: str = "",
-    bridge_image: str = "",
-    bridge_disk_source_image: str = "",
-    private_mcp_image: str = "",
-    private_mcp_disk_source_image: str = "",
-    public_shipments_mcp_image: str = "",
-    public_shipments_mcp_disk_source_image: str = "",
     agent365_client_id: str = "",
     agent365_tenant_id: str = "",
     role_blueprint: str = "",
@@ -118,18 +112,15 @@ def build_tfvars(
     user_scheduling_lock_renewal_seconds: int | None = None,
     servicebus_dream_enabled: bool | None = None,
     servicebus_dream_cron_expression: str = "",
-    scheduled_learning_enabled: bool | None = None,
-    scheduled_learning_initial_delay_seconds: int | None = None,
-    scheduled_learning_interval_seconds: int | None = None,
     scheduled_learning_focus: str = "",
     scheduled_learning_max_records: int | None = None,
     scheduled_learning_retry_limit: int | None = None,
     scheduled_learning_retry_backoff_seconds: int | None = None,
-    scheduled_learning_prepare_packet: bool | None = None,
     collective_approval_private_key: str = "",
     collective_approval_public_key: str = "",
 ) -> dict[str, Any]:
     tfvars: dict[str, Any] = dict(previous)
+    tfvars.pop("scheduled_learning_prepare_packet", None)
     if deployer_principal_id:
         tfvars["deployer_principal_id"] = str(uuid.UUID(deployer_principal_id))
     if worker_owner_id:
@@ -170,21 +161,6 @@ def build_tfvars(
                     "0 2 * * *",
                 )
             ),
-            "scheduled_learning_enabled": (
-                scheduled_learning_enabled
-                if scheduled_learning_enabled is not None
-                else bool(previous.get("scheduled_learning_enabled", False))
-            ),
-            "scheduled_learning_initial_delay_seconds": (
-                scheduled_learning_initial_delay_seconds
-                if scheduled_learning_initial_delay_seconds is not None
-                else int(previous.get("scheduled_learning_initial_delay_seconds", 60))
-            ),
-            "scheduled_learning_interval_seconds": (
-                scheduled_learning_interval_seconds
-                if scheduled_learning_interval_seconds is not None
-                else int(previous.get("scheduled_learning_interval_seconds", 86_400))
-            ),
             "scheduled_learning_focus": (
                 scheduled_learning_focus
                 or previous.get(
@@ -206,11 +182,6 @@ def build_tfvars(
                 scheduled_learning_retry_backoff_seconds
                 if scheduled_learning_retry_backoff_seconds is not None
                 else int(previous.get("scheduled_learning_retry_backoff_seconds", 30))
-            ),
-            "scheduled_learning_prepare_packet": (
-                scheduled_learning_prepare_packet
-                if scheduled_learning_prepare_packet is not None
-                else bool(previous.get("scheduled_learning_prepare_packet", True))
             ),
         }
     )
@@ -251,22 +222,16 @@ def build_tfvars(
         tfvars["agent365_client_id"] = resolved_agent365_client_id
     if resolved_agent365_tenant_id:
         tfvars["agent365_tenant_id"] = resolved_agent365_tenant_id
-    for prefix, image, source in (
-        ("runtime", runtime_image, runtime_disk_source_image),
-        ("bridge", bridge_image, bridge_disk_source_image),
-        ("private_mcp", private_mcp_image, private_mcp_disk_source_image),
-        ("public_shipments_mcp", public_shipments_mcp_image, public_shipments_mcp_disk_source_image),
-    ):
-        image_key, source_key = f"{prefix}_image", f"{prefix}_disk_source_image"
-        old_image, old_source = previous.get(image_key, ""), previous.get(source_key, "")
-        if image and image != old_image and old_source and not source:
-            raise ValueError(f"A changed {image_key} requires its corresponding {source_key}; refusing a stale disk source.")
-        if source and source != old_source and old_image and not image:
-            raise ValueError(f"A changed {source_key} requires its corresponding {image_key}.")
-        if image or old_image:
-            tfvars[image_key] = image or old_image
-        if source or old_source:
-            tfvars[source_key] = source or old_source
+    old_image = previous.get("runtime_image", "")
+    old_source = previous.get("runtime_disk_source_image", "")
+    if runtime_image and runtime_image != old_image and old_source and not runtime_disk_source_image:
+        raise ValueError("A changed runtime_image requires runtime_disk_source_image; refusing a stale disk source.")
+    if runtime_disk_source_image and runtime_disk_source_image != old_source and old_image and not runtime_image:
+        raise ValueError("A changed runtime_disk_source_image requires runtime_image.")
+    if runtime_image or old_image:
+        tfvars["runtime_image"] = runtime_image or old_image
+    if runtime_disk_source_image or old_source:
+        tfvars["runtime_disk_source_image"] = runtime_disk_source_image or old_source
     return tfvars
 
 
@@ -308,24 +273,10 @@ def main() -> None:
         "--servicebus-dream-cron-expression",
         default="",
     )
-    parser.add_argument(
-        "--scheduled-learning-enabled",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Keep the Hermes bridge active and run recurring Dreaming.",
-    )
-    parser.add_argument("--scheduled-learning-initial-delay-seconds", type=int, default=None)
-    parser.add_argument("--scheduled-learning-interval-seconds", type=int, default=None)
     parser.add_argument("--scheduled-learning-focus", default="")
     parser.add_argument("--scheduled-learning-max-records", type=int, default=None)
     parser.add_argument("--scheduled-learning-retry-limit", type=int, default=None)
     parser.add_argument("--scheduled-learning-retry-backoff-seconds", type=int, default=None)
-    parser.add_argument(
-        "--scheduled-learning-prepare-packet",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Prepare a human-approval packet when Dreaming produces transferable records.",
-    )
     parser.add_argument("--collective-approval-identity-file", default="", help="Local Ed25519 approval identity file.")
     parser.add_argument("--runtime-image", default="", help="Hermes runtime image digest.")
     parser.add_argument(
@@ -337,12 +288,6 @@ def main() -> None:
         ),
     )
     parser.add_argument("--runtime-disk-image-name", default="", help="ACA Sandbox runtime disk image name.")
-    parser.add_argument("--bridge-image", default="", help="Bridge image digest. Use to pin runtime deployments to a tested bridge build.")
-    parser.add_argument("--bridge-disk-source-image", default="", help="Matching tagged bridge image for Sandbox disk conversion.")
-    parser.add_argument("--private-mcp-image", default="", help="Private incidents MCP image digest.")
-    parser.add_argument("--private-mcp-disk-source-image", default="", help="Matching tagged private MCP image for Sandbox disk conversion.")
-    parser.add_argument("--public-shipments-mcp-image", default="", help="Public shipments MCP image digest.")
-    parser.add_argument("--public-shipments-mcp-disk-source-image", default="", help="Matching tagged public MCP image for Sandbox disk conversion.")
     parser.add_argument("--agent365-client-id", default="", help="Agent 365 blueprint app ID for Microsoft Agents SDK auth.")
     parser.add_argument("--agent365-tenant-id", default="", help="Tenant ID for Microsoft Agents SDK auth. Defaults to tenant if omitted by Terraform.")
     parser.add_argument(
@@ -376,12 +321,6 @@ def main() -> None:
         runtime_image=args.runtime_image,
         runtime_disk_source_image=args.runtime_disk_source_image,
         runtime_disk_image_name=args.runtime_disk_image_name,
-        bridge_image=args.bridge_image,
-        bridge_disk_source_image=args.bridge_disk_source_image,
-        private_mcp_image=args.private_mcp_image,
-        private_mcp_disk_source_image=args.private_mcp_disk_source_image,
-        public_shipments_mcp_image=args.public_shipments_mcp_image,
-        public_shipments_mcp_disk_source_image=args.public_shipments_mcp_disk_source_image,
         agent365_client_id=args.agent365_client_id or agent365_auth.get("client_id", ""),
         agent365_tenant_id=args.agent365_tenant_id,
         role_blueprint=args.role_blueprint,
@@ -396,14 +335,10 @@ def main() -> None:
         user_scheduling_lock_renewal_seconds=args.user_scheduling_lock_renewal_seconds,
         servicebus_dream_enabled=args.servicebus_dream_enabled,
         servicebus_dream_cron_expression=args.servicebus_dream_cron_expression,
-        scheduled_learning_enabled=args.scheduled_learning_enabled,
-        scheduled_learning_initial_delay_seconds=args.scheduled_learning_initial_delay_seconds,
-        scheduled_learning_interval_seconds=args.scheduled_learning_interval_seconds,
         scheduled_learning_focus=args.scheduled_learning_focus,
         scheduled_learning_max_records=args.scheduled_learning_max_records,
         scheduled_learning_retry_limit=args.scheduled_learning_retry_limit,
         scheduled_learning_retry_backoff_seconds=args.scheduled_learning_retry_backoff_seconds,
-        scheduled_learning_prepare_packet=args.scheduled_learning_prepare_packet,
         collective_approval_private_key=collective_identity.get("privateKey", ""),
         collective_approval_public_key=collective_identity.get("publicKey", ""),
     )

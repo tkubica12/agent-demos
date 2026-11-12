@@ -24,7 +24,7 @@ from collective_learning import redaction_findings, validate_governed_artifact  
 
 
 SCHEMA_VERSION = "1.0"
-HERMES_VERSION = "0.22.5"
+HERMES_VERSION = "0.22.6"
 SCENARIO_FIELDS = {
     "scenarioId", "input", "setupAssumptions", "expectedObservableOutcomes", "acceptanceCriteria", "scope",
 }

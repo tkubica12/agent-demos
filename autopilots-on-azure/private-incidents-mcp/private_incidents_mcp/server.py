@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
 
 from fastmcp import FastMCP
@@ -11,6 +12,8 @@ from fastmcp.server.middleware.authorization import AuthContext, AuthMiddleware
 from starlette.responses import JSONResponse
 
 from .incidents import ServiceName, get_incidents_for_service, service_values
+
+PROCESS_NONCE = uuid.uuid4().hex
 
 
 def split_csv(value: str | None) -> list[str]:
@@ -104,6 +107,9 @@ async def health(request) -> JSONResponse:
     return JSONResponse(
         {
             "status": "ok",
+            "release": os.getenv("APPLICATION_RELEASE", ""),
+            "processId": os.getpid(),
+            "memoryNonce": PROCESS_NONCE,
             "server": "private-fsi-incidents",
             "authMode": auth_mode(),
             "services": service_values(),

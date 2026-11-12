@@ -48,6 +48,12 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         def handle(request):
             requests.append(request)
+            if request.method == "POST" and request.url.path == "/v1/runs":
+                return httpx.Response(202, json={"run_id": "run-trace"})
+            if request.url.path == "/v1/runs/run-trace":
+                return httpx.Response(200, json={
+                    "run_id": "run-trace", "status": "completed", "output": "done",
+                })
             return httpx.Response(200, json={"token": "turn-1"})
 
         adapter = HermesRuntimeAdapter(
@@ -66,7 +72,7 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         async def run():
             await adapter._wait_for_health("https://hermes.example", "api-key")
-            await adapter._session_chat("https://hermes.example", "api-key", request)
+            await adapter._native_run("https://hermes.example", "api-key", request)
             await adapter._cron_request(
                 "https://hermes.example", "api-key", "GET", "/internal/cron/jobs"
             )
@@ -174,7 +180,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         finally:
             bridge_app.runtime_adapter.cache_clear()
 
-    def test_hermes_adapter_prefers_stateful_session_chat(self):
+    def test_hermes_adapter_uses_durable_native_runs_and_stateful_sessions(self):
         calls: list[dict] = []
         post_responses = [(200, {"output": " stateful OK "})]
 
@@ -206,11 +212,11 @@ class RuntimeAdapterTests(unittest.TestCase):
             call
             for call in calls
             if call["method"] == "POST"
-            and call["url"].endswith("/chat")
+            and call["url"].endswith("/v1/runs")
         )
         readiness = next(call for call in calls if call["url"].endswith("/v1/models"))
         self.assertEqual(response.text, "stateful OK")
-        self.assertEqual(response.raw["hermesEndpoint"], "sessions")
+        self.assertEqual(response.raw["hermesEndpoint"], "runs")
         self.assertEqual(readiness["headers"]["Authorization"], "Bearer api-key-1")
         self.assertLess(calls.index(readiness), calls.index(post))
         transcript_id = post["headers"]["X-Hermes-Session-Id"]
@@ -220,11 +226,10 @@ class RuntimeAdapterTests(unittest.TestCase):
         )
         self.assertEqual(
             post["url"],
-            (
-                "https://hermes.example/api/sessions/"
-                f"{quote(transcript_id, safe='')}/chat"
-            ),
+            "https://hermes.example/v1/runs",
         )
+        self.assertEqual(post["json"]["session_id"], transcript_id)
+        self.assertTrue(post["headers"]["Idempotency-Key"].startswith("autopilots-"))
         self.assertEqual(post["headers"]["Authorization"], "Bearer api-key-1")
         session_key = post["headers"]["X-Hermes-Session-Key"]
         self.assertEqual(
@@ -238,14 +243,14 @@ class RuntimeAdapterTests(unittest.TestCase):
         )
         self.assertEqual(post["json"]["input"], "hello")
 
-    def test_hermes_adapter_fails_closed_when_session_chat_is_unavailable(self):
+    def test_hermes_adapter_fails_closed_when_runs_are_unavailable(self):
         calls: list[dict] = []
         post_responses = [(404, {"error": "not found"}), (200, {"output_text": "responses OK"})]
 
 
         previous_env = {key: os.environ.get(key) for key in ["API_SERVER_KEY", "HERMES_BRIDGE_ENDPOINT_MODE", "AUTOPILOT_NAME"]}
         os.environ["API_SERVER_KEY"] = "api-key-1"
-        os.environ["HERMES_BRIDGE_ENDPOINT_MODE"] = "sessions"
+        os.environ["HERMES_BRIDGE_ENDPOINT_MODE"] = "runs"
         os.environ["AUTOPILOT_NAME"] = "hermes-worker"
         try:
             adapter = HermesRuntimeAdapter(
@@ -272,12 +277,12 @@ class RuntimeAdapterTests(unittest.TestCase):
             for call in calls
             if call["method"] == "POST"
             and (
-                call["url"].endswith("/chat")
+                call["url"].endswith("/v1/runs")
                 or call["url"].endswith("/v1/responses")
             )
         ]
         self.assertEqual(len(post_urls), 1)
-        self.assertTrue(post_urls[0].endswith("/chat"))
+        self.assertTrue(post_urls[0].endswith("/v1/runs"))
 
     def test_hermes_adapter_creates_missing_native_session(self):
         calls = []
@@ -409,62 +414,17 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         self.assertEqual(result, f"{base_id}:new:latest")
 
-    def test_hermes_adapter_recovers_completed_turn_after_session_500(self):
-        class RecoveringSessionClient:
-            def __init__(self, **_kwargs):
-                self.message_reads = 0
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, exc_type, exc, tb):
-                return False
-
-            async def get(self, url, *, headers):
-                if url.endswith("/messages"):
-                    self.message_reads += 1
-                    payload = {
-                        "data": [
-                            {"role": "user", "content": "old"},
-                            {"role": "assistant", "content": "old answer"},
-                            *(
-                                [
-                                    {
-                                        "role": "tool",
-                                        "content": "tool result",
-                                    },
-                                    {
-                                        "role": "assistant",
-                                        "content": (
-                                            "completed despite HTTP 500"
-                                        ),
-                                    },
-                                ]
-                                if self.message_reads >= 20
-                                else []
-                            ),
-                        ]
-                    }
-                else:
-                    payload = {
-                        "session": {
-                            "id": "session-1",
-                            "message_count": 2,
-                        }
-                    }
-                return httpx.Response(
-                    200,
-                    json=payload,
-                    request=httpx.Request("GET", url),
-                )
-
-            async def post(self, url, *, headers, json):
-                return httpx.Response(
-                    500,
-                    json={"error": "serialization failed"},
-                    request=httpx.Request("POST", url),
-                )
-
+    def test_native_poll_failure_does_not_guess_from_transcripts_or_submit_another_run(self):
+        requests = []
+        def handle(request):
+            requests.append(request)
+            if request.url.path == "/v1/runs" and request.method == "POST":
+                return httpx.Response(202, json={"run_id": "run-uncertain"})
+            if request.url.path == "/v1/runs/run-uncertain":
+                return httpx.Response(500, json={"error": "status unavailable"})
+            if request.url.path == "/api/sessions":
+                return httpx.Response(200, json={"data": []})
+            return httpx.Response(200, json={"session": {"message_count": 2}})
         request = AgentRequest(
             prompt="edit the document",
             conversation_id="teams:personal:conversation-1",
@@ -473,25 +433,21 @@ class RuntimeAdapterTests(unittest.TestCase):
             must_answer=True,
         )
         adapter = HermesRuntimeAdapter(
-            client_factory=RecoveringSessionClient,
+            client_factory=lambda **kwargs: httpx.AsyncClient(
+                transport=httpx.MockTransport(handle), **kwargs,
+            ),
         )
-
-        sleep = AsyncMock()
-        with patch.object(hermes_runtime.asyncio, "sleep", sleep):
-            payload = asyncio.run(
-                adapter._session_chat(
+        with self.assertRaises(httpx.HTTPStatusError):
+            asyncio.run(
+                adapter._native_run(
                     "https://hermes.example",
                     "api-key",
                     request,
                 )
             )
 
-        self.assertEqual(
-            payload["message"]["content"],
-            "completed despite HTTP 500",
-        )
-        self.assertEqual(payload["recovered_after_status"], 500)
-        self.assertEqual(sleep.await_count, 19)
+        self.assertEqual(sum(r.method == "POST" and r.url.path == "/v1/runs" for r in requests), 1)
+        self.assertFalse(any(r.url.path.endswith("/messages") for r in requests))
 
     def runtime_adapter(self, handler):
         requests: list[httpx.Request] = []
@@ -511,10 +467,16 @@ class RuntimeAdapterTests(unittest.TestCase):
     def native_session_handler(request):
         if request.method == "GET" and request.url.path == "/api/sessions":
             return httpx.Response(200, json={"data": []})
+        if request.method == "GET" and request.url.path == "/v1/runs/run-test":
+            return httpx.Response(200, json={
+                "run_id": "run-test", "status": "completed", "output": "Answer.",
+            })
         if request.method == "GET":
             return httpx.Response(404, json={"error": "missing"})
         if request.url.path == "/api/sessions":
             return httpx.Response(201, json={"session": {"id": json.loads(request.content)["id"]}})
+        if request.url.path == "/v1/runs":
+            return httpx.Response(202, json={"run_id": "run-test"})
         return httpx.Response(200, json={"message": {"role": "assistant", "content": "Answer."}})
 
     def test_private_turns_use_a_marked_native_session_and_ordinary_turns_do_not(self):
@@ -531,7 +493,7 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}):
             asyncio.run(run())
-        chats = [request for request in requests if request.url.path.endswith("/chat")]
+        chats = [request for request in requests if request.method == "POST" and request.url.path == "/v1/runs"]
         session_ids = [request.headers["X-Hermes-Session-Id"] for request in chats]
         self.assertFalse(session_ids[0].startswith(PRIVATE_SESSION_PREFIX))
         self.assertEqual(session_ids[1], PRIVATE_SESSION_PREFIX + session_ids[0])
@@ -548,7 +510,7 @@ class RuntimeAdapterTests(unittest.TestCase):
                 prompt="/learn Always confirm the timezone.", conversation_id="conversation-1", user_id="user-1",
                 source="teams_personal", must_answer=True,
             )))
-        chat = next(request for request in requests if request.url.path.endswith("/chat"))
+        chat = next(request for request in requests if request.method == "POST" and request.url.path == "/v1/runs")
         body = json.loads(chat.content)
         self.assertEqual(body["input"], "/learn Always confirm the timezone.")
         self.assertEqual(
@@ -569,7 +531,7 @@ class RuntimeAdapterTests(unittest.TestCase):
         adapter, requests = self.runtime_adapter(handler)
         with patch.dict(os.environ, {"API_SERVER_KEY": "api-key"}):
             result = asyncio.run(adapter.dream(DreamRequest(session_id="dream-1", focus="recent work", max_records=2)))
-        chat = next(request for request in requests if request.url.path.endswith("/chat"))
+        chat = next(request for request in requests if request.method == "POST" and request.url.path == "/v1/runs")
         prompt = json.loads(chat.content)["input"]
         self.assertIn("at most 2 skills", prompt)
         self.assertIn("skill_manage", prompt)
@@ -678,10 +640,10 @@ class RuntimeAdapterTests(unittest.TestCase):
         request = AgentRequest(
             prompt="hello", conversation_id="conversation", user_id="user", source="invoke", must_answer=True,
         )
-        for mode in ("auto", "responses", "chat_completions"):
+        for mode in ("auto", "sessions", "responses", "chat_completions"):
             with patch.dict(os.environ, {"HERMES_BRIDGE_ENDPOINT_MODE": mode}):
-                with patch.object(adapter, "_session_chat", new_callable=AsyncMock) as invoke:
-                    with self.assertRaisesRegex(ValueError, "only 'sessions'"):
+                with patch.object(adapter, "_native_run", new_callable=AsyncMock) as invoke:
+                    with self.assertRaisesRegex(ValueError, "only 'runs'"):
                         asyncio.run(adapter._invoke_hermes("http://runtime.test", "key", request))
                     invoke.assert_not_awaited()
 
@@ -935,6 +897,9 @@ class RuntimeAdapterTests(unittest.TestCase):
             def ensure_running(self, timeout):
                 events.append(("wake", self.sandbox_id))
 
+            def read_file(self, path):
+                return json.dumps({"workingDirectory": "/app"})
+
             def exec(self, command):
                 events.append(("exec", self.sandbox_id, command))
                 return exec_result
@@ -1140,6 +1105,11 @@ class FakeHermesClient:
 
     async def get(self, url: str, *, headers: dict | None = None):
         self.calls.append({"method": "GET", "url": url, "headers": headers or {}})
+        if "/v1/runs/" in url:
+            return httpx.Response(
+                200, json={"run_id": "run-test", "status": "completed", "output": self.native_output},
+                request=httpx.Request("GET", url),
+            )
         return httpx.Response(200, json={"status": "ok"}, request=httpx.Request("GET", url))
 
     async def request(
@@ -1176,6 +1146,9 @@ class FakeHermesClient:
     async def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
         status_code, payload = self.post_responses.pop(0)
+        if url.endswith("/v1/runs") and status_code == 200:
+            self.native_output = str(payload.get("output") or payload.get("output_text") or "")
+            return httpx.Response(202, json={"run_id": "run-test"}, request=httpx.Request("POST", url))
         return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
 
 

@@ -1,6 +1,6 @@
 # Hermes Worker contracts
 
-Hermes 0.22.5, built from the official image pinned by digest, implements a Junior Project Manager Worker: delivery coordination, document collaboration, scheduled work, and governed learning. [Deployment](DEPLOYMENT.md) contains operator procedures; [Demo](DEMO.md) contains prompts.
+Hermes 0.22.6, pinned by digest in a dependency image and paired with a verified application release, implements a Junior Project Manager Worker: delivery coordination, document collaboration, scheduled work, and governed learning. [Deployment](DEPLOYMENT.md) contains operator procedures; [Demo](DEMO.md) contains prompts.
 
 ## Domain
 
@@ -26,25 +26,37 @@ Each Worker has a separate Terraform workspace, Agent 365 platform blueprint, Ag
 
 | Group | Responsibility |
 | --- | --- |
-| `gateway` | Agent 365 `/api/messages`, operator `/invoke`, Teams delivery, continuous Service Bus receive, and generated-app publication. It calls the runtime only through `AGENT_RUNTIME_URL`. Auto-suspend is disabled. |
+| `gateway` | Authenticated Agent 365 admission, direct Teams turn handling, proactive delivery, and generated-app publication. Native callbacks receive scheduled work only. |
 | `runtime` | One Hermes writer, OnDemand compute suspended to memory, Hermes home on the Sandbox disk with native backups on a Blob volume, native tools, memory, learning, and cron state. |
 | `private-mcp` | Incidents MCP, private ingress through the linked Express environment, application-level Entra authorization. |
 | `public-mcp` | Shipments MCP, public HTTPS, application-level Entra authorization. |
 | `generated-apps` | Separate child Sandbox per published app; participant-authenticated ports and native lifecycle. |
 
-The gateway does not proxy model inference, MCP traffic, or generated-app traffic. An Agent 365 HTTP acknowledgement can precede completion of detached work; gateway availability must cover that work and queue receive. Runtime and generated-app suspension are independent.
+The gateway does not proxy model inference, MCP traffic, or generated-app traffic. Agent 365 activities enter the bridge directly; the bridge handles the turn and calls native Hermes Runs over OnDemand HTTPS. Teams messages are not copied into Service Bus or a durable activity-recovery inbox. The bridge's journal is used for scheduling receipts and bounded conversation state, not for admitting interactive model requests.
 
-Unchanged `Stopped` or `Suspended` Sandboxes resume with the same ID. The runtime suspends to **Memory** after five idle minutes, so resume continues the running Hermes processes instead of starting them again, and mints fresh identity tokens on demand. The Hermes home (`/data/hermes`) lives on the Sandbox root disk, which suspension, resume and platform maintenance preserve. Native backups on a platform-managed Blob volume make it survive replacement or loss of the Sandbox ([Persistent state](#persistent-state)). A Data Disk volume would force Disk mode, which restarts Hermes on every wake. An image change replaces gateway and MCP Sandboxes, which changes their native URLs. A profile is single-writer because it contains SQLite and transactional skill state.
+Each Worker has one Service Bus queue, `worker-<name>`, for native Hermes cron, Dreaming, and deterministic document retries when enabled. There is no activity-recovery queue and no interactive runtime request/result queue. A per-Worker managed connector has its own system-assigned identity and one caller-owned connection created by the gateway identity that settles its scheduling leases, not by the deployment operator.
+
+Gateway, runtime, and both MCP services suspend to **Memory** after five idle minutes. Unchanged stopped Sandboxes resume with the same ID and running processes; identity clients must refresh expired tokens rather than reuse stale credentials. The Hermes home (`/data/hermes`) lives on the Sandbox root disk. Native backups on a platform-managed Blob volume make it survive replacement or loss of the Sandbox ([Persistent state](#persistent-state)). A Data Disk volume would force Disk mode. A home remains single-writer because it contains SQLite and transactional skill state.
+
+Application source, dependencies, and identity have different lifecycles. Gateway and MCP services use a pinned public Python image, hashed source releases, and a lock-addressed dependency environment prepared from approved-feed wheels. The runtime uses one ACR dependency image for Hermes, Office binaries, and installed packages, plus a separate source release. A source-only update switches the supervised process in the existing Sandbox; it does not rebuild an image, recreate an identity, or change the native URL. A changed base image or compute-defining setting can require replacement and endpoint reconciliation.
 
 The `autopilots` Hermes plugin's keepalive wraps actual model and tool execution, including background review and Curator forks, in `try/finally` activity scopes. The runtime wrapper uses the same supervisor for mutating HTTP requests, including deterministic cron/document work. While active, each process sends periodic GETs at roughly 60-second intervals to its own published `/health`, using platform-provided `ADC_SANDBOX_ID` and `ADC_PROXY_DNS_SUFFIX`. Loopback requests, outbound model calls and local CPU work do not reset platform idle time. There is no keepalive queue, external controller, durable busy ledger or additional Azure permission. An operation expires after 30 minutes or when its owning thread exits; expiry and ingress failures are logged. This limit applies to one uninterrupted operation, not the total multi-step agent task. Detached subprocesses outside a tracked operation and future schedules do not keep compute awake.
 
-Deployment owns runtime compute. After the gateway Sandbox publishes its native URL, deployment creates or reuses the runtime with that URL, the Worker backup volume and a fingerprint of every compute-defining setting. A changed fingerprint or Role Release replaces compute: a Role Release change first requires Worker Refresh readiness, then the old runtime publishes a final backup before it is deleted, and its replacement restores that backup. Deployment also replaces terminal `Failed` compute, which restores the newest automatic backup, then verifies `/health` through the public OnDemand ingress before writing `AGENT_RUNTIME_URL` into gateway settings.
+Deployment owns compute. After the gateway publishes its native URL, deployment creates or reuses the runtime, installs the exact source release, and verifies its loaded release identity before exposing it to the gateway. A changed compute fingerprint or Role Release replaces runtime compute: a Role Release change first requires Worker Refresh readiness, then the old runtime publishes a final backup and its replacement restores it. A `Failed` runtime restores the newest automatic backup. An update refuses to delete or replace a Worker identity or Sandbox Group merely because the wrong Terraform workspace or inputs were selected.
 
-The gateway has no runtime Sandbox Group role, Sandbox SDK runtime path, or runtime provisioning settings. Every gateway request, including Teams, document retry, Service Bus delivery and Dreaming, simply calls the runtime URL. OnDemand ingress wakes `Stopped` or `Suspended` compute; the adapter waits for wrapper `/health` and native `/v1/models` readiness. Missing or `Failed` compute returns an explicit error until deployment is rerun. Keepalive does not fix a long HTTP request timeout, guarantee crash recovery, or change Teams delivery.
+The gateway has no runtime Sandbox Group role or runtime provisioning path. It uses authenticated native `/v1/runs` and deterministic control APIs over OnDemand HTTPS. Scheduled native Runs persist their admission scope, run ID, and frozen transcript/cron comparison state in the scheduling delivery receipt, so an exact broker redelivery can resume the same native run rather than create another. Teams turns are not admitted through a separate model API or polling protocol. Missing or `Failed` runtime compute returns an explicit error until deployment is rerun. Keepalive does not guarantee crash recovery or exactly-once external delivery.
 
 Gateway, runtime and MCP ports all use `OnDemand`. A request to a stopped `Manual` port returns `403` instead of waking compute; this previously disabled both MCP servers whenever they had been idle for 30 minutes. Measured on 2026-10-31 in Sweden Central (2 vCPU, 2 GiB): the platform resumed a Sandbox in under a second in either mode, and a Memory resume reached the native Hermes API in 1.5–2.7 s, including three cycles on the deployed `hermes2` Worker. Disk mode needed 17–25 s, because every wake repeated the launcher, the official bootstrap, imports and plugins, and MCP discovery of eleven servers, which Hermes completes before opening its API. A new runtime Sandbox pays that full start once: the `hermes2` replacement restored a 24 MB backup and passed `/health` 12 s after creation.
 
-A Service Bus message does not wake a Sandbox. The awake gateway is the queue consumer: it holds the PeekLock, renews it, checks schedule revisions and receipts, settles or dead-letters messages and posts Teams output through Agent 365. Its runtime call then wakes compute through ingress. Platform connector triggers are preview, do not list Service Bus as a Sandbox trigger source and do not provide this lock/settlement coupling, so none is attached to this queue.
+The native connector runner owns PeekLock for the scheduling queue and delivers the complete broker envelope, base64 encoded, to a fixed OnDemand callback. The gateway stores a durable scheduling receipt, renews the lease through the same caller-owned connection, performs bounded work, and completes only after the scheduled handler succeeds. A receive loop inside a sleeping process cannot provide wake-up and is not used.
+
+The connector service still polls the source outside the actors, which can delay scheduled work. The rejected three-hop design measured 68-116 seconds before activity receipt and 161-175 seconds per warm turn, versus about 4-13 seconds of model execution. Teams uses the direct gateway-to-native-Runs path; Service Bus is not on its response path. Queue timing is not chat timing, and an unverified ten-second metadata hint is not a latency guarantee.
+
+Scheduling envelopes are at most 64 KiB and contain job metadata, not Teams messages, prompts, document bodies, model output, or credentials. Interactive model input travels directly in the authenticated native HTTPS request body. Attachment extraction and model-context limits apply independently.
+
+Source updates use owned maintenance barriers: stop new gateway admissions before touching runtime compute, require active gateway turns and scheduled callbacks plus actual native tasks/executor threads to be quiescent, switch source, and verify loaded health. Unsettled scheduling receipts do not authorize repeating completed effects. Failure restores the preceding application configuration. Superseded gateway/MCP compute is recorded for explicit retirement after replacement validation.
+
+Unknown scheduled effects are not completed or silently retried. They are retained as unknown in the journal and moved to the broker DLQ through the owning connection. This terminal quarantine stops poison-message wake loops without claiming successful execution. A failure before scheduled effects start remains retryable. Journal snapshots are created and checked locally, then copied and renamed to Blob under a local cross-thread/process publication lock.
 
 Deployment explicitly separates Terraform resources, identity reconciliation, image conversion, service creation, and endpoint capture. It does not use Terraform `local-exec`. Linking a Group to the private-ingress environment is irreversible.
 
@@ -57,7 +69,9 @@ Deployment explicitly separates Terraform resources, identity reconciliation, im
 | Worker-owned Microsoft 365 | Agent Identity exchange → `user_fic` for the fixed Agent User → delegated Work IQ/Graph token. |
 | Agent 365 ingress | Microsoft 365 Agents SDK validates Activity Protocol authentication. |
 | Native cron Service Bus send | Worker Agent Identity with Data Sender, federated from runtime managed identity. |
-| Document-retry Service Bus send and queue receive | Gateway managed identity with Data Sender/Data Receiver; no Agent Identity exchange. |
+| Document retry publication | Gateway managed identity with queue-scoped Data Sender; no Agent Identity exchange. |
+| Queue receive and callback execution | Native connector system identity with queue-scoped Data Receiver and SandboxGroup Data Owner on the gateway callback group only. |
+| Lease renewal and completion | Gateway managed identity through its own native connection and narrowly scoped named-action role. |
 | Runtime compute lifecycle | Deployer only. The gateway managed identity has no role on the runtime Sandbox Group. |
 | Generated-app lifecycle | Gateway managed identity with Data Owner on that Worker's generated-app Group. |
 | Generated-app user access | Native Entra-authenticated port with explicit participant allowlist. |
@@ -68,15 +82,19 @@ Private network access and authorization are independent. Runtime VNet attachmen
 
 Sandbox egress inspection remains enabled. Python clients trust the system certificate store through `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`; disabling TLS checks is not an authentication remedy.
 
-Registry conversion is deployment-only: the deployer submits native-v2 disk-image conversions that the runtime/gateway/private-MCP/public-MCP Sandbox Groups authenticate with their own managed identities (`AcrPull`), then passes ready image IDs to workloads. Runtime deployment uses `AGENT_RUNTIME_DISK_IMAGE_ID`. No registry token or admin credential exists; workloads have no conversion code path. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records the decision.
+Registry conversion is deployment-only. Only the runtime dependency image needs ACR and runtime-group `AcrPull`; gateway and MCP groups convert the public Python digest directly. No registry token or admin credential exists. Runtime deployment uses `AGENT_RUNTIME_DISK_IMAGE_ID`. [ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md) records the conversion boundary.
+
+SandboxGroup Data Owner is broader than execute-only, and the native connection named-action wildcard is broader than one settlement action. Neither is described as absolute least privilege. Temporary connection/trigger creation grants are bounded to the owned namespace and removed in `finally`. A connection's immutable creator must match the identity that settles its leases.
 
 ## Messaging, events, and sessions
+
+There is no general model-invocation HTTP API, request polling endpoint, or bridge HTTP trigger for manual Dreaming. Real interactive validation uses the Agent 365/Teams surface. Automatic Dreaming remains a native scheduled Service Bus job; `scripts.servicebus_dream_smoke` uses the Sandbox management plane to enqueue a separate ad-hoc occurrence without changing production cron. Learning Packet preparation, approval, and export remain separate explicit operations and are never triggered automatically by Dreaming.
 
 - Agent 365 Agent Users are the only Teams packaging path; no companion bot is installed.
 - Personal messages and explicit mentions are invocation surfaces. Delivered replies, reaction events, and message updates are handled; SDK handlers do not imply that Teams delivers every event.
 - When observation is enabled, added reactions to remembered agent-authored messages may invoke Hermes. Removed reactions do not invoke it. Message updates record diagnostics only; there is no delete-event handler.
 - The bridge adds/removes temporary `eyes` on eligible public group requests and sends typing indicators in personal/group chats. Hermes requests semantic reactions through `TEAMS_REACTION: eyes|like|heart|smile|surprised|check`; the bridge strips control lines and executes them. Undirected thanks after an agent response can receive a direct `like` acknowledgement. `NO_RESPONSE` suppresses visible text.
-- Bridge context is an in-process bounded record of delivered events, not a channel subscription or durable history service.
+- Bridge context is a bounded journal-backed record of delivered events, not a channel subscription or a complete channel-history service.
 - Hermes transcript IDs rotate hourly by default. `HERMES_API_SESSION_ROTATION_HOURS` supports 1–24 hours; `HERMES_API_SESSION_RESET_HOUR_UTC` aligns buckets.
 - Stable `X-Hermes-Session-Key` includes Worker, source, authenticated user, and conversation/thread hash. `X-Hermes-Session-Id` is conversation/thread-based and time-bucketed. Group transcripts are shared despite user-specific memory keys.
 - `/new` and `/reset` create a distinct native session generation; native inventory preserves that selection across gateway restarts. Personal Memory and Work History remain on disk.
@@ -88,7 +106,7 @@ As checked on 2026-10-30, [Teams streaming documentation](https://learn.microsof
 
 ## Persistent state
 
-The Worker home is `/data/hermes` on the runtime Sandbox root disk. Hermes 0.22.5 runs one gateway per home, so the Worker is the home itself rather than a named profile.
+The Worker home is `/data/hermes` on the runtime Sandbox root disk. Hermes 0.22.6 runs one gateway per home, so the Worker is the home itself rather than a named profile.
 
 | State | Home-relative location | Refresh | Packet |
 | --- | --- | --- | --- |
@@ -101,6 +119,7 @@ The Worker home is `/data/hermes` on the runtime Sandbox root disk. Hermes 0.22.
 | Owner decisions | `learning\receipts\`, `learning\share-choices.json` | Archive per release | Share choice |
 | Worker manifest | `local\worker.json` | Update atomically | Identity/release bindings |
 | Cron and delivery state | Native cron files and execution ledger | Preserve | Exclude |
+| Native API session/run state | Native Hermes home and native backup | Preserve | Exclude |
 
 Personal Memory is a bounded frozen snapshot injected at fresh-session start. Its files and Private Playbooks belong to the Worker, not separate per-caller profiles. A user-specific session key does not split these stores. Skills use progressive disclosure; transferable skills are restricted to one `SKILL.md`. Skill basenames are unique across namespaces.
 
@@ -111,6 +130,8 @@ The distribution includes only declared role-owned files: `distribution.yaml`, `
 The root disk is local to one Sandbox, so it is not the only copy. The runtime wrapper checks the home once a minute and, when anything a backup would keep has changed, runs native `hermes backup`. Logs, caches, heartbeats, locks and SQLite shared-memory files that idle Hermes rewrites by itself do not count as changes. `hermes backup` snapshots every SQLite database through the SQLite backup API and writes a complete zip into the home's own `backups` directory; only a complete archive is copied to the Worker's platform-managed `AzureBlob` Sandbox volume at `/backup` and published by rename. The newest 24 archives are kept. Staging is local because SQLite snapshots fail on the blobfuse mount.
 
 A runtime starting with an empty home restores the newest archive with native `hermes import` before anything else touches the home, then checks that the restored manifest names the same Worker. A damaged or foreign archive, or a volume that cannot be listed, stops startup; a readable empty volume starts a fresh Worker. An existing home is never overwritten. Before deployment deletes a replaced runtime, it runs one more backup inside it, waiting for any automatic backup in progress. `/health` reports the last published archive and error.
+
+The gateway journal has its own `gateway-state` managed Blob volume. Local SQLite snapshots are checked and copied/renamed to that volume before acknowledging scheduling callbacks. A gateway replacement restores the verified journal before accepting callbacks. Scheduling receipts, native run IDs, frozen transcript/cron comparison state, and bounded Teams conversation state are retained; interactive message payloads and operator request bindings are not stored there. The runtime keeps native API state in its Hermes home, not a second custom transport journal. A possibly external scheduled effect interrupted mid-delivery is explicitly `unknown`, not silently replayed.
 
 | Event | Data kept |
 | --- | --- |
@@ -127,7 +148,7 @@ Hermes learns natively. Ordinary turns may update memory and skills, and a backg
 
 The Worker owner (`worker_owner_id`, the Agent Identity sponsor) is the only person who reviews what was learned. After Dreaming, and on `/learning` or `/learned` in the owner's personal chat, the gateway sends a digest card: recent skill changes with diffs and **Undo** (native rollback), staged writes with **Approve**/**Reject**, and for Role Skill or Candidate Improvement changes **Share**, **Keep** or **Discard**. **Keep** copies the change to the private `<skill>-playbook` and restores the release baseline; **Discard** restores the baseline. Actions are encrypted, expiring tokens bound to the owner and conversation, and every decision is an idempotent receipt. Nothing is sent to group chats.
 
-Attachment and persistence-disabled turns run in a separate native session marked `private:`. A `pre_tool_call` hook blocks `memory`, `skill_manage` and file writes into `skills/` or `memories/` there, including in the background review fork, which Hermes 0.22.5 cannot skip per request.
+Attachment and persistence-disabled turns run in a separate native session marked `private:`. A `pre_tool_call` hook blocks `memory`, `skill_manage` and file writes into `skills/` or `memories/` there, including in background review. Operational transcripts and transport journals are private execution state, never transferable learning material.
 
 ### Transferable contract
 
@@ -153,7 +174,7 @@ The awake gateway uses PeekLock, lock renewal, bounded concurrency, and explicit
 
 Proactive Teams work needs an existing bound conversation reference. A durable activity ID acknowledges delivery. Execution and external delivery are separate: Teams can accept a message before its local receipt is persisted, so crash recovery can duplicate delivery.
 
-Reserved `system.dream` uses fenced checkpoints for invocation, durable response, reconciliation, packet preparation, and completion. Persisted completed responses replay without new model/tool execution. An ambiguous `dream_started` stops for inspection. Operator run-now has a distinct occurrence and does not advance the production schedule. A no-change Dream can complete with `recordCount=0` and `packet=null`.
+Reserved `system.dream` uses fenced checkpoints for invocation, durable response, reconciliation, and completion. Persisted completed responses replay without new model/tool execution. An ambiguous `dream_started` stops for inspection. Ad-hoc run-now has a distinct occurrence and does not advance the production schedule. Dreaming never prepares or exports a Learning Packet; a no-change Dream can complete with `recordCount=0`.
 
 Dreaming can prepare but cannot approve, export, promote, or merge. Both `hermes` and `hermes2` enable user scheduling and Service Bus Dreaming, each on its own queue.
 
@@ -184,25 +205,28 @@ Generated apps use one child Sandbox per app, deny-default egress, at most five 
 
 Foundry external-agent registration identifies externally hosted compute. Azure Monitor export uses Entra authentication. Default spans contain timing, opaque correlation, model/tool names, and available usage—not prompts, arguments, results, documents, raw identities, or error payloads.
 
-Native `llm_execution` and `tool_execution` callbacks are instrumented. A local metadata-only handoff keyed by explicit native session bridges executor-thread context loss. Session chat and explicit-session chat completions support this handoff. Ambiguous interrupted leases return `409`; recovery restarts **both runtime wrapper and native gateway**, not only the public gateway. Expiry stops attribution but does not prove the old executor stopped.
+Native `llm_execution` and `tool_execution` callbacks are instrumented. A metadata-only handoff bridges executor-thread context loss. Scheduled Native Runs bind it to their durable delivery identity: an exact redelivery preserves the original context, while another delivery cannot acquire a potentially active lease. Expiry stops attribution without proving the old executor stopped. Scheduling envelopes carry only W3C context and opaque correlation, never prompt contents.
 
 ## Current limitations
 
-Both Workers run Hermes 0.22.5 with Memory suspend and Blob-volume backups. A cold-response long tail remains: a non-streaming upstream model call can stall until Hermes' no-response watchdog retries. VM wake, native API readiness, model generation and Teams delivery are distinct timings; keepalive and UI streaming do not by themselves resolve that model-transport behavior.
+The dependency base pins Hermes 0.22.6 with Memory suspend and Blob-volume backups. VM wake, application readiness, native admission, model generation, and channel delivery remain distinct timings. Keepalive does not repair an upstream model stall or turn an unknown external effect into a safe retry.
 
 | Area | Boundary |
 | --- | --- |
 | Fresh Worker bootstrap | `scripts.worker_lifecycle bootstrap` needs a tenant administrator, interactive admin consent, available licenses, and a manual package upload in Microsoft 365 admin center. |
-| Gateway endpoint | A gateway image change replaces its Sandbox and URL, which also replaces runtime compute because the runtime environment contains that URL. Agent 365 keeps sending to the old URL until a direct blueprint owner updates the endpoint ([DEPLOYMENT.md](DEPLOYMENT.md) step 6). |
+| Gateway endpoint | Source-only updates preserve the Sandbox and URL. A base-image or compute replacement can change the URL; a direct blueprint owner must reconcile Agent 365 before retiring the preceding gateway. |
 | Runtime repair | Ingress wakes only existing compute. Deleted or `Failed` runtime compute is replaced by rerunning service deployment, not by the gateway; the replacement loses changes made after the newest automatic backup. |
-| Registry conversion | SDK 0.1.0b4 does not expose the native-v2 disk-image endpoint, so the deployer calls it through the SDK client pipeline ([ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). The four workload identities can pull from the demo registry. |
+| Registry conversion | SDK 0.1.0b4 does not expose native-v2 private-image conversion, so deployment uses its SDK pipeline ([ADR 0021](docs/adr/0021-deployment-time-sandbox-image-authentication.md)). Only runtime conversion needs `AcrPull`; thin services use a public digest. |
+| Native connectors | Caller-owned connections and broader-than-execute callback roles are platform constraints. Trigger GET omits write-only authentication; configuration readback alone is not proof of callback execution or lease settlement. |
+| Receiver latency | Managed source polling can delay scheduled work. It is not on the interactive Teams path. The scheduling smoke separately checks real queue delivery and Memory retention. |
+| Transport limits | Five-minute scheduling PeekLock with renewal and a bounded active-operation window. Unknown scheduled effects stop rather than silently replay. |
 | Hermes version | Hermes 0.20+ ships only as GitHub releases and container images, not on the approved package feed. The runtime uses the official image, imported into ACR by digest. Packages the plugins need inside Hermes' sealed environment are vendored from the approved feed and pinned by hash. |
 | MCP discovery | A fresh Hermes start discovers all eleven MCP servers before opening its API. Native lazy discovery needs a cached tool schema, but these servers return `ttlMs: 0`, so it stays eager. Memory resume avoids the cost; a new Sandbox pays it once. |
 | Work IQ routes | Only the per-server Work IQ MCP servers are used. The unified Work IQ MCP, A2A, and REST routes reject the Agent User under the current tenant billing and Copilot licensing. |
 | Teams privacy | Public group `@` discovery is available; Hermes `/` discovery is absent in this Agent User package. `agenticUserTemplates` has no `bots[]`; targeted private handling and human OBO are not implemented. Do not put private facts in shared group context. |
 | Teams routing | Do not assume unmentioned channel messages, thread subscriptions, full history, or every supported SDK event reaches the Agent User. |
 | Native tracing | `/v1/responses` creates its own session and is marked `autopilots.trace.correlation=missing`. Sandbox-origin egress preserves W3C TraceId but rewrites the parent through platform hops absent from Application Insights. Proactive Teams sends and Graph document uploads have no spans. |
-| Office | Work IQ Word lacks arbitrary existing-body editing; the reviewed local/Graph path supplies it. Direct PDF/image/XLSX/PPTX attachment ingestion is absent. Shared PowerPoint supports bounded text reads, not creation/body editing. |
+| Office | Work IQ Word lacks arbitrary existing-body editing; the reviewed local/Graph path supplies it. `CreateDocument` can commit a file before returning sharing `input-required`; verify the original item before any retry and never fabricate a sharing recipient. Direct PDF/image/XLSX/PPTX attachment ingestion is absent. Shared PowerPoint supports bounded text reads, not creation/body editing. |
 | UI hosts | MCP Apps is not implemented in the Hermes Agent User conversation. Proactive card attachments and generated-app action replacement rendering have host limitations; use text/suggested actions and request fresh app inventory. |
 | BYO MCP | Agent 365 registration/approval requires a supported client's connection/OAuth flow; raw generic MCP initialization is insufficient. |
 | Evaluation | `scripts.evaluate_learning` checks response text only; it does not measure native skill discovery, tool workflows, or repeated-trial variance. Judge packets on owner-authored holdout cases, not agent-proposed ones. |

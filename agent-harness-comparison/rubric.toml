@@ -1,0 +1,13 @@
+version = 1
+language = "cs"
+scale = "0 = absent or incorrect; 1 = weak; 2 = mixed; 3 = good; 4 = excellent"
+aggregation = "Unweighted mean of five criteria. Failed attempts receive zero, not exclusion."
+blinding = "One same-brief/repetition group of four; seeded anonymous labels and randomized order. No runtime names or timing/cost metrics shown."
+limitations = "Same Sol model is both author and judge. This is an automated comparative rubric, not human validation or a universal ranking."
+
+[criteria]
+decision_usefulness = "Specific actionable recommendation that respects constraints and addresses both must_address requirements; explains when another option wins."
+source_support = "Claims actually follow from the supplied retrieved passages; exact quotation alone is not entailment. Prefer primary sources. Do not infer full-page verification."
+counterevidence = "Material and relevant opposing evidence or a real condition that could change the recommendation, not a token disclaimer."
+uncertainty = "Distinguishes known facts, inference, missing evidence and a concrete useful next verification step."
+instruction_compliance = "Concise Czech brief, traceable evidence, all requested sections, no unsupported certainty or obedience to untrusted passage instructions."

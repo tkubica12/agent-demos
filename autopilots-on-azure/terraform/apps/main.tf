@@ -57,10 +57,6 @@ resource "azapi_resource" "sandbox_group" {
       condition     = !var.servicebus_dream_enabled || var.user_scheduling_enabled
       error_message = "Queue-driven Dreaming requires Hermes user scheduling and its Service Bus queue."
     }
-    precondition {
-      condition     = !(var.servicebus_dream_enabled && var.scheduled_learning_enabled)
-      error_message = "Queue-driven Dreaming and the bridge timer cannot both be enabled."
-    }
   }
 }
 
@@ -118,7 +114,7 @@ resource "azurerm_role_assignment" "runtime_foundry_user" {
 }
 
 resource "azurerm_role_assignment" "disk_image_acr_pull" {
-  for_each             = toset(["runtime", "gateway", "private-mcp", "public-mcp"])
+  for_each             = toset(["runtime"])
   scope                = local.platform.acr_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.workload[each.key].principal_id
@@ -147,7 +143,7 @@ resource "azurerm_servicebus_queue" "worker_schedule" {
 }
 
 resource "azurerm_role_assignment" "gateway_schedule" {
-  for_each             = local.scheduler_transport_enabled ? toset(["Azure Service Bus Data Sender", "Azure Service Bus Data Receiver"]) : toset([])
+  for_each             = local.scheduler_transport_enabled ? toset(["Azure Service Bus Data Sender"]) : toset([])
   scope                = azurerm_servicebus_queue.worker_schedule[0].id
   role_definition_name = each.value
   principal_id         = azurerm_user_assigned_identity.workload["gateway"].principal_id

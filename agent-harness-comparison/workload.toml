@@ -1,0 +1,77 @@
+[design]
+version = 1
+language = "cs"
+description = "Fictional decision briefs; all evidence is gathered from real public sources."
+conditions = "Local, read-only research. No deployment or purchasing decision is executed."
+
+[[briefs]]
+id = "nightly-jobs"
+question = "For a small team producing nightly HTML/PDF research briefs, choose Azure Container Apps Jobs or Azure Functions."
+constraints = "Python, Entra access to Foundry, Chromium PDF export, 5-15 minute execution, no inbound public service."
+must_address = ["execution and dependency constraints", "identity and operational overhead"]
+
+[[briefs]]
+id = "workflow-agent"
+question = "Choose a deterministic Durable Functions workflow or a bounded agent harness for evidence research and artifact production."
+constraints = "Sources and follow-up questions are not known ahead of time; publication must remain deterministic and validated."
+must_address = ["exploration versus fixed control flow", "durability and trust boundary"]
+
+[[briefs]]
+id = "rag-store"
+question = "Choose Azure AI Search or PostgreSQL with pgvector for a small team's internal document retrieval prototype."
+constraints = "The team already operates PostgreSQL; hybrid retrieval, access control and modest corpus growth matter."
+must_address = ["hybrid retrieval capabilities", "operations and access control"]
+
+[[briefs]]
+id = "model-identity"
+question = "Choose Microsoft Entra token authentication or model API keys for a local research app that may later run in Azure."
+constraints = "Local developer access, no long-lived application secret, same Foundry model, unattended Azure execution later."
+must_address = ["local versus hosted identity", "token lifetime and least privilege"]
+
+[[briefs]]
+id = "local-state"
+question = "Choose SQLite or PostgreSQL for measurement records in a local single-operator agent benchmark."
+constraints = "One machine, at most four worker processes, resumable runs, reliable transactions, no server administration preferred."
+must_address = ["concurrent writes and locking", "recovery and operational simplicity"]
+
+[[briefs]]
+id = "work-queue"
+question = "Choose Azure Queue Storage or Azure Service Bus for dispatching independent research-report jobs."
+constraints = "At-least-once handling, retries, dead-letter investigation, Entra authentication, no ordered business transactions."
+must_address = ["duplicate handling and dead lettering", "identity and complexity"]
+
+[[briefs]]
+id = "telemetry"
+question = "Choose shared OpenTelemetry instrumentation or framework-specific trace stores for comparing four agent runtimes."
+constraints = "Common token and latency metrics, tool timing, no prompt bodies exported by default, local raw evidence retained."
+must_address = ["cross-runtime comparability", "sensitive content and missing metrics"]
+
+[[briefs]]
+id = "html-pdf"
+question = "Choose Chromium through Playwright or WeasyPrint for converting a local interactive HTML report into a printable PDF."
+constraints = "Offline single-file HTML, print CSS, no remote fonts, exact fixed-page paper, Python application."
+must_address = ["JavaScript and rendering compatibility", "installation and deterministic page checks"]
+
+[[briefs]]
+id = "cli-login"
+question = "Choose OAuth device authorization or authorization code with PKCE for a developer-facing research CLI."
+constraints = "Sometimes used over SSH; no embedded client secret; Microsoft Entra tenant policy and phishing exposure matter."
+must_address = ["headless usability and policy", "security properties and token handling"]
+
+[[briefs]]
+id = "tool-contract"
+question = "Choose MCP or an OpenAPI-described HTTP tool boundary for a research application with several agent SDKs."
+constraints = "Existing remote WebIQ MCP, narrow shared tool allowlist, host-owned credentials, structured tool errors."
+must_address = ["interoperability and tool discovery", "authentication and failure semantics"]
+
+[[briefs]]
+id = "durable-state"
+question = "Choose Cosmos DB or PostgreSQL for persistent sessions in a small multi-user research assistant."
+constraints = "Single region initially, tenant-separated session access, auditable updates, evolving document-shaped state."
+must_address = ["partitioning and transaction boundaries", "tenant isolation and operational tradeoffs"]
+
+[[briefs]]
+id = "tool-isolation"
+question = "Choose narrow application tools or a containerized shell for an agent that searches public sources and produces reports."
+constraints = "No arbitrary package installation, host-owned secrets, untrusted web passages, repeatable HTML/PDF template."
+must_address = ["capability limits versus OS isolation", "necessary flexibility and attack surface"]

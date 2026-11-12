@@ -4,7 +4,6 @@ import argparse
 import json
 import subprocess
 import time
-import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -19,9 +18,7 @@ from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_pa
 from scripts.tf_helpers import resolve_executable
 
 
-SMOKE_PROMPT = "Reply with exactly: Hermes bridge OK"
-EXPECTED_MARKERS = ["Hermes bridge OK"]
-SANDBOX_RESOURCE = "https://dynamicsessions.io"
+SANDBOX_RESOURCE = "https://management.azuredevcompute.io"
 SANDBOX_DATA_OWNER_ROLE = "Container Apps SandboxGroup Data Owner"
 SANDBOX_ROLES = ("runtime", "gateway", "private-mcp", "public-mcp", "generated-apps")
 SANDBOX_API_VERSION = "2026-02-01-preview"
@@ -73,26 +70,6 @@ def bridge_url(outputs: dict[str, Any]) -> str:
     if not value:
         raise KeyError("bridge_url")
     return value
-
-
-def invoke_body(runtime: str, *, conversation_id: str = "", message: str = "") -> dict[str, str]:
-    return {
-        "conversationId": conversation_id or f"{runtime}-operator-smoke-{uuid.uuid4().hex}",
-        "message": message or SMOKE_PROMPT,
-    }
-
-
-def response_text(payload: Any) -> str:
-    if isinstance(payload, dict):
-        value = payload.get("response")
-        if isinstance(value, str):
-            return value
-    return json.dumps(payload, sort_keys=True) if not isinstance(payload, str) else payload
-
-
-def missing_expected_markers(runtime: str, payload: Any) -> list[str]:
-    text = response_text(payload).lower()
-    return [marker for marker in EXPECTED_MARKERS if marker.lower() not in text]
 
 
 def sandbox_group_url(outputs: dict[str, Any], role: str = "runtime") -> str:
@@ -173,7 +150,8 @@ def sandbox_status_check(runtime: str, *, timeout: int = 120, state_name: str = 
                     valid = valid and state in {"running", "suspended", "stopped", "idle"}
                     if role == "gateway":
                         policy = (item.get("lifecycle") or {}).get("autoSuspendPolicy") or {}
-                        valid = valid and state == "running" and policy.get("enabled") is False
+                        valid = valid and policy.get("enabled") is True
+                        valid = valid and policy.get("mode") == "Memory" and policy.get("interval") == 300
                 groups[role]["ok"] = valid
                 ok = ok and valid
         return {"runtime": runtime, "check": "sandboxes", "ok": ok, "groups": groups}
@@ -275,88 +253,6 @@ def health_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> d
     return {"runtime": runtime, "check": "health", "url": f"{url}/health", **result}
 
 
-def invoke_check(runtime: str, *, message: str = "", timeout: int = 120, state_name: str = "") -> dict[str, Any]:
-    try:
-        outputs = load_json(runtime_outputs_path(runtime, state_name))
-        url = bridge_url(outputs)
-    except Exception as exc:
-        return {"runtime": runtime, "check": "invoke", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
-
-    body = invoke_body(runtime, message=message)
-    result = http_json(f"{url}/invoke", method="POST", body=body, timeout=timeout)
-    missing = missing_expected_markers(runtime, result.get("body")) if result.get("ok") and not message else []
-    return {
-        "runtime": runtime,
-        "check": "invoke",
-        "url": f"{url}/invoke",
-        "expectedMarkers": EXPECTED_MARKERS if not message else [],
-        "missingExpectedMarkers": missing,
-        **result,
-        "ok": bool(result.get("ok")) and not missing,
-    }
-
-
-def dream_check(*, focus: str = "", max_records: int = 5, timeout: int = 900, state_name: str = "") -> dict[str, Any]:
-    runtime = "hermes"
-    try:
-        outputs = load_json(runtime_outputs_path(runtime, state_name))
-        tfvars = load_json(runtime_app_tfvars_path(runtime, state_name))
-        url = bridge_url(outputs)
-        api_key = str(tfvars.get("api_server_key") or "")
-        if not api_key:
-            raise KeyError("api_server_key")
-    except Exception as exc:
-        return {"runtime": runtime, "check": "dream", "ok": False, "error": exc.__class__.__name__, "message": str(exc)}
-
-    result = http_json(
-        f"{url}/internal/dream",
-        method="POST",
-        body={"focus": focus, "maxRecords": max_records},
-        headers={"X-Autopilot-Key": api_key},
-        timeout=timeout,
-    )
-    return {"runtime": runtime, "check": "dream", "url": f"{url}/internal/dream", **result}
-
-
-def scheduled_learning_check(
-    *,
-    run: bool,
-    timeout: int = 900,
-    state_name: str = "",
-) -> dict[str, Any]:
-    runtime = "hermes"
-    try:
-        outputs = load_json(runtime_outputs_path(runtime, state_name))
-        tfvars = load_json(runtime_app_tfvars_path(runtime, state_name))
-        url = bridge_url(outputs)
-        api_key = str(tfvars.get("api_server_key") or "")
-        if not api_key:
-            raise KeyError("api_server_key")
-    except Exception as exc:
-        return {
-            "runtime": runtime,
-            "check": "scheduled-learning-run" if run else "scheduled-learning-status",
-            "ok": False,
-            "error": exc.__class__.__name__,
-            "message": str(exc),
-        }
-
-    path = "/internal/scheduled-learning/run" if run else "/internal/scheduled-learning/status"
-    result = http_json(
-        f"{url}{path}",
-        method="POST" if run else "GET",
-        body={} if run else None,
-        headers={"X-Autopilot-Key": api_key},
-        timeout=timeout,
-    )
-    return {
-        "runtime": runtime,
-        "check": "scheduled-learning-run" if run else "scheduled-learning-status",
-        "url": f"{url}{path}",
-        **result,
-    }
-
-
 def diag_check(runtime: str, *, timeout: int = 120, state_name: str = "") -> dict[str, Any]:
     try:
         outputs = load_json(runtime_outputs_path(runtime, state_name))
@@ -377,42 +273,10 @@ def run_status(args: argparse.Namespace) -> int:
         sandbox_status_check("hermes", timeout=args.timeout, state_name=args.state_name),
         health_check("hermes", timeout=args.timeout, state_name=args.state_name),
     ]
-    if args.invoke:
-        results.append(invoke_check("hermes", timeout=args.timeout, state_name=args.state_name))
     if args.diag:
         results.append(diag_check("hermes", timeout=args.timeout, state_name=args.state_name))
     print_json(results)
     return 0 if all(result.get("ok") for result in results) else 1
-
-
-def run_smoke(args: argparse.Namespace) -> int:
-    results = [
-        sandbox_status_check("hermes", timeout=args.timeout, state_name=args.state_name),
-        invoke_check("hermes", message=args.message, timeout=args.timeout, state_name=args.state_name),
-    ]
-    print_json(results)
-    return 0 if all(result.get("ok") for result in results) else 1
-
-
-def run_dream(args: argparse.Namespace) -> int:
-    result = dream_check(
-        focus=args.focus,
-        max_records=args.max_records,
-        timeout=args.timeout,
-        state_name=args.state_name,
-    )
-    print_json(result)
-    return 0 if result.get("ok") else 1
-
-
-def run_scheduled_learning(args: argparse.Namespace) -> int:
-    result = scheduled_learning_check(
-        run=args.command == "scheduled-run",
-        timeout=args.timeout,
-        state_name=args.state_name,
-    )
-    print_json(result)
-    return 0 if result.get("ok") else 1
 
 
 def run_activate(args: argparse.Namespace) -> int:
@@ -572,41 +436,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Operator helper for Hermes Workers. Defaults to status.")
     subparsers = parser.add_subparsers(dest="command")
 
-    status = subparsers.add_parser("status", help="Check bridge health, optionally /invoke and Teams diagnostics.")
+    status = subparsers.add_parser("status", help="Check Sandbox state and bridge health.")
     status.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
-    status.add_argument("--invoke", action="store_true", help="Also run the Hermes direct /invoke smoke prompt.")
     status.add_argument("--diag", action="store_true", help="Also read /diag/teams when bridge debug is enabled.")
     status.add_argument("--timeout", type=int, default=120)
     status.set_defaults(func=run_status)
-
-    smoke = subparsers.add_parser("smoke", help="Run direct /invoke smoke prompts.")
-    smoke.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
-    smoke.add_argument("--message", default="", help="Override the default runtime smoke prompt. Expected-marker checks are skipped.")
-    smoke.add_argument("--timeout", type=int, default=120)
-    smoke.set_defaults(func=run_smoke)
-
-    dream = subparsers.add_parser("dream", help="Run a secured local Hermes reflection and return its redacted learning packet.")
-    dream.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
-    dream.add_argument("--focus", default="", help="Optional reflection focus. Defaults to recent meaningful work.")
-    dream.add_argument("--max-records", type=int, choices=range(1, 11), default=5)
-    dream.add_argument("--timeout", type=int, default=900)
-    dream.set_defaults(func=run_dream)
-
-    scheduled_run = subparsers.add_parser(
-        "scheduled-run",
-        help="Run the configured Hermes Dreaming and packet-preparation cycle now.",
-    )
-    scheduled_run.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
-    scheduled_run.add_argument("--timeout", type=int, default=900)
-    scheduled_run.set_defaults(func=run_scheduled_learning)
-
-    scheduled_status = subparsers.add_parser(
-        "scheduled-status",
-        help="Read sanitized Hermes scheduled-learning status.",
-    )
-    scheduled_status.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")
-    scheduled_status.add_argument("--timeout", type=int, default=120)
-    scheduled_status.set_defaults(func=run_scheduled_learning)
 
     activate = subparsers.add_parser("activate", help="Make one Worker's tfvars active for Terraform operations.")
     activate.add_argument("--state-name", default="hermes", help="Local Worker state directory under .local.")

@@ -1,43 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="260" viewBox="0 0 800 260" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <title>Service Bus backed Hermes cron</title>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="340" viewBox="0 0 1000 340" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <title>Native Service Bus wake for Hermes cron</title>
+  <desc>A native cron provider queues only the next occurrence. A managed receiver wakes the gateway through OnDemand execution. The runtime claims its existing execution, delivers through the original channel, and the owning connection completes the lease.</desc>
   <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M0,0 L10,5 L0,10 z" fill="#505050"/>
-    </marker>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#0f6cbd"/></marker>
   </defs>
-  <rect width="800" height="260" fill="#ffffff"/>
-
-  <g stroke="#505050" stroke-width="1.6" fill="none" marker-end="url(#arrow)">
-    <path d="M240,75 H288"/>
-    <path d="M510,75 H558"/>
-    <path d="M670,110 V168"/>
-    <path d="M560,205 H512"/>
-    <path d="M290,205 H242"/>
+  <rect width="1000" height="340" fill="#fff"/>
+  <g stroke="#0f6cbd" stroke-width="1.7" fill="none" marker-end="url(#arrow)">
+    <path d="M300 75H350"/><path d="M650 75H700"/><path d="M840 120V205"/>
+    <path d="M700 250H650"/><path d="M350 250H300"/>
   </g>
-
-  <g text-anchor="middle">
-    <rect x="20" y="40" width="220" height="70" rx="8" fill="#fff4e5" stroke="#c25e00" stroke-width="1.5"/>
-    <text x="130" y="70" font-size="14" font-weight="600" fill="#202020">1. Hermes cron changes</text>
-    <text x="130" y="90" font-size="12" fill="#404040">state stays on the Data Disk</text>
-
-    <rect x="290" y="40" width="220" height="70" rx="8" fill="#fff4e5" stroke="#c25e00" stroke-width="1.5"/>
-    <text x="400" y="70" font-size="14" font-weight="600" fill="#202020">2. Next occurrence queued</text>
-    <text x="400" y="90" font-size="12" fill="#404040">type, job, revision, due time</text>
-
-    <rect x="560" y="40" width="220" height="70" rx="8" fill="#e8f1fb" stroke="#0f6cbd" stroke-width="1.5"/>
-    <text x="670" y="70" font-size="14" font-weight="600" fill="#202020">3. gateway receives</text>
-    <text x="670" y="90" font-size="12" fill="#404040">PeekLock, lock renewal</text>
-
-    <rect x="560" y="170" width="220" height="70" rx="8" fill="#e8f1fb" stroke="#0f6cbd" stroke-width="1.5"/>
-    <text x="670" y="200" font-size="14" font-weight="600" fill="#202020">4. runtime claims and runs</text>
-    <text x="670" y="220" font-size="12" fill="#404040">execution receipt</text>
-
-    <rect x="290" y="170" width="220" height="70" rx="8" fill="#f1ebfa" stroke="#6b3fa0" stroke-width="1.5"/>
-    <text x="400" y="200" font-size="14" font-weight="600" fill="#202020">5. Teams delivery</text>
-    <text x="400" y="220" font-size="12" fill="#404040">bound delivery receipt</text>
-
-    <rect x="20" y="170" width="220" height="70" rx="8" fill="#fff4e5" stroke="#c25e00" stroke-width="1.5"/>
-    <text x="130" y="200" font-size="14" font-weight="600" fill="#202020">6. Next occurrence armed</text>
-    <text x="130" y="220" font-size="12" fill="#404040">queue message completed</text>
+  <g fill="#f3f3f3" stroke="#616161" stroke-width="1.3">
+    <rect x="20" y="30" width="280" height="90" rx="8"/>
+    <rect x="350" y="30" width="300" height="90" rx="8"/>
+    <rect x="700" y="30" width="280" height="90" rx="8"/>
+    <rect x="700" y="205" width="280" height="90" rx="8"/>
+    <rect x="350" y="205" width="300" height="90" rx="8"/>
+    <rect x="20" y="205" width="280" height="90" rx="8"/>
+  </g>
+  <g text-anchor="middle" fill="#202020" font-size="16" font-weight="600">
+    <text x="160" y="62">1. Native cron changes</text>
+    <text x="500" y="62">2. Next occurrence queued</text>
+    <text x="840" y="62">3. Native receiver wakes gateway</text>
+    <text x="840" y="237">4. Runtime claims and executes</text>
+    <text x="500" y="237">5. Originating channel receives</text>
+    <text x="160" y="237">6. Complete the owning lease</text>
+  </g>
+  <g text-anchor="middle" fill="#404040" font-size="13">
+    <text x="160" y="88">Schedule and ledger stay in Worker home</text>
+    <text x="160" y="107">Root disk with native Blob backups</text>
+    <text x="500" y="88">Worker, job, revision, occurrence, due time</text>
+    <text x="500" y="107">No private prompt or document bytes</text>
+    <text x="840" y="88">Platform-owned PeekLock + OnDemand</text>
+    <text x="840" y="107">Gateway may be Memory-suspended</text>
+    <text x="840" y="263">Revision fence and durable execution receipt</text>
+    <text x="840" y="282">No repeated model run on delivery retry</text>
+    <text x="500" y="263">Authenticated conversation binding</text>
+    <text x="500" y="282">Visible result is separate from transport ACK</text>
+    <text x="160" y="263">Renew and settle through caller-owned MI</text>
+    <text x="160" y="282">Native cron arms the next occurrence</text>
+    <text x="500" y="160">Idle actors suspend; no application receive loop stays awake.</text>
+    <text x="500" y="325">Callback success is a durable receipt, never proof that the broker message was acknowledged.</text>
   </g>
 </svg>
