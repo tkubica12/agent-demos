@@ -7,6 +7,9 @@
 !scripts/**
 !autopilots_identity/
 !autopilots_identity/**
+!chat-simulator/
+!chat-simulator/backend/
+!chat-simulator/backend/container_start.py
 !private-incidents-mcp/
 !private-incidents-mcp/**
 !public-shipments-mcp/

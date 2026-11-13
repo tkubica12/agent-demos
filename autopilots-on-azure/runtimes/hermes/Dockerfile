@@ -88,7 +88,7 @@ COPY bridge/*.py ./bridge/
 COPY bridge/runtime/*.py ./bridge/runtime/
 COPY autopilots_identity/*.py ./autopilots_identity/
 COPY chat-simulator/backend/container_start.py ./container_start.py
-RUN /app/.venv/bin/python -B -c "import start_hermes; assert callable(start_hermes.main)"
+RUN /app/.venv/bin/python -B -c "import start_hermes, container_start; assert callable(start_hermes.main) and callable(container_start.main)"
 
 ENV HERMES_HOME=/data/hermes
 ENV AUTOPILOTS_APPLICATION_ROOT=/app

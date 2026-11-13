@@ -9,7 +9,7 @@ COPY bridge/*.py ./bridge/
 COPY bridge/runtime/*.py ./bridge/runtime/
 COPY autopilots_identity/*.py ./autopilots_identity/
 COPY chat-simulator/backend/container_start.py ./container_start.py
-RUN /app/.venv/bin/python -B -c "from bridge.app import app; assert app is not None"
+RUN /app/.venv/bin/python -B -c "from bridge.app import app; import container_start; assert app is not None and callable(container_start.main)"
 ENV PYTHONPATH=/app
 EXPOSE 8001
 ENTRYPOINT ["/app/.venv/bin/python", "/app/container_start.py", "gateway"]
