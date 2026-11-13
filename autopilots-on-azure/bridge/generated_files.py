@@ -11,8 +11,10 @@ import re
 import secrets
 import shutil
 import stat
+import threading
 import time
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,8 @@ ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 RUN_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,160}")
 MEDIA_LINE = re.compile(r"^[ \t]*MEDIA:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
 MAX_EVIDENCE_BYTES = 1024 * 1024
+SKILL_IDENTITIES = frozenset({"teams-html-widget"})
+MAX_SKILL_LOAD_SECONDS = 3600
 
 
 class GeneratedFileError(RuntimeError):
@@ -91,7 +95,90 @@ def validate_generated_bytes(name: str, data: bytes) -> str:
     return content_type
 
 
-def completed_run_evidence(run_id: str, status: Any, events: bytes) -> dict[str, Any]:
+class NativeSkillLoadEvidence:
+    """Retain only successful allowlisted main-skill loads, never their arguments or content."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._loads: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+
+    def observe(self, *, tool_name: str, args: Any, result: Any, status: str,
+                tool_call_id: str = "", duration_ms: int = 0, **_: Any) -> None:
+        if not generated_files_enabled() or tool_name != "skill_view":
+            return
+        from tools.approval_context import get_current_session_key
+
+        run_id = get_current_session_key(default="")
+        if not isinstance(run_id, str) or not RUN_PATTERN.fullmatch(run_id):
+            return
+        self.record(
+            run_id=run_id, tool_name=tool_name, args=args, result=result, status=status,
+            tool_call_id=tool_call_id, duration_ms=duration_ms,
+        )
+
+    def record(self, *, run_id: str, tool_name: str, args: Any, result: Any,
+               status: str, tool_call_id: str, duration_ms: int = 0) -> None:
+        if (
+            tool_name != "skill_view" or status != "ok" or not isinstance(args, dict)
+            or not isinstance(args.get("name"), str) or args["name"] not in SKILL_IDENTITIES
+            or args.get("file_path") not in (None, "")
+        ):
+            return
+        if (
+            not isinstance(run_id, str) or not RUN_PATTERN.fullmatch(run_id)
+            or not isinstance(tool_call_id, str) or not RUN_PATTERN.fullmatch(tool_call_id)
+            or type(duration_ms) is not int or not 0 <= duration_ms <= MAX_SKILL_LOAD_SECONDS * 1000
+        ):
+            raise GeneratedFileError("Native skill evidence has invalid execution identity or duration.")
+        if not isinstance(result, str) or len(result) > MAX_EVIDENCE_BYTES:
+            raise GeneratedFileError("Native skill evidence requires a bounded structured skill result.")
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError as exc:
+            raise GeneratedFileError("Native skill evidence has an invalid structured result.") from exc
+        if (
+            not isinstance(payload, dict) or payload.get("success") is not True or payload.get("error")
+            or payload.get("name") != args["name"] or payload.get("dedup") is True
+            or ("content_returned" in payload and payload["content_returned"] is not True)
+            or payload.get("status") == "unchanged"
+            or not isinstance(payload.get("content"), str) or not payload["content"]
+        ):
+            return
+        try:
+            content = payload["content"].encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise GeneratedFileError("Native skill evidence has invalid UTF-8 content.") from exc
+        if len(content) > MAX_EVIDENCE_BYTES:
+            raise GeneratedFileError("Native skill evidence exceeds the bounded content limit.")
+        content_hash = hashlib.sha256(content).hexdigest()
+        evidence = {
+            "toolCallId": tool_call_id, "skillName": payload["name"],
+            "skillContentReturned": True, "skillContentSha256": content_hash,
+        }
+        with self._lock:
+            key = (run_id, tool_call_id)
+            previous = self._loads.get(key)
+            if previous is not None and previous != evidence:
+                del self._loads[key]
+                raise GeneratedFileError("Native skill evidence has conflicting tool-call content.")
+            self._loads[key] = evidence
+            while len(self._loads) > 256:
+                self._loads.popitem(last=False)
+
+    def snapshot(self, run_id: str) -> dict[str, Any]:
+        if not RUN_PATTERN.fullmatch(run_id):
+            raise GeneratedFileError("Invalid native skill evidence run ID.")
+        with self._lock:
+            return {
+                "runId": run_id,
+                "loads": [dict(value) for (recorded_run, _), value in self._loads.items() if recorded_run == run_id],
+            }
+
+
+native_skill_load_evidence = NativeSkillLoadEvidence()
+
+
+def completed_run_evidence(run_id: str, status: Any, events: bytes, skill_loads: Any = None) -> dict[str, Any]:
     """Project completed native status/SSE into metadata without prompts, previews, or file claims."""
     if not isinstance(status, dict) or status.get("run_id") != run_id or status.get("status") != "completed":
         raise GeneratedFileError("Native evidence requires the exact completed run.")
@@ -99,6 +186,30 @@ def completed_run_evidence(run_id: str, status: Any, events: bytes) -> dict[str,
         raise GeneratedFileError("Native evidence exceeds the 1 MiB limit.")
     tools = []
     completed = False
+    skill_records: dict[str, dict[str, Any]] = {}
+    if skill_loads is not None:
+        if (
+            not isinstance(skill_loads, dict) or skill_loads.get("runId") != run_id
+            or not isinstance(skill_loads.get("loads"), list) or len(skill_loads["loads"]) > 256
+        ):
+            raise GeneratedFileError("Native skill evidence does not match the completed run.")
+        for record in skill_loads["loads"]:
+            if (
+                not isinstance(record, dict) or not isinstance(record.get("skillName"), str)
+                or record["skillName"] not in SKILL_IDENTITIES
+                or record.get("skillContentReturned") is not True
+                or not isinstance(record.get("skillContentSha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", record["skillContentSha256"])
+                or not isinstance(record.get("toolCallId"), str)
+                or not RUN_PATTERN.fullmatch(record["toolCallId"])
+                or record["toolCallId"] in skill_records
+            ):
+                raise GeneratedFileError("Native skill evidence contains an invalid load identity.")
+            skill_records[record["toolCallId"]] = {
+                key: record[key] for key in ("skillName", "skillContentReturned", "skillContentSha256")
+            }
+    skill_starts: set[str] = set()
+    skill_calls: set[str] = set()
     try:
         for line in events.decode("utf-8").splitlines():
             if not line.startswith("data:"):
@@ -129,6 +240,18 @@ def completed_run_evidence(run_id: str, status: Any, events: bytes) -> dict[str,
                 if type(duration) not in {int, float} or not math.isfinite(duration) or duration < 0:
                     raise GeneratedFileError("Native evidence contains an invalid tool duration.")
                 tool.update(error=event["error"], duration=duration)
+                if (
+                    name == "skill_view" and call_id in skill_starts and event["error"] is False
+                    and duration <= MAX_SKILL_LOAD_SECONDS and call_id in skill_records
+                ):
+                    tool.update(skill_records[call_id])
+                if name == "skill_view":
+                    skill_starts.discard(call_id)
+            elif name == "skill_view" and call_id is not None:
+                if call_id in skill_calls:
+                    raise GeneratedFileError("Native skill evidence has ambiguous tool-call starts.")
+                skill_starts.add(call_id)
+                skill_calls.add(call_id)
             tools.append(tool)
             if len(tools) > 256:
                 raise GeneratedFileError("Native evidence exceeds the 256 tool-event limit.")

@@ -22,7 +22,7 @@ from opentelemetry.trace import StatusCode
 
 from bridge import hermes_telemetry as native
 from bridge import telemetry
-from bridge.generated_files import GeneratedFileError, RUN_HEADER, SCOPE_HEADER
+from bridge.generated_files import GeneratedFileError, RUN_HEADER, SCOPE_HEADER, native_skill_load_evidence
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -364,11 +364,29 @@ class HermesTelemetryTests(unittest.TestCase):
             self.assertNotIn(SCOPE_HEADER, request.headers)
             if mode == "redirect":
                 return httpx.Response(302, headers={"Location": "https://outside.invalid/secret"})
+            if request.url.path.startswith("/internal/skills/evidence/"):
+                self.assertEqual(request.headers["X-Autopilot-Key"], "native-test")
+                if mode == "missing-skill-route":
+                    return httpx.Response(404)
+                return httpx.Response(200, json={
+                    "runId": "native-run", "loads": [{
+                        "toolCallId": "call-1", "skillName": "teams-html-widget",
+                        "skillContentReturned": True, "skillContentSha256": "a" * 64,
+                    }],
+                })
             if request.url.path.endswith("/events"):
                 event = "replay.truncated" if mode == "truncated" else "run.completed"
+                prefix = b"".join(
+                    ("data: " + json.dumps({"run_id": "native-run", **row}) + "\n\n").encode()
+                    for row in (
+                        {"event": "tool.started", "tool": "skill_view", "tool_call_id": "call-1"},
+                        {"event": "tool.completed", "tool": "skill_view", "tool_call_id": "call-1",
+                         "duration": 0.123, "error": False},
+                    )
+                )
                 return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=(
                     b"x" * (1024 * 1024 + 1) if mode == "oversized" else
-                    ("data: " + json.dumps({"run_id": "native-run", "event": event, "output": "secret"}) + "\n\n").encode()
+                    prefix + ("data: " + json.dumps({"run_id": "native-run", "event": event, "output": "secret"}) + "\n\n").encode()
                 ))
             return httpx.Response(200, json={
                 "run_id": "native-run", "status": "running" if mode == "running" else "completed",
@@ -389,9 +407,13 @@ class HermesTelemetryTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["runId"], "native-run")
                 self.assertTrue(response.json()["runtimeMetadataAvailable"])
+                self.assertEqual(response.json()["tools"][-1]["skillName"], "teams-html-widget")
                 self.assertNotIn("secret", response.text)
-                self.assertEqual(len(calls), 2)
-                for failure, expected in (("running", 409), ("truncated", 502), ("oversized", 502), ("redirect", 502)):
+                self.assertEqual(len(calls), 3)
+                for failure, expected in (
+                    ("running", 409), ("truncated", 502), ("oversized", 502), ("redirect", 502),
+                    ("missing-skill-route", 502),
+                ):
                     mode = failure
                     response = await client.get(url, headers=headers)
                     self.assertEqual(response.status_code, expected, response.text)
@@ -412,6 +434,18 @@ class HermesTelemetryTests(unittest.TestCase):
             }),
         ):
             asyncio.run(exercise())
+
+    def test_allowlisted_skill_observer_registration_is_feature_gated(self):
+        context = Mock()
+        with patch.object(native, "configure_telemetry"), patch.object(native.atexit, "register"):
+            with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "false"}):
+                native.register(context)
+            context.register_hook.assert_not_called()
+            with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true"}):
+                native.register(context)
+        context.register_hook.assert_called_once_with(
+            "post_tool_call", native_skill_load_evidence.observe,
+        )
 
     def test_real_wrapper_context_handoff_and_ambiguous_http_failure(self):
         runtime_directory = _ROOT / "runtimes" / "hermes"

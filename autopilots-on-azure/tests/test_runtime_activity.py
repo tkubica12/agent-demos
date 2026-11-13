@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
+from bridge.generated_files import NativeSkillLoadEvidence
 
 RUNTIME = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
 sys.path.insert(0, str(RUNTIME))
@@ -45,6 +46,26 @@ class RuntimeActivityTests(unittest.TestCase):
 
 
 class RuntimeActivityRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_native_skill_load_route_is_authenticated_gated_and_metadata_only(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict("os.environ", {"API_SERVER_KEY": "activity-unit-key", "GENERATED_CHAT_FILES_ENABLED": "true"}),
+            patch.object(runtime_routes, "native_skill_load_evidence", NativeSkillLoadEvidence()),
+        ):
+            app = web.Application()
+            runtime_routes.register_routes(app, Path(directory))
+            async with TestClient(TestServer(app)) as client:
+                url = "/internal/skills/evidence/run-1"
+                self.assertEqual((await client.get(url)).status, 401)
+                headers = {"X-Autopilot-Key": "activity-unit-key"}
+                response = await client.get(url, headers=headers)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(await response.json(), {"runId": "run-1", "loads": []})
+                response = await client.get("/internal/skills/evidence/invalid%3Aid", headers=headers)
+                self.assertEqual(response.status, 400)
+                with patch.dict("os.environ", {"GENERATED_CHAT_FILES_ENABLED": "false"}):
+                    self.assertEqual((await client.get(url, headers=headers)).status, 503)
+
     async def test_cancelled_http_request_retains_its_native_worker_until_actual_completion(self):
         started = threading.Event()
         release = threading.Event()

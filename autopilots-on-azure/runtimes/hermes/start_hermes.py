@@ -723,7 +723,10 @@ def create_health_app(
             raise HTTPException(status_code=503, detail="Generated chat files are disabled in this runtime.")
         if not RUN_PATTERN.fullmatch(run_id):
             raise HTTPException(status_code=400, detail="Invalid native run ID.")
-        headers = {"Authorization": "Bearer " + os.environ["API_SERVER_KEY"]}
+        headers = {
+            "Authorization": "Bearer " + os.environ["API_SERVER_KEY"],
+            "X-Autopilot-Key": os.environ["API_SERVER_KEY"],
+        }
         target = f"http://127.0.0.1:{gateway_port()}/v1/runs/{run_id}"
         try:
             async with asyncio.timeout(20), httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
@@ -747,7 +750,11 @@ def create_health_app(
                 if not isinstance(status, dict) or status.get("status") != "completed":
                     raise HTTPException(status_code=409, detail="Native evidence requires a completed run.")
                 events = await read_native(target + "/events", "text/event-stream")
-                return completed_run_evidence(run_id, status, events)
+                skill_loads = json.loads(await read_native(
+                    f"http://127.0.0.1:{gateway_port()}/internal/skills/evidence/{run_id}",
+                    "application/json",
+                ))
+                return completed_run_evidence(run_id, status, events, skill_loads)
         except (httpx.TimeoutException, TimeoutError) as exc:
             raise HTTPException(status_code=504, detail="Native evidence timed out.") from exc
         except httpx.RequestError as exc:

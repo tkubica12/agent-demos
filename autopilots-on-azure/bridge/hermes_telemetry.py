@@ -258,4 +258,8 @@ def register(context: Any) -> None:
     configure_telemetry("hermes-gateway", reuse_existing=True)
     context.register_middleware("llm_execution", llm_execution)
     context.register_middleware("tool_execution", tool_execution)
+    from bridge.generated_files import generated_files_enabled, native_skill_load_evidence
+
+    if generated_files_enabled():
+        context.register_hook("post_tool_call", native_skill_load_evidence.observe)
     atexit.register(flush_telemetry)

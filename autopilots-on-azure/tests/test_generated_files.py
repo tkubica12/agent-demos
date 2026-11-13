@@ -2,19 +2,109 @@ import hashlib
 import io
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import zipfile
 
 from bridge.generated_files import (
     GeneratedFileError, GeneratedFileStore, MAX_EVIDENCE_BYTES, MAX_FILE_BYTES,
-    completed_run_evidence, conversation_file_scope,
+    NativeSkillLoadEvidence, completed_run_evidence, conversation_file_scope,
 )
 
 
 class GeneratedFileEvidenceTests(unittest.TestCase):
+    def skill_evidence(self, events, snapshot):
+        wire = b"".join(
+            ("data: " + json.dumps({"run_id": "run-1", **event}) + "\n\n").encode()
+            for event in [*events, {"event": "run.completed"}]
+        )
+        return completed_run_evidence("run-1", {"run_id": "run-1", "status": "completed"}, wire, snapshot)
+
+    def test_actual_skill_content_is_joined_only_to_its_successful_native_tool_pair(self):
+        collector = NativeSkillLoadEvidence()
+        content = "---\nname: teams-html-widget\n---\n# Test skill\n"
+        collector.record(
+            run_id="run-1", tool_name="skill_view", args={"name": "teams-html-widget", "secret": "hidden"},
+            result=json.dumps({"success": True, "name": "teams-html-widget", "content": content, "secret": "hidden"}),
+            status="ok", tool_call_id="call-1", duration_ms=123,
+        )
+        snapshot = collector.snapshot("run-1")
+        actual = self.skill_evidence([
+            {"event": "tool.started", "tool": "skill_view", "tool_call_id": "call-1", "preview": content},
+            {"event": "tool.completed", "tool": "skill_view", "tool_call_id": "call-1", "duration": 0.123, "error": False},
+        ], snapshot)
+        self.assertEqual(actual["tools"][-1], {
+            "event": "tool.completed", "tool": "skill_view", "toolCallId": "call-1",
+            "duration": 0.123, "error": False, "skillName": "teams-html-widget",
+            "skillContentReturned": True, "skillContentSha256": hashlib.sha256(content.encode()).hexdigest(),
+        })
+        self.assertNotIn("hidden", json.dumps(snapshot))
+        self.assertNotIn("Test skill", json.dumps(actual))
+        self.assertEqual(collector.snapshot("other-run")["loads"], [])
+
+    def test_failed_missing_wrong_deduplicated_and_linked_file_skill_loads_prove_nothing(self):
+        success = {"success": True, "name": "teams-html-widget", "content": "Test skill"}
+        for changes, arguments, outcome in (
+            ({}, {"name": "teams-html-widget"}, "error"),
+            ({"success": False}, {"name": "teams-html-widget"}, "ok"),
+            ({"name": None}, {"name": "teams-html-widget"}, "ok"),
+            ({"name": "another-skill"}, {"name": "teams-html-widget"}, "ok"),
+            ({"content": None}, {"name": "teams-html-widget"}, "ok"),
+            ({"content": ""}, {"name": "teams-html-widget"}, "ok"),
+            ({"dedup": True}, {"name": "teams-html-widget"}, "ok"),
+            ({"content_returned": False}, {"name": "teams-html-widget"}, "ok"),
+            ({"status": "unchanged"}, {"name": "teams-html-widget"}, "ok"),
+            ({}, {"name": "teams-html-widget", "file_path": "SKILL.md"}, "ok"),
+            ({}, {}, "ok"),
+        ):
+            with self.subTest(changes=changes, arguments=arguments, outcome=outcome):
+                collector = NativeSkillLoadEvidence()
+                collector.record(
+                    run_id="run-1", tool_name="skill_view", args=arguments,
+                    result=json.dumps({**success, **changes}), status=outcome, tool_call_id="call-1",
+                )
+                self.assertEqual(collector.snapshot("run-1")["loads"], [])
+
+    def test_skill_proof_requires_matching_started_completed_ids_and_successful_bounded_duration(self):
+        snapshot = {"runId": "run-1", "loads": [{
+            "toolCallId": "call-1", "skillName": "teams-html-widget", "skillContentReturned": True,
+            "skillContentSha256": "a" * 64,
+        }]}
+        start = {"event": "tool.started", "tool": "skill_view", "tool_call_id": "call-1"}
+        done = {"event": "tool.completed", "tool": "skill_view", "tool_call_id": "call-1", "duration": 0.1, "error": False}
+        for events in (
+            [start], [done], [done, start],
+            [start, {**done, "tool_call_id": "call-2"}], [start, {**done, "error": True}],
+            [start, {**done, "duration": 3601}], [start, {**done, "tool": "terminal"}],
+        ):
+            with self.subTest(events=events):
+                actual = self.skill_evidence(events, snapshot)
+                self.assertTrue(all("skillName" not in tool for tool in actual["tools"]))
+        with self.assertRaises(GeneratedFileError):
+            self.skill_evidence([start, done], {**snapshot, "runId": "other-run"})
+        with self.assertRaises(GeneratedFileError):
+            self.skill_evidence([start, done, start, done], snapshot)
+
+    def test_native_observer_uses_run_context_not_task_session_or_api_request_identity(self):
+        collector = NativeSkillLoadEvidence()
+        scope = SimpleNamespace(get_current_session_key=lambda default: "run-1")
+        with (
+            patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true"}),
+            patch.dict(sys.modules, {"tools.approval_context": scope}),
+        ):
+            collector.observe(
+                tool_name="skill_view", args={"name": "teams-html-widget"},
+                result=json.dumps({"success": True, "name": "teams-html-widget", "content": "Test skill"}),
+                status="ok", tool_call_id="call-1", duration_ms=123,
+                task_id="wrong-task", session_id="wrong-session", api_request_id="wrong-request",
+            )
+        self.assertEqual(len(collector.snapshot("run-1")["loads"]), 1)
+        self.assertEqual(collector.snapshot("wrong-task")["loads"], [])
+
     def test_only_native_safe_status_and_tool_fields_are_returned(self):
         status = {
             "run_id": "run-1", "status": "completed", "output": "secret",
