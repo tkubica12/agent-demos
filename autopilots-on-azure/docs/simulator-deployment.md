@@ -320,7 +320,10 @@ Native dependencies in `runtimes\hermes\hermes-telemetry.txt` and
 `runtimes\hermes\hermes-native.txt` are part of the runtime dependency-image
 fingerprint. The latter corrects the pinned native base's `browser-harness`
 Pillow constraint with a hash-verified Linux CP314 wheel and PNG roundtrip,
-without changing `/app/.venv`. Keep both files and
+without changing `/app/.venv`. The native telemetry guard snapshots every
+installed base package after this correction and rejects any replacement or
+removal while adding HTTP tracing. Keep both manifests,
+`runtimes\hermes\native_telemetry_smoke.py`, and
 `bridge\telemetry.py` in the Docker build context. The image checks dependencies
 and the shared telemetry initializer with the actual `/opt/hermes/.venv`
 interpreter; a successful `/app/.venv` import does not prove native readiness.

@@ -361,7 +361,7 @@ class SimulatorDeploymentTests(unittest.TestCase):
             runtime = source / "runtimes" / "hermes"
             dependencies = (
                 "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "hermes-telemetry.txt", "hermes-native.txt",
-                "package.json", "package-lock.json",
+                "native_telemetry_smoke.py", "package.json", "package-lock.json",
                 "office_helper/OfficeCollaboration.csproj", "office_helper/Program.cs",
             )
             for name in dependencies:
@@ -370,6 +370,8 @@ class SimulatorDeploymentTests(unittest.TestCase):
                 path.write_text(name)
             (source / "chat-simulator").mkdir()
             (source / "chat-simulator" / "Dockerfile").write_text("FROM simulator")
+            (source / "bridge").mkdir()
+            (source / "bridge" / "telemetry.py").write_text("shared telemetry initializer")
             save(root / "platform-outputs.json", {
                 "acr_name": "target", "acr_login_server": "target.azurecr.io", "acr_agent_pool_name": "privatebuild",
             })
@@ -397,6 +399,14 @@ class SimulatorDeploymentTests(unittest.TestCase):
                 build_images(config, root)
                 self.assertEqual(build.call_count, 3)
                 (runtime / "hermes-native.txt").write_text("changed native base dependency correction")
+                build.reset_mock()
+                build_images(config, root)
+                self.assertEqual(build.call_count, 3)
+                (runtime / "native_telemetry_smoke.py").write_text("changed native initializer verification")
+                build.reset_mock()
+                build_images(config, root)
+                self.assertEqual(build.call_count, 3)
+                (source / "bridge" / "telemetry.py").write_text("changed shared telemetry initializer")
                 build.reset_mock()
                 build_images(config, root)
                 self.assertEqual(build.call_count, 3)

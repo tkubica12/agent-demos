@@ -448,13 +448,16 @@ def build_images(config: dict, root: Path, *, source_root: Path | None = None) -
     )
     dependencies = (
         "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "hermes-telemetry.txt", "hermes-native.txt",
-        "package.json", "package-lock.json",
+        "native_telemetry_smoke.py", "package.json", "package-lock.json",
         "office_helper/OfficeCollaboration.csproj", "office_helper/Program.cs",
     )
     build_fingerprint = hashlib.sha256(json.dumps({
         "base": base,
-        "files": {name: hashlib.sha256((REPO_ROOT / "runtimes" / "hermes" / name).read_bytes()).hexdigest()
-                  for name in dependencies},
+        "files": {
+            **{name: hashlib.sha256((REPO_ROOT / "runtimes" / "hermes" / name).read_bytes()).hexdigest()
+               for name in dependencies},
+            "bridge/telemetry.py": hashlib.sha256((REPO_ROOT / "bridge" / "telemetry.py").read_bytes()).hexdigest(),
+        },
     }, sort_keys=True).encode()).hexdigest()
     if not runtime_path.exists() or load(runtime_path).get("build_fingerprint") != build_fingerprint:
         digest = acr_build(registry=registry, repository="hermes-runtime",
