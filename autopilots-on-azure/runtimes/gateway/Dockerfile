@@ -8,7 +8,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY bridge/*.py ./bridge/
 COPY bridge/runtime/*.py ./bridge/runtime/
 COPY autopilots_identity/*.py ./autopilots_identity/
+COPY chat-simulator/backend/container_start.py ./container_start.py
 RUN /app/.venv/bin/python -B -c "from bridge.app import app; assert app is not None"
 ENV PYTHONPATH=/app
 EXPOSE 8001
-ENTRYPOINT ["/app/.venv/bin/python", "-m", "uvicorn", "bridge.app:app", "--host", "0.0.0.0", "--port", "8001", "--no-access-log"]
+ENTRYPOINT ["/app/.venv/bin/python", "/app/container_start.py", "gateway"]

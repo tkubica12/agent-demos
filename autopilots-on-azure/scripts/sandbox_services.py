@@ -29,6 +29,7 @@ from scripts.application_releases import (
     PYTHON_BASE_IMAGE, ApplicationRelease, build_release, install_release,
 )
 from bridge.transport_ingress import CALLBACK_PORT
+from scripts.prebuilt_images import IMAGE_PATTERN
 
 
 DISK_IMAGE_AUDIENCE = "https://management.azuredevcompute.io/.default"
@@ -79,14 +80,17 @@ class SandboxService:
     auto_suspend: bool = True
     disk_source_image: str = ""
     release: ApplicationRelease | None = None
+    source_commit: str = ""
 
 
 def disk_image_request(source: str, name: str, identity_client_id: str, vnet_connection_name: str = "") -> dict:
     """Native-v2 registry conversion authenticated by the Sandbox Group's managed identity."""
     body = {
-        "source": {"kind": "registry", "imageUrl": source, "managedIdentityClientId": identity_client_id},
+        "source": {"kind": "registry", "imageUrl": source},
         "labels": {"name": name},
     }
+    if identity_client_id:
+        body["source"]["managedIdentityClientId"] = identity_client_id
     if vnet_connection_name:
         body["customerVnetConnectionName"] = vnet_connection_name
     return body
@@ -113,7 +117,7 @@ def convert_disk_image(client: Any, body: dict, *, timeout_seconds: int = 900, p
         if status == "Failed":
             raise RuntimeError(
                 f"Disk image conversion {operation_id} failed: {result.get('errorMessage') or 'no detail'}. "
-                "The Sandbox Group identity needs AcrPull on the registry; a new assignment can take minutes to apply."
+                "Inspect this exact operation before retrying; registry access and VNet egress must permit its source."
             )
         if time.monotonic() >= deadline:
             raise TimeoutError(f"Disk image conversion {operation_id} is still {status}; inspect it before retrying.")
@@ -124,6 +128,17 @@ def prepare_disk_image(client: Any, *, role: str, image: str, source: str, acr_n
                        subscription_id: str, identity_client_id: str, vnet_connection_name: str = "") -> str:
     name = f"{role}-{hashlib.sha256(image.encode()).hexdigest()[:20]}"
     disk = existing_named(client.list_disk_images(), name)
+    if image.startswith("ghcr.io/"):
+        if not re.fullmatch(IMAGE_PATTERN, image) or source != image:
+            raise ValueError(f"{role} requires the exact immutable public GHCR source, without a mutable conversion tag.")
+        if disk is None:
+            disk = client.get_disk_image(convert_disk_image(
+                client, disk_image_request(image, name, "", vnet_connection_name),
+            ))
+        if (disk.status.state not in {"Ready", "Succeeded"}
+                or not disk.image or disk.image.base != image):
+            raise RuntimeError(f"{role} converted disk must be Ready and retain the exact pinned GHCR digest.")
+        return disk.id
     if disk is None:
         if image == PYTHON_BASE_IMAGE and role != "runtime":
             disk = client.begin_create_disk_image(
@@ -295,7 +310,7 @@ def gateway_environment(settings: dict[str, str]) -> dict[str, str]:
     }
 
 
-def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) -> dict[str, Any]:
+def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any, *, source_commit: str = "") -> dict[str, Any]:
     """Create or reuse runtime compute at deployment and return its native OnDemand endpoint."""
     config = config_from_environment({**settings, "AUTOPILOT_BRIDGE_URL": gateway_url})
     if settings.get("GENERATED_CHAT_FILES_ENABLED") == "true":
@@ -316,16 +331,28 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) 
             environment["HERMES_ROLE_BUNDLE_SHA256"] = settings["HERMES_ROLE_BUNDLE_SHA256"]
         config = replace(config, environment=environment)
         config = replace(config, runtime_config_revision=runtime_config_revision(config))
-    config = replace(config, command=("python3", "-c", BOOTSTRAP), args=())
+    config = replace(
+        config,
+        command=("/app/.venv/bin/python", "/app/container_start.py", "runtime") if source_commit else ("python3", "-c", BOOTSTRAP),
+        args=(), always_on=bool(source_commit), persistent_home=bool(source_commit),
+    )
+    if source_commit:
+        config = replace(config, environment={
+            **config.environment, "AUTOPILOTS_SERVICE_CONFIG": SERVICE_CONFIG_PATH,
+            "RUNTIME_BACKUP_DIR": "/data/backups",
+        })
+        config = replace(config, runtime_config_revision=runtime_config_revision(config))
     runtime = deploy_agent_sandbox(config, credential=credential)
-    release = build_release("runtime", base_image=config.runtime_image_reference, role_bundle={
+    role_bundle = {
         "source": settings.get("HERMES_ROLE_BLUEPRINT_SOURCE", ""),
         "blueprint": settings.get("HERMES_ROLE_BLUEPRINT", ""),
         "path": settings.get("HERMES_ROLE_BLUEPRINT_PATH", ""),
         "release": settings.get("HERMES_ROLE_RELEASE", ""),
         "commit": settings.get("HERMES_ROLE_RELEASE_COMMIT", ""),
         "bundle_sha256": settings.get("HERMES_ROLE_BUNDLE_SHA256", ""),
-    })
+    }
+    release = None if source_commit else build_release("runtime", base_image=config.runtime_image_reference, role_bundle=role_bundle)
+    release_id = source_commit or release.digest
     with SandboxGroupClient(
         endpoint_for_region(config.region), credential,
         subscription_id=config.subscription_id, resource_group=config.resource_group,
@@ -333,20 +360,24 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) 
     ) as group:
         sandbox = group.get_sandbox_client(runtime.sandbox_id)
         sandbox.ensure_running(timeout=600)
-        directory = install_release(sandbox, release)
+        directory = "/app" if source_commit else install_release(sandbox, release)
         environment = dict(config.environment)
         environment.update({
-            "APPLICATION_RELEASE": release.digest,
-            "OTEL_SERVICE_VERSION": release.digest,
+            "APPLICATION_RELEASE": release_id,
+            "OTEL_SERVICE_VERSION": release_id,
             "AUTOPILOTS_APPLICATION_ROOT": directory,
             "PYTHONPATH": directory,
             "AUTOPILOTS_PLUGIN_PATH": directory + ":/opt/autopilots/hermes-site",
             "HERMES_BUNDLED_SKILLS": directory + "/runtime_skills",
         })
+        if source_commit and role_bundle["source"] == "local":
+            from scripts.role_bundle import publish_role_bundle
+
+            environment["HERMES_ROLE_BUNDLE_ROOT"] = publish_role_bundle(sandbox, role_bundle)
         deployed = {
             "environment": environment,
             "command": ["/app/.venv/bin/python", directory + "/start_hermes.py"],
-            "workingDirectory": directory, "release": release.digest,
+            "workingDirectory": directory, "release": release_id,
         }
         if runtime.reused_existing_sandbox:
             previous = json.loads(sandbox.read_file(SERVICE_CONFIG_PATH))
@@ -355,7 +386,7 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) 
                     require_quiescent_service(sandbox, previous, config.port)
                     try:
                         write_service_settings(sandbox, deployed)
-                        require_service_health(sandbox, config.port, release.digest)
+                        require_service_health(sandbox, config.port, release_id)
                     except (AzureError, OSError, ValueError, RuntimeError) as error:
                         try:
                             write_service_settings(sandbox, previous)
@@ -365,16 +396,21 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) 
                         raise
         else:
             write_service_settings(sandbox, deployed)
-        require_service_health(sandbox, config.port, release.digest)
-    seconds = require_runtime_ready(runtime.endpoint_url)
-    print(
-        f"Runtime {runtime.sandbox_id} healthy through OnDemand ingress after {seconds:.1f}s "
-        f"({'reused' if runtime.reused_existing_sandbox else 'created'}).",
-        flush=True,
-    )
+        require_service_health(sandbox, config.port, release_id)
+        if source_commit:
+            require_always_running(group, runtime.sandbox_id)
+    if source_commit:
+        print(f"Runtime {runtime.sandbox_id}: authenticated management loopback health passed.", flush=True)
+    else:
+        seconds = require_runtime_ready(runtime.endpoint_url)
+        print(
+            f"Runtime {runtime.sandbox_id} healthy through OnDemand ingress after {seconds:.1f}s "
+            f"({'reused' if runtime.reused_existing_sandbox else 'created'}).",
+            flush=True,
+        )
     return {
         "runtime_url": runtime.endpoint_url, "runtime_sandbox_id": runtime.sandbox_id,
-        "runtime_application_release": release.digest,
+        "runtime_application_release": release_id,
     }
 
 
@@ -432,6 +468,11 @@ def service_body(service: SandboxService, group: dict, disk_id: str, worker: str
     }
     if service.role == "gateway":
         body["volumes"] = [SandboxVolume("gateway-state", "/backup")._to_dict()]
+    if service.source_commit:
+        body["entrypoint"] = ["/app/.venv/bin/python", "/app/container_start.py", service.role]
+        body["environment"]["AUTOPILOTS_SERVICE_CONFIG"] = SERVICE_CONFIG_PATH
+        body["lifecycle"]["autoSuspendPolicy"]["enabled"] = False
+        body["lifecycle"]["autoDeletePolicy"] = {"enabled": False}
     if group["vnet_connection_name"]:
         body["customerVnetConnectionName"] = group["vnet_connection_name"]
     body["labels"]["deployment"] = hashlib.sha256(
@@ -440,8 +481,19 @@ def service_body(service: SandboxService, group: dict, disk_id: str, worker: str
     return body
 
 
+def require_always_running(group: Any, sandbox_id: str) -> dict:
+    model = group._dp_get(group._group_path + "/sandboxes/" + sandbox_id)
+    lifecycle = model.get("lifecycle") or {}
+    if any((lifecycle.get(name) or {}).get("enabled") is not False
+           for name in ("autoSuspendPolicy", "autoDeletePolicy")):
+        raise RuntimeError("Sandbox must report BOTH automatic suspend and automatic delete explicitly disabled.")
+    if model.get("state") != "Running":
+        raise RuntimeError("Always-running Sandbox did not report Running.")
+    return {"state": "Running", "auto_suspend": False, "auto_delete": False}
+
+
 def require_exec_success(result: Any, operation: str) -> None:
-    if result.exit_code != 0:
+    if type(result.exit_code) is not int or result.exit_code != 0:
         raise RuntimeError(f"{operation} failed: {result.stderr}")
 
 
@@ -529,19 +581,21 @@ def configure_callback_port(sandbox: Any, environment: dict[str, str]) -> str:
     return url.rstrip("/")
 
 
-def require_service_health(client: Any, port: int, release: str = "") -> None:
+def require_service_health(client: Any, port: int, release: str = "", *, health_path: str = "/health") -> None:
+    nonce = uuid.uuid4().hex
     probe = (
         "import urllib.request; "
-        f"r=urllib.request.urlopen('http://127.0.0.1:{port}/health', timeout=5); "
+        f"r=urllib.request.urlopen('http://127.0.0.1:{port}{health_path}', timeout=5); "
         "assert r.status == 200; "
         "import json; data=json.load(r); "
-        f"assert not {release!r} or data.get('release') == {release!r}, data"
+        f"assert not {release!r} or data.get('release') == {release!r}; "
+        f"print({nonce!r})"
     )
     deadline = time.monotonic() + 180
     detail = ""
     while time.monotonic() < deadline:
         result = client.exec("python3 -c " + shlex.quote(probe))
-        if result.exit_code == 0:
+        if type(result.exit_code) is int and result.exit_code == 0 and result.stdout.strip() == nonce:
             return
         detail = result.stderr
         time.sleep(3)
@@ -585,7 +639,7 @@ print(json.dumps(result))
 
 
 @contextmanager
-def service_maintenance(sandbox: Any):
+def service_maintenance(sandbox: Any, *, retire_on_success: bool = False):
     owner = uuid.uuid4().hex
     acquire = (
         "import pathlib; "
@@ -593,16 +647,19 @@ def service_maintenance(sandbox: Any):
         f"handle=path.open('x'); handle.write({owner!r}); handle.close()"
     )
     require_exec_success(sandbox.exec("python3 -c " + shlex.quote(acquire)), "Entering application maintenance")
+    retired = False
     try:
         yield
+        retired = retire_on_success
     finally:
-        release = (
-            "import pathlib; path=pathlib.Path('/app/.application-maintenance'); "
-            f"assert path.read_text()=={owner!r}, 'Maintenance belongs to another operation'; path.unlink()"
-        )
-        require_exec_success(
-            sandbox.exec("python3 -c " + shlex.quote(release)), "Leaving application maintenance",
-        )
+        if not retired:
+            release = (
+                "import pathlib; path=pathlib.Path('/app/.application-maintenance'); "
+                f"assert path.read_text()=={owner!r}, 'Maintenance belongs to another operation'; path.unlink()"
+            )
+            require_exec_success(
+                sandbox.exec("python3 -c " + shlex.quote(release)), "Leaving application maintenance",
+            )
 
 
 def deploy_service(
@@ -617,17 +674,24 @@ def deploy_service(
     """Deploy one service; endpoint_environment derives settings that need this service's native URL."""
     if not disk_image_id:
         raise ValueError("A deployment-prepared disk image ID is required.")
-    if service.release is None:
+    if service.release is None and not service.source_commit:
         raise ValueError(f"{service.role} requires a verified application release.")
+    release_id = service.source_commit or service.release.digest
     if service.role == "gateway":
         volumes = {volume.name: volume for volume in client.list_volumes()}
         if "gateway-state" not in volumes:
             client.create_volume(
-                "gateway-state", type="AzureBlob",
+                "gateway-state", type="DataDisk" if service.source_commit else "AzureBlob",
+                **({"size": "5Gi"} if service.source_commit else {}),
                 labels={"app": "autopilots-on-azure", "worker": worker},
             )
-        elif volumes["gateway-state"].type != "AzureBlob":
-            raise ValueError("The gateway-state volume is not the expected managed Blob volume.")
+        elif volumes["gateway-state"].type != ("DataDisk" if service.source_commit else "AzureBlob"):
+            raise ValueError("The gateway-state volume is not the expected persistent volume type.")
+        elif service.source_commit and any(
+            volumes["gateway-state"].labels.get(key) != value
+            for key, value in {"app": "autopilots-on-azure", "worker": worker}.items()
+        ):
+            raise ValueError("The gateway Data Disk has unexpected ownership.")
     image_hash = hashlib.sha256(service.image.encode()).hexdigest()[:32]
     body = service_body(service, group, disk_image_id, worker)
     existing = [
@@ -662,11 +726,27 @@ def deploy_service(
             if state not in {"Running", "Stopped", "Suspended", "Failed"}:
                 raise RuntimeError(f"Previous {service.role} Sandbox is still transitioning: {state}")
             was_running = state == "Running"
+            if service.source_commit:
+                if was_running:
+                    previous_settings = json.loads(old.read_file(SERVICE_CONFIG_PATH))
+                    with service_maintenance(old, retire_on_success=True):
+                        require_quiescent_service(old, previous_settings, service.port)
+                    old.begin_stop(polling_timeout=300).result()
+                old.begin_delete(polling_timeout=600).result()
+                superseded_ids.append(item["id"])
+                continue
             old_clients.append((old, was_running))
             superseded_ids.append(item["id"])
             if was_running:
                 old.begin_stop(polling_timeout=300).result()
         if created:
+            if service.source_commit and service.role == "gateway":
+                for _ in range(90):
+                    if not client.get_volume("gateway-state").is_attached:
+                        break
+                    time.sleep(2)
+                else:
+                    raise TimeoutError("Gateway Data Disk did not detach.")
             result = client._dp_put(
                 f"{client._group_path}/sandboxes", body
             )
@@ -692,14 +772,14 @@ def deploy_service(
                 callback_url = configure_callback_port(sandbox, environment)
         if endpoint_environment is not None:
             environment.update(endpoint_environment(endpoint.rstrip("/")))
-        directory = install_release(sandbox, service.release)
-        environment["APPLICATION_RELEASE"] = service.release.digest
-        environment["OTEL_SERVICE_VERSION"] = service.release.digest
+        directory = "/app" if service.source_commit else install_release(sandbox, service.release)
+        environment["APPLICATION_RELEASE"] = release_id
+        environment["OTEL_SERVICE_VERSION"] = release_id
         command = list(service.command)
         command[0] = directory + "/.venv/bin/python"
         settings = {
             "environment": environment, "command": command,
-            "workingDirectory": directory, "release": service.release.digest,
+            "workingDirectory": directory, "release": release_id,
         }
         if not created:
             try:
@@ -709,7 +789,9 @@ def deploy_service(
         if previous != settings:
             write_service_settings(sandbox, settings)
             config_changed = True
-        require_service_health(sandbox, service.port, service.release.digest)
+        require_service_health(sandbox, service.port, release_id)
+        if service.source_commit:
+            require_always_running(client, sandbox.sandbox_id)
     except (AzureError, OSError, ValueError, RuntimeError) as exc:
         try:
             if created and sandbox is not None:
@@ -731,13 +813,14 @@ def deploy_service(
     return {"sandbox_id": sandbox.sandbox_id, "url": endpoint.rstrip("/"),
             **({"callback_url": callback_url} if service.role == "gateway" else {}),
             "image": service.image, "disk_image_id": disk_image_id,
-            "application_release": service.release.digest,
+            "application_release": release_id,
             "superseded_sandbox_ids": superseded_ids}
 
 
 def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
     config = infrastructure["deployment_config"]
     simulator = config.get("channel", "agent365") == "simulator"
+    source_commit = config.get("prebuilt_source_commit", "")
     private = config.get("private_network_enabled", False)
     if private and any(
         group.get("public_network_access") != "Disabled" or not group.get("vnet_connection_name")
@@ -746,7 +829,7 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
         raise ValueError("Every private Sandbox Group requires disabled public ingress and a native VNet connection.")
     bridge_image = config.get("bridge_image") or PYTHON_BASE_IMAGE
     bridge_source = config.get("bridge_disk_source_image") or PYTHON_BASE_IMAGE
-    if private and not bridge_image.startswith(platform["acr_login_server"] + "/"):
+    if private and not source_commit and not bridge_image.startswith(platform["acr_login_server"] + "/"):
         raise ValueError("The private gateway base image must be mirrored into its stack's private ACR.")
     demo_mcp = config.get("demo_mcp_enabled", not simulator)
     required_identity = ("agent365_client_id", "agent365_agent_identity_client_id",
@@ -798,16 +881,18 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
             if role == "gateway":
                 settings = worker_settings(config, platform, infrastructure, endpoints)
                 service = SandboxService(
-                    role="gateway", image=bridge_image, port=8000,
+                    role="gateway", image=bridge_image, port=8001 if source_commit else 8000,
                     disk_source_image=bridge_source,
-                    command=("/app/.venv/bin/python", "-m", "bridge.server"),
+                    command=(("/app/.venv/bin/python", "-m", "uvicorn", "bridge.app:app")
+                             if source_commit else ("/app/.venv/bin/python", "-m", "bridge.server")),
                     environment=gateway_environment(settings),
-                    auto_suspend=True,
-                    release=build_release("gateway", base_image=bridge_image),
+                    auto_suspend=not bool(source_commit),
+                    release=None if source_commit else build_release("gateway", base_image=bridge_image),
+                    source_commit=source_commit,
                 )
 
                 def endpoint_environment(gateway_url: str) -> dict[str, str]:
-                    runtime.update(deploy_runtime(settings, gateway_url, credential))
+                    runtime.update(deploy_runtime(settings, gateway_url, credential, source_commit=source_commit))
                     return {"AGENT_RUNTIME_URL": runtime["runtime_url"]}
             else:
                 service = mcp_service(role, config, infrastructure)

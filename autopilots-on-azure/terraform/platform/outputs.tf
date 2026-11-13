@@ -15,15 +15,15 @@ output "sandbox_location" {
 }
 
 output "acr_name" {
-  value = azurerm_container_registry.main.name
+  value = try(azurerm_container_registry.main[0].name, "")
 }
 
 output "acr_login_server" {
-  value = azurerm_container_registry.main.login_server
+  value = try(azurerm_container_registry.main[0].login_server, "")
 }
 
 output "acr_id" {
-  value = azurerm_container_registry.main.id
+  value = try(azurerm_container_registry.main[0].id, "")
 }
 
 output "scheduler_servicebus_namespace_id" {
@@ -103,11 +103,11 @@ output "acr_agent_pool_name" {
 
 output "acr_trusted_services_bypass_enabled" {
   description = "Effective ACR trusted-services bypass: private mode requires explicit opt-in; public mode preserves AzureServices."
-  value       = azurerm_container_registry.main.network_rule_bypass_option == "AzureServices"
+  value       = try(azurerm_container_registry.main[0].network_rule_bypass_option == "AzureServices", false)
 }
 
 output "acr_network_rule_bypass_option" {
-  value = azurerm_container_registry.main.network_rule_bypass_option
+  value = try(azurerm_container_registry.main[0].network_rule_bypass_option, "")
 }
 
 output "ai_location" {
@@ -145,8 +145,8 @@ output "private_network_handoff" {
     required_private_dns_zones  = var.private_network_enabled ? sort(tolist(local.required_private_dns_zones)) : []
     required_sandbox_delegation = "Microsoft.App/environments"
     acr_agent_pool_subnet_id    = var.acr_agent_pool_subnet_id
-    private_image_build         = !var.private_network_enabled ? null : (var.acr_agent_pool_subnet_id == "" ? "No private build pool: supply prebuilt images or provide a dedicated nondelegated build-agent subnet." : "Customer build-agent subnet must resolve registry private DNS, reach registry private endpoints, and allow documented ACR agent-pool service dependencies.")
-    operator_access             = var.private_network_enabled ? "Run image builds/pushes, data-plane setup and smoke tests from a host with private endpoint connectivity and central DNS resolution." : null
+    private_image_build         = !var.registry_enabled || !var.private_network_enabled ? null : (var.acr_agent_pool_subnet_id == "" ? "No private build pool: supply prebuilt images or provide a dedicated nondelegated build-agent subnet." : "Customer build-agent subnet must resolve registry private DNS, reach registry private endpoints, and allow documented ACR agent-pool service dependencies.")
+    operator_access             = var.private_network_enabled ? (var.registry_enabled ? "Source builds and browser tests require private connectivity." : "Deployment uses authenticated Sandbox management APIs; assigned-user browser tests require private connectivity.") : null
     existing_network_contract   = local.existing_network ? "Customer must supply both subnets in sandbox_location, routing/connectivity between them, private-endpoint-capable policies/capacity, and central DNS resolution/links for both workloads and deployment operators." : null
   }
 }

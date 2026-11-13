@@ -24,6 +24,7 @@ from scripts.sandbox_services import (
     gateway_environment,
     mcp_service,
     prepare_disk_image,
+    require_always_running,
     require_service_health,
     service_body,
     worker_settings,
@@ -51,6 +52,56 @@ class SandboxServicesTests(unittest.TestCase):
             "vnet_connection_name": "private-tools" if role in {"runtime", "gateway"} else "",
         }
 
+    def test_public_digest_conversion_has_no_registry_identity_or_acr_lookup(self):
+        image = "ghcr.io/example/gateway@sha256:" + "a" * 64
+        client = Mock()
+        client.list_disk_images.return_value = []
+        client.get_disk_image.return_value = SimpleNamespace(
+            id="converted", image=SimpleNamespace(base=image), status=SimpleNamespace(state="Ready"),
+        )
+        with patch("scripts.sandbox_services.convert_disk_image", return_value="converted") as convert, patch(
+            "scripts.sandbox_services.run_text", side_effect=AssertionError("No ACR lookup"),
+        ):
+            result = prepare_disk_image(
+                client, role="gateway", image=image, source=image, acr_name="", subscription_id="subscription",
+                identity_client_id="workload-client", vnet_connection_name="private",
+            )
+            self.assertEqual(result, "converted")
+            body = convert.call_args.args[1]
+            self.assertEqual(body["source"], {"kind": "registry", "imageUrl": image})
+            self.assertEqual(body["customerVnetConnectionName"], "private")
+            with self.assertRaisesRegex(ValueError, "exact immutable"):
+                prepare_disk_image(
+                    client, role="gateway", image=image, source="ghcr.io/example/gateway:latest", acr_name="",
+                    subscription_id="subscription", identity_client_id="workload-client",
+                )
+
+    def test_prebuilt_gateway_uses_packaged_startup_and_disables_both_lifecycle_policies(self):
+        service = SandboxService(
+            role="gateway", image="image", port=8001, command=("unused",), environment={},
+            source_commit="a" * 40,
+        )
+        body = service_body(service, self.group(), "disk", "worker")
+        self.assertEqual(body["entrypoint"], ["/app/.venv/bin/python", "/app/container_start.py", "gateway"])
+        self.assertIs(body["lifecycle"]["autoSuspendPolicy"]["enabled"], False)
+        self.assertIs(body["lifecycle"]["autoDeletePolicy"]["enabled"], False)
+        self.assertEqual(body["environment"]["AUTOPILOTS_SERVICE_CONFIG"], SERVICE_CONFIG_PATH)
+
+    def test_never_suspend_verification_rejects_missing_or_inferred_booleans(self):
+        group = Mock()
+        group._group_path = "/group"
+        model = {"state": "Running", "lifecycle": {
+            "autoSuspendPolicy": {"enabled": False}, "autoDeletePolicy": {"enabled": False},
+        }}
+        group._dp_get.return_value = model
+        self.assertEqual(require_always_running(group, "sandbox")["state"], "Running")
+        for value in (None, True, 0):
+            group._dp_get.return_value = {
+                **model, "lifecycle": {**model["lifecycle"], "autoSuspendPolicy": {"enabled": value}},
+            }
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "explicitly disabled"):
+                require_always_running(group, "sandbox")
+
     def test_source_release_readiness_accepts_minimal_public_health(self):
         response = io.BytesIO(json.dumps({"status": "ok", "release": self.release.digest}).encode())
         response.status = 200
@@ -58,20 +109,28 @@ class SandboxServicesTests(unittest.TestCase):
 
         def execute(command):
             probe = shlex.split(command)[2]
-            with patch("urllib.request.urlopen", return_value=response) as request:
+            stdout = io.StringIO()
+            with patch("urllib.request.urlopen", return_value=response) as request, redirect_stdout(stdout):
                 exec(compile(probe, "<source-release-health-probe>", "exec"), {})
             request.assert_called_once_with("http://127.0.0.1:8000/health", timeout=5)
-            return SimpleNamespace(exit_code=0, stderr="")
+            return SimpleNamespace(exit_code=0, stderr="", stdout=stdout.getvalue())
 
         sandbox.exec.side_effect = execute
         require_service_health(sandbox, 8000, self.release.digest)
         sandbox.exec.assert_called_once()
 
+    def test_health_does_not_accept_sdk_default_exit_zero_without_this_invocations_completion(self):
+        sandbox = Mock()
+        sandbox.exec.return_value = SimpleNamespace(exit_code=0, stdout="", stderr="")
+        with patch("scripts.sandbox_services.time.monotonic", side_effect=[0, 0, 181]), patch(
+            "scripts.sandbox_services.time.sleep",
+        ), self.assertRaises(TimeoutError):
+            require_service_health(sandbox, 8001)
+
     def test_remote_bootstrap_and_quiescence_commands_are_valid_python(self):
         from scripts.sandbox_services import require_quiescent_service
         from scripts.application_releases import INSTALL_RELEASE
-        from scripts.simulator_hosting import BOOTSTRAP as SIMULATOR_BOOTSTRAP
-        for source in (BOOTSTRAP, INSTALL_RELEASE, SIMULATOR_BOOTSTRAP):
+        for source in (BOOTSTRAP, INSTALL_RELEASE):
             ast.parse(source)
         sandbox = Mock()
         def execute(command):
@@ -406,6 +465,47 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertEqual(written["AGENT_RUNTIME_URL"], "https://runtime.example")
         self.assertEqual(written["AUTOPILOT_BRIDGE_URL"], "https://gateway.example")
 
+    def test_prebuilt_replacement_detaches_disk_before_create_and_never_restarts_deleted_compute(self):
+        for healthy in (True, False):
+            with self.subTest(healthy=healthy):
+                service = SandboxService(
+                    "gateway", "new-image", 8001, ("python3",), {}, source_commit="a" * 40,
+                )
+                client = Mock()
+                client._group_path = "/group"
+                client.list_volumes.return_value = [SimpleNamespace(
+                    name="gateway-state", type="DataDisk",
+                    labels={"app": "autopilots-on-azure", "worker": "worker"},
+                )]
+                client._dp_get.return_value = [{
+                    "id": "old", "labels": {"worker": "worker", "service": "gateway", "image": "old-image"},
+                }]
+                old, new = Mock(), Mock()
+                old.get.return_value = SimpleNamespace(state="Stopped")
+                new.sandbox_id = "new"
+                new.get.return_value = SimpleNamespace(
+                    state="Running", ports=[SimpleNamespace(port=8001, url="https://gateway.example")],
+                )
+                new.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
+                client.get_sandbox_client.side_effect = lambda identity: old if identity == "old" else new
+                order = []
+                old.begin_delete.return_value.result.side_effect = lambda: order.append("delete")
+                client.get_volume.side_effect = lambda name: (order.append("detach"), SimpleNamespace(is_attached=False))[1]
+                client._dp_put.side_effect = lambda path, body: (order.append("create"), {"id": "new"})[1]
+                with patch("scripts.sandbox_services.require_always_running"), patch(
+                    "scripts.sandbox_services.require_service_health",
+                    side_effect=None if healthy else TimeoutError("not healthy"),
+                ):
+                    if healthy:
+                        deploy_service(client, service, self.group(), "worker", disk_image_id="disk")
+                    else:
+                        with self.assertRaises(TimeoutError):
+                            deploy_service(client, service, self.group(), "worker", disk_image_id="disk")
+                self.assertEqual(order, ["delete", "detach", "create"])
+                old.ensure_running.assert_not_called()
+                client.delete_volume.assert_not_called()
+                self.assertEqual(new.begin_delete.call_count, 0 if healthy else 1)
+
     def test_native_url_supplied_before_gateway_process_starts(self):
         service = SandboxService("gateway", "image@sha256:123", 8000, ("python3", "-m", "server"), {}, False,
                                  disk_source_image="image:build123", release=self.release)
@@ -594,7 +694,7 @@ class SandboxServicesTests(unittest.TestCase):
             {"operationId": "op-1"},
             {"status": "Failed", "errorMessage": "UNAUTHORIZED: authentication required"},
         ]
-        with self.assertRaisesRegex(RuntimeError, "UNAUTHORIZED.*AcrPull"):
+        with self.assertRaisesRegex(RuntimeError, "UNAUTHORIZED.*before retrying"):
             convert_disk_image(client, {"source": {}})
 
     def test_existing_ready_disk_needs_no_registry_access(self):

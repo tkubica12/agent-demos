@@ -152,8 +152,8 @@ variables {
         return body + "}\n"
 
     public = run("public_defaults_unchanged", "", [
-        'azurerm_container_registry.main.sku == "Basic" && azurerm_container_registry.main.public_network_access_enabled && !azurerm_container_registry.main.admin_enabled',
-        'azurerm_container_registry.main.network_rule_bypass_option == "AzureServices" && output.acr_trusted_services_bypass_enabled && output.acr_network_rule_bypass_option == "AzureServices"',
+        'azurerm_container_registry.main[0].sku == "Basic" && azurerm_container_registry.main[0].public_network_access_enabled && !azurerm_container_registry.main[0].admin_enabled',
+        'azurerm_container_registry.main[0].network_rule_bypass_option == "AzureServices" && output.acr_trusted_services_bypass_enabled && output.acr_network_rule_bypass_option == "AzureServices"',
         'length(azurerm_servicebus_namespace.scheduler) == 1 && azurerm_servicebus_namespace.scheduler[0].sku == "Standard" && azurerm_servicebus_namespace.scheduler[0].public_network_access_enabled && !azurerm_servicebus_namespace.scheduler[0].local_auth_enabled',
         'azapi_resource.foundry.body.properties.publicNetworkAccess == "Enabled" && azapi_resource.foundry.body.properties.disableLocalAuth',
         'azapi_resource.log_analytics[0].body.properties.publicNetworkAccessForIngestion == "Enabled" && azapi_resource.application_insights[0].body.properties.publicNetworkAccessForQuery == "Enabled"',
@@ -173,12 +173,12 @@ variables {
       environment = "cannot-replace"
     }
 ''', [
-        'azurerm_container_registry.main.sku == "Premium" && !azurerm_container_registry.main.public_network_access_enabled && !azurerm_container_registry.main.admin_enabled',
-        'azurerm_container_registry.main.network_rule_bypass_option == "None" && !output.acr_trusted_services_bypass_enabled && output.acr_network_rule_bypass_option == "None"',
+        'azurerm_container_registry.main[0].sku == "Premium" && !azurerm_container_registry.main[0].public_network_access_enabled && !azurerm_container_registry.main[0].admin_enabled',
+        'azurerm_container_registry.main[0].network_rule_bypass_option == "None" && !output.acr_trusted_services_bypass_enabled && output.acr_network_rule_bypass_option == "None"',
         'length(azurerm_servicebus_namespace.scheduler) == 1 && azurerm_servicebus_namespace.scheduler[0].sku == "Premium" && azurerm_servicebus_namespace.scheduler[0].capacity == 1 && !azurerm_servicebus_namespace.scheduler[0].public_network_access_enabled && !azurerm_servicebus_namespace.scheduler[0].local_auth_enabled',
         'azapi_resource.foundry.body.properties.publicNetworkAccess == "Disabled" && azapi_resource.foundry.body.properties.disableLocalAuth && azapi_resource.foundry.location == "swedencentral"',
         'azapi_resource.foundry_project.location == "swedencentral" && azurerm_resource_group.main[0].location == "northeurope"',
-        'azurerm_container_registry.main.location == "northeurope" && azurerm_servicebus_namespace.scheduler[0].location == "northeurope" && azurerm_private_endpoint.private_mcp.location == "northeurope"',
+        'azurerm_container_registry.main[0].location == "northeurope" && azurerm_servicebus_namespace.scheduler[0].location == "northeurope" && azurerm_private_endpoint.private_mcp.location == "northeurope"',
         'alltrue([for endpoint in azurerm_private_endpoint.services : endpoint.location == "northeurope"]) && azurerm_virtual_network.main[0].location == "northeurope"',
         'length(azurerm_private_endpoint.services) == 2 && !contains(keys(azurerm_private_endpoint.services), "foundry") && length(azapi_resource.foundry_private_endpoint) == 1 && length(azurerm_private_dns_zone.services) == 5 && length(azurerm_private_dns_zone.private_mcp) == 1',
         'azapi_resource.foundry_private_endpoint[0].name == "pe-foundry-demo" && azapi_resource.foundry_private_endpoint[0].location == "northeurope" && azapi_resource.foundry_private_endpoint[0].body.properties.privateLinkServiceConnections[0].properties.privateLinkServiceId == azapi_resource.foundry.id && azapi_resource.foundry_private_endpoint[0].body.properties.privateLinkServiceConnections[0].properties.groupIds == ["account"]',
@@ -187,7 +187,7 @@ variables {
         'azapi_resource.private_mcp_env.body.properties.environmentMode == "Express" && azapi_resource.private_mcp_env.body.properties.publicNetworkAccess == "Disabled"',
         'azapi_resource.log_analytics[0].body.properties.publicNetworkAccessForIngestion == "Disabled" && azapi_resource.log_analytics[0].body.properties.publicNetworkAccessForQuery == "Disabled" && azapi_resource.log_analytics[0].body.properties.features.disableLocalAuth',
         'azapi_resource.application_insights[0].body.properties.publicNetworkAccessForIngestion == "Disabled" && azapi_resource.application_insights[0].body.properties.publicNetworkAccessForQuery == "Disabled" && azapi_resource.application_insights[0].body.properties.DisableLocalAuth',
-        'azurerm_container_registry.main.tags.CostCenter == "CEZ" && azurerm_container_registry.main.tags.app == "autopilots-on-azure" && azurerm_container_registry.main.tags.layer == "platform" && azurerm_container_registry.main.tags.environment == "cez"',
+        'azurerm_container_registry.main[0].tags.CostCenter == "CEZ" && azurerm_container_registry.main[0].tags.app == "autopilots-on-azure" && azurerm_container_registry.main[0].tags.layer == "platform" && azurerm_container_registry.main[0].tags.environment == "cez"',
         'output.monitoring_private_link_handoff.ampls_handoff_required && length(azapi_resource.monitor_scoped_resource) == 0',
         'output.location == "northeurope" && output.ai_location == "swedencentral"',
     ])
@@ -229,6 +229,15 @@ variables {
         ) + "    scheduler_enabled = false\n", no_scheduler_assertions)
         + run("private_simulator_ignores_unused_central_servicebus_dns",
             external_inputs + "    scheduler_enabled = false\n", no_scheduler_assertions)
+        + run("prebuilt_simulator_has_no_registry_or_registry_dns", external_inputs.replace(
+            hcl_map(dns_ids()), hcl_map({zone: id for zone, id in dns_ids().items()
+                                       if zone not in {"privatelink.azurecr.io", "privatelink.servicebus.windows.net"}}),
+        ) + "    scheduler_enabled = false\n    registry_enabled = false\n", [
+            "length(azurerm_container_registry.main) == 0 && length(azurerm_container_registry_agent_pool.private) == 0",
+            'output.acr_id == "" && output.acr_name == "" && output.acr_login_server == ""',
+            'length(azurerm_private_endpoint.services) == 0 && length(azapi_resource.foundry_private_endpoint) == 1',
+            '!contains(keys(output.private_dns_zone_ids), "privatelink.azurecr.io") && !contains(output.private_network_handoff.required_private_dns_zones, "privatelink.azurecr.io")',
+        ])
     )
     independent_rg = run("existing_rg_with_owned_network", '''
     private_network_enabled = true
@@ -269,15 +278,15 @@ variables {
         'length(azurerm_container_registry_agent_pool.private) == 1 && output.acr_agent_pool_name == "private-build"',
         'azurerm_container_registry_agent_pool.private[0].tier == "S1" && azurerm_container_registry_agent_pool.private[0].instance_count == 2 && azurerm_container_registry_agent_pool.private[0].location == "northeurope"',
         f'azurerm_container_registry_agent_pool.private[0].virtual_network_subnet_id == "{SUBNET_ROOT}/build-agents" && length(azurerm_subnet.sandbox) == 0 && length(azurerm_subnet.private_endpoints) == 0',
-        'azurerm_container_registry.main.network_rule_bypass_option == "None" && !output.acr_trusted_services_bypass_enabled',
+        'azurerm_container_registry.main[0].network_rule_bypass_option == "None" && !output.acr_trusted_services_bypass_enabled',
     ])
     approved_bypass = run("private_trusted_services_bypass_requires_explicit_opt_in", '''
     private_network_enabled = true
     scheduler_enabled = false
     acr_trusted_services_bypass_enabled = true
 ''', [
-        'azurerm_container_registry.main.network_rule_bypass_option == "AzureServices" && output.acr_trusted_services_bypass_enabled && output.acr_network_rule_bypass_option == "AzureServices"',
-        '!azurerm_container_registry.main.public_network_access_enabled && !azurerm_container_registry.main.admin_enabled',
+        'azurerm_container_registry.main[0].network_rule_bypass_option == "AzureServices" && output.acr_trusted_services_bypass_enabled && output.acr_network_rule_bypass_option == "AzureServices"',
+        '!azurerm_container_registry.main[0].public_network_access_enabled && !azurerm_container_registry.main[0].admin_enabled',
     ])
     existing_monitoring_override = f'''
   override_data {{
@@ -300,30 +309,33 @@ variables {
         run("reject_partial_subnets", f'''
     private_network_enabled = true
     existing_sandbox_subnet_id = "{SUBNET_ROOT}/sandbox"
-''', [], "azurerm_container_registry.main"),
+''', [], "azapi_resource.private_mcp_env"),
         run("reject_public_existing_subnets", external_inputs.replace(
             "private_network_enabled = true", "private_network_enabled = false"
-        ), [], "azurerm_container_registry.main"),
+        ), [], "azapi_resource.private_mcp_env"),
         run("reject_missing_central_dns", external_inputs.replace(
             f"private_dns_zone_ids = {hcl_map(dns_ids())}", "private_dns_zone_ids = {}"
-        ), [], "azurerm_container_registry.main"),
+        ), [], "azapi_resource.private_mcp_env"),
+        run("reject_prebuilt_missing_central_dns", external_inputs.replace(
+            f"private_dns_zone_ids = {hcl_map(dns_ids())}", "private_dns_zone_ids = {}"
+        ) + "    registry_enabled = false\n    scheduler_enabled = false\n", [], "azapi_resource.private_mcp_env"),
         run("reject_partial_monitoring", f'''
     existing_log_analytics_workspace_id = "{WORKSPACE}"
-''', [], "azurerm_container_registry.main"),
+''', [], "azapi_resource.private_mcp_env"),
         run("reject_shared_subnet", external_inputs.replace(
             f"{SUBNET_ROOT}/endpoints", f"{SUBNET_ROOT}/sandbox"
-        ), [], "azurerm_container_registry.main"),
-        run("reject_public_ampls", f'    ampls_id = "{AMPLS}"', [], "azurerm_container_registry.main"),
+        ), [], "azapi_resource.private_mcp_env"),
+        run("reject_public_ampls", f'    ampls_id = "{AMPLS}"', [], "azapi_resource.private_mcp_env"),
         run("reject_mismatched_dns_id", external_inputs.replace(
             dns_ids()["privatelink.azurecr.io"],
             f"{CUSTOMER_RG}/providers/Microsoft.Network/privateDnsZones/wrong.example",
-        ), [], "azurerm_container_registry.main"),
+        ), [], "azapi_resource.private_mcp_env"),
         run("reject_agent_pool_in_sandbox_subnet", external_inputs + f'''
     acr_agent_pool_subnet_id = "{SUBNET_ROOT}/sandbox"
-''', [], "azurerm_container_registry.main"),
+''', [], "azapi_resource.private_mcp_env"),
         run("reject_agent_pool_in_public_mode", f'''
     acr_agent_pool_subnet_id = "{SUBNET_ROOT}/build-agents"
-''', [], "azurerm_container_registry.main"),
+''', [], "azapi_resource.private_mcp_env"),
         run("reject_mismatched_existing_monitoring_workspace", external_inputs + monitoring_inputs,
             [], "data.azapi_resource.existing_application_insights[0]",
             existing_monitoring_override.replace(WORKSPACE, WORKSPACE + "-other")),

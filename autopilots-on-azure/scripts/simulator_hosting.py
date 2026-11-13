@@ -10,55 +10,15 @@ import httpx
 from azure.containerapps.sandbox import SandboxGroupClient, SandboxVolume
 from azure.identity import AzureCliCredential
 
-from scripts.sandbox_services import DISK_IMAGE_AUDIENCE, prepare_disk_image, require_exec_success, require_private_endpoint
+from scripts.sandbox_services import (
+    DISK_IMAGE_AUDIENCE, prepare_disk_image, require_always_running, require_exec_success,
+    require_private_endpoint, require_service_health,
+)
 from scripts.simulator_channel import simulator_environment
 
 
 VOLUME = "simulator-data"
 CONFIG_PATH = "/tmp/simulator-service.json"
-BOOTSTRAP = """
-import json, os, pathlib, subprocess, time
-log = open("/tmp/simulator-service.log", "a", buffering=1)
-os.dup2(log.fileno(), 1)
-os.dup2(log.fileno(), 2)
-volume = pathlib.Path("/mnt/tsim")
-if os.geteuid() != 0:
-    raise RuntimeError("Sandbox volume initialization requires the root-bootstrap image")
-if volume.stat().st_uid not in (0, 10001):
-    raise RuntimeError("Simulator volume has an unexpected owner")
-os.chown(volume, 10001, 10001)
-os.chmod(volume, 0o700)
-os.setgroups([])
-os.setgid(10001)
-os.setuid(10001)
-path = pathlib.Path("/tmp/simulator-service.json")
-deadline = time.monotonic() + 1800
-while not path.exists():
-    if time.monotonic() > deadline:
-        raise RuntimeError("Deployment did not supply simulator settings")
-    time.sleep(1)
-previous = ""
-process = None
-while True:
-    metadata = path.stat()
-    if metadata.st_uid != 10001 or metadata.st_mode & 0o777 != 0o600:
-        raise RuntimeError("Simulator settings must be owned by UID 10001 with mode 0600")
-    content = path.read_text()
-    if content != previous:
-        config = json.loads(content)
-        if process is not None:
-            process.terminate()
-            process.wait(timeout=45)
-        environment = dict(os.environ)
-        environment.update(config["environment"])
-        process = subprocess.Popen(config["command"], cwd="/app", env=environment)
-        previous = content
-    if process.poll() is not None:
-        raise RuntimeError("Simulator exited: " + str(process.returncode))
-    time.sleep(1)
-""".strip()
-
-
 def save(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
@@ -76,7 +36,7 @@ def group_client(binding: dict, credential: AzureCliCredential) -> SandboxGroupC
 
 def deploy_host(config: dict, binding: dict, platform: dict, image: dict, state_path: Path) -> dict:
     labels = {"app": "autopilots-on-azure", "environment": config["environment"], "service": "simulator"}
-    fingerprint = hashlib.sha256((image["image"] + BOOTSTRAP).encode()).hexdigest()[:32]
+    fingerprint = hashlib.sha256(image["image"].encode()).hexdigest()[:32]
     with AzureCliCredential(subscription=binding["subscription_id"], process_timeout=150) as credential:
         with group_client(binding, credential) as group:
             disk = prepare_disk_image(
@@ -119,8 +79,11 @@ def deploy_host(config: dict, binding: dict, platform: dict, image: dict, state_
                         "autoDeletePolicy": {"enabled": False},
                     },
                     "labels": {**labels, "image": fingerprint},
-                    "environment": {"AZURE_CLIENT_ID": binding["identity_client_id"], "PYTHONUNBUFFERED": "1"},
-                    "entrypoint": ["python", "-c", BOOTSTRAP],
+                    "environment": {
+                        "AZURE_CLIENT_ID": binding["identity_client_id"], "PYTHONUNBUFFERED": "1",
+                        "AUTOPILOTS_SERVICE_CONFIG": CONFIG_PATH, "TSIM_DATA_DIRECTORY": "/mnt/tsim",
+                    },
+                    "entrypoint": ["/app/.venv/bin/python", "-m", "backend.container_start", "simulator"],
                     "cmd": [],
                     "volumes": [SandboxVolume(VOLUME, "/mnt/tsim")._to_dict()],
                     "ports": [{"port": 8000, "protocol": "Http", "activationMode": "OnDemand",
@@ -136,7 +99,9 @@ def deploy_host(config: dict, binding: dict, platform: dict, image: dict, state_
             if not url.startswith("https://"):
                 raise RuntimeError("Simulator did not publish an HTTPS endpoint.")
             require_private_endpoint(url, binding)
-            result = {**binding, **image, "sandbox_id": current["id"], "disk_image_id": disk, "url": url.rstrip("/")}
+            lifecycle = require_always_running(group, current["id"])
+            result = {**binding, **image, "sandbox_id": current["id"], "disk_image_id": disk,
+                      "url": url.rstrip("/"), "lifecycle": lifecycle}
             save(state_path, result)
             return result
 
@@ -145,10 +110,6 @@ def configure_host(config: dict, binding: dict, identities: dict, agents: list[d
     environment = simulator_environment(config, binding, identities, agents)
     payload = {
         "environment": environment,
-        "command": config.get("simulator_command", [
-            "/app/.venv/bin/python", "-m", "uvicorn", "backend.app:create_app", "--factory", "--host", "0.0.0.0",
-            "--port", "8000", "--no-access-log",
-        ]),
     }
     with AzureCliCredential(subscription=binding["subscription_id"], process_timeout=150) as credential:
         with group_client(binding, credential) as group:
@@ -160,7 +121,7 @@ def configure_host(config: dict, binding: dict, identities: dict, agents: list[d
                 + " && chmod 0600 " + shlex.quote(CONFIG_PATH + ".next")
                 + " && mv " + shlex.quote(CONFIG_PATH + ".next") + " " + shlex.quote(CONFIG_PATH)),
                                  "Activating simulator settings")
-    wait_health(binding["url"], "/api/health")
+            require_service_health(sandbox, 8000, health_path="/api/health")
 
 
 def wait_health(origin: str, path: str = "/health") -> dict:

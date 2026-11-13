@@ -9,15 +9,16 @@ import re
 import uuid
 
 from scripts.tf_helpers import run
+from scripts.prebuilt_images import validate_manifest
 
 
 PROVIDERS = (
-    "Microsoft.App", "Microsoft.CognitiveServices", "Microsoft.ContainerRegistry",
+    "Microsoft.App", "Microsoft.CognitiveServices",
     "Microsoft.ManagedIdentity", "Microsoft.Network", "Microsoft.ServiceBus",
     "Microsoft.Insights", "Microsoft.OperationalInsights",
 )
 DNS_ZONES = (
-    "privatelink.azurecr.io", "privatelink.cognitiveservices.azure.com",
+    "privatelink.cognitiveservices.azure.com",
     "privatelink.openai.azure.com", "privatelink.services.ai.azure.com",
     "privatelink.servicebus.windows.net",
 )
@@ -112,62 +113,11 @@ def _token(value: object, label: str) -> str:
     return value
 
 
-def _build_scope(config: dict, *, private: bool) -> dict:
-    settings = config.get("build", {})
-    if not isinstance(settings, dict):
-        raise ValueError("build must be a mapping.")
-    mode = settings.get("mode", "source")
-    if mode not in ("import", "source"):
-        raise ValueError("build.mode must be import or source; quick-build/public staging fallbacks are not permitted.")
-    platform = config.get("platform", {})
-    allow_import = settings.get("allow_trusted_service_import", False)
-    trusted_bypass = platform.get("acr_trusted_services_bypass_enabled", False)
-    if not isinstance(allow_import, bool) or not isinstance(trusted_bypass, bool):
-        raise ValueError("allow_trusted_service_import and acr_trusted_services_bypass_enabled must be booleans.")
-    if mode == "import" and (not allow_import or not trusted_bypass):
-        raise ValueError(
-            "Import mode is opt-in only: build.allow_trusted_service_import=true and "
-            "platform.acr_trusted_services_bypass_enabled=true are both required."
-        )
-    pool_id = platform.get("acr_agent_pool_subnet_id") or None
-    pool_name = platform.get("acr_agent_pool_name", "private-build")
-    instance_count = platform.get("acr_agent_pool_instance_count", 1)
-    if not isinstance(pool_name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]{0,48}[a-zA-Z0-9]", pool_name):
-        raise ValueError("acr_agent_pool_name must contain 2-50 alphanumeric/hyphen characters and start/end alphanumeric.")
-    if isinstance(instance_count, bool) or not isinstance(instance_count, int) or instance_count < 1:
-        raise ValueError("acr_agent_pool_instance_count must be a positive integer.")
-    if private and mode == "source" and not pool_id:
-        raise ValueError(
-            "Private source build requires platform.acr_agent_pool_subnet_id; "
-            "quick-build/public staging fallbacks are not permitted."
-        )
-    if pool_id:
-        _arm_id(pool_id, "Microsoft.Network/virtualNetworks/subnets", "ACR build-agent subnet")
-    result = {
-        "mode": mode,
-        "allow_trusted_service_import": allow_import,
-        "acr_trusted_services_bypass_enabled": trusted_bypass,
-        "agent_pool": {"subnet_id": pool_id, "name": pool_name, "instance_count": instance_count} if pool_id else None,
+def _image_scope(config: dict) -> dict:
+    return {
+        **validate_manifest(config.get("images")),
+        "artifact_verification": "local immutable manifest validated; anonymous pulls and deployed startup are unverified",
     }
-    if mode == "import":
-        source_id = _arm_id(settings.get("source_registry_id"), "Microsoft.ContainerRegistry/registries",
-                            "build.source_registry_id")
-        server = settings.get("source_registry_server")
-        hostname = r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
-        if not isinstance(server, str) or len(server) > 253 or not re.fullmatch(hostname + r"(?:\." + hostname + r")+", server):
-            raise ValueError("build.source_registry_server must be a bare registry DNS hostname.")
-        result.update(source_registry_id=source_id, source_registry_server=server)
-        component = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
-        image_pattern = component + r"(?:/" + component + r")*@sha256:[0-9a-fA-F]{64}"
-        for field in ("runtime_image", "simulator_image", "gateway_image"):
-            image = settings.get(field)
-            if (not isinstance(image, str) or "/" not in image
-                    or image.split("/", 1)[0].casefold() != server.casefold()
-                    or not re.fullmatch(image_pattern, image.split("/", 1)[1])):
-                raise ValueError(f"build.{field} must be a full same-server repository@sha256:<64 hex digits> reference.")
-            result[field] = image
-        result["artifact_verification"] = "immutable references only; manifests, network access and image pulls are unverified"
-    return result
 
 
 def _scope(config: dict) -> dict:
@@ -237,7 +187,7 @@ def _scope(config: dict) -> dict:
             "capacity": capacity,
         },
         "required_tag_names": sorted(tags),
-        "build": _build_scope(config, private=private),
+        "images": _image_scope(config),
         "providers": {}, "warnings": [IDENTITY_LIMITATION],
     })
     return scope
@@ -376,40 +326,12 @@ def _monitoring(reads: _Reads, scope: dict) -> None:
     )
 
 
-def _build(reads: _Reads, scope: dict) -> None:
-    build = scope["build"]
-    pool = build["agent_pool"]
-    if pool:
-        pool_id = pool["subnet_id"]
-        if any(pool_id.casefold() == str(subnet_id).casefold() for subnet_id in scope["subnets"].values()):
-            raise ValueError("ACR build-agent subnet must be dedicated and different from sandbox/private endpoint subnets.")
-        _subnet(reads, pool_id, sandbox=False, scope=scope, label="ACR build-agent subnet")
-    if build["mode"] == "import":
-        registry = _resource(
-            reads, build["source_registry_id"], "Microsoft.ContainerRegistry/registries", "2023-07-01",
-            "Source registry", "{id:id,type:type,properties:{loginServer:properties.loginServer,"
-            "publicNetworkAccess:properties.publicNetworkAccess}}",
-        )
-        properties = registry.get("properties") or {}
-        if str(properties.get("loginServer", "")).casefold() != build["source_registry_server"].casefold():
-            raise ValueError("Source registry loginServer does not match build.source_registry_server.")
-        if scope["network_mode"] == "private" and properties.get("publicNetworkAccess") != "Disabled":
-            raise ValueError("Private import requires source registry publicNetworkAccess to be Disabled.")
-        scope["warnings"].append(
-            "UNVERIFIED import artifacts: immutable digest references and source registry ARM metadata were checked; "
-            "image existence/manifests, import/pull authorization and network/pull access are not verified. "
-            "Both trusted-service import exceptions were explicitly requested, not proven deployed. "
-            "No registry data-plane queries were made."
-        )
-    else:
-        scope["warnings"].append(
-            "UNVERIFIED source build: agent-pool provisioning/capacity, private registry connectivity/DNS, "
-            "source/base-image availability and required build-service outbound dependencies are not proven. "
-            "OCI bases are pulled directly through approved build-network egress (inside the dedicated pool "
-            "in private mode); registry/package-feed access and that egress are not verified. "
-            "No validation ACR/customer artifact registry or default ARM import is assumed; "
-            "no build or quick-build/public staging fallback was attempted."
-        )
+def _images(scope: dict) -> None:
+    scope["warnings"].append(
+        "UNVERIFIED prebuilt images: local source/digest manifest validated; anonymous registry access, "
+        "native private-VNet conversion and actual container startup must be verified during deployment. "
+        "No ACR, build pool, source upload or in-VNet deployment operator is required."
+    )
 
 
 def _normalized(value: str) -> str:
@@ -688,7 +610,7 @@ def plan(configs: list[dict]) -> list[dict]:
         _group(reads, scope)
         _network(reads, scope)
         _monitoring(reads, scope)
-        _build(reads, scope)
+        _images(scope)
         _owned_capacity(reads, config, scope)
         credit = scope["model_capacity_credit"]
         if credit["owned_capacity"]:

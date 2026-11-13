@@ -87,6 +87,7 @@ COPY runtimes/hermes/runtime_skills/ ./runtime_skills/
 COPY bridge/*.py ./bridge/
 COPY bridge/runtime/*.py ./bridge/runtime/
 COPY autopilots_identity/*.py ./autopilots_identity/
+COPY chat-simulator/backend/container_start.py ./container_start.py
 RUN /app/.venv/bin/python -B -c "import start_hermes; assert callable(start_hermes.main)"
 
 ENV HERMES_HOME=/data/hermes
@@ -101,4 +102,4 @@ ENV PORT=8642
 
 EXPOSE 8642
 
-ENTRYPOINT ["/app/.venv/bin/python", "/app/start_hermes.py"]
+ENTRYPOINT ["/app/.venv/bin/python", "/app/container_start.py", "runtime"]

@@ -174,9 +174,12 @@ def _matches_installed(settings: RoleReleaseSettings, manifest: dict[str, Any]) 
 
 
 def _local_distribution_root(settings: RoleReleaseSettings) -> Path:
-    application_root = os.getenv("AUTOPILOTS_APPLICATION_ROOT", "").strip()
+    application_root = (
+        os.getenv("HERMES_ROLE_BUNDLE_ROOT", "").strip()
+        or os.getenv("AUTOPILOTS_APPLICATION_ROOT", "").strip()
+    )
     if not application_root:
-        raise ValueError("Local roles require AUTOPILOTS_APPLICATION_ROOT.")
+        raise ValueError("Local roles require HERMES_ROLE_BUNDLE_ROOT or AUTOPILOTS_APPLICATION_ROOT.")
     if not SHA256_PATTERN.fullmatch(settings.bundle_sha256):
         raise ValueError("Local roles require the SHA-256 of role-release.json.")
     root = Path(application_root).resolve(strict=True)

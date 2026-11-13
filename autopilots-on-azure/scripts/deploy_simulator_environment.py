@@ -15,6 +15,7 @@ import tomllib
 import uuid
 
 from scripts.deploy_apps_runtime import require_identity_preservation
+from scripts.prebuilt_images import load_manifest
 from scripts.setup_app_tfvars import build_tfvars, load_or_create_collective_approval_identity
 from scripts.tf_helpers import REPO_ROOT, output, run, terraform_output, write_tfvars
 
@@ -106,7 +107,12 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
             continue
         config = {**inputs, **stack}
         config["platform"] = {**inputs.get("platform", {}), **stack.get("platform", {})}
-        config["build"] = {**inputs.get("build", {}), **stack.get("build", {})}
+        if "build" in inputs or "build" in stack:
+            raise ValueError("Simulator deployments use [images] manifest, not legacy [build]/ACR settings.")
+        image_settings = {**inputs.get("images", {}), **stack.get("images", {})}
+        if set(image_settings) != {"manifest"} or not isinstance(image_settings["manifest"], str):
+            raise ValueError('[images] requires exactly manifest = "deployment-images.json".')
+        config["images"] = load_manifest((path.parent / image_settings["manifest"]).resolve())
         config.setdefault("network_mode", "private")
         config.setdefault("resource_group_mode", "existing")
         if config["network_mode"] not in {"private", "public"}:
@@ -115,9 +121,7 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
             raise ValueError("resource_group_mode must be existing or create.")
         config["platform"]["private_network_enabled"] = config["network_mode"] == "private"
         config["platform"]["scheduler_enabled"] = False
-        config["build"].setdefault("mode", "source")
-        if config["build"]["mode"] not in {"import", "source"}:
-            raise ValueError("build.mode must be import or source; there is no public fallback mode.")
+        config["platform"]["registry_enabled"] = False
         zones_file = config.get("private_dns_zone_ids_file")
         if zones_file:
             zones_path = (path.parent / zones_file).resolve()
@@ -329,154 +333,20 @@ def infrastructure(config: dict, root: Path, ownership: dict) -> None:
         save(root / "bindings.json", bindings)
 
 
-def import_image(target: dict, source_registry_id: str, source_server: str, image: str,
-                 *, repository: str = "") -> tuple[str, str]:
-    prefix = source_server + "/"
-    if not image.startswith(prefix):
-        raise ValueError("An imported image must belong to the configured source registry.")
-    reference = image.removeprefix(prefix)
-    if not re.fullmatch(r"[a-z0-9._/-]+@sha256:[a-f0-9]{64}", reference):
-        raise ValueError("An imported image must use a complete immutable SHA-256 digest.")
-    original, digest = reference.split("@", 1)
-    repository = repository or original
-    tag = repository + ":bundle-" + digest.removeprefix("sha256:")[:12]
-    repositories = json.loads(output(["az", "acr", "repository", "list", "--name", target["acr_name"],
-                                      "-o", "json", "--only-show-errors"]))
-    tags = []
-    if repository in repositories:
-        tags = json.loads(output(["az", "acr", "repository", "show-tags", "--name", target["acr_name"],
-                                  "--repository", repository, "-o", "json", "--only-show-errors"]))
-    if tag.split(":", 1)[1] not in tags:
-        run(["az", "acr", "import", "--name", target["acr_name"],
-             *(["--registry", source_registry_id] if source_registry_id else []),
-             "--source", reference if source_registry_id else image, "--image", tag, "--only-show-errors"])
-    actual = output(["az", "acr", "repository", "show", "--name", target["acr_name"],
-                     "--image", tag, "--query", "digest", "-o", "tsv", "--only-show-errors"])
-    if actual != digest:
-        raise ValueError("Independent registry copy did not preserve the image digest.")
-    return target["acr_login_server"] + "/" + repository + "@" + digest, target["acr_login_server"] + "/" + tag
-
-
-def copy_images(source_root: Path, root: Path) -> None:
-    source = load(source_root / "platform-outputs.json")
-    target = load(root / "platform-outputs.json")
-    if source["acr_id"] == target["acr_id"]:
-        raise ValueError("Independent stacks must not share a registry.")
-    artifacts = [
-        ("runtime-image.json", "runtime_image", "runtime_disk_source_image"),
-        ("simulator-image.json", "image", "source"),
-    ]
-    if (source_root / "gateway-image.json").exists():
-        artifacts.append(("gateway-image.json", "bridge_image", "bridge_disk_source_image"))
-    for filename, image_key, tag_key in artifacts:
-        manifest = load(source_root / filename)
-        image, tagged = import_image(target, source["acr_id"], source["acr_login_server"], manifest[image_key])
-        save(root / filename, {
-            **manifest,
-            image_key: image,
-            tag_key: tagged,
-        })
-
-
-def import_configured_images(config: dict, root: Path, platform: dict) -> None:
-    settings = config["build"]
-    if config["network_mode"] == "private" and not (
-        settings.get("allow_trusted_service_import", False) and platform.get("acr_trusted_services_bypass_enabled", False)
-    ):
-        raise ValueError("Private ARM image import requires explicit build.allow_trusted_service_import approval.")
-    for key in ("source_registry_id", "source_registry_server", "runtime_image", "simulator_image", "gateway_image"):
-        if not settings.get(key):
-            raise ValueError("Prebuilt import mode requires build." + key)
-    source = json.loads(output(["az", "resource", "show", "--ids", settings["source_registry_id"],
-                                "--api-version", "2023-07-01", "-o", "json", "--only-show-errors"]))
-    if (source["type"].lower() != "microsoft.containerregistry/registries"
-            or source["properties"]["loginServer"] != settings["source_registry_server"]
-            or config["network_mode"] == "private" and source["properties"].get("publicNetworkAccess") != "Disabled"):
-        raise ValueError("Prebuilt source registry must match its ARM ID/login server and remain private in private mode.")
-    for source_key, filename, image_key, tag_key in (
-        ("runtime_image", "runtime-image.json", "runtime_image", "runtime_disk_source_image"),
-        ("simulator_image", "simulator-image.json", "image", "source"),
-        ("gateway_image", "gateway-image.json", "bridge_image", "bridge_disk_source_image"),
-    ):
-        image, tagged = import_image(platform, settings["source_registry_id"], settings["source_registry_server"],
-                                     settings[source_key])
-        values = {image_key: image, tag_key: tagged}
-        if source_key == "runtime_image":
-            values["runtime_disk_image_name"] = "hermes-runtime-" + image.split("@sha256:", 1)[1][:12]
-        save(root / filename, values)
-
-
-def build_images(config: dict, root: Path, *, source_root: Path | None = None) -> None:
-    from scripts.build_images import acr_build, import_hermes_upstream, HERMES_UPSTREAM_SOURCE, HERMES_UPSTREAM_DIGEST
-
-    platform = load(root / "platform-outputs.json")
-    private = config.get("network_mode", "private") == "private"
-    if source_root is not None and (
-        not private or (
-            config.get("build", {}).get("allow_trusted_service_import", False)
-            and platform.get("acr_trusted_services_bypass_enabled", False)
-        )
-    ):
-        copy_images(source_root, root)
-        return
-    if config.get("build", {}).get("mode") == "import":
-        import_configured_images(config, root, platform)
-        return
-    registry, server = platform["acr_name"], platform["acr_login_server"]
-    pool = platform.get("acr_agent_pool_name", "")
-    if private and not pool:
-        raise ValueError(
-            "Private ACR builds require a dedicated VNet agent pool (platform.acr_agent_pool_subnet_id). "
-            "Default quick-build and public staging registries are not permitted."
-        )
-    tag = "sim-" + source_revision()[:12]
-    if private:
-        from scripts.application_releases import PYTHON_BASE_IMAGE
-
-        digest = acr_build(
-            registry=registry, repository="bridge-base", dockerfile=str(Path("runtimes") / "gateway" / "Dockerfile"),
-            context=".", tag=tag, agent_pool_name=pool,
-            build_args={"PYTHON_BASE_IMAGE": config.get("build", {}).get("gateway_base_image", PYTHON_BASE_IMAGE)},
-        )
-        save(root / "gateway-image.json", {
-            "bridge_image": f"{server}/bridge-base@{digest}", "bridge_disk_source_image": f"{server}/bridge-base:{tag}",
-        })
-    runtime_path = root / "runtime-image.json"
-    base = (
-        config.get("build", {}).get("hermes_base_image", f"{HERMES_UPSTREAM_SOURCE}@{HERMES_UPSTREAM_DIGEST}")
-        if private else import_hermes_upstream(registry, server)
-    )
-    dependencies = (
-        "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "hermes-telemetry.txt", "hermes-native.txt",
-        "native_telemetry_smoke.py", "package.json", "package-lock.json",
-        "office_helper/OfficeCollaboration.csproj", "office_helper/Program.cs",
-    )
-    build_fingerprint = hashlib.sha256(json.dumps({
-        "base": base,
-        "files": {
-            **{name: hashlib.sha256((REPO_ROOT / "runtimes" / "hermes" / name).read_bytes()).hexdigest()
-               for name in dependencies},
-            "bridge/telemetry.py": hashlib.sha256((REPO_ROOT / "bridge" / "telemetry.py").read_bytes()).hexdigest(),
-        },
-    }, sort_keys=True).encode()).hexdigest()
-    if not runtime_path.exists() or load(runtime_path).get("build_fingerprint") != build_fingerprint:
-        digest = acr_build(registry=registry, repository="hermes-runtime",
-                           dockerfile=str(Path("runtimes") / "hermes" / "Dockerfile"), context=".", tag=tag,
-                           build_args={"HERMES_BASE_IMAGE": base}, agent_pool_name=pool)
-        save(runtime_path, {
-            "runtime_image": f"{server}/hermes-runtime@{digest}",
-            "runtime_disk_source_image": f"{server}/hermes-runtime:{tag}",
-            "runtime_disk_image_name": "hermes-runtime-" + digest.removeprefix("sha256:")[:12],
-            "build_fingerprint": build_fingerprint,
-        })
-    if not (REPO_ROOT / "chat-simulator" / "Dockerfile").exists():
-        raise FileNotFoundError("Session A chat-simulator/Dockerfile is not present. Merge its pushed source before building.")
-    digest = acr_build(registry=registry, repository="chat-simulator",
-                       dockerfile=str(Path("chat-simulator") / "Dockerfile"), context="chat-simulator", tag=tag,
-                       build_args={"SIMULATOR_CONTAINER_USER": "0:0"}, agent_pool_name=pool)
-    save(root / "simulator-image.json", {
-        "image": f"{server}/chat-simulator@{digest}", "source": f"{server}/chat-simulator:{tag}",
+def select_images(config: dict, root: Path) -> None:
+    manifest = config["images"]
+    if manifest["source_commit"] != source_revision():
+        raise ValueError("Pinned image source_commit differs from the deployment source/package; select its matching release.")
+    images = manifest["images"]
+    save(root / "runtime-image.json", {
+        "runtime_image": images["runtime"], "runtime_disk_source_image": images["runtime"],
+        "runtime_disk_image_name": "hermes-runtime-" + images["runtime"].split("@sha256:")[1][:12],
     })
+    save(root / "gateway-image.json", {
+        "bridge_image": images["gateway"], "bridge_disk_source_image": images["gateway"],
+    })
+    save(root / "simulator-image.json", {"image": images["simulator"], "source": images["simulator"]})
+    save(root / "deployment-images.json", manifest)
 
 
 def identities(config: dict, root: Path, *, redirect_uri: str = "") -> dict:
@@ -503,6 +373,7 @@ def deploy(config: dict, root: Path, ownership: dict) -> None:
         name = agent["name"]
         values = worker_values(config, root, agent, ownership, identity, simulator_url=binding["url"])
         worker = terraform(root / name, config["environment"], values)
+        worker["deployment_config"]["prebuilt_source_commit"] = config["images"]["source_commit"]
         services = deploy_sandbox_services(worker, platform)
         save(root / name / "outputs.json", {**worker, **services})
         registrations.append({
@@ -521,8 +392,39 @@ def deploy(config: dict, root: Path, ownership: dict) -> None:
         "url": binding["url"], "resource_group": platform["resource_group_name"],
         "agents": [{key: value for key, value in item.items() if key != "demoKey"} for item in registrations],
         "source_commit": source_revision(),
+        "images": config["images"],
     })
     print(json.dumps(load(root / "deployment.json"), indent=2))
+
+
+def verify_readiness(config: dict, root: Path) -> None:
+    from azure.identity import AzureCliCredential
+    from azure.containerapps.sandbox import SandboxGroupClient
+    from scripts.sandbox_services import DISK_IMAGE_AUDIENCE, require_always_running, require_service_health
+    from scripts.simulator_hosting import group_client
+
+    evidence = {"method": "authenticated-sandbox-management", "services": {}, "full_acceptance": False}
+    binding = load(root / "hosting.json")
+    with AzureCliCredential(subscription=config["subscription_id"], process_timeout=150) as credential:
+        with group_client(binding, credential) as group:
+            require_service_health(group.get_sandbox_client(binding["sandbox_id"]), 8000, health_path="/api/health")
+            evidence["services"]["simulator"] = require_always_running(group, binding["sandbox_id"])
+        for agent in config["agents"]:
+            worker = load(root / agent["name"] / "outputs.json")
+            for role, sandbox_key, port in (("runtime", "runtime_sandbox_id", 8642), ("gateway", "bridge_sandbox_id", 8001)):
+                group_binding = worker["sandbox_groups"][role]
+                with SandboxGroupClient(
+                    binding["management_endpoint"], credential,
+                    subscription_id=config["subscription_id"], resource_group=worker["resource_group_name"],
+                    sandbox_group=group_binding["name"], audience=DISK_IMAGE_AUDIENCE,
+                ) as group:
+                    sandbox_id = worker[sandbox_key]
+                    require_service_health(
+                        group.get_sandbox_client(sandbox_id), port, config["images"]["source_commit"],
+                    )
+                    evidence["services"][agent["name"] + "-" + role] = require_always_running(group, sandbox_id)
+    save(root / "readiness.json", evidence)
+    print("All services passed loopback health and explicit never-suspend/delete checks. Full browser/chat acceptance is separate.")
 
 
 def verify(config: dict, root: Path) -> None:
@@ -659,7 +561,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True, help="Local TOML inputs; never commit customer identifiers or secrets.")
     parser.add_argument("--stack", action="append", default=[], help="Select agent-1, agent-2, ...; repeat for a subset. Defaults to all.")
     parser.add_argument("--state-root", type=Path, help="Durable state directory outside the extracted source tree; also AUTOPILOTS_STATE_ROOT.")
-    parser.add_argument("action", choices=["plan", "prepare", "infrastructure", "identities", "build", "deploy", "verify", "all", "destroy"],
+    parser.add_argument("action", choices=["plan", "prepare", "infrastructure", "identities", "images", "deploy", "verify", "all", "destroy"],
                         nargs="?", default="all")
     args = parser.parse_args()
     if args.state_root is not None:
@@ -670,8 +572,8 @@ def main() -> None:
 
         print(json.dumps(plan(configs), indent=2))
         return
-    image_seed = None
-    image_profile = None
+    if args.action != "destroy" and any(config["images"]["source_commit"] != source_revision() for config in configs):
+        raise ValueError("Pinned image source_commit differs from the deployment source/package; no deployment was started.")
     for config in configs:
         print(f"Stack {config['stack_name']}: {args.action}", flush=True)
         assert_account(config)
@@ -684,14 +586,13 @@ def main() -> None:
                 infrastructure(config, root, ownership)
             if args.action == "identities" or (args.action == "all" and config["auth_mode"] == "entra"):
                 identities(config, root)
-            if args.action in {"build", "all"}:
-                profile = (config["network_mode"], json.dumps(config["build"], sort_keys=True))
-                build_images(config, root, source_root=image_seed if profile == image_profile else None)
-                image_seed = root
-                image_profile = profile
+            if args.action in {"images", "all"}:
+                select_images(config, root)
             if args.action in {"deploy", "all"}:
                 deploy(config, root, ownership)
-            if args.action in {"verify", "all"}:
+            if args.action == "all":
+                verify_readiness(config, root)
+            if args.action == "verify":
                 verify(config, root)
             if args.action == "destroy":
                 destroy(config, root)

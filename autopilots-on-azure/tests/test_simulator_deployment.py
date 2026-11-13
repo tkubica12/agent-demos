@@ -6,19 +6,33 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.deploy_simulator_environment import (
+    select_images,
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
     validate_config,
     terraform,
     destroy,
 )
 from scripts.simulator_channel import simulator_environment, simulator_worker_environment
+from scripts.prebuilt_images import load_manifest
 
 
 class SimulatorDeploymentTests(unittest.TestCase):
+    def setUp(self):
+        self.images_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.images_directory.cleanup)
+        self.image_manifest = {
+            "schema": 1, "source_commit": "a" * 40,
+            "images": {role: f"ghcr.io/example/demo-{role}@sha256:" + "b" * 64
+                       for role in ("runtime", "gateway", "simulator")},
+        }
+        self.images_path = Path(self.images_directory.name) / "deployment-images.json"
+        self.images_path.write_text(json.dumps(self.image_manifest))
+
     def input_text(self):
         return (
             'environment = "training"\n'
@@ -28,7 +42,39 @@ class SimulatorDeploymentTests(unittest.TestCase):
             'owner_id = "33333333-3333-3333-3333-333333333333"\n'
             '[role]\nblueprint = "role"\nsource = "https://example.test/role.git"\n'
             'release = "1.0.0"\ncommit = "' + "a" * 40 + '"\n'
+            + f"[images]\nmanifest = '{self.images_path}'\n"
         )
+
+    def test_prebuilt_manifest_rejects_mutable_incomplete_or_ambiguous_releases(self):
+        self.assertEqual(load_manifest(self.images_path), self.image_manifest)
+        invalid = [
+            {**self.image_manifest, "schema": True},
+            {**self.image_manifest, "source_commit": "main"},
+            {**self.image_manifest, "images": {"runtime": self.image_manifest["images"]["runtime"]}},
+            {**self.image_manifest, "images": {**self.image_manifest["images"], "runtime": "ghcr.io/example/runtime:latest"}},
+            {**self.image_manifest, "images": {**self.image_manifest["images"], "gateway": "https://" + self.image_manifest["images"]["gateway"]}},
+            {**self.image_manifest, "extra": "not permitted"},
+        ]
+        for manifest in invalid:
+            with self.subTest(manifest=manifest):
+                self.images_path.write_text(json.dumps(manifest))
+                with self.assertRaises(ValueError):
+                    load_manifest(self.images_path)
+
+    def test_pinned_images_materialize_without_registry_or_build_commands(self):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.deploy_simulator_environment.source_revision", return_value="a" * 40,
+        ), patch("scripts.deploy_simulator_environment.run", side_effect=AssertionError("No build commands")), patch(
+            "scripts.deploy_simulator_environment.output", side_effect=AssertionError("No registry commands"),
+        ):
+            root = Path(temporary)
+            select_images({"images": self.image_manifest}, root)
+            self.assertEqual(json.loads((root / "deployment-images.json").read_text()), self.image_manifest)
+            self.assertEqual(json.loads((root / "simulator-image.json").read_text())["source"],
+                             self.image_manifest["images"]["simulator"])
+        with patch("scripts.deploy_simulator_environment.source_revision", return_value="c" * 40):
+            with self.assertRaisesRegex(ValueError, "source_commit differs"):
+                select_images({"images": self.image_manifest}, Path("unused"))
 
     def config(self, mode="entra"):
         return {
@@ -214,7 +260,8 @@ class SimulatorDeploymentTests(unittest.TestCase):
             configs = load_stack_configs(path, ["agent-1"])
             self.assertTrue(configs[0]["platform"]["private_network_enabled"])
             self.assertFalse(configs[0]["platform"]["scheduler_enabled"])
-            self.assertEqual(configs[0]["build"]["mode"], "source")
+            self.assertFalse(configs[0]["platform"]["registry_enabled"])
+            self.assertEqual(configs[0]["images"], self.image_manifest)
 
     def test_extracted_source_and_external_state_need_no_git(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -248,6 +295,24 @@ class SimulatorDeploymentTests(unittest.TestCase):
             (directory / "role.toml").write_text('name = "changed"\n')
             with self.assertRaisesRegex(ValueError, "differs"):
                 build_role_bundle(role, root=root)
+
+    def test_role_data_publisher_writes_manifest_last_and_requires_permission_completion(self):
+        from azure.core.exceptions import ResourceNotFoundError
+        from scripts.role_bundle import publish_role_bundle
+
+        files = {"role-release.json": b"manifest", "roles/junior/role.toml": b"name='junior'"}
+        sandbox = Mock()
+        sandbox.read_file.side_effect = ResourceNotFoundError()
+        sandbox.exec.return_value = SimpleNamespace(exit_code=0, stdout="complete\n")
+        with patch("scripts.role_bundle.build_role_bundle", return_value=(files, "a" * 64)), patch(
+            "scripts.role_bundle.uuid.uuid4", return_value=SimpleNamespace(hex="complete"),
+        ):
+            directory = publish_role_bundle(sandbox, {})
+            self.assertEqual(sandbox.write_file.call_args.args[0], directory + "/role-release.json")
+            self.assertTrue(sandbox.exec.call_args.args[0].startswith("chmod 0600 "))
+            sandbox.exec.return_value = SimpleNamespace(exit_code=0, stdout="")
+            with self.assertRaisesRegex(RuntimeError, "did not complete"):
+                publish_role_bundle(sandbox, {})
 
     def test_real_chat_smoke_requires_model_reply_from_registered_agent(self):
         import httpx
@@ -320,116 +385,29 @@ class SimulatorDeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "resource boundary"):
                 remove_owned_smart_alert(config, {**platform, "resource_group_name": "rg-existing"})
 
-    def test_import_preserves_digest_and_reuses_an_existing_copy(self):
-        from scripts.deploy_simulator_environment import import_image
-
-        digest = "sha256:" + "a" * 64
-        target = {"acr_name": "target", "acr_login_server": "target.azurecr.io"}
-        image = "source.azurecr.io/runtime@" + digest
-        for tags, expected_imports in (([], 1), (["bundle-" + "a" * 12], 0)):
-            with self.subTest(tags=tags), patch(
-                "scripts.deploy_simulator_environment.output",
-                side_effect=[json.dumps(["runtime"]), json.dumps(tags), digest],
-            ), patch("scripts.deploy_simulator_environment.run") as command:
-                copied, tagged = import_image(target, "/source-registry", "source.azurecr.io", image)
-                self.assertEqual(copied, "target.azurecr.io/runtime@" + digest)
-                self.assertEqual(tagged, "target.azurecr.io/runtime:bundle-" + "a" * 12)
-                self.assertEqual(command.call_count, expected_imports)
-        with patch("scripts.deploy_simulator_environment.output", side_effect=["[]", "sha256:" + "b" * 64]), patch(
-            "scripts.deploy_simulator_environment.run"
-        ), self.assertRaisesRegex(ValueError, "preserve"):
-            import_image(target, "/source-registry", "source.azurecr.io", image)
-        for invalid in ("other.azurecr.io/runtime@" + digest, "source.azurecr.io/runtime:latest"):
-            with self.assertRaises(ValueError):
-                import_image(target, "/source-registry", "source.azurecr.io", invalid)
-
-    def test_private_import_requires_both_explicit_exceptions(self):
-        from scripts.deploy_simulator_environment import import_configured_images
-
-        config = {"network_mode": "private", "build": {"allow_trusted_service_import": True}}
-        with patch("scripts.deploy_simulator_environment.output") as command:
-            with self.assertRaisesRegex(ValueError, "explicit"):
-                import_configured_images(config, Path("unused"), {"acr_trusted_services_bypass_enabled": False})
-            command.assert_not_called()
-
-    def test_private_source_build_uses_pool_without_arm_import_and_invalidates_changed_dependencies(self):
-        from scripts.deploy_simulator_environment import build_images, save
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "snapshot"
-            runtime = source / "runtimes" / "hermes"
-            dependencies = (
-                "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "hermes-telemetry.txt", "hermes-native.txt",
-                "native_telemetry_smoke.py", "package.json", "package-lock.json",
-                "office_helper/OfficeCollaboration.csproj", "office_helper/Program.cs",
-            )
-            for name in dependencies:
-                path = runtime / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(name)
-            (source / "chat-simulator").mkdir()
-            (source / "chat-simulator" / "Dockerfile").write_text("FROM simulator")
-            (source / "bridge").mkdir()
-            (source / "bridge" / "telemetry.py").write_text("shared telemetry initializer")
-            save(root / "platform-outputs.json", {
-                "acr_name": "target", "acr_login_server": "target.azurecr.io", "acr_agent_pool_name": "privatebuild",
-            })
-            config = {"network_mode": "private", "build": {"mode": "source"}}
-            with patch("scripts.deploy_simulator_environment.REPO_ROOT", source), patch(
-                "scripts.deploy_simulator_environment.source_revision", return_value="a" * 40
-            ), patch("scripts.build_images.acr_build", return_value="sha256:" + "b" * 64) as build, patch(
-                "scripts.build_images.import_hermes_upstream", side_effect=AssertionError("No ARM import permitted")
-            ), patch("scripts.deploy_simulator_environment.copy_images", side_effect=AssertionError("No implicit import")):
-                build_images(config, root, source_root=root / "other-stack")
-                self.assertEqual(build.call_count, 3)
-                self.assertTrue(all(call.kwargs["agent_pool_name"] == "privatebuild" for call in build.call_args_list))
-                runtime_build = next(call for call in build.call_args_list if call.kwargs["repository"] == "hermes-runtime")
-                self.assertTrue(runtime_build.kwargs["build_args"]["HERMES_BASE_IMAGE"].startswith("docker.io/"))
-                build.reset_mock()
-                (runtime / "server.py").write_text("source-only update")
-                build_images(config, root)
-                self.assertEqual(build.call_count, 2)
-                (runtime / "Dockerfile").write_text("changed dependency")
-                build.reset_mock()
-                build_images(config, root)
-                self.assertEqual(build.call_count, 3)
-                (runtime / "hermes-telemetry.txt").write_text("changed native telemetry dependency")
-                build.reset_mock()
-                build_images(config, root)
-                self.assertEqual(build.call_count, 3)
-                (runtime / "hermes-native.txt").write_text("changed native base dependency correction")
-                build.reset_mock()
-                build_images(config, root)
-                self.assertEqual(build.call_count, 3)
-                (runtime / "native_telemetry_smoke.py").write_text("changed native initializer verification")
-                build.reset_mock()
-                build_images(config, root)
-                self.assertEqual(build.call_count, 3)
-                (source / "bridge" / "telemetry.py").write_text("changed shared telemetry initializer")
-                build.reset_mock()
-                build_images(config, root)
-                self.assertEqual(build.call_count, 3)
-
-    def test_differing_per_stack_build_settings_do_not_reuse_image_seed(self):
+    def test_each_stack_selects_its_own_pinned_manifest_without_build_or_copy(self):
         from scripts.deploy_simulator_environment import main
 
         configs = [
             {"environment": f"test-agent-{index}", "stack_name": f"agent-{index}",
-             "network_mode": "public", "build": {"mode": "source", "gateway_base_image": base}}
-            for index, base in ((1, "first"), (2, "second"), (3, "second"))
+             "network_mode": "public", "images": {
+                 **self.image_manifest,
+                 "images": {**self.image_manifest["images"], "runtime": "ghcr.io/example/runtime@sha256:" + base * 64},
+             }}
+            for index, base in ((1, "a"), (2, "b"), (3, "b"))
         ]
         with tempfile.TemporaryDirectory() as temporary, patch.dict(
             "os.environ", {"AUTOPILOTS_STATE_ROOT": temporary}
-        ), patch("sys.argv", ["deploy", "--config", "inputs.toml", "build"]), patch(
+        ), patch("sys.argv", ["deploy", "--config", "inputs.toml", "images"]), patch(
             "scripts.deploy_simulator_environment.load_stack_configs", return_value=configs
         ), patch("scripts.deploy_simulator_environment.assert_account"), patch(
             "scripts.deploy_simulator_environment.prepare"
-        ), patch("scripts.deploy_simulator_environment.build_images") as build:
+        ), patch("scripts.deploy_simulator_environment.source_revision", return_value="a" * 40), patch(
+            "scripts.deploy_simulator_environment.select_images"
+        ) as images:
             main()
-            self.assertIsNone(build.call_args_list[0].kwargs["source_root"])
-            self.assertIsNone(build.call_args_list[1].kwargs["source_root"])
-            self.assertEqual(build.call_args_list[2].kwargs["source_root"], environment_root(configs[1]))
+            self.assertEqual([call.args[0] for call in images.call_args_list], configs)
+            self.assertTrue(all(not call.kwargs for call in images.call_args_list))
 
     def test_private_conversion_and_url_validation_use_native_vnet_binding(self):
         from scripts.sandbox_services import disk_image_request, require_private_endpoint

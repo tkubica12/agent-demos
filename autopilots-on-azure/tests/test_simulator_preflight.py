@@ -19,9 +19,6 @@ BOUNDARY = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/customer"
 VNET = BOUNDARY + "/providers/Microsoft.Network/virtualNetworks/customer"
 SANDBOX = VNET + "/subnets/sandbox"
 ENDPOINTS = VNET + "/subnets/endpoints"
-BUILD_SUBNET = VNET + "/subnets/build"
-SOURCE_REGISTRY = BOUNDARY + "/providers/Microsoft.ContainerRegistry/registries/artifacts"
-SOURCE_SERVER = "artifacts.azurecr.io"
 WORKSPACE = BOUNDARY + "/providers/Microsoft.OperationalInsights/workspaces/customer"
 INSIGHTS = BOUNDARY + "/providers/Microsoft.Insights/components/customer"
 AMPLS = BOUNDARY + "/providers/Microsoft.Insights/privateLinkScopes/customer"
@@ -51,11 +48,14 @@ class SimulatorPreflightTests(unittest.TestCase):
             "environment": "training-agent-1", "stack_name": "agent-1", "subscription_id": SUBSCRIPTION,
             "tenant_id": TENANT, "owner_id": OWNER, "auth_mode": "entra", "model_capacity": 15,
             "role": {"blueprint": "example"},
-            "build": {"mode": "source"},
+            "images": {
+                "schema": 1, "source_commit": "a" * 40,
+                "images": {role: f"ghcr.io/example/{role}@sha256:" + "b" * 64
+                           for role in ("runtime", "gateway", "simulator")},
+            },
             "platform": {
                 "existing_resource_group_name": "customer", "existing_sandbox_subnet_id": SANDBOX,
                 "existing_private_endpoint_subnet_id": ENDPOINTS,
-                "acr_agent_pool_subnet_id": BUILD_SUBNET,
                 "private_dns_zone_ids": {
                     zone: f"/subscriptions/{CENTRAL_SUBSCRIPTION}/resourceGroups/dns"
                           f"/providers/Microsoft.Network/privateDnsZones/{zone}"
@@ -76,12 +76,6 @@ class SimulatorPreflightTests(unittest.TestCase):
             }),
             ENDPOINTS: resource(ENDPOINTS, "Microsoft.Network/virtualNetworks/subnets", properties={
                 "addressPrefixes": ["10.0.1.0/28"], "delegations": [],
-            }),
-            BUILD_SUBNET: resource(BUILD_SUBNET, "Microsoft.Network/virtualNetworks/subnets", properties={
-                "addressPrefix": "10.0.2.0/26", "delegations": [],
-            }),
-            SOURCE_REGISTRY: resource(SOURCE_REGISTRY, "Microsoft.ContainerRegistry/registries", properties={
-                "loginServer": SOURCE_SERVER, "publicNetworkAccess": "Disabled",
             }),
             WORKSPACE: resource(WORKSPACE, "Microsoft.OperationalInsights/workspaces"),
             INSIGHTS: resource(INSIGHTS, "Microsoft.Insights/components",
@@ -259,8 +253,8 @@ class SimulatorPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing required private DNS zones: privatelink.servicebus.windows.net"):
             preflight.plan([self.config])
         self.config["platform"]["scheduler_enabled"] = False
-        del zones["privatelink.azurecr.io"]
-        with self.assertRaisesRegex(ValueError, "missing required private DNS zones: privatelink.azurecr.io"):
+        del zones["privatelink.cognitiveservices.azure.com"]
+        with self.assertRaisesRegex(ValueError, "missing required private DNS zones: privatelink.cognitiveservices.azure.com"):
             preflight.plan([self.config])
 
     def test_create_group_skips_only_group_existence_check(self):
@@ -373,168 +367,19 @@ class SimulatorPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must identify"):
             preflight.plan([self.config])
 
-    def import_settings(self):
-        return {
-            "mode": "import", "allow_trusted_service_import": True,
-            "source_registry_id": SOURCE_REGISTRY, "source_registry_server": SOURCE_SERVER,
-            **{field: SOURCE_SERVER + "/demo/" + field + "@sha256:" + digest * 64
-               for field, digest in (("runtime_image", "a"), ("simulator_image", "b"), ("gateway_image", "c"))},
-        }
-
-    def enable_import(self):
-        self.config["build"] = self.import_settings()
-        self.config["platform"]["acr_trusted_services_bypass_enabled"] = True
-
-    def test_explicit_import_reports_immutable_artifacts_without_data_plane_reads(self):
-        self.enable_import()
-        del self.config["platform"]["acr_agent_pool_subnet_id"]
-        other = deepcopy(self.config)
-        other.update(environment="training-agent-2", stack_name="agent-2")
-        original = deepcopy(self.config)
-        reports = preflight.plan([self.config, other])
-        self.assertEqual(self.config, original)
-        self.assertEqual(reports[0]["build"]["mode"], "import")
-        for field in ("runtime_image", "simulator_image", "gateway_image"):
-            self.assertEqual(reports[0]["build"][field], self.config["build"][field])
-        self.assertIn("image pulls are unverified", reports[0]["build"]["artifact_verification"])
-        self.assertTrue(any("No registry data-plane queries" in warning for warning in reports[0]["warnings"]))
-        self.assertEqual(sum(SOURCE_REGISTRY + "?" in " ".join(command) for command in self.commands), 1)
-        self.assertTrue(all(command[1:3] in (["account", "show"], ["provider", "show"])
-                            or command[1:4] == ["cognitiveservices", "model", "list"]
-                            or command[1:4] == ["rest", "--method", "get"] for command in self.commands))
-
-    def test_import_requires_every_immutable_same_server_image(self):
-        self.enable_import()
-        for field in ("runtime_image", "simulator_image", "gateway_image"):
-            for value in (None, SOURCE_SERVER + "/demo/image:latest",
-                          "other.azurecr.io/demo/image@sha256:" + "a" * 64,
-                          SOURCE_SERVER + "/demo/image@sha256:" + "a" * 63):
-                with self.subTest(field=field, value=value):
-                    self.config["build"] = {**self.import_settings(), field: value}
-                    with self.assertRaisesRegex(ValueError, "build." + field):
-                        preflight.plan([self.config])
-        self.assertEqual(self.commands, [])
-
-    def test_private_source_registry_public_access_must_be_disabled(self):
-        self.enable_import()
-        for value in ("Enabled", None):
-            with self.subTest(value=value):
-                self.resources[SOURCE_REGISTRY]["properties"]["publicNetworkAccess"] = value
-                with self.assertRaisesRegex(ValueError, "publicNetworkAccess.*Disabled"):
-                    preflight.plan([self.config])
-        self.config.update(network_mode="public")
-        self.config["build"]["mode"] = "import"
-        self.config["platform"] = {"existing_resource_group_name": "customer", "acr_trusted_services_bypass_enabled": True}
-        self.resources[SOURCE_REGISTRY]["properties"]["publicNetworkAccess"] = "Enabled"
+    def test_prebuilt_plan_needs_no_registry_provider_dns_build_pool_or_data_plane_reads(self):
+        self.config["platform"]["scheduler_enabled"] = False
+        self.provider_states["Microsoft.ContainerRegistry"] = "NotRegistered"
         report, = preflight.plan([self.config])
-        self.assertEqual(report["build"]["mode"], "import")
+        self.assertEqual(report["images"]["images"], self.config["images"]["images"])
+        self.assertTrue(any("No ACR, build pool" in warning for warning in report["warnings"]))
+        self.assertFalse(any("Microsoft.ContainerRegistry" in " ".join(command) for command in self.commands))
+        self.assertFalse(any("azurecr.io" in " ".join(command) for command in self.commands))
 
-    def test_source_registry_must_have_matching_id_type_login_server_and_be_readable(self):
-        self.enable_import()
-        for field, value in (("id", WORKSPACE), ("type", "Microsoft.Insights/components")):
-            with self.subTest(field=field):
-                original = self.resources[SOURCE_REGISTRY][field]
-                self.resources[SOURCE_REGISTRY][field] = value
-                with self.assertRaisesRegex(ValueError, "Source registry.*ID or type"):
-                    preflight.plan([self.config])
-                self.resources[SOURCE_REGISTRY][field] = original
-        self.resources[SOURCE_REGISTRY]["properties"]["loginServer"] = "other.azurecr.io"
-        with self.assertRaisesRegex(ValueError, "loginServer"):
+    def test_preflight_validates_manifest_before_azure_reads(self):
+        self.config["images"]["images"]["runtime"] = "ghcr.io/example/runtime:latest"
+        with self.assertRaisesRegex(ValueError, "immutable"):
             preflight.plan([self.config])
-        self.failures[SOURCE_REGISTRY] = "403 Forbidden"
-        with self.assertRaisesRegex(RuntimeError, "Source registry.*unreadable"):
-            preflight.plan([self.config])
-
-    def test_private_source_build_requires_dedicated_non_delegated_subnet(self):
-        for shared_subnet in (SANDBOX, ENDPOINTS.upper()):
-            with self.subTest(shared_subnet=shared_subnet):
-                self.config["platform"]["acr_agent_pool_subnet_id"] = shared_subnet
-                with self.assertRaisesRegex(ValueError, "dedicated and different"):
-                    preflight.plan([self.config])
-        self.config["platform"]["acr_agent_pool_subnet_id"] = BUILD_SUBNET
-        self.resources[BUILD_SUBNET]["properties"]["delegations"] = [{"properties": {"serviceName": "Microsoft.App/environments"}}]
-        with self.assertRaisesRegex(ValueError, "ACR build-agent subnet must have no delegation"):
-            preflight.plan([self.config])
-        del self.config["platform"]["acr_agent_pool_subnet_id"]
-        with self.assertRaisesRegex(ValueError, "Private source build requires.*acr_agent_pool_subnet_id"):
-            preflight.plan([self.config])
-
-    def test_shared_build_subnet_get_is_cached_and_pool_settings_are_reported(self):
-        self.config["platform"].update(acr_agent_pool_name="classroom-build", acr_agent_pool_instance_count=2)
-        other = deepcopy(self.config)
-        other.update(environment="training-agent-2", stack_name="agent-2")
-        reports = preflight.plan([self.config, other])
-        self.assertEqual(reports[0]["build"]["agent_pool"],
-                         {"subnet_id": BUILD_SUBNET, "name": "classroom-build", "instance_count": 2})
-        self.assertEqual(sum(BUILD_SUBNET + "?" in " ".join(command) for command in self.commands), 1)
-        self.assertTrue(any("build-service outbound" in warning for warning in reports[0]["warnings"]))
-
-    def test_build_subnet_must_be_readable_and_in_infrastructure_region(self):
-        self.failures[BUILD_SUBNET] = "403 Forbidden"
-        with self.assertRaisesRegex(RuntimeError, "ACR build-agent subnet.*unreadable"):
-            preflight.plan([self.config])
-        self.failures.clear()
-        build_vnet = BOUNDARY + "/providers/Microsoft.Network/virtualNetworks/build"
-        build_subnet = build_vnet + "/subnets/build"
-        self.config["platform"]["acr_agent_pool_subnet_id"] = build_subnet
-        self.resources[build_subnet] = {**self.resources[BUILD_SUBNET], "id": build_subnet}
-        self.resources[build_vnet] = resource(build_vnet, "Microsoft.Network/virtualNetworks", location="northeurope")
-        with self.assertRaisesRegex(ValueError, "ACR build-agent subnet VNet location"):
-            preflight.plan([self.config])
-
-    def test_build_pool_settings_are_validated_without_quick_build_fallbacks(self):
-        for count in (0, -1, True, 1.5, "1"):
-            with self.subTest(count=count):
-                self.config["platform"]["acr_agent_pool_instance_count"] = count
-                with self.assertRaisesRegex(ValueError, "instance_count must be a positive integer"):
-                    preflight.plan([self.config])
-        self.config["platform"]["acr_agent_pool_instance_count"] = 1
-        self.config["platform"]["acr_agent_pool_name"] = "invalid_pool"
-        with self.assertRaisesRegex(ValueError, "acr_agent_pool_name"):
-            preflight.plan([self.config])
-        self.config["platform"]["acr_agent_pool_name"] = "private-build"
-        self.config["build"]["mode"] = "quick-build"
-        with self.assertRaisesRegex(ValueError, "fallbacks are not permitted"):
-            preflight.plan([self.config])
-
-    def test_public_defaults_to_source_without_an_agent_pool(self):
-        self.config.update(network_mode="public")
-        self.config.pop("build")
-        self.config["platform"] = {"existing_resource_group_name": "customer"}
-        report, = preflight.plan([self.config])
-        self.assertEqual(report["build"], {
-            "mode": "source", "agent_pool": None, "allow_trusted_service_import": False,
-            "acr_trusted_services_bypass_enabled": False,
-        })
-        self.assertFalse(any("/subnets/" in " ".join(command) for command in self.commands))
-        self.assertFalse(any(SOURCE_REGISTRY in " ".join(command) for command in self.commands))
-
-    def test_private_defaults_to_source_with_dedicated_pool_and_no_registry_assumption(self):
-        self.config.pop("build")
-        report, = preflight.plan([self.config])
-        self.assertEqual(report["build"]["mode"], "source")
-        self.assertFalse(report["build"]["allow_trusted_service_import"])
-        self.assertFalse(report["build"]["acr_trusted_services_bypass_enabled"])
-        self.assertEqual(report["build"]["agent_pool"]["subnet_id"], BUILD_SUBNET)
-        self.assertFalse(any(SOURCE_REGISTRY in " ".join(command) for command in self.commands))
-        self.assertTrue(any("OCI bases are pulled directly" in warning for warning in report["warnings"]))
-        self.assertTrue(any("egress are not verified" in warning for warning in report["warnings"]))
-        del self.config["platform"]["acr_agent_pool_subnet_id"]
-        with self.assertRaisesRegex(ValueError, "Private source build requires"):
-            preflight.plan([self.config])
-
-    def test_import_requires_both_explicit_trusted_service_opt_ins(self):
-        for field in ("allow_trusted_service_import", "acr_trusted_services_bypass_enabled"):
-            for value in (None, False, "true", 1):
-                with self.subTest(field=field, value=value):
-                    self.enable_import()
-                    settings = self.config["build"] if field == "allow_trusted_service_import" else self.config["platform"]
-                    if value is None:
-                        settings.pop(field)
-                    else:
-                        settings[field] = value
-                    with self.assertRaisesRegex(ValueError, "opt-in only|must be booleans"):
-                        preflight.plan([self.config])
         self.assertEqual(self.commands, [])
 
     def test_regional_availability_uses_actual_model_version_and_deployment_sku_not_deployment_name(self):

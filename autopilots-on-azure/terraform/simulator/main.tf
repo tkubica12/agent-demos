@@ -98,6 +98,7 @@ resource "azurerm_role_assignment" "deployer" {
 }
 
 resource "azurerm_role_assignment" "registry" {
+  count                = local.platform.acr_id == "" ? 0 : 1
   scope                = local.platform.acr_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.channel.principal_id

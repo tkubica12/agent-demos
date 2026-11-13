@@ -3,24 +3,23 @@ locals {
     contains(keys(var.private_dns_zone_ids), "privatelink.azurecontainerapps.io") ? "privatelink.azurecontainerapps.io" : "privatelink.${var.sandbox_location}.azurecontainerapps.io"
   )
   service_private_dns_zones = toset(concat([
-    "privatelink.azurecr.io",
     "privatelink.cognitiveservices.azure.com",
     "privatelink.openai.azure.com",
     "privatelink.services.ai.azure.com",
-  ], var.scheduler_enabled ? ["privatelink.servicebus.windows.net"] : []))
+  ], var.registry_enabled ? ["privatelink.azurecr.io"] : [], var.scheduler_enabled ? ["privatelink.servicebus.windows.net"] : []))
   required_private_dns_zones = setunion(local.service_private_dns_zones, toset([local.container_apps_private_dns_zone]))
   service_private_dns_zone_ids = merge(
     { for zone, resource in azurerm_private_dns_zone.services : zone => resource.id },
     { for zone, id in var.private_dns_zone_ids : zone => id if contains(local.service_private_dns_zones, zone) },
   )
   container_apps_private_dns_zone_id = try(var.private_dns_zone_ids[local.container_apps_private_dns_zone], azurerm_private_dns_zone.private_mcp[0].id, null)
-  service_private_endpoints = var.private_network_enabled ? merge({
+  service_private_endpoints = var.private_network_enabled ? merge(var.registry_enabled ? {
     acr = {
-      resource_id = azurerm_container_registry.main.id
+      resource_id = azurerm_container_registry.main[0].id
       group_id    = "registry"
       zone_names  = ["privatelink.azurecr.io"]
     }
-    }, var.scheduler_enabled ? {
+    } : {}, var.scheduler_enabled ? {
     scheduler = {
       resource_id = azurerm_servicebus_namespace.scheduler[0].id
       group_id    = "namespace"
@@ -124,6 +123,38 @@ resource "azapi_resource" "private_mcp_env" {
   response_export_values    = ["properties.defaultDomain", "properties.environmentMode", "properties.publicNetworkAccess"]
   schema_validation_enabled = false
   lifecycle {
+    precondition {
+      condition     = (var.existing_sandbox_subnet_id == "") == (var.existing_private_endpoint_subnet_id == "")
+      error_message = "Supply both existing_sandbox_subnet_id and existing_private_endpoint_subnet_id, or neither."
+    }
+    precondition {
+      condition     = !local.existing_network || var.private_network_enabled
+      error_message = "Existing subnet mode requires private_network_enabled=true."
+    }
+    precondition {
+      condition     = !local.existing_network || lower(var.existing_sandbox_subnet_id) != lower(var.existing_private_endpoint_subnet_id)
+      error_message = "The delegated sandbox subnet and private endpoint subnet must be different subnets."
+    }
+    precondition {
+      condition     = (var.existing_log_analytics_workspace_id == "") == (var.existing_application_insights_id == "")
+      error_message = "Supply both existing monitoring IDs, or neither."
+    }
+    precondition {
+      condition     = var.ampls_id == "" || var.private_network_enabled
+      error_message = "ampls_id requires private_network_enabled=true."
+    }
+    precondition {
+      condition     = var.acr_agent_pool_subnet_id == "" || (var.registry_enabled && var.private_network_enabled && lower(var.acr_agent_pool_subnet_id) != lower(local.sandbox_subnet_id) && lower(var.acr_agent_pool_subnet_id) != lower(local.private_endpoint_subnet_id))
+      error_message = "An ACR build pool requires registry_enabled/private_network_enabled and a dedicated nondelegated subnet."
+    }
+    precondition {
+      condition     = !local.existing_network || alltrue([for zone in local.required_private_dns_zones : contains(keys(var.private_dns_zone_ids), zone)])
+      error_message = "Existing subnet mode requires DNS IDs for the three Foundry zones, regional (or parent) Container Apps zone, plus ACR/Service Bus only when enabled."
+    }
+    precondition {
+      condition     = alltrue([for zone, id in var.private_dns_zone_ids : lower(element(reverse(split("/", id)), 0)) == lower(zone)])
+      error_message = "Every private_dns_zone_ids key must match the zone name in its resource ID."
+    }
     postcondition {
       condition     = !var.private_network_enabled || self.output.properties.publicNetworkAccess == "Disabled"
       error_message = "Private Container Apps Express environment did not report publicNetworkAccess=Disabled."

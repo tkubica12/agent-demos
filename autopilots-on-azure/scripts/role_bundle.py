@@ -4,6 +4,10 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shlex
+import uuid
+
+from azure.core.exceptions import ResourceNotFoundError
 
 from scripts.tf_helpers import REPO_ROOT
 
@@ -39,3 +43,32 @@ def build_role_bundle(role: dict, *, root: Path = REPO_ROOT, verify: bool = True
         raise ValueError("Local role bundle_sha256 is missing or differs from the bundled snapshot; expected " + digest)
     files["role-release.json"] = manifest
     return files, digest
+
+
+def _execute(sandbox, command: str) -> None:
+    completion = uuid.uuid4().hex
+    result = sandbox.exec(command + " && printf '%s\\n' " + shlex.quote(completion))
+    if (type(result.exit_code) is not int or result.exit_code != 0
+            or completion not in str(result.stdout).splitlines()):
+        raise RuntimeError("Applying private role configuration did not complete.")
+
+
+def publish_role_bundle(sandbox, role: dict) -> str:
+    files, digest = build_role_bundle(role)
+    directory = "/data/role-bundles/" + digest
+    paths = [directory + "/" + name for name in files]
+    try:
+        manifest = sandbox.read_file(directory + "/role-release.json")
+    except ResourceNotFoundError:
+        manifest = None
+    if manifest is not None:
+        if hashlib.sha256(manifest).hexdigest() != digest:
+            raise ValueError("The immutable role data directory contains a different manifest.")
+        _execute(sandbox, "chmod 0600 " + " ".join(shlex.quote(path) for path in paths))
+        return directory
+    parents = sorted({directory + "/" + str(PurePosixPath(name).parent) for name in files})
+    _execute(sandbox, "mkdir -p " + " ".join(shlex.quote(parent) for parent in parents))
+    for name in sorted(files, key=lambda value: value == "role-release.json"):
+        sandbox.write_file(directory + "/" + name, files[name], mode="0600")
+    _execute(sandbox, "chmod 0600 " + " ".join(shlex.quote(path) for path in paths))
+    return directory

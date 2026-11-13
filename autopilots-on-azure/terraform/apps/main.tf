@@ -142,7 +142,7 @@ resource "azurerm_role_assignment" "runtime_foundry_user" {
 }
 
 resource "azurerm_role_assignment" "disk_image_acr_pull" {
-  for_each             = var.private_network_enabled ? toset(["runtime", "gateway"]) : toset(["runtime"])
+  for_each             = local.platform.acr_id == "" ? toset([]) : (var.private_network_enabled ? toset(["runtime", "gateway"]) : toset(["runtime"]))
   scope                = local.platform.acr_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.workload[each.key].principal_id

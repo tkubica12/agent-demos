@@ -103,6 +103,8 @@ class AgentSandboxConfig:
     collective_learning_approval_public_key: str = ""
     previous_api_server_key: str = ""
     runtime_config_revision: str = ""
+    always_on: bool = False
+    persistent_home: bool = False
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,10 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
         labels["runtimeConfigRevision"] = config.runtime_config_revision
     if config.disk_image_name:
         labels["runtimeImage"] = config.disk_image_name
+    if config.always_on:
+        labels["alwaysOn"] = "true"
+    if config.persistent_home:
+        labels["persistentHome"] = "true"
     labels.update(config.labels)
     return labels
 
@@ -593,7 +599,7 @@ def create_agent_sandbox(
         },
         "lifecycle": {
             "autoSuspendPolicy": {
-                "enabled": True,
+                "enabled": not config.always_on,
                 "interval": RUNTIME_IDLE_SECONDS,
                 "mode": RUNTIME_SUSPEND_MODE,
             },
@@ -615,6 +621,10 @@ def create_agent_sandbox(
     }
     if config.customer_vnet_connection_name:
         body["customerVnetConnectionName"] = config.customer_vnet_connection_name
+    if config.always_on:
+        body["lifecycle"]["autoDeletePolicy"] = {"enabled": False}
+    if config.persistent_home:
+        body["volumes"] = [SandboxVolume("hermes-data", "/data")._to_dict()]
 
     created = client._dp_put(f"{client._group_path}/sandboxes", body)
     sandbox_id = created["id"]
@@ -664,10 +674,20 @@ def deploy_agent_sandbox(
     if not config.disk_image_id:
         raise ValueError("AGENT_RUNTIME_DISK_IMAGE_ID is required. Deploy the Sandbox disk images before starting the runtime.")
     client = create_sandbox_group_client(config, credential)
+    persistent_volume = None
+    if config.persistent_home:
+        persistent_volume = existing_named(client.list_volumes(), "hermes-data")
+        if persistent_volume is not None and (
+            persistent_volume.type != "DataDisk"
+            or (persistent_volume.labels or {}).get("app") != "autopilots-on-azure"
+            or (persistent_volume.labels or {}).get("worker") != config.worker_id
+        ):
+            raise ValueError("The runtime Data Disk has unexpected type or ownership.")
 
     for stale in stale_agent_sandboxes(client, config):
         require_worker_refresh_ready(client, config, stale)
-        publish_final_backup(client, stale)
+        if not config.persistent_home:
+            publish_final_backup(client, stale)
         client.begin_delete_sandbox(stale["id"], polling_timeout=600).result()
 
     existing_sandbox = recycle_failed_agent_sandbox(
@@ -679,13 +699,23 @@ def deploy_agent_sandbox(
         sandbox_id = str(existing_sandbox["id"])
         endpoint_url = port_url(existing_sandbox.get("ports") or [], config.port)
     else:
-        if existing_named(client.list_volumes(), RUNTIME_BACKUP_VOLUME) is None:
+        volume_name = "hermes-data" if config.persistent_home else RUNTIME_BACKUP_VOLUME
+        volume = persistent_volume if config.persistent_home else existing_named(client.list_volumes(), volume_name)
+        if volume is None:
             volume_labels = {"app": "autopilots-on-azure", "worker": config.worker_id}
             client.create_volume(
-                RUNTIME_BACKUP_VOLUME,
-                type="AzureBlob",
+                volume_name,
+                type="DataDisk" if config.persistent_home else "AzureBlob",
+                **({"size": "10Gi"} if config.persistent_home else {}),
                 labels={key: value for key, value in volume_labels.items() if value},
             )
+        if config.persistent_home:
+            for _ in range(90):
+                if not client.get_volume(volume_name).is_attached:
+                    break
+                time.sleep(2)
+            else:
+                raise TimeoutError("Runtime Data Disk did not detach.")
         _, current = create_agent_sandbox(
             client,
             config=config,
@@ -703,7 +733,7 @@ def deploy_agent_sandbox(
         runtime_kind=config.runtime_kind,
         port=config.port,
         health_path=config.health_path,
-        backup_volume=RUNTIME_BACKUP_VOLUME,
+        backup_volume="hermes-data" if config.persistent_home else RUNTIME_BACKUP_VOLUME,
         runtime_home=config.runtime_home,
         runtime_workspace=config.runtime_workspace,
         private_incidents_mcp_url=config.private_incidents_mcp_url or None,

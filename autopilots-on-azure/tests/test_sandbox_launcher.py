@@ -1,5 +1,6 @@
 import unittest
 import urllib.error
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -85,6 +86,10 @@ class SandboxLauncherTests(unittest.TestCase):
         self.assertEqual(client.body["ports"][0]["activationMode"], "OnDemand")
         self.assertNotIn("command", client.body)
         self.assertNotIn("args", client.body)
+        create_agent_sandbox(client, config=replace(config, always_on=True, persistent_home=True), disk_id="disk-1")
+        self.assertIs(client.body["lifecycle"]["autoSuspendPolicy"]["enabled"], False)
+        self.assertIs(client.body["lifecycle"]["autoDeletePolicy"]["enabled"], False)
+        self.assertEqual(client.body["volumes"], [{"volumeName": "hermes-data", "mountpoint": "/data"}])
 
     def test_only_failed_runtime_compute_is_recreated(self):
         class Poller:
@@ -111,6 +116,36 @@ class SandboxLauncherTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(client.deleted, [("sandbox-1", 600)])
+
+    def test_persistent_runtime_replacement_retains_owned_disk_and_waits_for_detachment(self):
+        config = AgentSandboxConfig(
+            subscription_id="subscription", resource_group="rg", sandbox_group="group", region="region",
+            image_name="new-image", disk_image_id="disk", worker_id="worker", persistent_home=True,
+        )
+        client = Mock()
+        volume = SimpleNamespace(
+            name="hermes-data", type="DataDisk", labels={"app": "autopilots-on-azure", "worker": "worker"},
+        )
+        client.list_volumes.return_value = [volume]
+        client.get_volume.side_effect = [SimpleNamespace(is_attached=True), SimpleNamespace(is_attached=False)]
+        created = SimpleNamespace(id="new", ports=[SimpleNamespace(port=8642, url="https://runtime.example")])
+        with (
+            patch("scripts.sandbox_runtime.create_sandbox_group_client", return_value=client),
+            patch("scripts.sandbox_runtime.stale_agent_sandboxes", return_value=[{"id": "old"}]),
+            patch("scripts.sandbox_runtime.require_worker_refresh_ready"),
+            patch("scripts.sandbox_runtime.publish_final_backup") as backup,
+            patch("scripts.sandbox_runtime.existing_agent_sandbox", return_value=None),
+            patch("scripts.sandbox_runtime.create_agent_sandbox", return_value=(Mock(), created)) as create,
+            patch("scripts.sandbox_runtime.time.sleep") as sleep,
+        ):
+            result = deploy_agent_sandbox(config)
+        self.assertEqual(result.backup_volume, "hermes-data")
+        backup.assert_not_called()
+        client.create_volume.assert_not_called()
+        client.delete_volume.assert_not_called()
+        client.begin_delete_sandbox.assert_called_once_with("old", polling_timeout=600)
+        sleep.assert_called_once_with(2)
+        create.assert_called_once()
 
     def test_missing_runtime_is_created_with_its_backup_volume_and_native_url(self):
         config = AgentSandboxConfig(

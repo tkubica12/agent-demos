@@ -1,3 +1,9 @@
+variable "registry_enabled" {
+  description = "Provision ACR for source-built demos; prebuilt simulator deployments disable it."
+  type        = bool
+  default     = true
+}
+
 variable "location" {
   type    = string
   default = "swedencentral"
