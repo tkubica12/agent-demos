@@ -146,6 +146,17 @@ class PrivateProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "nonempty and at most"):
                 verify_download(file, "fresh")
 
+    def test_word_xml_alone_is_not_a_real_docx_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codes = create_fixtures(Path(directory), "fresh")
+            with ZipFile(Path(directory) / "acceptance.docx") as source:
+                xml = source.read("word/document.xml")
+            file = Path(directory) / "incomplete.docx"
+            with ZipFile(file, "w") as archive:
+                archive.writestr("word/document.xml", xml)
+            with self.assertRaisesRegex(ValueError, "Word package"):
+                verify_download(file, codes["acceptance.docx"])
+
 
 if __name__ == "__main__":
     unittest.main()

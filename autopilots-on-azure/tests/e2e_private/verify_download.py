@@ -17,12 +17,34 @@ def verify_download(file: Path, nonce: str):
     if kind == ".txt":
         text = file.read_text(encoding="utf-8")
     elif kind == ".docx":
+        parts = {}
         with ZipFile(file) as archive:
-            with archive.open("word/document.xml") as document:
-                xml = document.read(4 * 1024 * 1024 + 1)
-        if len(xml) > 4 * 1024 * 1024 or b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:
-            raise ValueError("Invalid or oversized Word document part.")
-        root = ElementTree.fromstring(xml)
+            required = ("word/document.xml", "[Content_Types].xml", "_rels/.rels")
+            if not set(required).issubset(archive.namelist()):
+                raise ValueError("Incomplete Word package.")
+            for name in required:
+                with archive.open(name) as document:
+                    xml = document.read(4 * 1024 * 1024 + 1)
+                if len(xml) > 4 * 1024 * 1024 or b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:
+                    raise ValueError("Invalid or oversized Word package part.")
+                parts[name] = ElementTree.fromstring(xml)
+        content_namespace = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+        relationship_namespace = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+        has_content_type = any(
+            node.get("PartName") == "/word/document.xml"
+            and node.get("ContentType") ==
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+            for node in parts["[Content_Types].xml"].iter(f"{content_namespace}Override")
+        )
+        has_relationship = any(
+            node.get("Type") == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+            and node.get("Target", "").lstrip("/") == "word/document.xml"
+            and node.get("TargetMode") != "External"
+            for node in parts["_rels/.rels"].iter(f"{relationship_namespace}Relationship")
+        )
+        if not has_content_type or not has_relationship:
+            raise ValueError("Invalid Word package content type or document relationship.")
+        root = parts["word/document.xml"]
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
         if root.tag != f"{namespace}document":
             raise ValueError("The downloaded file is not a Word document.")
