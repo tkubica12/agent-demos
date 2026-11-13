@@ -142,18 +142,19 @@ def select_widget_turn(payload, expected, now):
     )}, **linkage}
 
 
-def successful_tool_completions(tools, tool):
-    starts = {
-        item.get("toolCallId") for item in tools if isinstance(item, dict)
-        and item.get("event") == "tool.started" and item.get("tool") == tool
-        and isinstance(item.get("toolCallId"), str)
-        and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", item["toolCallId"])
-    }
+def successful_tool_completions(tools, tool, *, require_preceding_start=False):
+    starts = {}
+    for index, item in enumerate(tools):
+        if (isinstance(item, dict) and item.get("event") == "tool.started"
+                and item.get("tool") == tool and isinstance(item.get("toolCallId"), str)
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", item["toolCallId"])):
+            starts.setdefault(item["toolCallId"], index)
     return [
-        item for item in tools if isinstance(item, dict)
+        item for index, item in enumerate(tools) if isinstance(item, dict)
         and item.get("event") == "tool.completed" and item.get("tool") == tool
         and isinstance(item.get("toolCallId"), str)
         and item.get("toolCallId") in starts and item.get("error") is False
+        and (not require_preceding_start or starts[item["toolCallId"]] < index)
         and type(item.get("duration")) in (int, float)
         and math.isfinite(item["duration"]) and item["duration"] >= 0
     ]
@@ -191,7 +192,7 @@ def validate_run(payload, run_id, *, require_terminal=True, require_widget_skill
 
         expected_content_sha256 = EXPECTED["runtime_skills/teams-html-widget/SKILL.md"]["sha256"]
         loaded = [
-            item for item in successful_tool_completions(tools, "skill_view")
+            item for item in successful_tool_completions(tools, "skill_view", require_preceding_start=True)
             if item.get("skillName") == "teams-html-widget"
             and item.get("skillContentReturned") is True
             and isinstance(item.get("skillContentSha256"), str)
@@ -284,6 +285,31 @@ def query_failure_metadata(error, stage):
     return {"stage": stage, "errorType": type(error).__name__, "causes": causes, "httpStatus": status}
 
 
+def bounded_query_script(script, completion_nonce, *, timeout_seconds=120):
+    if type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) \
+            or not 0 < timeout_seconds <= 120:
+        raise ValueError("Query guest deadline must be positive and at most 120 seconds.")
+    failure = {
+        "completionNonce": completion_nonce,
+        "failure": {
+            "stage": "private-query-deadline", "errorType": "TimeoutExpired",
+            "causes": ["TimeoutExpired"], "httpStatus": None,
+        },
+    }
+    return (
+        "import json,subprocess,sys"
+        "\ntry:"
+        f"\n result=subprocess.run([sys.executable,'-c',{script!r}],"
+        f"timeout={timeout_seconds!r},stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,"
+        "stderr=subprocess.DEVNULL,text=True)"
+        "\nexcept subprocess.TimeoutExpired:"
+        f"\n print(json.dumps({failure!r}))"
+        "\n raise SystemExit(124)"
+        "\nsys.stdout.write(result.stdout)"
+        "\nraise SystemExit(result.returncode)"
+    )
+
+
 def query_trace_in_sandbox(configuration, app_id, trace_id):
     from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
     from azure.identity import AzureCliCredential
@@ -322,6 +348,7 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         "\n raise SystemExit(1)"
         "\nprint(json.dumps({'queryNetwork':network,'observed':observed,'completionNonce':p['completion_nonce']}))"
     )
+    script = bounded_query_script(script, completion_nonce)
     python = configuration.get("python_path", "/app/.venv/bin/python")
     if not isinstance(python, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", python) or ".." in python.split("/"):
         raise ValueError("Configure the attested Sandbox's absolute Python interpreter path.")
@@ -344,7 +371,8 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         raise ValueError("Sandbox query did not return this invocation's completed output.")
     failure = result.get("failure")
     if failure is not None:
-        if not isinstance(failure, dict) or failure.get("stage") not in ("private-query-network", "private-query") \
+        if not isinstance(failure, dict) or failure.get("stage") not in (
+                "private-query-network", "private-query", "private-query-deadline") \
                 or not isinstance(failure.get("errorType"), str) \
                 or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", failure["errorType"]):
             raise ValueError("Sandbox query returned invalid failure metadata.")
@@ -364,6 +392,7 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         "inlineSourceSha256": hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest(),
         "operatorCredentialsExported": False,
         "completionVerified": True,
+        "guestDeadlineSeconds": 120,
     }
     return result
 

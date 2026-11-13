@@ -3,7 +3,10 @@ import json
 import shlex
 import socket
 import ssl
+import subprocess
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 import urllib.error
@@ -16,7 +19,7 @@ from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import confirm_deleted, execution_result
 from verify_download import verify_download
-from verify_native_evidence import foundry_trace, query_failure_metadata, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
+from verify_native_evidence import bounded_query_script, foundry_trace, query_failure_metadata, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
 from verify_widget_attestation import EXPECTED, validate_attestation
 
 
@@ -128,6 +131,24 @@ class PrivateProbeTests(unittest.TestCase):
         self.assertNotIn("never-export", json.dumps(result))
         self.assertNotIn("private.example", json.dumps(result))
 
+    def test_query_guest_deadline_kills_stalled_worker_without_partial_output(self):
+        nonce = "e" * 32
+        script = bounded_query_script(
+            "import time; print('never-export-partial-output',flush=True); time.sleep(2)",
+            nonce, timeout_seconds=0.2,
+        )
+        started = time.monotonic()
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=5,
+        )
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertEqual(result.returncode, 124)
+        metadata = json.loads(result.stdout)
+        self.assertEqual(metadata["completionNonce"], nonce)
+        self.assertEqual(metadata["failure"]["stage"], "private-query-deadline")
+        self.assertEqual(metadata["failure"]["errorType"], "TimeoutExpired")
+        self.assertNotIn("never-export", result.stdout + result.stderr)
+
     @patch("azure.containerapps.sandbox.SandboxGroupClient")
     @patch("azure.identity.AzureCliCredential")
     @patch("verify_native_evidence.uuid.uuid4", return_value=SimpleNamespace(hex="e" * 32))
@@ -138,13 +159,20 @@ class PrivateProbeTests(unittest.TestCase):
             "resource_group": "test", "group": "test-query",
             "sandbox_id": "10000000-0000-0000-0000-000000000002",
         }
-        for exit_code in (0, 1):
-            with self.subTest(exit_code=exit_code):
+        for exit_code, stage, error_type, status in (
+            (0, "private-query", "HTTPError", 403),
+            (1, "private-query", "HTTPError", 403),
+            (0, "private-query-deadline", "TimeoutExpired", None),
+            (124, "private-query-deadline", "TimeoutExpired", None),
+        ):
+            with self.subTest(exit_code=exit_code, stage=stage):
                 sandbox.exec.return_value = SimpleNamespace(exit_code=exit_code, stdout=json.dumps({
                     "completionNonce": "e" * 32,
-                    "failure": {"stage": "private-query", "errorType": "HTTPError", "httpStatus": 403},
+                    "failure": {"stage": stage, "errorType": error_type, "httpStatus": status},
                 }), stderr="never-export-secret")
-                with self.assertRaisesRegex(RuntimeError, "stage=private-query; class=HTTPError; HTTP=403") as failure:
+                with self.assertRaisesRegex(
+                    RuntimeError, f"stage={stage}; class={error_type}; HTTP={status}",
+                ) as failure:
                     query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
                 self.assertNotIn("never-export-secret", str(failure.exception))
 
@@ -474,7 +502,8 @@ class PrivateProbeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_run(payload, "another-run", **options)
         for tools in (
-            [], [start], [completion],
+            [], [start], [completion], [completion, start],
+            [{**completion, "event": "tool.started"}],
             [start, {**completion, "toolCallId": "another-call"}],
             [start, {**completion, "toolCallId": {}}],
             [start, {**completion, "error": True}],
@@ -484,6 +513,8 @@ class PrivateProbeTests(unittest.TestCase):
             [start, {**completion, "skillContentReturned": False}],
             [start, {**completion, "skillContentReturned": 1}],
             [start, {key: value for key, value in completion.items() if key != "skillName"}],
+            [start, {key: value for key, value in completion.items() if key != "skillContentReturned"}],
+            [start, {key: value for key, value in completion.items() if key != "skillContentSha256"}],
             [start, {**completion, "skillContentSha256": None}],
             [start, {**completion, "skillContentSha256": "C" * 64}],
             [start, {**completion, "skillContentSha256": "c" * 63}],
