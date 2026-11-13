@@ -1,11 +1,14 @@
 """Correlate actual simulator downloads with authenticated native and Foundry evidence."""
 
 import argparse
+import base64
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import shlex
 import time
 import urllib.error
 import urllib.request
@@ -217,6 +220,80 @@ def foundry_trace(payload):
     }
 
 
+def query_trace(credential, app_id, trace_id):
+    query = (
+        f'dependencies | where operation_Id == "{trace_id}" '
+        '| project name, type, success, resultCode, target, '
+        'responseModel=tostring(customDimensions["gen_ai.response.model"]), '
+        'inputTokens=toint(customDimensions["gen_ai.usage.input_tokens"]), '
+        'outputTokens=toint(customDimensions["gen_ai.usage.output_tokens"])'
+    )
+    token = credential.get_token("https://api.applicationinsights.io/.default").token
+    result = read_json(
+        f"https://api.applicationinsights.io/v1/apps/{app_id}/query",
+        {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        "Application Insights query", {"query": query, "timespan": "PT1H"},
+    )
+    if result.get("error"):
+        raise RuntimeError("Application Insights returned a query error.")
+    observed = foundry_trace(result)
+    if observed:
+        observed["network"] = check(f"https://{observed['observedFoundryHost']}", transport_only=True)
+        observed["traceId"] = trace_id
+    return observed
+
+
+def query_trace_in_sandbox(configuration, app_id, trace_id):
+    from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
+    from azure.identity import AzureCliCredential
+
+    sandbox_id = str(uuid.UUID(configuration["sandbox_id"]))
+    app_id = str(uuid.UUID(app_id))
+    if not re.fullmatch(r"[0-9a-f]{32}", trace_id):
+        raise ValueError("Invalid exact native trace identity.")
+    sources = {
+        name: Path(__file__).with_name(name + ".py").read_text(encoding="utf-8")
+        for name in ("network_probe", "verify_native_evidence")
+    }
+    payload = base64.b64encode(json.dumps({
+        "sources": sources, "app_id": app_id, "trace_id": trace_id,
+    }).encode()).decode()
+    script = (
+        "import base64,json,sys,types; "
+        f"p=json.loads(base64.b64decode({payload!r})); "
+        "\nfor name,source in p['sources'].items():"
+        "\n m=types.ModuleType(name);sys.modules[name]=m;exec(compile(source,name,'exec'),m.__dict__)"
+        "\nimport os"
+        "\nfrom azure.identity import ManagedIdentityCredential"
+        "\nfrom network_probe import check"
+        "\nfrom verify_native_evidence import query_trace"
+        "\nnetwork=check('https://api.applicationinsights.io',transport_only=True)"
+        "\nwith ManagedIdentityCredential(client_id=os.environ.get('AZURE_CLIENT_ID')) as credential:"
+        "\n observed=query_trace(credential,p['app_id'],p['trace_id'])"
+        "\nprint(json.dumps({'queryNetwork':network,'observed':observed}))"
+    )
+    python = configuration.get("python_path", "/app/.venv/bin/python")
+    if not isinstance(python, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", python) or ".." in python.split("/"):
+        raise ValueError("Configure the attested Sandbox's absolute Python interpreter path.")
+    with AzureCliCredential() as credential, SandboxGroupClient(
+        endpoint_for_region(configuration.get("region", "swedencentral")), credential,
+        subscription_id=str(uuid.UUID(configuration["subscription_id"])),
+        resource_group=configuration["resource_group"], sandbox_group=configuration["group"],
+    ) as group, group.get_sandbox_client(sandbox_id) as sandbox:
+        result = sandbox.exec(f"{shlex.quote(python)} -c {shlex.quote(script)}")
+    if result.exit_code:
+        raise RuntimeError(f"In-VNet Sandbox query execution failed exit {result.exit_code}; no credentials or stderr exported.")
+    result = json.loads(result.stdout)
+    if result.get("queryNetwork", {}).get("scope") != "private-dns-tls" or result["queryNetwork"].get("status") != "pass":
+        raise ValueError("Sandbox query did not prove private App Insights DNS/TLS.")
+    result["queryExecution"] = {
+        "sandboxId": sandbox_id, "credential": "sandbox-managed-identity",
+        "inlineSourceSha256": hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest(),
+        "operatorCredentialsExported": False,
+    }
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gateway-url", required=True)
@@ -227,9 +304,12 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--widget-turn", choices=("producing", "followup"))
+    parser.add_argument("--temporary-public", action="store_true")
+    parser.add_argument("--credential", choices=("managed-identity", "azure-cli"), default="managed-identity")
+    parser.add_argument("--query-sandbox", type=Path)
     args = parser.parse_args()
     from azure.core.exceptions import AzureError
-    from azure.identity import ManagedIdentityCredential
+    from azure.identity import AzureCliCredential, ManagedIdentityCredential
 
     evidence = {"status": "fail"}
     try:
@@ -245,8 +325,8 @@ def main():
         ):
             raise ValueError("Provide the explicitly authorized Application Insights ARM resource ID.")
         expected = json.loads(args.expected.read_text(encoding="utf-8"))
-        evidence["gatewayNetwork"] = check(args.gateway_url, transport_only=True)
-        evidence["runtimeNetwork"] = check(args.runtime_url, transport_only=True)
+        evidence["gatewayNetwork"] = check(args.gateway_url, transport_only=True, temporary_public=args.temporary_public)
+        evidence["runtimeNetwork"] = check(args.runtime_url, transport_only=True, temporary_public=args.temporary_public)
         headers = {"X-Autopilot-Key": key}
         route = "turns" if args.widget_turn else "generated-files"
         gateway = read_json(
@@ -278,35 +358,27 @@ def main():
             headers, "Runtime evidence",
         )
         evidence["native"] = validate_run(native, delivery["nativeRunId"], require_terminal=not args.widget_turn)
-        evidence["queryNetwork"] = check("https://api.applicationinsights.io", transport_only=True)
-        with ManagedIdentityCredential() as credential:
+        query_sandbox = json.loads(args.query_sandbox.read_text()) if args.query_sandbox else None
+        if not query_sandbox:
+            evidence["queryNetwork"] = check("https://api.applicationinsights.io", transport_only=True)
+        credential_type = AzureCliCredential if args.credential == "azure-cli" else ManagedIdentityCredential
+        with credential_type() as credential:
             token = credential.get_token("https://management.azure.com/.default").token
             component = read_json(
                 f"https://management.azure.com{args.app_insights_resource_id}?api-version=2020-02-02",
                 {"Authorization": f"Bearer {token}"}, "Application Insights metadata",
             )
             app_id = str(uuid.UUID(component["properties"]["AppId"]))
-            query = (
-                f'dependencies | where operation_Id == "{delivery["traceId"]}" '
-                '| project name, type, success, resultCode, target, '
-                'responseModel=tostring(customDimensions["gen_ai.response.model"]), '
-                'inputTokens=toint(customDimensions["gen_ai.usage.input_tokens"]), '
-                'outputTokens=toint(customDimensions["gen_ai.usage.output_tokens"])'
-            )
             deadline = time.monotonic() + args.timeout_seconds
             while time.monotonic() < deadline:
-                token = credential.get_token("https://api.applicationinsights.io/.default").token
-                result = read_json(
-                    f"https://api.applicationinsights.io/v1/apps/{app_id}/query",
-                    {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                    "Application Insights query", {"query": query, "timespan": "PT1H"},
-                )
-                if result.get("error"):
-                    raise RuntimeError("Application Insights returned a query error.")
-                observed = foundry_trace(result)
+                if query_sandbox:
+                    remote = query_trace_in_sandbox(query_sandbox, app_id, delivery["traceId"])
+                    evidence["queryNetwork"] = remote["queryNetwork"]
+                    evidence["queryExecution"] = remote["queryExecution"]
+                    observed = remote["observed"]
+                else:
+                    observed = query_trace(credential, app_id, delivery["traceId"])
                 if observed:
-                    observed["network"] = check(f"https://{observed['observedFoundryHost']}", transport_only=True)
-                    observed["traceId"] = delivery["traceId"]
                     evidence["foundry"] = observed
                     break
                 time.sleep(5)

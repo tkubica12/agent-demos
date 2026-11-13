@@ -16,7 +16,7 @@ const execute = promisify(execFile);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const summary = {
-  scope: "private-automated-browser-subset",
+  scope: config.network_mode === "temporary-public" ? "temporary-public-automated-browser-subset" : "private-automated-browser-subset",
   fullCertification: "not-claimed",
   started: new Date().toISOString(), stacks: [],
 };
@@ -35,6 +35,13 @@ async function eventually(action, timeout = config.timeout_ms) {
 async function runStack(stack) {
   const directory = path.join(config.output, stack.name);
   await mkdir(directory, { recursive: true });
+  const evidenceOptions = ["--credential", config.credential ?? "managed-identity"];
+  if (config.network_mode === "temporary-public") evidenceOptions.push("--temporary-public");
+  if (stack.query_sandbox) {
+    const queryPath = path.join(directory, "query-sandbox.json");
+    await writeFile(queryPath, JSON.stringify(stack.query_sandbox));
+    evidenceOptions.push("--query-sandbox", queryPath);
+  }
   const report = {
     name: stack.name, url: stack.url, checks: [], status: "running",
     additionalAcceptance: {
@@ -247,6 +254,7 @@ async function runStack(stack) {
           "--gateway-url", stack.gateway_url, "--runtime-url", stack.runtime_url,
           "--key-env", stack.evidence_key_env, "--app-insights-resource-id", stack.app_insights_resource_id,
           "--expected", expectedPath, "--output", nativeOutput,
+          ...evidenceOptions,
           "--timeout-seconds", String(Math.min(config.timeout_ms / 1000, 600)),
         ], { timeout: Math.min(config.timeout_ms, 600_000) + 120_000 });
         generated.nativeEvidence = JSON.parse(native.stdout.trim());
@@ -276,6 +284,7 @@ async function runStack(stack) {
             "--gateway-url", stack.gateway_url, "--runtime-url", stack.runtime_url,
             "--key-env", stack.evidence_key_env, "--app-insights-resource-id", stack.app_insights_resource_id,
             "--expected", expectedPath, "--output", output, "--widget-turn", target.turn,
+            ...evidenceOptions,
             "--timeout-seconds", String(Math.min(config.timeout_ms / 1000, 600)),
           ], { timeout: Math.min(config.timeout_ms, 600_000) + 120_000 });
           return JSON.parse(result.stdout.trim());
