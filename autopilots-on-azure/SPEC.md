@@ -246,6 +246,8 @@ Consequential Teams cards use reviewed typed actions; informational cards use a 
 
 Generated apps use one child Sandbox per app, deny-default egress, at most five active apps per Worker, and artifacts limited to 80 files/2 MiB. Native Entra participant ports are OnDemand; five idle minutes suspend compute and default deletion is 24 hours after suspension. Owner-bound **Keep 1h/6h/24h/72h** and **Delete** actions change native lifecycle directly, without an LLM or Service Bus. Updates preserve the logical app ID; failed updates preserve the working deployment. App traffic never traverses the gateway.
 
+With `PRIVATE_NETWORK_ENABLED=true`, the gateway requires `GENERATED_APPS_VNET_CONNECTION_NAME` and passes it as native `customer_vnet_connection_name` on every generated-app creation. Deployment must provision that VNet connection on the generated-app Sandbox Group. Participant-email Entra ingress and deny-default egress policy remain unchanged. A missing connection is an explicit configuration error; a platform/image rejection propagates without a public-network or alternative-runtime retry. When private mode is absent or false, the existing creation request is unchanged.
+
 ## Observability
 
 Foundry external-agent registration identifies externally hosted compute. Azure Monitor export uses Entra authentication. Default spans contain timing, opaque correlation, model/tool names, and available usage—not prompts, arguments, results, documents, raw identities, or error payloads.
