@@ -20,11 +20,38 @@ from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import confirm_deleted, execution_result
 from verify_download import verify_download
-from verify_native_evidence import bounded_query_script, foundry_trace, query_failure_metadata, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
+from verify_native_evidence import anonymous_evidence_check, bounded_query_script, foundry_trace, query_failure_metadata, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
 from verify_widget_attestation import EXPECTED, validate_attestation
 
 
 class PrivateProbeTests(unittest.TestCase):
+    @patch("verify_native_evidence.urllib.request.build_opener")
+    def test_evidence_endpoints_must_reject_anonymous_access(self, build_opener):
+        opener = build_opener.return_value
+        for status in (401, 403):
+            with self.subTest(status=status):
+                opener.open.side_effect = urllib.error.HTTPError(
+                    "https://evidence.example/internal/runs/run/evidence",
+                    status, "never-export-body", {}, None,
+                )
+                self.assertEqual(anonymous_evidence_check("https://evidence.example")["httpStatus"], status)
+                request = opener.open.call_args.args[0]
+                self.assertEqual(request.header_items(), [])
+                self.assertEqual(request.get_method(), "GET")
+        for status in (302, 404, 500):
+            with self.subTest(status=status):
+                opener.open.side_effect = urllib.error.HTTPError(
+                    "https://evidence.example", status, "never-export-body", {}, None,
+                )
+                with self.assertRaisesRegex(ValueError, "must reject anonymous"):
+                    anonymous_evidence_check("https://evidence.example")
+        opener.open.side_effect = None
+        response = opener.open.return_value.__enter__.return_value
+        response.status = 200
+        with self.assertRaisesRegex(ValueError, "got HTTP200"):
+            anonymous_evidence_check("https://evidence.example")
+        response.read.assert_not_called()
+
     def test_landing_zone_prepare_does_not_create_linux_credentials_or_run_tools(self):
         spec = importlib.util.spec_from_file_location(
             "landing_zone_manage", Path(__file__).parents[2] / "terraform" / "test-landing-zone" / "manage.py",

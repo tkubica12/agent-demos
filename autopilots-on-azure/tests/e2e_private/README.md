@@ -91,6 +91,13 @@ For an explicitly approved **empty test environment only**, set root TOML
 It verifies global DNS, a global trusted TLS peer and successful readiness,
 then runs the same real file/widget/native provenance and restart gates.
 This phase is labelled temporary-public, never private certification.
+The outside collector also needs authorized HTTPS reachability to the new
+gateway and runtime groups' protected evidence routes, not only the simulator.
+Before each authenticated evidence read it requires anonymous HTTP401/403;
+HTTP200, redirects, lookup-only HTTP404 and transport failures cannot pass.
+Keep internal keys in headers only. Any temporary exposure is an explicitly
+bounded development window (at most 60 minutes), owned and relocked by the
+deployment operator; Foundry/AI/LAW remain private.
 After the deployment enables its Private Endpoint and disables public access,
 run the outside `--public-negative` probe against the actual current origin.
 Customer/skill deployments must start private; do not use this test phase there.
