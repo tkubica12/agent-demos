@@ -112,4 +112,3 @@ resource "azapi_resource" "nat" {
     properties = { publicIpAddresses = [{ id = azapi_resource.nat_ip.id }] }
   }
 }
-
