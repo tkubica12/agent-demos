@@ -437,6 +437,21 @@ class PrivateProbeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_run({**payload, "runtimeMetadataAvailable": False}, "run", require_terminal=False)
 
+    def test_terminal_pair_requires_nonempty_bounded_tool_identity(self):
+        payload = {
+            "runId": "run", "status": "completed", "runtimeMetadataAvailable": True,
+            "runtime": {"provider": "actual", "model": "served"}, "usage": {},
+        }
+        for call_id in ("", "a" * 161, "call\nsecret"):
+            with self.subTest(call_id=call_id):
+                payload["tools"] = [
+                    {"event": "tool.started", "tool": "terminal", "toolCallId": call_id},
+                    {"event": "tool.completed", "tool": "terminal", "toolCallId": call_id,
+                     "error": False, "duration": 0.1},
+                ]
+                with self.assertRaisesRegex(ValueError, "matching tool-call identity"):
+                    validate_run(payload, "run")
+
 
 if __name__ == "__main__":
     unittest.main()

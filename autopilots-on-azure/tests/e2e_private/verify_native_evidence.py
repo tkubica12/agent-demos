@@ -160,6 +160,7 @@ def validate_run(payload, run_id, *, require_terminal=True):
         item.get("toolCallId") for item in tools if isinstance(item, dict)
         and item.get("event") == "tool.started" and item.get("tool") == "terminal"
         and isinstance(item.get("toolCallId"), str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", item["toolCallId"])
     }
     completed = [
         item for item in tools if isinstance(item, dict)
