@@ -452,6 +452,33 @@ class SimulatorDeploymentTests(unittest.TestCase):
         cpu_millicores = int(body["resources"]["cpu"].removesuffix("m"))
         self.assertLessEqual(total_disk_gib * 1000, cpu_millicores * 20)
 
+    def test_default_readiness_probes_main_gateway_not_callback_health_port(self):
+        from scripts.deploy_simulator_environment import verify_readiness
+
+        config = {
+            "subscription_id": "subscription", "agents": [{"name": "agent-4"}],
+            "images": {"source_commit": "a" * 40},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "hosting.json").write_text(json.dumps({
+                "subscription_id": "subscription", "sandbox_id": "simulator",
+                "management_endpoint": "https://management.example",
+            }))
+            (root / "agent-4").mkdir()
+            (root / "agent-4" / "outputs.json").write_text(json.dumps({
+                "resource_group_name": "isolated",
+                "sandbox_groups": {"runtime": {"name": "runtime"}, "gateway": {"name": "gateway"}},
+                "runtime_sandbox_id": "runtime", "bridge_sandbox_id": "gateway",
+            }))
+            with patch("azure.identity.AzureCliCredential"), patch(
+                "azure.containerapps.sandbox.SandboxGroupClient",
+            ), patch("scripts.simulator_hosting.group_client"), patch(
+                "scripts.sandbox_services.require_always_running", return_value={},
+            ), patch("scripts.sandbox_services.require_service_health") as health:
+                verify_readiness(config, root)
+            self.assertEqual([call.args[1] for call in health.call_args_list], [8000, 8642, 8000])
+
     def test_entra_verification_requires_scoped_recent_manual_browser_evidence(self):
         import httpx
         from scripts.deploy_simulator_environment import save, verify

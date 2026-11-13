@@ -411,7 +411,7 @@ def verify_readiness(config: dict, root: Path) -> None:
             evidence["services"]["simulator"] = require_always_running(group, binding["sandbox_id"])
         for agent in config["agents"]:
             worker = load(root / agent["name"] / "outputs.json")
-            for role, sandbox_key, port in (("runtime", "runtime_sandbox_id", 8642), ("gateway", "bridge_sandbox_id", 8001)):
+            for role, sandbox_key, port in (("runtime", "runtime_sandbox_id", 8642), ("gateway", "bridge_sandbox_id", 8000)):
                 group_binding = worker["sandbox_groups"][role]
                 with SandboxGroupClient(
                     binding["management_endpoint"], credential,
