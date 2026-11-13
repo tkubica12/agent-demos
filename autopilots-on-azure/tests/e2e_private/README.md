@@ -120,6 +120,8 @@ trace, and verifies the observed Foundry host privately. No operator tokens,
 evidence keys, file contents or submission tokens go to this helper. Missing
 permission, runtime or query evidence fails explicitly. Each invocation must
 return its own completion nonce; the SDK's default exit zero alone is not proof.
+Failures report only stage, exception class and available HTTP status, never
+exception messages, response bodies or stderr.
 Without this option,
 the original direct private managed-identity query path remains required.
 
