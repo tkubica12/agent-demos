@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote, urlparse
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -450,7 +450,10 @@ def test_connector_typing_reply_update_delete_and_ws_isolation(client, app, issu
         assert typing["type"] == "typing" and typing["actor"]["isAgent"] is True
         assert typing["conversationId"] == cid and typing["replyToId"] == installed["message"]["id"]
         assert isinstance(typing["expiresAt"], str) and typing["expiresAt"].endswith("Z")
-        assert started < datetime.fromisoformat(typing["expiresAt"]).timestamp() <= time.time() + 5
+        expires_at = datetime.fromisoformat(typing["expiresAt"])
+        assert datetime.fromtimestamp(started, timezone.utc) < expires_at <= (
+            datetime.now(timezone.utc) + timedelta(seconds=5)
+        )
         mid = connector_message(client, installed)
         created = member_socket.receive_json()
         assert created["type"] == "message.created" and created["message"]["id"] == mid

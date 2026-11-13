@@ -87,7 +87,9 @@ def listener(*, tls=False):
 
 async def serve(application, sock, *, tls=False):
     options = {"ssl_certfile": str(cert_path), "ssl_keyfile": str(key_path)} if tls else {}
-    server = uvicorn.Server(uvicorn.Config(application, log_level="critical", access_log=False, **options))
+    server = uvicorn.Server(uvicorn.Config(
+        application, log_level="critical", access_log=False, timeout_graceful_shutdown=5, **options,
+    ))
     task = asyncio.create_task(server.serve(sockets=[sock]))
     servers.append(server)
     tasks.append(task)

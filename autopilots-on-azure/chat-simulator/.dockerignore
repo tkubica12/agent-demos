@@ -16,3 +16,4 @@
 !frontend/scripts/prepare-assets.mjs
 !frontend/src/
 !frontend/src/**
+**/node_modules/
