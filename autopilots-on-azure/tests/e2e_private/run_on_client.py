@@ -20,6 +20,18 @@ def execution_result(view):
     return None
 
 
+def confirm_deleted(get_status, timeout=120):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = get_status()
+        if status == 404:
+            return
+        if status != 200:
+            raise RuntimeError(f"Managed command cleanup verification failed HTTP {status}.")
+        time.sleep(5)
+    raise TimeoutError("Managed command deletion was accepted but resource removal is unverified.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vm-id", required=True)
@@ -39,6 +51,7 @@ def main():
     if not script.strip():
         raise ValueError("The client script cannot be empty.")
     from azure.core import PipelineClient
+    from azure.core.exceptions import AzureError
     from azure.core.pipeline.policies import BearerTokenCredentialPolicy, RetryPolicy
     from azure.core.rest import HttpRequest
     from azure.identity import AzureCliCredential
@@ -66,10 +79,11 @@ def main():
             BearerTokenCredentialPolicy(credential, "https://management.azure.com/.default"),
         ],
     ) as client:
-        def request(method, target, payload=None):
+        def request(method, target, payload=None, allow_not_found=False):
             response = client.send_request(HttpRequest(method, target, json=payload) if payload is not None
                                            else HttpRequest(method, target))
-            if response.status_code not in {200, 201, 202, 204}:
+            allowed = {200, 201, 202, 204} | ({404} if allow_not_found else set())
+            if response.status_code not in allowed:
                 raise RuntimeError(f"Managed command ARM {method} failed HTTP {response.status_code}.")
             return response
 
@@ -91,12 +105,32 @@ def main():
             if state in {"Succeeded", "Failed", "TimedOut", "Canceled"}:
                 evidence["status"] = "fail"
                 save()
+                failures = []
                 try:
                     execution_result(view)
-                finally:
+                    evidence["execution_status"] = "pass"
+                except RuntimeError as error:
+                    evidence["execution_status"] = "fail"
+                    evidence["execution_error"] = str(error)
+                    failures.append(error)
+                evidence["cleanup_status"] = "unverified"
+                save()
+                try:
                     request("DELETE", url)
                     evidence["command_delete_accepted"] = True
                     save()
+                    confirm_deleted(lambda: request("GET", url, allow_not_found=True).status_code)
+                    evidence["command_delete_verified"] = True
+                    evidence["cleanup_status"] = "pass"
+                except (RuntimeError, TimeoutError, AzureError) as error:
+                    evidence["cleanup_status"] = "fail"
+                    evidence["cleanup_error"] = str(error)
+                    failures.append(error)
+                save()
+                if len(failures) == 1:
+                    raise failures[0]
+                if failures:
+                    raise ExceptionGroup("Managed command execution and cleanup both failed.", failures)
                 evidence["status"] = "pass"
                 save()
                 print(f"Private client succeeded; evidence: {args.output}")

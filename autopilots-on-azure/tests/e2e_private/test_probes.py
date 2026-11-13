@@ -13,7 +13,7 @@ from zipfile import ZipFile
 from fixtures import create_fixtures
 from network_probe import check, private_address, public_control
 from restart_sandbox import restart
-from run_on_client import execution_result
+from run_on_client import confirm_deleted, execution_result
 from verify_download import verify_download
 from verify_native_evidence import foundry_trace, select_delivery, validate_run
 
@@ -216,6 +216,20 @@ class PrivateProbeTests(unittest.TestCase):
         proof = foundry_trace(response([chat, http]))
         self.assertEqual(proof["observedFoundryHost"], "account.openai.azure.com")
         self.assertEqual(proof["servedModel"], "served-model")
+
+    @patch("run_on_client.time.sleep")
+    def test_cleanup_requires_actual_resource_absence_after_acceptance(self, _):
+        status = Mock(side_effect=[200, 404])
+        confirm_deleted(status, timeout=1)
+        self.assertEqual(status.call_count, 2)
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            confirm_deleted(lambda: 403, timeout=1)
+
+    @patch("run_on_client.time.sleep")
+    @patch("run_on_client.time.monotonic", side_effect=[0, 0, 2])
+    def test_accepted_delete_does_not_pass_while_resource_still_exists(self, _, __):
+        with self.assertRaisesRegex(TimeoutError, "resource removal is unverified"):
+            confirm_deleted(lambda: 200, timeout=1)
 
 
 if __name__ == "__main__":

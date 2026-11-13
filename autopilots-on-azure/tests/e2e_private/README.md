@@ -187,7 +187,15 @@ sets `asyncExecution=true`, reads expanded `instanceView`, and requires
 `executionState=Succeeded` **and** `exitCode=0`. It does not mistake Pending/exit0
 for success or wait forever on stale parent resource `Creating`. It preserves
 private execution evidence and deletes only its own terminal temporary command
-record, including terminal script failures. Pending/running timeouts leave that
+record, including terminal script failures. Deletion acceptance is not deletion
+completion: it verifies that the exact resource GET returns HTTP404 and fails
+explicitly after a bounded wait if it remains present. Execution and cleanup
+outcomes are saved separately; cleanup cannot mask an actual script failure.
+The live service accepted an earlier deletion and later recorded
+`ResourceOperationFailure`, so `command_delete_accepted=true` alone is not a
+cleanup claim. The [REST deletion contract](https://learn.microsoft.com/rest/api/compute/virtual-machine-run-commands/delete)
+also distinguishes HTTP202 acceptance from completed removal.
+Pending/running timeouts leave that
 record for diagnosis; inspect it rather than blindly resubmitting or stopping
 another session's job.
 Legacy `az vm run-command invoke` returned `InternalExecutionError` during
