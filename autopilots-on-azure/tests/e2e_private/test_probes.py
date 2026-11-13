@@ -68,10 +68,12 @@ class PrivateProbeTests(unittest.TestCase):
 
     @patch("azure.containerapps.sandbox.SandboxGroupClient")
     @patch("azure.identity.AzureCliCredential")
-    def test_private_query_sandbox_uses_own_identity_and_preserves_pending_evidence(self, _, group):
+    @patch("verify_native_evidence.uuid.uuid4", return_value=SimpleNamespace(hex="e" * 32))
+    def test_private_query_sandbox_uses_own_identity_and_preserves_pending_evidence(self, _, __, group):
         sandbox = group.return_value.__enter__.return_value.get_sandbox_client.return_value.__enter__.return_value
         sandbox.exec.return_value = SimpleNamespace(exit_code=0, stdout=json.dumps({
             "queryNetwork": {"scope": "private-dns-tls", "status": "pass"}, "observed": None,
+            "completionNonce": "e" * 32,
         }))
         configuration = {
             "subscription_id": "10000000-0000-0000-0000-000000000001",
@@ -87,9 +89,34 @@ class PrivateProbeTests(unittest.TestCase):
         self.assertIn("ManagedIdentityCredential(client_id=os.environ.get('AZURE_CLIENT_ID'))", command[2])
         self.assertIsNone(result["observed"])
         self.assertFalse(result["queryExecution"]["operatorCredentialsExported"])
+        self.assertTrue(result["queryExecution"]["completionVerified"])
         sandbox.exec.return_value = SimpleNamespace(exit_code=3, stdout="", stderr="secret-error-body")
         with self.assertRaisesRegex(RuntimeError, "exit 3"):
             query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
+
+    @patch("azure.containerapps.sandbox.SandboxGroupClient")
+    @patch("azure.identity.AzureCliCredential")
+    @patch("verify_native_evidence.uuid.uuid4", return_value=SimpleNamespace(hex="e" * 32))
+    def test_query_requires_correlated_completion_not_sdk_default_exit_zero(self, _, __, group):
+        sandbox = group.return_value.__enter__.return_value.get_sandbox_client.return_value.__enter__.return_value
+        configuration = {
+            "subscription_id": "10000000-0000-0000-0000-000000000001",
+            "resource_group": "test", "group": "test-query",
+            "sandbox_id": "10000000-0000-0000-0000-000000000002",
+        }
+        response = {"queryNetwork": {"scope": "private-dns-tls", "status": "pass"}, "observed": None}
+        for payload in (response, {**response, "completionNonce": "f" * 32}, []):
+            with self.subTest(payload=payload):
+                sandbox.exec.return_value = SimpleNamespace(exit_code=0, stdout=json.dumps(payload))
+                with self.assertRaisesRegex(ValueError, "this invocation"):
+                    query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
+        for exit_code in (None, False):
+            with self.subTest(exit_code=exit_code):
+                sandbox.exec.return_value = SimpleNamespace(
+                    exit_code=exit_code, stdout=json.dumps({**response, "completionNonce": "e" * 32}),
+                )
+                with self.assertRaisesRegex(RuntimeError, "execution failed"):
+                    query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
 
     @patch("network_probe.socket.getaddrinfo", return_value=[(socket.AF_INET, 1, 6, "", ("20.1.2.3", 443))])
     @patch("network_probe.request")
