@@ -58,6 +58,8 @@ def main() -> None:
             "TSIM_REDIRECT_URI": "https://container-startup.invalid",
             "TSIM_SERVICE_URL": "https://container-startup.invalid", "ENV": "production",
         }
+    elif role == "runtime":
+        environment["RUNTIME_BACKUP_DIR"] = "/data"
 
     def show_logs(value: str) -> None:
         for key in ("API_SERVER_KEY", "TSIM_DEMO_ACCESS_CODE"):
@@ -69,8 +71,11 @@ def main() -> None:
     run("pull", options.image, timeout=600)
     created = False
     try:
-        run("run", "--detach", "--name", name, "--network", "none",
-            "--env", "AUTOPILOTS_SERVICE_CONFIG=/tmp/service.json", options.image)
+        arguments = ["run", "--detach", "--name", name, "--network", "none",
+                     "--env", "AUTOPILOTS_SERVICE_CONFIG=/tmp/service.json"]
+        if role == "runtime":
+            arguments += ["--mount", "type=tmpfs,destination=/data"]
+        run(*arguments, options.image)
         created = True
         with tempfile.TemporaryDirectory() as temporary:
             configuration = Path(temporary) / "service.json"

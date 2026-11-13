@@ -339,7 +339,7 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any, 
     if source_commit:
         config = replace(config, environment={
             **config.environment, "AUTOPILOTS_SERVICE_CONFIG": SERVICE_CONFIG_PATH,
-            "RUNTIME_BACKUP_DIR": "/data/backups",
+            "RUNTIME_BACKUP_DIR": "/data",
         })
         config = replace(config, runtime_config_revision=runtime_config_revision(config))
     runtime = deploy_agent_sandbox(config, credential=credential)

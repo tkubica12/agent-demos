@@ -25,7 +25,10 @@ Automatic suspend **and** automatic delete are explicitly disabled for simulator
 gateway and runtime. Deployment checks the actual raw Sandbox policies, rejecting
 missing/inferred values. Persistent single-writer Data Disks hold simulator chat
 and files (`/mnt/tsim`, 5 GiB), runtime home/role data (`/data`, 10 GiB) and gateway
-journal backups (`/backup`, 5 GiB). No suspend mode alone proves never-suspend.
+journal backups (`/backup`, 5 GiB). Runtime native backup archives are written at
+the actual `/data` mount root alongside its home/role directories; `/data/backups`
+is not a separate mount and fails the unchanged native backup mount guard.
+No suspend mode alone proves never-suspend.
 
 The packaged launcher starts the actual application directly with environment
 variables, or waits for mode-0600 deployment configuration and supervises the same

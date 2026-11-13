@@ -8,6 +8,7 @@ import json
 import os
 import unittest
 import shlex
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, mock_open, patch
 
@@ -413,6 +414,34 @@ class SandboxServicesTests(unittest.TestCase):
             "runtime_url": "https://runtime.example", "runtime_sandbox_id": "runtime-1",
             "runtime_application_release": self.release.digest,
         })
+
+    def test_prebuilt_runtime_backups_use_actual_data_mount_not_child_directory(self):
+        from runtimes.hermes.runtime_backup import BackupError, require_mounted
+
+        runtime = SimpleNamespace(sandbox_id="runtime-1", endpoint_url="https://runtime.example",
+                                  reused_existing_sandbox=False)
+        settings = {
+            "AZURE_SUBSCRIPTION_ID": "sub", "AZURE_RESOURCE_GROUP": "rg", "AZURE_SANDBOX_GROUP": "runtime",
+            "AZURE_REGION": "swedencentral", "API_SERVER_KEY": "key", "AGENT_RUNTIME_DISK_IMAGE_ID": "disk",
+            "USE_AGENTIC_AUTH": "false", "WORKER_OWNER_ID": "owner",
+        }
+        with patch("scripts.sandbox_services.deploy_agent_sandbox", return_value=runtime) as deploy, patch(
+            "scripts.sandbox_services.require_service_health",
+        ), patch("scripts.sandbox_services.require_always_running"), patch(
+            "scripts.sandbox_services.SandboxGroupClient",
+        ) as factory:
+            factory.return_value.__enter__.return_value.get_sandbox_client.return_value.exec.return_value = (
+                SimpleNamespace(exit_code=0, stderr="")
+            )
+            deploy_runtime(settings, "https://gateway.example", "credential", source_commit="a" * 40)
+        config = deploy.call_args.args[0]
+        self.assertTrue(config.persistent_home)
+        backup = Path(config.environment["RUNTIME_BACKUP_DIR"])
+        self.assertEqual(backup, Path("/data"))
+        with patch("os.path.ismount", side_effect=lambda path: Path(path) == Path("/data")):
+            require_mounted(backup)
+            with self.assertRaises(BackupError):
+                require_mounted(backup / "backups")
 
     def test_teardown_drains_owned_instances_before_native_connection_deletion(self):
         group = {"name": "owned", "id": "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/sandboxGroups/owned"}

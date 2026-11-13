@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
+import io
+import itertools
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
+import httpx
+from fastapi import FastAPI
+
+from bridge.transport_ingress import NativeTransportIngressMiddleware
 from scripts.deploy_simulator_environment import (
     select_images,
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
@@ -454,6 +464,46 @@ class SimulatorDeploymentTests(unittest.TestCase):
 
     def test_default_readiness_probes_main_gateway_not_callback_health_port(self):
         from scripts.deploy_simulator_environment import verify_readiness
+        from scripts.sandbox_services import require_service_health
+
+        app = FastAPI()
+        app.add_middleware(NativeTransportIngressMiddleware)
+
+        @app.get("/health")
+        @app.get("/api/health")
+        async def service_health():
+            return {"release": "a" * 40}
+
+        observed = []
+
+        async def request(url):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app)) as client:
+                return await client.get(url)
+
+        def urlopen(url, timeout):
+            response = asyncio.run(request(url))
+            observed.append((url, response.status_code))
+            if response.status_code != 200:
+                raise HTTPError(url, response.status_code, "Health unavailable", {}, None)
+            body = io.BytesIO(response.content)
+            body.status = response.status_code
+            return body
+
+        def execute(command):
+            stdout = io.StringIO()
+            try:
+                with redirect_stdout(stdout):
+                    exec(shlex.split(command)[2], {})
+            except HTTPError:
+                return SimpleNamespace(exit_code=1, stdout=stdout.getvalue(), stderr="HTTP404")
+            return SimpleNamespace(exit_code=0, stdout=stdout.getvalue(), stderr="")
+
+        sandbox = Mock()
+        sandbox.exec.side_effect = execute
+        group = Mock()
+        group.get_sandbox_client.return_value = sandbox
+        ticks = itertools.count(step=100)
+        clock = SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _: None)
 
         config = {
             "subscription_id": "subscription", "agents": [{"name": "agent-4"}],
@@ -473,11 +523,22 @@ class SimulatorDeploymentTests(unittest.TestCase):
             }))
             with patch("azure.identity.AzureCliCredential"), patch(
                 "azure.containerapps.sandbox.SandboxGroupClient",
-            ), patch("scripts.simulator_hosting.group_client"), patch(
+            ) as worker_group, patch("scripts.simulator_hosting.group_client") as simulator_group, patch(
                 "scripts.sandbox_services.require_always_running", return_value={},
-            ), patch("scripts.sandbox_services.require_service_health") as health:
+            ), patch("urllib.request.urlopen", side_effect=urlopen), patch(
+                "scripts.sandbox_services.time", clock,
+            ):
+                worker_group.return_value.__enter__.return_value = group
+                simulator_group.return_value.__enter__.return_value = group
                 verify_readiness(config, root)
-            self.assertEqual([call.args[1] for call in health.call_args_list], [8000, 8642, 8000])
+                with self.assertRaises(TimeoutError):
+                    require_service_health(sandbox, 8001, "a" * 40)
+            self.assertEqual(observed, [
+                ("http://127.0.0.1:8000/api/health", 200),
+                ("http://127.0.0.1:8642/health", 200),
+                ("http://127.0.0.1:8000/health", 200),
+                ("http://127.0.0.1:8001/health", 404),
+            ])
 
     def test_entra_verification_requires_scoped_recent_manual_browser_evidence(self):
         import httpx
