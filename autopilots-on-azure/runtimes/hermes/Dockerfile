@@ -81,8 +81,15 @@ COPY --from=minimax-skills /source/skills/pptx-generator ./runtime_skills/pptx-g
 COPY --from=minimax-skills /source/skills/minimax-pdf ./runtime_skills/minimax-pdf
 COPY --from=office-helper /out/office-collaboration /usr/local/bin/office-collaboration
 COPY --from=minimax-docx /out/MiniMaxAIDocx.Cli /usr/local/bin/minimax-docx
+COPY runtimes/hermes/*.py ./
+COPY runtimes/hermes/plugins/ ./runtime_plugins/
+COPY runtimes/hermes/runtime_skills/ ./runtime_skills/
+COPY bridge/*.py ./bridge/
+COPY autopilots_identity/*.py ./autopilots_identity/
+RUN /app/.venv/bin/python -B -c "import start_hermes; assert callable(start_hermes.main)"
 
 ENV HERMES_HOME=/data/hermes
+ENV AUTOPILOTS_APPLICATION_ROOT=/app
 ENV HERMES_BUNDLED_SKILLS=/app/runtime_skills
 ENV AUTOPILOTS_PLUGIN_PATH=/app:/opt/autopilots/hermes-site
 ENV PYTHONPATH=/app
@@ -93,4 +100,4 @@ ENV PORT=8642
 
 EXPOSE 8642
 
-ENTRYPOINT ["/bin/sleep", "infinity"]
+ENTRYPOINT ["/app/.venv/bin/python", "/app/start_hermes.py"]

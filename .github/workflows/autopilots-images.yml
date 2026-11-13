@@ -1,0 +1,128 @@
+name: Autopilots public images
+
+on:
+  push:
+    branches: [tkubica12-autopilots-simulator-deployment]
+    paths:
+      - autopilots-on-azure/**
+      - .github/workflows/autopilots-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilots-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [runtime, gateway, simulator]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Export only committed generic source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          context="$RUNNER_TEMP/autopilots-source"
+          mkdir "$context"
+          git archive HEAD:autopilots-on-azure | tar -x -C "$context"
+          python3 - "$context" <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          forbidden = {".local", ".venv", "__pycache__", "node_modules"}
+          for path in root.rglob("*"):
+              if path.is_symlink():
+                  raise SystemExit("Symlink in build source: " + str(path.relative_to(root)))
+              if not path.is_file():
+                  continue
+              relative = path.relative_to(root)
+              if forbidden.intersection(relative.parts) or (path.name.startswith(".env") and path.name != ".env.example") or path.suffix.lower() in {".key", ".pem", ".pfx", ".pyc"}:
+                  raise SystemExit("Sensitive/generated build member: " + str(relative))
+          PY
+          case "${{ matrix.role }}" in
+            runtime) file="$context/runtimes/hermes/Dockerfile" ;;
+            gateway) file="$context/runtimes/gateway/Dockerfile" ;;
+            simulator) context="$context/chat-simulator"; file="$context/Dockerfile" ;;
+          esac
+          echo "context=$context" >> "$GITHUB_OUTPUT"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish generic image
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: ${{ steps.source.outputs.context }}
+          file: ${{ steps.source.outputs.file }}
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/${{ steps.source.outputs.owner }}/agent-demos-${{ matrix.role }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            HERMES_BASE_IMAGE=docker.io/nousresearch/hermes-agent@sha256:9a31a97e38540562142c52f439c124325355f671f31ad10f9ebd1c7b55dab7ea
+            PYTHON_BASE_IMAGE=docker.io/library/python@sha256:aaf08c5490d52cd92bc27142a5215b1e47355a5eaf9adfad2a0fbc022d0b5490
+            SIMULATOR_CONTAINER_USER=0:0
+          cache-from: type=gha,scope=autopilots-${{ matrix.role }}
+          cache-to: type=gha,mode=max,scope=autopilots-${{ matrix.role }}
+      - name: Record immutable image
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/image-result"
+          python3 - <<'PY'
+          import json, os, pathlib
+          role = "${{ matrix.role }}"
+          image = "ghcr.io/${{ steps.source.outputs.owner }}/agent-demos-" + role + "@${{ steps.image.outputs.digest }}"
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "image-result" / (role + ".json")
+          path.write_text(json.dumps({"source_commit": "${{ github.sha }}", "role": role, "image": image}, indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-${{ matrix.role }}
+          path: ${{ runner.temp }}/image-result/*.json
+          if-no-files-found: error
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: images
+      - name: Create pinned deployment image manifest
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          roles = ("runtime", "gateway", "simulator")
+          values = [json.loads((pathlib.Path("images") / (role + ".json")).read_text()) for role in roles]
+          assert all(value["source_commit"] == "${{ github.sha }}" for value in values)
+          assert all(re.fullmatch(r"ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}", value["image"]) for value in values)
+          pathlib.Path("deployment-images.json").write_text(json.dumps({
+              "schema": 1, "source_commit": "${{ github.sha }}",
+              "images": {value["role"]: value["image"] for value in values},
+          }, indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deployment-images
+          path: deployment-images.json
+          if-no-files-found: error

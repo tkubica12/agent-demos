@@ -17,3 +17,13 @@
 **/.venv/
 **/__pycache__/
 **/node_modules/
+**/.local
+**/.local/**
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/*.pfx
+**/profiles
+**/profiles/**
+**/tokens.json

@@ -10,6 +10,21 @@ Agent User, `a365`, publishing, Work IQ, or Microsoft 365 licensing is involved.
 Azure DevOps and Clarity MCP integration and Entra Agent ID are phase 2.
 Phase 1 uses only standard secretless Entra application registrations.
 
+## Public image release
+
+`.github/workflows/autopilots-images.yml` builds self-contained runtime, gateway
+and simulator images on the deployment branch, with a manual dispatch trigger.
+It exports the committed project tree rather than uploading an operator
+directory, and publishes source-labelled images, provenance and SBOMs to GHCR.
+The `deployment-images` artifact contains schema `1`, `source_commit`, and
+`images.runtime`, `images.gateway`, `images.simulator` as immutable GHCR digest
+references. No customer configuration is a build argument or image input.
+
+New GHCR packages must be made public and anonymously pull-tested before
+deployment. This image workflow alone does not establish private Sandbox
+conversion, deployment, or live acceptance. The legacy private-ACR/operator
+instructions below are being replaced; do not use them for the no-VM handoff.
+
 ## Architecture and isolation
 
 In each stack, the browser signs in to its simulator SPA/API. A separate channel application
