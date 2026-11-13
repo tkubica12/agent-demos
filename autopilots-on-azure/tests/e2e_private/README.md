@@ -117,6 +117,8 @@ timeout_seconds = 180
 name = "agent-1"
 url = "https://<native-private-simulator-FQDN>"
 access_code_env = "PRIVATE_AGENT_1_CODE"
+owner_display_name = "<configured-DEMO-Worker-owner-display-name>"
+worker_owner_id = "<deployed-WORKER_OWNER_ID-UUID>"
 # Explicit operator-approved argv that really restarts the simulator.
 # Do not use page reload, a health check, or an arbitrary sleep here.
 restart_command = ["<restart-tool>", "<actual-restart-argument>"]
@@ -145,6 +147,25 @@ actual mention; a real agent Adaptive Card; DOCX and TXT uploads whose contents
 the agent reads; an agent-generated downloadable document; and a genuine
 restart retaining the original chat and file hashes. Independent feature
 failures accumulate, rather than silently skipping the rest.
+
+The first human signs in as the configured Worker owner. In DEMO mode its
+identity is UUIDv5(namespace `51f8c9cd-dcd4-4c33-9ef6-48b4c5919185`,
+`displayName.strip().lower()`), **not** the simulator database user ID. Its
+authenticated `/api/me` identity must match the supplied deployed
+`WORKER_OWNER_ID`. The second human is independent.
+
+Adaptive Card acceptance sends exactly `/learning` in that owner's personal
+chat. This supported production handler calls the actual Hermes runtime's
+delivery-reference and native learning-ledger/approval endpoints and returns
+an AdaptiveCard v1.4 headed `What I learned`. Even an empty native ledger emits
+`Nothing new since the last digest.`; no fabricated learning entry or actionable
+button is required. This proves native runtime/channel/card integration, **not
+model inference**. The separate random challenge retains that inference check.
+Wrong owner, missing native tools, runtime/auth failure, or a text/error reply
+fails explicitly. No group-command/model-created-card guarantee is implied.
+Real agent document download remains a separate mandatory criterion: the
+currently unwired Hermes local-document channel capability does not get waived
+by a successful learning card.
 
 A random model challenge rejects canned static replies but **does not alone
 prove which inference backend was used**. Retain the matching Hermes/Foundry

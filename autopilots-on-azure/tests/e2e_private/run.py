@@ -29,6 +29,9 @@ def main():
     for stack in stacks:
         if not os.environ.get(stack["access_code_env"]):
             raise ValueError(f"Missing access code environment variable for {stack['name']}.")
+        if not isinstance(stack.get("owner_display_name"), str) or not stack["owner_display_name"].strip():
+            raise ValueError(f"Configure the real DEMO Worker owner display name for {stack['name']}.")
+        stack["worker_owner_id"] = str(uuid.UUID(stack["worker_owner_id"]))
         evidence["results"].append(check(stack["url"]))
     (output / "private-network.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     public = json.loads(Path(config["public_negative_evidence"]).read_text(encoding="utf-8"))
