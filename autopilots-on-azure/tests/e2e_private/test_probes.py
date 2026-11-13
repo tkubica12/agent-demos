@@ -205,7 +205,7 @@ class PrivateProbeTests(unittest.TestCase):
             "name", "success", "resultCode", "target", "responseModel", "inputTokens", "outputTokens",
         )]
         chat = ["chat", True, "", "azure-foundry", "served-model", 100, 20]
-        http = ["internal", True, "200", "account.openai.azure.com", "", None, None]
+        http = ["POST /", True, "200", "account.openai.azure.com:443", "", None, None]
         def response(rows):
             return {"tables": [{"columns": columns, "rows": rows}]}
         self.assertIsNone(foundry_trace(response([chat])))
