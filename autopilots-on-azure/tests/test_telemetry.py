@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import ipaddress
 import os
+import ssl
 import sys
+import tempfile
+import threading
 import unittest
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from fastapi import FastAPI
 from opentelemetry import trace
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -47,6 +58,91 @@ class TelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.tracer_patch.stop()
         self.settings_patch.stop()
         self.provider.shutdown()
+
+    async def test_real_sync_and_async_https_targets_survive_export_without_urls_or_credentials(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "HTTP tracing test")])
+            now = datetime.now(timezone.utc)
+            certificate = (
+                x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(hours=1))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+                .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+                               critical=False)
+                .sign(key, hashes.SHA256())
+            )
+            cert_path, key_path = directory / "cert.pem", directory / "key.pem"
+            cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption(),
+            ))
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert_path, key_path)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            telemetry.configure_httpx_telemetry(self.provider)
+            try:
+                port = server.server_address[1]
+                url = f"https://user:secret@127.0.0.1:{port}/private/path?token=secret-query"
+                trust = ssl.create_default_context(cafile=str(cert_path))
+                with telemetry.model_span("configured-model"):
+                    with httpx.Client(verify=trust, trust_env=False) as client:
+                        self.assertEqual(client.post(url, json={"prompt": "private prompt"}).status_code, 200)
+                    async with httpx.AsyncClient(verify=trust, trust_env=False) as client:
+                        self.assertEqual((await client.post(url, json={"prompt": "private prompt"})).status_code, 200)
+            finally:
+                HTTPXClientInstrumentor().uninstrument()
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+        from azure.monitor.opentelemetry.exporter.export.trace._exporter import _convert_span_to_envelope
+
+        spans = self.exporter.get_finished_spans()
+        model = next(span for span in spans if span.name == "chat")
+        clients = [span for span in spans if span.kind == SpanKind.CLIENT and "http.request.method" in span.attributes]
+        self.assertEqual(len(clients), 2)
+        for span in clients:
+            self.assertEqual(span.parent.span_id, model.context.span_id)
+            self.assertEqual(span.context.trace_id, model.context.trace_id)
+            self.assertEqual(span.attributes["server.address"], "127.0.0.1")
+            self.assertEqual(span.attributes["server.port"], port)
+            self.assertEqual(span.attributes["http.response.status_code"], 200)
+            envelope = _convert_span_to_envelope(span)
+            self.assertEqual(envelope.data.base_data.target, f"127.0.0.1:{port}")
+            self.assertEqual(envelope.data.base_data.type, "HTTP")
+            self.assertEqual(envelope.data.base_data.result_code, "200")
+            self.assertTrue(envelope.data.base_data.success)
+            exported = repr(envelope.as_dict())
+            for private in ("private/path", "secret", "private prompt", "user:"):
+                self.assertNotIn(private, exported)
+
+    async def test_target_allowlist_rejects_url_credentials_and_non_client_configured_targets(self):
+        for target, kind in (
+            ("https://user:secret@host/private?token=secret", SpanKind.CLIENT),
+            ("host?token=secret", SpanKind.CLIENT),
+            ("configured-model-host.example", SpanKind.INTERNAL),
+        ):
+            with self.tracer.start_as_current_span("outgoing", kind=kind) as span:
+                span.set_attributes({"server.address": target, "server.port": 443, "http.request.method": "POST"})
+        for span in self.exporter.get_finished_spans():
+            self.assertNotIn("server.address", span.attributes)
+            self.assertNotIn("server.port", span.attributes)
 
     async def test_real_asgi_chain_keeps_trace_and_opaque_session_through_runtime(self):
         runtime = FastAPI()
@@ -308,8 +404,10 @@ class ConfigurationTests(unittest.TestCase):
                 patch("azure.identity.ManagedIdentityCredential") as mi,
                 patch("azure.monitor.opentelemetry.exporter.AzureMonitorTraceExporter") as exporter,
                 patch.object(telemetry, "BatchSpanProcessor"),
+                patch.object(telemetry, "configure_httpx_telemetry") as instrument,
             ):
                 provider = telemetry.configure_telemetry()
+                instrument.assert_called_once_with(provider)
                 if managed_identity:
                     mi.assert_called_once_with(client_id="worker-mi")
                     cli.assert_not_called()
@@ -337,6 +435,7 @@ class ConfigurationTests(unittest.TestCase):
             patch.object(telemetry, "_settings", None),
             patch.object(trace, "get_tracer_provider", return_value=trace.ProxyTracerProvider()),
             patch.object(trace, "set_tracer_provider") as install,
+            patch.object(telemetry, "configure_httpx_telemetry") as instrument,
         ):
             provider = telemetry.configure_telemetry()
             self.assertIs(telemetry.configure_telemetry(), provider)
@@ -344,6 +443,7 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "one telemetry component"):
                 telemetry.configure_telemetry("hermes-gateway")
             install.assert_called_once_with(provider)
+            instrument.assert_called_once_with(provider)
             provider.shutdown()
 
     def test_preexisting_provider_fails_instead_of_adding_another_exporter(self):

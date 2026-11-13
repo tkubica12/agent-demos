@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 import re
 import threading
@@ -14,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from opentelemetry import trace
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor, RequestInfo, ResponseInfo
 from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
@@ -45,6 +47,7 @@ _SAFE_ATTRIBUTES = frozenset(
         "gen_ai.request.model", "gen_ai.response.model", "gen_ai.tool.name",
         "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
         "http.request.method", "http.response.status_code", "http.route",
+        "server.address", "server.port",
         "messaging.system", "messaging.operation.type",
         "autopilots.worker.id", "autopilots.operation.id", "autopilots.role.blueprint",
         "autopilots.role.release", "autopilots.role.commit", "autopilots.component",
@@ -152,11 +155,7 @@ class MetadataOnlyExporter(SpanExporter):
                     key: value for key, value in span.resource.attributes.items()
                     if key in _SAFE_RESOURCE_ATTRIBUTES
                 }),
-                attributes={
-                    key: value
-                    for key, value in (span.attributes or {}).items()
-                    if key in _SAFE_ATTRIBUTES
-                },
+                attributes=self._attributes(span),
                 events=(),
                 links=[trace.Link(link.context) for link in span.links],
                 kind=span.kind,
@@ -168,6 +167,30 @@ class MetadataOnlyExporter(SpanExporter):
             for span in spans
         ]
         return self.exporter.export(sanitized)
+
+    @staticmethod
+    def _attributes(span: ReadableSpan) -> dict[str, Any]:
+        attributes = {
+            key: value for key, value in (span.attributes or {}).items()
+            if key in _SAFE_ATTRIBUTES and key not in {"server.address", "server.port"}
+        }
+        host = (span.attributes or {}).get("server.address")
+        if (
+            span.kind == SpanKind.CLIENT and "http.request.method" in attributes
+            and isinstance(host, str) and len(host) <= 253
+        ):
+            try:
+                ipaddress.ip_address(host)
+                valid = True
+            except ValueError:
+                valid = all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                            for label in host.rstrip(".").split("."))
+            if valid:
+                attributes["server.address"] = host
+                port = (span.attributes or {}).get("server.port")
+                if type(port) is int and 1 <= port <= 65535:
+                    attributes["server.port"] = port
+        return attributes
 
     @staticmethod
     def _name(span: ReadableSpan) -> str:
@@ -220,9 +243,40 @@ def configure_telemetry(component: str = "bridge", *, reuse_existing: bool = Fal
             )
             provider.add_span_processor(BatchSpanProcessor(MetadataOnlyExporter(exporter)))
         trace.set_tracer_provider(provider)
+        configure_httpx_telemetry(provider)
         _settings = configuration
         _provider = provider
         return provider
+
+
+def configure_httpx_telemetry(provider: TracerProvider) -> None:
+    """Trace actual HTTPX transports using observed request/response metadata only."""
+    instrumentor = HTTPXClientInstrumentor()
+    if instrumentor.is_instrumented_by_opentelemetry:
+        raise RuntimeError("HTTPX tracing is already configured; use one shared telemetry initializer.")
+
+    def request_hook(span: trace.Span, request: RequestInfo) -> None:
+        if span.is_recording():
+            span.set_attributes({
+                "http.request.method": request.method.decode("ascii"),
+                "server.address": request.url.host,
+                "server.port": request.url.port or (443 if request.url.scheme == "https" else 80),
+            })
+
+    def response_hook(span: trace.Span, request: RequestInfo, response: ResponseInfo) -> None:
+        if span.is_recording():
+            span.set_attribute("http.response.status_code", response.status_code)
+
+    async def async_request_hook(span: trace.Span, request: RequestInfo) -> None:
+        request_hook(span, request)
+
+    async def async_response_hook(span: trace.Span, request: RequestInfo, response: ResponseInfo) -> None:
+        response_hook(span, request, response)
+
+    instrumentor.instrument(
+        tracer_provider=provider, request_hook=request_hook, response_hook=response_hook,
+        async_request_hook=async_request_hook, async_response_hook=async_response_hook,
+    )
 
 
 def flush_telemetry() -> None:
