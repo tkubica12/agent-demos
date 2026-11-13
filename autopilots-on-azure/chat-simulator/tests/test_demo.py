@@ -143,6 +143,9 @@ def test_declarative_agents_idempotent_update_file_and_env(demo_settings, tmp_pa
     registration["messagingEndpoint"] = "https://bridge.example.test/api/messages"
     monkeypatch.setenv("TSIM_AUTH_MODE", "demo")
     monkeypatch.setenv("TSIM_TEST_IDP", "0")
+    monkeypatch.setenv("TSIM_TENANT_ID", demo_settings.tenant_id)
+    monkeypatch.setenv("TSIM_CLIENT_ID", "")
+    monkeypatch.setenv("TSIM_SCOPE", "")
     monkeypatch.setenv("TSIM_DEMO_ACCESS_CODE", demo_settings.demo_access_code)
     monkeypatch.setenv("TSIM_DEMO_EXPIRES_AT", demo_settings.demo_expires_at)
     monkeypatch.setenv("TSIM_AGENTS_JSON", json.dumps([registration]))
@@ -150,7 +153,9 @@ def test_declarative_agents_idempotent_update_file_and_env(demo_settings, tmp_pa
     monkeypatch.setenv("TSIM_STORAGE_PATH", str(demo_settings.storage_path))
     from_env = Settings.from_env()
     with TestClient(create_app(from_env)) as client:
-        users = client.get("/api/users", headers=login(client, from_env)).json()
+        response = client.get("/api/users", headers=login(client, from_env))
+        assert response.status_code == 200, response.text
+        users = response.json()
         agents = [user for user in users if user.get("isAgent")]
         assert len(agents) == 1 and agents[0]["id"] == agent["id"]
         assert agents[0]["displayName"] == "Updated Agent"
