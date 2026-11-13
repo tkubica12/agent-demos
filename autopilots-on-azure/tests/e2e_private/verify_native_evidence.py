@@ -142,6 +142,22 @@ def select_widget_turn(payload, expected, now):
     )}, **linkage}
 
 
+def successful_tool_completions(tools, tool):
+    starts = {
+        item.get("toolCallId") for item in tools if isinstance(item, dict)
+        and item.get("event") == "tool.started" and item.get("tool") == tool
+        and isinstance(item.get("toolCallId"), str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", item["toolCallId"])
+    }
+    return [
+        item for item in tools if isinstance(item, dict)
+        and item.get("event") == "tool.completed" and item.get("tool") == tool
+        and item.get("toolCallId") in starts and item.get("error") is False
+        and type(item.get("duration")) in (int, float)
+        and math.isfinite(item["duration"]) and item["duration"] >= 0
+    ]
+
+
 def validate_run(payload, run_id, *, require_terminal=True):
     if payload.get("runId") != run_id or payload.get("status") != "completed":
         raise ValueError("Evidence is not the exact completed native run.")
@@ -156,19 +172,7 @@ def validate_run(payload, run_id, *, require_terminal=True):
     tools = payload.get("tools")
     if not isinstance(tools, list):
         raise ValueError("Native tool evidence is unavailable.")
-    starts = {
-        item.get("toolCallId") for item in tools if isinstance(item, dict)
-        and item.get("event") == "tool.started" and item.get("tool") == "terminal"
-        and isinstance(item.get("toolCallId"), str)
-        and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", item["toolCallId"])
-    }
-    completed = [
-        item for item in tools if isinstance(item, dict)
-        and item.get("event") == "tool.completed" and item.get("tool") == "terminal"
-        and item.get("toolCallId") in starts and item.get("error") is False
-        and type(item.get("duration")) in (int, float)
-        and math.isfinite(item["duration"]) and item["duration"] >= 0
-    ]
+    completed = successful_tool_completions(tools, "terminal")
     if require_terminal and not completed:
         raise ValueError("No actual successful terminal start/completion with matching tool-call identity.")
     return {
