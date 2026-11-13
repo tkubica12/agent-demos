@@ -168,6 +168,22 @@ async def check_widgets(
             await expect(page.locator(f'article[data-message-id="{ordinary}"] pre code')).to_contain_text("widget/mcp-ui")
             await expect(page.locator(f'article[data-message-id="{ordinary}"] iframe')).to_have_count(0)
             checks.append("markdown widget fence stays code")
+            users = await call("GET", "/api/users")
+            mentioned = next(user for user in users if user.get("isAgent"))
+            mention_title = f"<at>{mentioned['displayName']}</at>"
+            mention_widget = render_widget({**spec, "title": mention_title}, session_key=session_key,
+                                           user_id=user_id, conversation_id=conversation,
+                                           fallback=f"Hello {mention_title}")
+            mention_widget = Activity.model_validate({
+                **mention_widget.model_dump(by_alias=True, exclude_none=True),
+                "entities": [{"type": "mention", "mentioned": {"id": mentioned["id"], "name": mentioned["displayName"]},
+                              "text": mention_title}],
+            })
+            mentioned_id = await post_widget(mention_widget)
+            mentioned_message = page.locator(f'article[data-message-id="{mentioned_id}"]')
+            await expect(mentioned_message.locator("iframe")).to_have_attribute("title", mention_title)
+            await expect(mentioned_message.locator(".mention")).to_have_text(mentioned["displayName"])
+            checks.append("mention formatting leaves widget JSON/payload unchanged")
 
             attack_script = """
 window.probes={};

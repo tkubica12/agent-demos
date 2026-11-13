@@ -14,13 +14,14 @@ const escapeMarkdown = (text: string) => text.replace(/[\\[\]()*_`]/g, "\\$&");
 
 export function MessageBody({ message, api, dark = false }: { message: Message; api: Api; dark?: boolean }) {
   if (message.deleted) return <span className="deleted-message">This message has been deleted.</span>;
-  let text = message.text;
-  for (const mention of message.mentions) {
-    text = text.replaceAll(`<at>${mention.displayName}</at>`,
-      `[${escapeMarkdown(mention.displayName)}](/mention/${encodeURIComponent(mention.userId)})`);
-  }
   if (message.textFormat === "plain") return <div className="plain-message">{emojiText(message.text)}</div>;
-  const markdown = (source: string, key: number) => <Markdown key={key} remarkPlugins={[remarkGfm]} components={{
+  const markdown = (source: string, key: number) => {
+    let text = source;
+    for (const mention of message.mentions) {
+      text = text.replaceAll(`<at>${mention.displayName}</at>`,
+        `[${escapeMarkdown(mention.displayName)}](/mention/${encodeURIComponent(mention.userId)})`);
+    }
+    return <Markdown key={key} remarkPlugins={[remarkGfm]} components={{
     p: ({ children }) => <p>{inlineEmoji(children)}</p>,
     strong: ({ children }) => <strong>{inlineEmoji(children)}</strong>,
     em: ({ children }) => <em>{inlineEmoji(children)}</em>,
@@ -34,8 +35,9 @@ export function MessageBody({ message, api, dark = false }: { message: Message; 
     h1: ({ children }) => <h3>{inlineEmoji(children)}</h3>,
     h2: ({ children }) => <h3>{inlineEmoji(children)}</h3>,
     h3: ({ children }) => <h3>{inlineEmoji(children)}</h3>,
-  }}>{source}</Markdown>;
-  return <>{widgetParts(text, message.textFormat, !!message.author.isAgent).map((part, index) =>
+    }}>{text}</Markdown>;
+  };
+  return <>{widgetParts(message.text, message.textFormat, !!message.author.isAgent).map((part, index) =>
     "widget" in part ? <HtmlWidgetView key={`widget-${part.index}`} api={api} messageId={message.id}
       index={part.index} widget={part.widget} dark={dark} /> : markdown(part.text, index))}</>;
 }
