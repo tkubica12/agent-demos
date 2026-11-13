@@ -72,7 +72,7 @@ async function runStack(stack) {
           method, headers, body: data instanceof FormData ? data : data ? JSON.stringify(data) : undefined,
           redirect: "error", signal: AbortSignal.timeout(config.timeout_ms),
         });
-        assert.ok(response.ok(), `${method} ${resource} failed HTTP ${response.status}`);
+        assert.ok(response.ok, `${method} ${resource} failed HTTP ${response.status}`);
         return bytes ? Buffer.from(await response.arrayBuffer()) : response.json();
       }
       return { page, api, me: await api("/me") };
@@ -108,6 +108,7 @@ async function runStack(stack) {
       return eventually(async () => {
         const messages = await first.api(`/conversations/${cid}/messages`);
         const index = messages.findIndex((message) => message.id === afterId);
+        if (index < 0) return false;
         return messages.slice(index + 1).find((message) => message.author.id === agent.id && predicate(message));
       });
     }
@@ -190,7 +191,7 @@ async function runStack(stack) {
       const file = received.attachments[0];
       await expect(first.page.locator(`[data-message-id="${received.id}"]`)).toContainText(file.name);
       const downloadEvent = first.page.waitForEvent("download");
-      await first.page.locator(`[data-message-id="${received.id}"]`).getByText(file.name, { exact: true }).click();
+      await first.page.locator(`[data-message-id="${received.id}"]`).getByRole("button", { name: file.name, exact: true }).click();
       const download = await downloadEvent;
       assert.equal(await download.failure(), null);
       const bytes = await first.api(`/files/${file.id}/content`, "GET", undefined, true);
@@ -198,6 +199,7 @@ async function runStack(stack) {
       persistedFiles.push({ id: file.id, sha256: sha(bytes) });
     });
     await check("restart-chat-and-file-persistence", async () => {
+      assert.ok(persistedFiles.length > 0, "File persistence requires an actual uploaded/downloaded file.");
       assert.ok(Array.isArray(stack.restart_command) && stack.restart_command.length,
         "A real restart_command argv is mandatory; page reload is not a restart.");
       const restarted = await execute(stack.restart_command[0], stack.restart_command.slice(1), { timeout: 600_000 });
