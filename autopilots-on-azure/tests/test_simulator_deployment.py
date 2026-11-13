@@ -83,6 +83,11 @@ class SimulatorDeploymentTests(unittest.TestCase):
             second = prepare(self.config(), root)
             self.assertEqual(first["deployer_principal_id"], second["deployer_principal_id"])
             command.assert_called_once()
+            values = json.loads((root / "secrets.json").read_text())
+            import uuid
+            self.assertNotEqual(uuid.UUID(values["registration_client_ids"]["agent-1"]).int, 0)
+            prepare(self.config(), root)
+            self.assertEqual(values, json.loads((root / "secrets.json").read_text()))
             self.assertNotEqual(state_path(root, "platform", "training"), root / "platform" / "terraform.tfstate")
             with self.assertRaisesRegex(ValueError, "state boundary"):
                 prepare({**self.config(), "tenant_id": "different"}, root)
@@ -130,6 +135,56 @@ class SimulatorDeploymentTests(unittest.TestCase):
             self.assertEqual(configs[0]["stack_name"], "agent-3")
             with self.assertRaisesRegex(ValueError, "Unknown selected"):
                 load_stack_configs(path, ["agent-2"])
+
+    def test_real_chat_smoke_requires_model_reply_from_registered_agent(self):
+        import httpx
+        from scripts.simulator_smoke import verify_chat
+
+        marker = ""
+
+        def respond(request):
+            nonlocal marker
+            if request.url.path == "/api/demo/login":
+                return httpx.Response(200, json={"accessToken": "session"})
+            self.assertEqual(request.headers["Authorization"], "Bearer session")
+            if request.url.path == "/api/users":
+                return httpx.Response(200, json=[{"id": "agent", "isAgent": True}])
+            if request.url.path == "/api/chats":
+                return httpx.Response(201, json={"conversationId": "conversation"})
+            if request.method == "POST":
+                marker = json.loads(request.content)["text"].split()[-1]
+                return httpx.Response(201, json={"id": "user-message"})
+            return httpx.Response(200, json=[{
+                "id": "reply", "author": {"isAgent": True}, "text": marker,
+            }])
+
+        with httpx.Client(base_url="https://simulator.test", transport=httpx.MockTransport(respond)) as client:
+            evidence = verify_chat("https://simulator.test", access_code="code", client=client)
+        self.assertEqual(evidence["reply_id"], "reply")
+        self.assertEqual(evidence["marker"], marker)
+
+    def test_real_chat_smoke_does_not_accept_a_user_echo(self):
+        import httpx
+        from scripts.simulator_smoke import verify_chat
+
+        marker = ""
+
+        def respond(request):
+            nonlocal marker
+            if request.url.path == "/api/users":
+                return httpx.Response(200, json=[{"id": "agent", "isAgent": True}])
+            if request.url.path == "/api/chats":
+                return httpx.Response(201, json={"conversationId": "conversation"})
+            if request.method == "POST":
+                marker = json.loads(request.content)["text"].split()[-1]
+                return httpx.Response(201, json={"id": "user-message"})
+            return httpx.Response(200, json=[{
+                "id": "user-message", "author": {"isAgent": False}, "text": marker,
+            }])
+
+        with httpx.Client(base_url="https://simulator.test", transport=httpx.MockTransport(respond)) as client:
+            with self.assertRaisesRegex(TimeoutError, "Hermes/model reply"):
+                verify_chat("https://simulator.test", access_token="session", client=client, timeout=0)
 
 
 if __name__ == "__main__":

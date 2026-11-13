@@ -6,7 +6,8 @@ Simulator, gateway, and Hermes Worker. No Foundry account, model deployment,
 network, registry, monitoring, simulator, or channel audience is shared.
 The channel is not Microsoft Teams: no Agent 365 blueprint, Agent Identity,
 Agent User, `a365`, publishing, Work IQ, or Microsoft 365 licensing is involved.
-Azure DevOps and Clarity MCP integration is a later phase.
+Azure DevOps and Clarity MCP integration and Entra Agent ID are phase 2.
+Phase 1 uses only standard secretless Entra application registrations.
 
 ## Architecture and isolation
 
@@ -145,6 +146,8 @@ uv run python -m scripts.deploy_simulator_environment --config .local\customer.t
 The default action is `all` for every selected stack: isolated infrastructure and UAMIs, identities,
 immutable image builds, simulator creation, redirect reconciliation, Workers,
 registrations through `TSIM_AGENTS_JSON`, and health/anonymous-access checks.
+In DEMO mode it also logs in, sends a unique challenge through the simulator,
+and requires a real Hermes/model reply through the gateway and Connector API.
 Each stack has its own three Entra applications (SPA/API, channel, agent).
 The initial UAMI infrastructure must exist before Entra FICs can bind to its
 actual object IDs. The SPA redirect is captured from the native Sandbox HTTPS
@@ -185,7 +188,7 @@ demo_acknowledge = "test-data-only"
 demo_expires_at = "2026-11-15T23:59:00Z"
 ```
 
-Choose a future, timezone-qualified expiry for the actual exercise. Deployment
+Choose a future UTC expiry within 30 days for the actual exercise. Deployment
 generates a private simulator access code and a different strong agent key per
 stack in that stack's ignored `secrets.json`. Share the access code through an
 approved secure channel, never a deployment log or public issue. Expiry is
@@ -199,6 +202,13 @@ require Entra app creation. To transition, reconcile identities, change
 uv run python -m unittest tests.test_simulator_deployment tests.test_simulator_identity tests.test_sandbox_services tests.test_sandbox_launcher -q
 uv run python -m scripts.deploy_simulator_environment --config .local\customer.toml verify
 ```
+
+The `verify` action includes a real personal-chat challenge/reply in DEMO mode
+and saves `chat-verification.json` in the stack's local state directory.
+In Entra mode, supply `TSIM_SMOKE_ACCESS_TOKEN` from an assigned user's SPA
+session to run that same check; without it, verification explicitly reports
+that only health and anonymous-access rejection were checked. Tokens are never
+saved or printed by this command.
 
 Health and unauthenticated-access checks are **not** complete chat acceptance.
 With a real assigned Entra user (or the explicit DEMO access code), verify login,
@@ -217,7 +227,7 @@ changing the simulator's channel identity.
 
 ## Cost and teardown
 
-Billable shared resources include ACR Basic/builds, Service Bus Standard,
+Billable per-stack resources include ACR Basic/builds, Service Bus Standard,
 monitoring, private networking, Sandbox compute and volumes, and Foundry token
 usage. Stopped Worker compute does not make the environment free. Each simulator
 is provisioned at 1 vCPU/2 GiB continuously; its active Worker adds 2 vCPU/2 GiB

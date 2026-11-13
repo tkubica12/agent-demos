@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -52,8 +52,9 @@ def validate_config(config: dict, *, validate_expiry: bool = True) -> dict:
         raise ValueError("model_capacity must be a positive integer in the customer's model quota.")
     if config["auth_mode"] == "demo" and validate_expiry:
         expiry = datetime.fromisoformat(config["demo_expires_at"].replace("Z", "+00:00"))
-        if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
-            raise ValueError("DEMO mode requires a future timezone-qualified demo_expires_at.")
+        now = datetime.now(timezone.utc)
+        if expiry.utcoffset() != timedelta(0) or expiry <= now or (expiry - now).total_seconds() > 30 * 86400:
+            raise ValueError("DEMO mode requires a future UTC demo_expires_at within 30 days.")
         if config.get("demo_acknowledge") != "test-data-only":
             raise ValueError('DEMO requires demo_acknowledge = "test-data-only".')
     return config
@@ -113,6 +114,9 @@ def prepare_root(root: Path, layer: str, source: str) -> Path:
 def terraform(root: Path, workspace: str, values: dict, *, destroy: bool = False) -> dict:
     if root.resolve().is_relative_to((REPO_ROOT / "terraform").resolve()):
         raise ValueError("Simulator may not operate in the shared Terraform roots.")
+    cache = REPO_ROOT / ".local" / "terraform-provider-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("TF_PLUGIN_CACHE_DIR", str(cache))
     write_tfvars(root / "generated.simulator.auto.tfvars.json", values)
     run(["terraform", "init", "-input=false", "-lockfile=readonly"], cwd=root)
     selected = run(["terraform", "workspace", "select", workspace], cwd=root, capture=True, check=False)
@@ -171,9 +175,13 @@ def prepare(config: dict, root: Path) -> dict:
     existing["agent_names"] = [agent["name"] for agent in config["agents"]]
     save(ownership, existing)
     private = root / "secrets.json"
-    values = load(private) if private.exists() else {"demo_access_code": secrets.token_urlsafe(24), "agent_keys": {}}
+    values = load(private) if private.exists() else {
+        "demo_access_code": secrets.token_urlsafe(24), "agent_keys": {}, "registration_client_ids": {},
+    }
+    values.setdefault("registration_client_ids", {})
     for agent in config["agents"]:
-        values["agent_keys"].setdefault(agent["name"], secrets.token_urlsafe(36))
+        values["agent_keys"].setdefault(agent["name"], secrets.token_urlsafe(32))
+        values["registration_client_ids"].setdefault(agent["name"], str(uuid.uuid4()))
     save(private, values)
     prepare_root(root, "platform", "platform")
     prepare_root(root, "simulator", "simulator")
@@ -297,7 +305,10 @@ def deploy(config: dict, root: Path, ownership: dict) -> None:
         save(root / name / "outputs.json", {**worker, **services})
         registrations.append({
             "name": name, "displayName": agent.get("display_name", name),
-            "clientId": identity.get("agents", {}).get(name, {}).get("client_id", ""),
+            "clientId": (
+                identity["agents"][name]["client_id"] if config["auth_mode"] == "entra"
+                else load(root / "secrets.json")["registration_client_ids"][name]
+            ),
             "messagingEndpoint": services["bridge_url"] + "/api/messages",
             **({"demoKey": values["simulator_demo_key"]} if config["auth_mode"] == "demo" else {}),
         })
@@ -324,7 +335,19 @@ def verify(config: dict, root: Path) -> None:
         response = client.get(deployment["url"] + "/api/me")
         if response.status_code != 401:
             raise RuntimeError(f"Anonymous simulator data access returned {response.status_code}, expected 401.")
-    print("Simulator and gateway health passed; anonymous access rejected. Real chat acceptance is a separate check.")
+    print("Simulator and gateway health passed; anonymous access rejected.")
+    if config["auth_mode"] == "demo" or os.environ.get("TSIM_SMOKE_ACCESS_TOKEN"):
+        from scripts.simulator_smoke import verify_chat
+
+        evidence = verify_chat(
+            deployment["url"],
+            access_code=load(root / "secrets.json")["demo_access_code"] if config["auth_mode"] == "demo" else "",
+            access_token=os.environ.get("TSIM_SMOKE_ACCESS_TOKEN", ""),
+        )
+        save(root / "chat-verification.json", evidence)
+        print(evidence["verified"])
+    else:
+        print("Entra real-chat verification not run: supply TSIM_SMOKE_ACCESS_TOKEN from an assigned SPA user.")
 
 
 def destroy(config: dict, root: Path) -> None:
