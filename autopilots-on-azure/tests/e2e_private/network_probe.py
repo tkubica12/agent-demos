@@ -31,12 +31,17 @@ def private_address(value):
     return any(address in network for network in RFC1918)
 
 
-def check(url, public=False):
+def check(url, public=False, transport_only=False):
     parsed = urlparse(url)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
             or parsed.query or parsed.fragment or parsed.path not in ("", "/") or parsed.port not in (None, 443)):
         raise ValueError("Provide an HTTPS origin without credentials or a query.")
-    result = {"url": url.rstrip("/"), "public_negative": public}
+    if public and transport_only:
+        raise ValueError("Transport-only is a private DNS/TLS check, not a public-negative proof.")
+    result = {
+        "url": url.rstrip("/"), "public_negative": public,
+        "scope": "public-negative" if public else "private-dns-tls" if transport_only else "private-readiness",
+    }
     try:
         addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(parsed.hostname, 443, type=socket.SOCK_STREAM)})
     except socket.gaierror as error:
@@ -49,6 +54,15 @@ def check(url, public=False):
         raise AssertionError(f"{parsed.hostname} did not resolve exclusively to RFC1918 addresses.")
     if public and any(private_address(address) for address in addresses):
         raise AssertionError("Public-negative probe resolved a private address; run it outside private DNS/VPN.")
+    if transport_only:
+        with socket.create_connection((parsed.hostname, 443), timeout=20) as connection:
+            with ssl.create_default_context().wrap_socket(connection, server_hostname=parsed.hostname) as tls:
+                peer = tls.getpeername()[0]
+                if not private_address(peer):
+                    raise AssertionError("Verified TLS connection did not reach a private peer.")
+                result.update(tls_verified=True, peer=peer, cipher=tls.cipher()[0], tls_version=tls.version())
+        result["status"] = "pass"
+        return result
     try:
         with request(f"{url.rstrip('/')}/api/health") as response:
             result["http_status"] = response.status
@@ -71,6 +85,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", action="append", required=True)
     parser.add_argument("--public-negative", action="store_true")
+    parser.add_argument("--transport-only", action="store_true")
     parser.add_argument("--control-url", default="https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -80,7 +95,7 @@ def main():
     failed = False
     for url in args.url:
         try:
-            result = check(url, args.public_negative)
+            result = check(url, args.public_negative, args.transport_only)
         except (ValueError, AssertionError, OSError, urllib.error.URLError) as error:
             result = {"url": url, "status": "fail", "error": str(error)}
             failed = True

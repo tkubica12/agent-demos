@@ -105,6 +105,13 @@ silently routed through an HTTP proxy:
 uv run python tests\e2e_private\network_probe.py --public-negative --url https://<native-private-simulator-FQDN> --output .local\public-negative.json
 ```
 
+Before application boot completes, the in-VNet `--transport-only` option
+independently proves private DNS, a private TLS peer and trusted hostname
+certificate. Its explicit scope is `private-dns-tls`: it sends no application
+request and does **not** certify health, login or agent readiness. The default
+private probe and the full runner still require successful `/api/health`;
+HTTP503 remains a failure rather than a success-shaped fallback.
+
 Transfer that nonsecret evidence to the in-VNet host. Create a private TOML
 configuration (do not commit live origins, credentials or command arguments):
 
@@ -139,6 +146,45 @@ after authentication. Access codes and bearer tokens are not recorded;
 browser traces/HAR are deliberately disabled. Keep screenshots/chat evidence
 private even though this runner uses test data.
 
+For an operator outside the VNet, `run_on_client.py` submits a uniquely named
+**Managed Run Command** to the explicitly authorized private Linux VM. Write
+the actual in-VM invocation into a local `.sh` file, using paths in the extracted
+package and sourcing the existing private access-code environment file inside
+the VM. Do not put codes, operator tokens or credentials into that script.
+
+```sh
+#!/usr/bin/env bash
+set -eu
+cd "/opt/<extracted-package>/autopilots-on-azure"
+set -a
+. "/opt/<private-access-code-environment-file>"
+set +a
+export PRIVATE_PLAYWRIGHT_MODULE=/opt/private-playwright/node_modules/@playwright/test
+uv run python tests/e2e_private/run.py --config .local/private-acceptance.toml
+```
+
+Use the full extracted project with its frozen dependencies restored for
+native SDK lifecycle calls, not just a standalone copy of the browser scripts.
+
+```powershell
+uv run python tests\e2e_private\run_on_client.py --vm-id "<Linux-VM-ARM-ID>" --script .local\run-private-acceptance.sh --output .local\managed-acceptance.json
+```
+
+The ARM script is ordinary source text; secrets must remain in the VM's private
+environment file, not in its public `source.script` property. CLI credentials
+authenticate only the ARM request and are never sent to the guest. The helper
+sets `asyncExecution=true`, reads expanded `instanceView`, and requires
+`executionState=Succeeded` **and** `exitCode=0`. It does not mistake Pending/exit0
+for success or wait forever on stale parent resource `Creating`. It preserves
+private execution evidence and deletes only its own terminal temporary command
+record, including terminal script failures. Pending/running timeouts leave that
+record for diagnosis; inspect it rather than blindly resubmitting or stopping
+another session's job.
+Legacy `az vm run-command invoke` returned `InternalExecutionError` during
+concurrent deployment in the live test; the named managed alternative
+succeeded and verified the runner file hash. Prefer this method for prepared
+private-client execution. The operator must have scoped VM run-command rights.
+
 Checks include RFC1918-only DNS and verified HTTPS; anonymous API rejection;
 two separate real DEMO browser sessions and websocket readiness; exactly one
 registered agent; personal dynamic random-code/arithmetic reply and visible
@@ -153,7 +199,7 @@ not a Git operation or Terraform apply. It reads the guest kernel boot UUID
 before/after and fails if it did not change; a paused guest or page reload
 cannot masquerade as a reboot. Resume is attempted even if stop reports an
 error, without swallowing that error. Invoke only against the explicitly
-authorized simulator instance after obtaining C's resource/instance handoff.
+authorized simulator instance after obtaining the deployment owner's instance handoff.
 The runner allows ten minutes for this lifecycle and records the helper's JSON
 reboot evidence before checking retained chat/files. This mechanism is
 implemented and unit-tested, **not yet certified against a live private
