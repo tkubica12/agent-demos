@@ -281,6 +281,42 @@ class HermesBootstrapTests(unittest.TestCase):
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
             self.assertFalse(config["curator"]["enabled"])
 
+    def test_customer_model_configuration_is_selected_at_runtime(self):
+        deployments = (
+            ("alpha", {"HERMES_MODEL": "alpha-deployment"}, "https://ai.azure.com/.default"),
+            ("beta", {"AZURE_AI_MODEL_DEPLOYMENT_NAME": "beta-deployment"}, "https://cognitiveservices.azure.com/.default"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            inherited_config = {}
+            for name, model_environment, scope in deployments:
+                environment = {
+                    "USE_AGENTIC_AUTH": "false",
+                    "FOUNDRY_OPENAI_BASE_URL": f"https://{name}.example/openai/v1/",
+                    "FOUNDRY_TOKEN_SCOPE": scope,
+                    "API_SERVER_KEY": f"{name}-test-key",
+                    "OPENAI_API_KEY": "obsolete-placeholder",
+                    "AZURE_FOUNDRY_API_KEY": "obsolete-placeholder",
+                    **model_environment,
+                }
+                with self.subTest(deployment=name), patch.dict(os.environ, environment, clear=True):
+                    config = start_hermes.hermes_config(home, inherited_config)
+                    env_path = start_hermes.write_env_file(home)
+                    model = config["model"]
+                    self.assertEqual(model["default"], f"{name}-deployment")
+                    self.assertEqual(model["provider"], "azure-foundry")
+                    self.assertEqual(model["base_url"], f"https://{name}.example/openai/v1")
+                    self.assertEqual(model["entra"]["scope"], scope)
+                    self.assertEqual(model["auth_mode"], "entra_id")
+                    self.assertEqual(config["gateway"]["platforms"]["api_server"]["api_key"], f"{name}-test-key")
+                    generated_environment = env_path.read_text(encoding="utf-8")
+                    self.assertIn(f"HERMES_INFERENCE_MODEL={name}-deployment", generated_environment)
+                    self.assertIn(f"API_SERVER_KEY={name}-test-key", generated_environment)
+                    self.assertNotIn("obsolete-placeholder", generated_environment)
+                    if name == "beta":
+                        self.assertNotIn("alpha", generated_environment)
+                    inherited_config = config
+
 
 if __name__ == "__main__":
     unittest.main()
