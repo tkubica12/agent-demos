@@ -106,26 +106,26 @@ async function runStack(stack) {
     const agents = (await first.api("/users")).filter((user) => user.isAgent);
     assert.equal(agents.length, 1, "Exactly one registered agent is required.");
     const agent = agents[0];
-    async function chat(memberIds, name) {
-      const value = await first.api("/chats", "POST", { memberIds, ...(name ? { name } : {}) });
+    async function chat(memberIds, name, actor = first) {
+      const value = await actor.api("/chats", "POST", { memberIds, ...(name ? { name } : {}) });
       const selector = `[data-conversation-id="${value.conversationId}"]`;
-      await expect(first.page.locator(selector)).toBeVisible();
-      await first.page.locator(selector).click();
+      await expect(actor.page.locator(selector)).toBeVisible();
+      await actor.page.locator(selector).click();
       return value.conversationId;
     }
-    async function send(cid, text) {
-      const pending = first.page.waitForResponse((response) =>
+    async function send(cid, text, actor = first) {
+      const pending = actor.page.waitForResponse((response) =>
         response.request().method() === "POST" &&
         new URL(response.url()).pathname === `/api/conversations/${cid}/messages`);
-      await first.page.getByTestId("composer").getByRole("textbox").fill(text);
-      await first.page.getByRole("button", { name: "Send message", exact: true }).click();
+      await actor.page.getByTestId("composer").getByRole("textbox").fill(text);
+      await actor.page.getByRole("button", { name: "Send message", exact: true }).click();
       const response = await pending;
       assert.equal(response.status(), 201);
       return response.json();
     }
-    async function reply(cid, afterId, predicate) {
+    async function reply(cid, afterId, predicate, actor = first) {
       return eventually(async () => {
-        const messages = await first.api(`/conversations/${cid}/messages`);
+        const messages = await actor.api(`/conversations/${cid}/messages`);
         const index = messages.findIndex((message) => message.id === afterId);
         if (index < 0) return false;
         return messages.slice(index + 1).find((message) => message.author.id === agent.id && predicate(message));
@@ -259,8 +259,14 @@ async function runStack(stack) {
     }
     await check("real-native-widget-browser-and-trace-provenance", async () => {
       assert.equal(stack.widget_attestation?.status, "pass", "Guest widget/skill source attestation is mandatory.");
+      const widgetActor = await login(`Private widget visitor ${randomUUID()}`);
+      assert.equal((await widgetActor.api("/chats")).length, 0,
+        "A fresh DEMO browser identity must have no previous personal chat.");
       report.widget = await runWidgetAcceptance({
-        first, agent, chat, send, reply, directory, expect, sanitize: sanitized,
+        first: widgetActor, agent, directory, expect, sanitize: sanitized,
+        chat: (members, name) => chat(members, name, widgetActor),
+        send: (cid, text) => send(cid, text, widgetActor),
+        reply: (cid, afterId, predicate) => reply(cid, afterId, predicate, widgetActor),
         prove: async (target) => {
           const expectedPath = path.join(directory, `widget-target-${target.turn}.json`);
           await writeFile(expectedPath, JSON.stringify(target));

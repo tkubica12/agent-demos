@@ -168,7 +168,9 @@ attestation: `source_commit`, `runtime_release`, `bundled_skills_path`, and
 `b899de1ab25ad95f4e6719b3b3b48b24689f8f40` in the selected bundled skill directory.
 This validates the deployment's actual guest attestation, not local file copies.
 
-A fresh personal chat requests a real Hermes widget, checks the `allow-scripts`
+A fresh, independently logged-in DEMO browser identity creates a personal chat
+with exactly that human and the agent (the simulator otherwise reuses personal
+chats for the same two members). It requests a real Hermes widget, checks the `allow-scripts`
 iframe initialization/resize and local recompute, then clicks its actual action.
 The accepted invoke, disabled button, same-chat follow-up and same-token
 `already_submitted` replay are checked. Authenticated `/internal/turns/evidence`

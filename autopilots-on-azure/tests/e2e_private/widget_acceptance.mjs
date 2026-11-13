@@ -16,6 +16,11 @@ export async function runWidgetAcceptance({ first, agent, chat, send, reply, dir
   try {
     const cid = await chat([agent.id], `Live widget ${nonce.slice(0, 6)}`);
     report.conversationId = cid;
+    const actualChat = (await first.api("/chats")).find(item => item.conversationId === cid);
+    assert.equal(actualChat?.conversationType, "personal");
+    assert.deepEqual([...actualChat.memberIds].sort(), [first.me.id, agent.id].sort(),
+      "The fresh widget chat must contain only this human and the real agent.");
+    report.freshPersonalChat = true;
     await page.evaluate(() => {
       window.privateWidgetMethods = [];
       window.addEventListener("message", event => {
