@@ -610,7 +610,8 @@ def destroy(config: dict, root: Path) -> None:
     for agent in reversed(config["agents"]):
         layer = root / agent["name"]
         if state_path(root, agent["name"], config["environment"]).exists():
-            infrastructure = terraform_output(layer)
+            captured = layer / "outputs.json"
+            infrastructure = load(captured) if captured.exists() else terraform_output(layer)
             if infrastructure.get("sandbox_groups"):
                 delete_owned_sandboxes(
                     list(infrastructure["sandbox_groups"].values()),

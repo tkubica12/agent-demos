@@ -40,6 +40,9 @@ while not path.exists():
 previous = ""
 process = None
 while True:
+    metadata = path.stat()
+    if metadata.st_uid != 10001 or metadata.st_mode & 0o777 != 0o600:
+        raise RuntimeError("Simulator settings must be owned by UID 10001 with mode 0600")
     content = path.read_text()
     if content != previous:
         config = json.loads(content)
@@ -154,6 +157,7 @@ def configure_host(config: dict, binding: dict, identities: dict, agents: list[d
             sandbox.write_file(CONFIG_PATH + ".next", json.dumps(payload), mode="0600")
             require_exec_success(sandbox.exec(
                 "chown 10001:10001 " + shlex.quote(CONFIG_PATH + ".next")
+                + " && chmod 0600 " + shlex.quote(CONFIG_PATH + ".next")
                 + " && mv " + shlex.quote(CONFIG_PATH + ".next") + " " + shlex.quote(CONFIG_PATH)),
                                  "Activating simulator settings")
     wait_health(binding["url"], "/api/health")

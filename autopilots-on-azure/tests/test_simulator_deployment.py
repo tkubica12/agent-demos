@@ -13,6 +13,7 @@ from scripts.deploy_simulator_environment import (
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
     validate_config,
     terraform,
+    destroy,
 )
 from scripts.simulator_channel import simulator_environment, simulator_worker_environment
 
@@ -133,6 +134,27 @@ class SimulatorDeploymentTests(unittest.TestCase):
             self.assertEqual(command.call_count, 2)
             self.assertEqual(command.call_args_list[-1].args[0],
                              ["terraform", "workspace", "select", "-or-create", "training-agent-1"])
+
+    def test_partial_teardown_uses_captured_groups_after_terraform_outputs_disappear(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = self.config()
+            (root / "environment.json").write_text(json.dumps(config))
+            state = state_path(root, "agent-1", config["environment"])
+            state.parent.mkdir(parents=True)
+            state.write_text("{}")
+            layer = root / "agent-1"
+            captured = {"resource_group_name": "owned-rg", "sandbox_location": "region",
+                        "sandbox_groups": {"runtime": {"name": "owned-runtime", "id": "/owned"}}}
+            (layer / "outputs.json").write_text(json.dumps(captured))
+            (layer / "generated.simulator.auto.tfvars.json").write_text("{}")
+            with patch("scripts.sandbox_services.delete_owned_sandboxes") as drain, patch(
+                "scripts.deploy_simulator_environment.terraform",
+            ), patch("scripts.deploy_simulator_environment.terraform_output") as current:
+                destroy(config, root)
+            current.assert_not_called()
+            self.assertEqual(drain.call_args.args[0], [captured["sandbox_groups"]["runtime"]])
+            self.assertEqual(drain.call_args.kwargs["resource_group"], "owned-rg")
 
     def test_demo_expiry_and_existing_worker_names_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
