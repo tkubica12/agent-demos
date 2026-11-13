@@ -192,6 +192,8 @@ def foundry_trace(payload):
     ]
     hosts = []
     for row in rows:
+        if row.get("type") != "HTTP":
+            continue
         if row.get("success") is not True or not str(row.get("resultCode", "")).isdigit():
             continue
         if not 200 <= int(row["resultCode"]) < 300:
@@ -286,7 +288,7 @@ def main():
             app_id = str(uuid.UUID(component["properties"]["AppId"]))
             query = (
                 f'dependencies | where operation_Id == "{delivery["traceId"]}" '
-                '| project name, success, resultCode, target, '
+                '| project name, type, success, resultCode, target, '
                 'responseModel=tostring(customDimensions["gen_ai.response.model"]), '
                 'inputTokens=toint(customDimensions["gen_ai.usage.input_tokens"]), '
                 'outputTokens=toint(customDimensions["gen_ai.usage.output_tokens"])'
