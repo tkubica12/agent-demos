@@ -11,6 +11,7 @@ import uuid
 
 from fixtures import create_fixtures
 from network_probe import check
+from verify_widget_attestation import validate_attestation
 
 
 def main():
@@ -36,6 +37,10 @@ def main():
         if not isinstance(stack.get("owner_display_name"), str) or not stack["owner_display_name"].strip():
             raise ValueError(f"Configure the real DEMO Worker owner display name for {stack['name']}.")
         stack["worker_owner_id"] = str(uuid.UUID(stack["worker_owner_id"]))
+        stack["widget_attestation"] = validate_attestation(
+            json.loads(Path(stack["widget_attestation_path"]).read_text(encoding="utf-8")),
+            stack["source_commit"],
+        )
         evidence["results"].append(check(stack["url"]))
         for field in ("gateway_url", "runtime_url"):
             evidence["results"].append(check(stack[field], transport_only=True))

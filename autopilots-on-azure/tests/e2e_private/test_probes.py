@@ -15,7 +15,8 @@ from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import confirm_deleted, execution_result
 from verify_download import verify_download
-from verify_native_evidence import foundry_trace, select_delivery, validate_run
+from verify_native_evidence import foundry_trace, select_delivery, select_widget_turn, validate_run
+from verify_widget_attestation import EXPECTED, validate_attestation
 
 
 class PrivateProbeTests(unittest.TestCase):
@@ -230,6 +231,87 @@ class PrivateProbeTests(unittest.TestCase):
     def test_accepted_delete_does_not_pass_while_resource_still_exists(self, _, __):
         with self.assertRaisesRegex(TimeoutError, "resource removal is unverified"):
             confirm_deleted(lambda: 200, timeout=1)
+
+    def test_widget_requires_selected_release_and_exact_guest_blob_bytes(self):
+        commit = "a" * 40
+        payload = {
+            "source_commit": commit, "runtime_release": "/app/releases/native",
+            "bundled_skills_path": "/app/releases/native/runtime_skills",
+            "files": {
+                name: {**expected, "guest_path": "/app/releases/native/" + name}
+                for name, expected in EXPECTED.items()
+            },
+        }
+        self.assertEqual(validate_attestation(payload, commit)["status"], "pass")
+        for invalid in (
+            {**payload, "source_commit": "b" * 40},
+            {**payload, "bundled_skills_path": "/app/releases/old/runtime_skills"},
+            {**payload, "files": {
+                **payload["files"],
+                "bridge/html_widgets.py": {**payload["files"]["bridge/html_widgets.py"], "sha256": "0" * 64},
+            }},
+            {**payload, "files": {}},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    validate_attestation(invalid, commit)
+
+    def test_widget_followup_requires_exact_accepted_invoke_and_no_replay_turn(self):
+        expected = {
+            "turn": "followup", "conversationId": "chat", "replyActivityId": "followup",
+            "widgetActivityId": "widget", "requestedAt": 100,
+        }
+        accepted = {
+            "event": "widgetSubmissionAccepted", "ts": 101, "conversationId": "chat",
+            "requestActivityId": "opaque-invoke", "replyToId": "widget",
+            "interactionId": "interaction", "status": "accepted",
+        }
+        replay = {**accepted, "requestActivityId": "opaque-replay", "status": "already_submitted"}
+        followup = {
+            "event": "turnReplySent", "ts": 102, "conversationId": "chat",
+            "requestActivityId": "opaque-invoke", "activityId": "followup",
+            "replyToId": "widget", "interactionId": "interaction",
+            "nativeRunId": "actual-run", "traceId": "a" * 32,
+        }
+        events = [replay, followup, accepted]
+        selected = select_widget_turn({"events": events}, expected, 110)
+        self.assertEqual(selected["acceptedInvokeId"], "opaque-invoke")
+        for invalid in (
+            [replay, {**followup, "requestActivityId": "browser-guessed"}, accepted],
+            [followup, accepted],
+            [*events, {**followup, "requestActivityId": "opaque-replay", "activityId": "second-followup"}],
+            [replay, {**followup, "nativeRunId": None}, accepted],
+            [*events, accepted],
+            [replay, {**followup, "ts": -1000}, accepted],
+        ):
+            with self.subTest(events=invalid):
+                with self.assertRaises(ValueError):
+                    select_widget_turn({"events": invalid}, expected, 110)
+
+    def test_widget_producing_turn_cannot_reuse_unrelated_request(self):
+        expected = {
+            "turn": "producing", "conversationId": "chat", "requestActivityId": "browser-request",
+            "replyActivityId": "widget", "requestedAt": 100,
+        }
+        turn = {
+            "event": "turnReplySent", "ts": 101, "conversationId": "chat",
+            "requestActivityId": "browser-request", "activityId": "widget",
+            "replyToId": None, "interactionId": None, "nativeRunId": "run", "traceId": "a" * 32,
+        }
+        self.assertEqual(select_widget_turn({"events": [turn]}, expected, 110)["nativeRunId"], "run")
+        with self.assertRaises(ValueError):
+            select_widget_turn({"events": [{**turn, "requestActivityId": "other"}]}, expected, 110)
+
+    def test_widget_mode_does_not_weaken_file_terminal_requirement(self):
+        payload = {
+            "runId": "run", "status": "completed", "runtimeMetadataAvailable": True,
+            "runtime": {"provider": "actual", "model": "served"}, "tools": [], "usage": {},
+        }
+        self.assertEqual(validate_run(payload, "run", require_terminal=False)["status"], "completed")
+        with self.assertRaisesRegex(ValueError, "terminal"):
+            validate_run(payload, "run")
+        with self.assertRaises(ValueError):
+            validate_run({**payload, "runtimeMetadataAvailable": False}, "run", require_terminal=False)
 
 
 if __name__ == "__main__":

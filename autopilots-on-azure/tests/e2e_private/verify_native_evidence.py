@@ -67,7 +67,79 @@ def select_delivery(payload, expected, now):
     )}
 
 
-def validate_run(payload, run_id):
+def select_widget_turn(payload, expected, now):
+    events = payload.get("events")
+    if not isinstance(events, list):
+        raise ValueError("Gateway widget evidence has no event list.")
+    scoped = [
+        item for item in events if isinstance(item, dict)
+        and item.get("conversationId") == expected["conversationId"]
+    ]
+    replies = [
+        item for item in scoped if item.get("event") == "turnReplySent"
+        and item.get("activityId") == expected["replyActivityId"]
+    ]
+    if len(replies) != 1:
+        raise ValueError("Missing or ambiguous exact widget reply Activity evidence.")
+    turn = replies[0]
+    linkage = {}
+    if expected["turn"] == "producing":
+        if (turn.get("requestActivityId") != expected["requestActivityId"]
+                or turn.get("replyToId") is not None or turn.get("interactionId") is not None):
+            raise ValueError("Widget-producing reply does not match the exact browser request.")
+    elif expected["turn"] == "followup":
+        submissions = [
+            item for item in scoped if item.get("event") == "widgetSubmissionAccepted"
+            and item.get("replyToId") == expected["widgetActivityId"]
+        ]
+        accepted = [item for item in submissions if item.get("status") == "accepted"]
+        if len(accepted) != 1:
+            raise ValueError("Missing or ambiguous actual accepted widget invoke identity.")
+        invoke = accepted[0]
+        interaction = invoke.get("interactionId")
+        if (not isinstance(interaction, str) or not interaction
+                or turn.get("requestActivityId") != invoke.get("requestActivityId")
+                or turn.get("replyToId") != expected["widgetActivityId"]
+                or turn.get("interactionId") != interaction):
+            raise ValueError("Native follow-up is not linked to the exact accepted internal invoke.")
+        replays = [
+            item for item in submissions if item.get("status") == "already_submitted"
+            and item.get("interactionId") == interaction
+            and item.get("requestActivityId") != invoke.get("requestActivityId")
+        ]
+        if len(replays) != 1 or any(
+            item.get("event") == "turnReplySent"
+            and item.get("requestActivityId") == replays[0].get("requestActivityId")
+            for item in scoped
+        ):
+            raise ValueError("Actual same-token replay rejection without a native follow-up is unverified.")
+        for item in (invoke, replays[0]):
+            timestamp = item.get("ts")
+            if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                    or timestamp < expected["requestedAt"] - 30 or not -30 <= now - timestamp <= 600):
+                raise ValueError("Widget invoke/replay evidence is stale.")
+        linkage = {
+            "acceptedInvokeId": invoke["requestActivityId"],
+            "replayInvokeId": replays[0]["requestActivityId"],
+            "interactionId": interaction, "replayStatus": "already_submitted",
+        }
+    else:
+        raise ValueError("Unsupported widget turn evidence mode.")
+    timestamp = turn.get("ts")
+    if (type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+            or timestamp < expected["requestedAt"] - 30 or not -30 <= now - timestamp <= 600):
+        raise ValueError("Widget native reply evidence is stale.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", turn.get("nativeRunId") or ""):
+        raise ValueError("Widget reply has no valid native run identity.")
+    if not re.fullmatch(r"[0-9a-f]{32}", turn.get("traceId") or ""):
+        raise ValueError("Widget reply has no valid native trace identity.")
+    return {**{key: turn.get(key) for key in (
+        "conversationId", "requestActivityId", "activityId", "replyToId",
+        "interactionId", "nativeRunId", "traceId", "ts",
+    )}, **linkage}
+
+
+def validate_run(payload, run_id, *, require_terminal=True):
     if payload.get("runId") != run_id or payload.get("status") != "completed":
         raise ValueError("Evidence is not the exact completed native run.")
     runtime = payload.get("runtime")
@@ -93,7 +165,7 @@ def validate_run(payload, run_id):
         and type(item.get("duration")) in (int, float)
         and math.isfinite(item["duration"]) and item["duration"] >= 0
     ]
-    if not completed:
+    if require_terminal and not completed:
         raise ValueError("No actual successful terminal start/completion with matching tool-call identity.")
     return {
         "runId": run_id, "status": "completed",
@@ -152,6 +224,7 @@ def main():
     parser.add_argument("--expected", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument("--widget-turn", choices=("producing", "followup"))
     args = parser.parse_args()
     from azure.core.exceptions import AzureError
     from azure.identity import ManagedIdentityCredential
@@ -173,16 +246,36 @@ def main():
         evidence["gatewayNetwork"] = check(args.gateway_url, transport_only=True)
         evidence["runtimeNetwork"] = check(args.runtime_url, transport_only=True)
         headers = {"X-Autopilot-Key": key}
-        delivery = select_delivery(read_json(
-            f"{args.gateway_url.rstrip('/')}/internal/generated-files/evidence?"
+        route = "turns" if args.widget_turn else "generated-files"
+        gateway = read_json(
+            f"{args.gateway_url.rstrip('/')}/internal/{route}/evidence?"
             + urlencode({"conversation_id": expected["conversationId"]}), headers, "Gateway evidence",
-        ), expected, time.time())
-        evidence["delivery"] = delivery
+        )
+        if args.widget_turn:
+            evidence["activityTarget"] = {key: expected.get(key) for key in (
+                "conversationId", "requestActivityId", "replyActivityId", "widgetActivityId", "turn",
+            )}
+            evidence["observedReplyIdentities"] = [
+                {key: item.get(key) for key in (
+                    "requestActivityId", "activityId", "nativeRunId", "traceId",
+                ) if item.get(key) is None or (
+                    isinstance(item.get(key), str) and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", item[key])
+                )}
+                for item in gateway.get("events", []) if isinstance(item, dict)
+                and item.get("conversationId") == expected["conversationId"]
+                and item.get("activityId") == expected["replyActivityId"]
+            ]
+            if expected.get("turn") != args.widget_turn:
+                raise ValueError("Widget collector mode differs from the actual browser target.")
+            delivery = select_widget_turn(gateway, expected, time.time())
+        else:
+            delivery = select_delivery(gateway, expected, time.time())
+        evidence["turn" if args.widget_turn else "delivery"] = delivery
         native = read_json(
             f"{args.runtime_url.rstrip('/')}/internal/runs/{quote(delivery['nativeRunId'], safe='')}/evidence",
             headers, "Runtime evidence",
         )
-        evidence["native"] = validate_run(native, delivery["nativeRunId"])
+        evidence["native"] = validate_run(native, delivery["nativeRunId"], require_terminal=not args.widget_turn)
         evidence["queryNetwork"] = check("https://api.applicationinsights.io", transport_only=True)
         with ManagedIdentityCredential() as credential:
             token = credential.get_token("https://management.azure.com/.default").token
