@@ -435,12 +435,21 @@ deployment that is not claiming complete file acceptance.
 
 For startup failures, read the owned simulator's
 `/tmp/simulator-service.log` through its authenticated Sandbox client.
+Settings activation explicitly applies POSIX mode 0600 before atomic rename;
+the supervisor verifies that mode and UID 10001 before reading. Do not rely on
+the Sandbox file-upload API's string-mode interpretation: a live upload using
+`"0600"` produced mode 1110 and prevented the unprivileged process from reading.
 Teardown drains all ownership-checked native instances before deleting their
-VNet connections, including instances left by a partial deployment.
-Generic Hermes-local-file to outgoing attachment delivery is currently
-unimplemented; uploaded-document transport and fixture attachment downloads
-must not be described as model-generated-file acceptance. Card transport is
-not proof that a card action caused a real model/tool outcome.
+VNet connections, including instances left by a partial deployment; retained
+`outputs.json` preserves the native group boundary after Terraform outputs have
+already disappeared. Uploaded-document transport and fixture downloads are not
+model-generated-file evidence. Card transport is not proof that a card action
+caused a real model/tool outcome. The key-authenticated gateway
+`/internal/generated-files/evidence?conversation_id=<exact-ID>` links delivery
+activity IDs and byte hashes to native run/trace IDs. The runtime's
+`/internal/runs/<native-run-ID>/evidence` projects bounded native provider/model,
+usage and tool metadata. Missing or expired native evidence is an explicit gap;
+never export debug channel payloads to replace it.
 
 User scheduling, Dreaming, and Microsoft 365 document retries remain disabled
 in this simulator deployment until their channel-aware identity and delivery
@@ -468,8 +477,9 @@ For 31 days, continuous compute is about USD 1,591. With six Workers active
 8 hours on 22 teaching days and all six simulators continuous, compute is about
 USD 744. Both estimates exclude model tokens, networking, registry/builds,
 storage, monitoring, generated apps, tax, and discounts; they are not spending
-limits. The live validation subscription initially had only 95k TPM free;
-six separate 15k TPM deployments need 90k TPM total. Customer quotas must cover
+limits. Six separate default 15k TPM deployments need 90k TPM total; the
+explicitly reduced validation configuration uses 10k per stack, not the customer
+default. Customer quotas must cover
 the sum of per-stack capacities. A 15k TPM allocation is a constrained classroom
 starting point, not proof of an unrestricted concurrency SLA.
 The compute figures exclude the private Premium registry, agent pools and
