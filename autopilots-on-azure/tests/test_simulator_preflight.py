@@ -52,6 +52,7 @@ class SimulatorPreflightTests(unittest.TestCase):
         }
         self.account = {"id": SUBSCRIPTION, "tenantId": TENANT, "state": "Enabled"}
         self.provider_state = "Registered"
+        self.provider_states = {}
         self.failures = {}
         self.resources = {
             BOUNDARY: resource(BOUNDARY, "Microsoft.Resources/resourceGroups"),
@@ -80,6 +81,10 @@ class SimulatorPreflightTests(unittest.TestCase):
             "name": {"value": "OpenAI.GlobalStandard.gpt-6.1-sol"}, "unit": "Count",
             "limit": 100, "currentValue": 10,
         }]}
+        self.models = [{"model": {
+            "format": "OpenAI", "name": "gpt-6.1-sol", "version": "2026-09-29",
+            "skus": [{"name": "GlobalStandard"}],
+        }, "skuName": "S0"}]
         self.commands = []
         self.command = patch.object(preflight, "run", side_effect=self.azure_read)
         self.command.start()
@@ -95,7 +100,10 @@ class SimulatorPreflightTests(unittest.TestCase):
             key, payload = "account", self.account
         elif arguments[1:3] == ["provider", "show"]:
             key = arguments[arguments.index("--namespace") + 1]
-            payload = {"registrationState": self.provider_state}
+            payload = {"registrationState": self.provider_states.get(key, self.provider_state)}
+        elif arguments[1:4] == ["cognitiveservices", "model", "list"]:
+            key = "models:" + arguments[arguments.index("--location") + 1]
+            payload = self.models
         else:
             self.assertEqual(arguments[1:4], ["rest", "--method", "get"])
             url = arguments[arguments.index("--url") + 1]
@@ -126,6 +134,7 @@ class SimulatorPreflightTests(unittest.TestCase):
         self.assertEqual(self.config, original)
         self.assertTrue(any("no Entra calls" in warning for warning in report["warnings"]))
         self.assertTrue(all(command[1:3] in (["account", "show"], ["provider", "show"])
+                            or command[1:4] == ["cognitiveservices", "model", "list"]
                             or command[1:4] == ["rest", "--method", "get"] for command in self.commands))
 
     def test_shared_dns_subnet_account_and_quota_reads_are_cached_per_invocation(self):
@@ -137,6 +146,7 @@ class SimulatorPreflightTests(unittest.TestCase):
             self.assertEqual(sum(zone_id in " ".join(command) for command in self.commands), 1)
         self.assertEqual(sum("/usages?" in " ".join(command) for command in self.commands), 1)
         self.assertEqual(sum(command[1:3] == ["account", "show"] for command in self.commands), 1)
+        self.assertEqual(sum(command[1:4] == ["cognitiveservices", "model", "list"] for command in self.commands), 1)
         self.assertEqual(sum(VNET + "?" in " ".join(command) for command in self.commands), 1)
         count = len(self.commands)
         preflight.plan([self.config])
@@ -311,6 +321,21 @@ class SimulatorPreflightTests(unittest.TestCase):
         self.assertTrue(any("access denied" in warning for warning in reports[0]["warnings"]))
         self.assertEqual(sum("Microsoft.App" in command for command in self.commands), 2)
 
+    def test_servicebus_provider_is_required_only_if_any_planned_scope_uses_scheduler(self):
+        self.config["platform"]["scheduler_enabled"] = False
+        self.provider_states["Microsoft.ServiceBus"] = "NotRegistered"
+        report, = preflight.plan([self.config])
+        self.assertEqual(report["providers"]["Microsoft.ServiceBus"], "not_required")
+        self.assertFalse(any("Microsoft.ServiceBus" in command for command in self.commands))
+        other = deepcopy(self.config)
+        other.update(environment="training-agent-2", stack_name="agent-2")
+        other["platform"]["scheduler_enabled"] = True
+        with self.assertRaisesRegex(ValueError, "Microsoft.ServiceBus is not Registered"):
+            preflight.plan([self.config, other])
+        del self.config["platform"]["scheduler_enabled"]
+        with self.assertRaisesRegex(ValueError, "Microsoft.ServiceBus is not Registered"):
+            preflight.plan([self.config])
+
     def test_unexpected_api_failure_is_not_downgraded_to_warning(self):
         for key in ("Microsoft.App", f"/subscriptions/{SUBSCRIPTION}/providers/Microsoft.CognitiveServices/locations/northeurope/usages"):
             with self.subTest(key=key):
@@ -355,6 +380,7 @@ class SimulatorPreflightTests(unittest.TestCase):
         self.assertTrue(any("No registry data-plane queries" in warning for warning in reports[0]["warnings"]))
         self.assertEqual(sum(SOURCE_REGISTRY + "?" in " ".join(command) for command in self.commands), 1)
         self.assertTrue(all(command[1:3] in (["account", "show"], ["provider", "show"])
+                            or command[1:4] == ["cognitiveservices", "model", "list"]
                             or command[1:4] == ["rest", "--method", "get"] for command in self.commands))
 
     def test_import_requires_every_immutable_same_server_image(self):
@@ -490,6 +516,75 @@ class SimulatorPreflightTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "opt-in only|must be booleans"):
                         preflight.plan([self.config])
         self.assertEqual(self.commands, [])
+
+    def test_regional_availability_uses_actual_model_version_and_deployment_sku_not_deployment_name(self):
+        self.config["platform"]["model_deployment_name"] = "classroom-alias"
+        report, = preflight.plan([self.config])
+        self.assertEqual(report["model"]["name"], "gpt-6.1-sol")
+        self.assertEqual(report["model"]["deployment_name"], "classroom-alias")
+        self.assertEqual(report["model_availability"], {
+            "status": "verified", "region": "northeurope", "model_name": "gpt-6.1-sol",
+            "version": "2026-09-29", "sku": "GlobalStandard",
+        })
+        self.assertEqual(report["model_quota"]["status"], "verified")
+
+    def test_unsupported_regional_model_version_or_sku_blocks_despite_available_quota(self):
+        self.usage["value"][0].update(limit=80, currentValue=15)
+        original = deepcopy(self.models)
+        for catalog in (
+            [],
+            [{**original[0], "model": {**original[0]["model"], "name": "other-model"}}],
+            [{**original[0], "model": {**original[0]["model"], "version": "2026-10-01"}}],
+            [{"skuName": "GlobalStandard", "model": {
+                **original[0]["model"], "skus": [{"name": "Standard"}],
+            }}],
+        ):
+            with self.subTest(catalog=catalog):
+                self.models = catalog
+                with self.assertRaisesRegex(ValueError, "Unsupported regional model/version/SKU.*northeurope.*quota"):
+                    preflight.plan([self.config])
+
+    def test_regional_model_read_denial_warns_without_treating_quota_as_availability(self):
+        self.failures["models:northeurope"] = "403 Forbidden private-token"
+        other = {**self.config, "environment": "training-agent-2", "stack_name": "agent-2"}
+        reports = preflight.plan([self.config, other])
+        for report in reports:
+            self.assertEqual(report["model_availability"]["status"], "unverified")
+            self.assertEqual(report["model_quota"]["status"], "verified")
+            self.assertTrue(any("quota does not establish regional model/version/SKU support" in warning
+                                for warning in report["warnings"]))
+            self.assertNotIn("private-token", json.dumps(report))
+        self.assertEqual(sum(command[1:4] == ["cognitiveservices", "model", "list"] for command in self.commands), 1)
+
+    def test_incomplete_regional_model_metadata_is_explicitly_unverified(self):
+        for catalog in (
+            {"unexpected": "schema"},
+            [{"model": None}],
+            [{"model": {"format": "OpenAI", "name": "gpt-6.1-sol"}}],
+            [{"model": {"format": "OpenAI", "name": "gpt-6.1-sol", "version": "2026-09-29", "skus": None}}],
+        ):
+            with self.subTest(catalog=catalog):
+                self.models = catalog
+                report, = preflight.plan([self.config])
+                self.assertEqual(report["model_availability"]["status"], "unverified")
+                self.assertTrue(any("regional model catalog metadata is unreadable or incomplete" in warning
+                                    for warning in report["warnings"]))
+
+    def test_explicit_region_version_and_sku_are_checked_without_a_runtime_fallback(self):
+        self.config["platform"].update(
+            location="swedencentral", model_name="gpt-6.1-sol",
+            model_version="2026-10-01", model_sku_name="Standard",
+        )
+        self.models[0]["model"].update(version="2026-10-01", skus=[{"name": "Standard"}])
+        original = deepcopy(self.config)
+        report, = preflight.plan([self.config])
+        self.assertEqual(report["model_availability"]["region"], "swedencentral")
+        self.assertEqual(report["model_availability"]["version"], "2026-10-01")
+        self.assertEqual(report["model_availability"]["sku"], "Standard")
+        self.assertEqual(report["model_availability"]["status"], "verified")
+        self.assertEqual(self.config, original)
+        command = next(command for command in self.commands if command[1:4] == ["cognitiveservices", "model", "list"])
+        self.assertEqual(command[command.index("--location") + 1], "swedencentral")
 
 
 if __name__ == "__main__":

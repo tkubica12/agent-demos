@@ -229,7 +229,9 @@ def _scope(config: dict) -> dict:
             "existing_log_analytics_workspace_id", "existing_application_insights_id", "ampls_id",
         )},
         "model": {
-            "name": _token(platform.get("model_name", "gpt-6-1-sol"), "model_name"),
+            "name": _token(platform.get("model_name", "gpt-6.1-sol"), "model_name"),
+            "version": _token(platform.get("model_version", "2026-09-29"), "model_version"),
+            "deployment_name": _token(platform.get("model_deployment_name", "gpt-6-1-sol"), "model_deployment_name"),
             "sku": _token(platform.get("model_sku_name", "GlobalStandard"), "model_sku_name"),
             "capacity": capacity,
         },
@@ -240,7 +242,7 @@ def _scope(config: dict) -> dict:
     return scope
 
 
-def _account_and_providers(reads: _Reads, scope: dict) -> None:
+def _account_and_providers(reads: _Reads, scope: dict, *, scheduler_required: bool) -> None:
     subscription = scope["subscription_id"]
     try:
         account = reads.read([
@@ -256,6 +258,9 @@ def _account_and_providers(reads: _Reads, scope: dict) -> None:
     if account.get("state") != "Enabled":
         raise ValueError("Configured Azure subscription is not Enabled.")
     for provider in PROVIDERS:
+        if provider == "Microsoft.ServiceBus" and not scheduler_required:
+            scope["providers"][provider] = "not_required"
+            continue
         try:
             response = reads.read([
                 "provider", "show", "--namespace", provider, "--subscription", subscription,
@@ -410,6 +415,68 @@ def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.casefold())
 
 
+def _model_availability(reads: _Reads, scope: dict) -> None:
+    model = scope["model"]
+    region = scope["regions"]["ai"]
+    evidence = {
+        "status": "unverified", "region": region, "model_name": model["name"],
+        "version": model["version"], "sku": model["sku"],
+    }
+    scope["model_availability"] = evidence
+    warning = (
+        "UNVERIFIED regional model availability: regional model catalog metadata is unreadable or incomplete; "
+        "quota does not establish regional model/version/SKU support. No model, version, SKU or region fallback was selected."
+    )
+    try:
+        catalog = reads.read([
+            "cognitiveservices", "model", "list", "--location", region,
+            "--subscription", scope["subscription_id"], "--query", "[].{model:model}",
+        ])
+    except RuntimeError:
+        scope["warnings"].append(warning)
+        return
+    if not isinstance(catalog, list):
+        scope["warnings"].append(warning)
+        return
+    models = []
+    incomplete = False
+    for item in catalog:
+        metadata = item.get("model") if isinstance(item, dict) else None
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("format"), str):
+            incomplete = True
+            continue
+        if metadata["format"].casefold() != "openai":
+            continue
+        if not all(isinstance(metadata.get(field), str) and metadata[field] for field in ("name", "version")):
+            incomplete = True
+            continue
+        if (metadata["name"].casefold() == model["name"].casefold()
+                and metadata["version"] == model["version"]):
+            models.append(metadata)
+    for metadata in models:
+        skus = metadata.get("skus")
+        if not isinstance(skus, list):
+            incomplete = True
+            continue
+        for sku in skus:
+            if not isinstance(sku, dict) or not isinstance(sku.get("name"), str):
+                incomplete = True
+            elif sku["name"].casefold() == model["sku"].casefold():
+                evidence["status"] = "verified"
+                scope["warnings"].append(
+                    "UNVERIFIED deployment admission: regional model/version/SKU metadata confirms catalog support, "
+                    "not live deployment capacity, policy approval or guaranteed provisioning."
+                )
+                return
+    if incomplete:
+        scope["warnings"].append(warning)
+        return
+    raise ValueError(
+        f"Unsupported regional model/version/SKU: OpenAI {model['name']} version {model['version']} "
+        f"with {model['sku']} is not listed in {region}; quota does not establish model availability."
+    )
+
+
 def _quota(reads: _Reads, scopes: list[dict]) -> None:
     groups = defaultdict(list)
     for scope in scopes:
@@ -467,14 +534,16 @@ def plan(configs: list[dict]) -> list[dict]:
     """Read Azure prerequisites for expanded stacks, raising ValueError/RuntimeError on blockers.
 
     Returns JSON-safe allowlisted reports, not a deployment authorization or a state file.
-    All Azure commands are account/provider reads or explicit ARM GETs, cached only for this call.
+    All Azure commands are account/provider/model-catalog reads or explicit ARM GETs, cached only for this call.
     """
     if not isinstance(configs, list) or not configs or not all(isinstance(config, dict) for config in configs):
         raise ValueError("plan requires a nonempty list of expanded stack configuration dictionaries.")
     scopes = [_scope(config) for config in configs]
+    scheduler_required = any(scope["scheduler_enabled"] for scope in scopes)
     reads = _Reads()
     for scope in scopes:
-        _account_and_providers(reads, scope)
+        _account_and_providers(reads, scope, scheduler_required=scheduler_required)
+        _model_availability(reads, scope)
         _group(reads, scope)
         _network(reads, scope)
         _monitoring(reads, scope)

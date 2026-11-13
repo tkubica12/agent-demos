@@ -146,10 +146,10 @@ roles, create custom role definitions, build/import ACR images, and use
 SandboxGroup data-plane operations. Subscription Owner suffices; alternatively
 combine Contributor, Role Based Access Control Administrator (including the
 custom-role operations), and SandboxGroup Data Owner at the appropriate scopes.
-Register the providers used by the existing platform, including Microsoft.App,
-Microsoft.Web, Microsoft.CognitiveServices, Microsoft.ContainerRegistry,
-Microsoft.ManagedIdentity, Microsoft.Network, Microsoft.ServiceBus, and
-Microsoft.Insights. Regional Sandbox availability and Foundry model quota are
+Register the providers used by this profile: Microsoft.App,
+Microsoft.CognitiveServices, Microsoft.ContainerRegistry,
+Microsoft.ManagedIdentity, Microsoft.Network, Microsoft.OperationalInsights,
+and Microsoft.Insights. Regional Sandbox availability and Foundry model quota are
 prerequisites. `model_capacity` is a deployment capacity unit, not a concurrent
 Worker count or guaranteed token rate.
 
@@ -204,8 +204,11 @@ commit = "<full 40-character commit containing this release>"
 bundle_sha256 = "<role manifest SHA-256 supplied with the snapshot>"
 
 [platform]
-location = "northeurope"
+location = "swedencentral"
 sandbox_location = "swedencentral"
+model_name = "gpt-6.1-sol"
+model_version = "2026-09-29"
+model_sku_name = "GlobalStandard"
 existing_private_endpoint_subnet_id = "<full customer PE subnet ARM ID>"
 acr_agent_pool_subnet_id = "<full dedicated build subnet ARM ID>"
 ampls_id = "<full central AMPLS ARM ID>"
@@ -292,6 +295,10 @@ The `plan` action performs read-only Azure checks before any deployment lock,
 state-directory preparation, Terraform apply or Entra write. It reports exact
 per-stack scope and blocks invalid/unreadable customer boundaries. Quota or
 permissions that cannot be proven read-only remain explicit warnings.
+Model catalog support (region, model, version and SKU) is checked separately
+from quota. The example uses `swedencentral`, `gpt-6.1-sol`, version
+`2026-09-29`, `GlobalStandard`, with deployment name `gpt-6-1-sol`.
+A quota meter alone does not prove regional availability or deployment admission.
 
 Rerunning a stack reuses its identities, platform, state and DEMO keys. The
 runtime dependency image is reused only while its Dockerfile, dependency

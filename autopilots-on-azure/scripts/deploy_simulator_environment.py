@@ -443,7 +443,7 @@ def build_images(config: dict, root: Path, *, source_root: Path | None = None) -
     }, sort_keys=True).encode()).hexdigest()
     if not runtime_path.exists() or load(runtime_path).get("build_fingerprint") != build_fingerprint:
         digest = acr_build(registry=registry, repository="hermes-runtime",
-                           dockerfile="runtimes/hermes/Dockerfile", context=".", tag=tag,
+                           dockerfile=str(Path("runtimes") / "hermes" / "Dockerfile"), context=".", tag=tag,
                            build_args={"HERMES_BASE_IMAGE": base}, agent_pool_name=pool)
         save(runtime_path, {
             "runtime_image": f"{server}/hermes-runtime@{digest}",
