@@ -1,6 +1,6 @@
 output "deployment_config" {
   sensitive = true
-  value = {
+  value = merge({
     channel                                  = var.channel
     private_network_enabled                  = var.private_network_enabled
     demo_mcp_enabled                         = local.demo_mcp_enabled
@@ -64,5 +64,5 @@ output "deployment_config" {
     workiq_excel_mcp_scope                   = var.workiq_excel_mcp_scope
     workiq_copilot_mcp_url                   = var.workiq_copilot_mcp_url
     workiq_copilot_mcp_scope                 = var.workiq_copilot_mcp_scope
-  }
+  }, var.generated_chat_files_enabled ? { generated_chat_files_enabled = true } : {})
 }

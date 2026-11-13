@@ -20,6 +20,7 @@ from scripts.sandbox_services import (
     deploy_service,
     deploy_runtime,
     deploy_sandbox_services,
+    delete_owned_sandboxes,
     gateway_environment,
     mcp_service,
     prepare_disk_image,
@@ -69,7 +70,8 @@ class SandboxServicesTests(unittest.TestCase):
     def test_remote_bootstrap_and_quiescence_commands_are_valid_python(self):
         from scripts.sandbox_services import require_quiescent_service
         from scripts.application_releases import INSTALL_RELEASE
-        for source in (BOOTSTRAP, INSTALL_RELEASE):
+        from scripts.simulator_hosting import BOOTSTRAP as SIMULATOR_BOOTSTRAP
+        for source in (BOOTSTRAP, INSTALL_RELEASE, SIMULATOR_BOOTSTRAP):
             ast.parse(source)
         sandbox = Mock()
         def execute(command):
@@ -286,6 +288,7 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertEqual(env["SCHEDULED_LEARNING_MAX_RECORDS"], "2")
         self.assertNotIn("SCHEDULED_LEARNING_PREPARE_PACKET", env)
         self.assertFalse(any("CLIENTSECRET" in key or "REGISTRY_PASSWORD" in key for key in env))
+        self.assertNotIn("GENERATED_CHAT_FILES_ENABLED", env)
 
     def test_runtime_telemetry_uses_runtime_image_not_gateway_image(self):
         config = AgentSandboxConfig("sub", "rg", "group", "region", "registry/runtime:build123",
@@ -327,7 +330,8 @@ class SandboxServicesTests(unittest.TestCase):
         runtime = SimpleNamespace(sandbox_id="runtime-1", endpoint_url="https://runtime.example",
                                   reused_existing_sandbox=False)
         settings = {"AZURE_SUBSCRIPTION_ID": "sub", "AZURE_RESOURCE_GROUP": "rg", "AZURE_SANDBOX_GROUP": "runtime",
-                    "AZURE_REGION": "swedencentral", "API_SERVER_KEY": "key", "AGENT_RUNTIME_DISK_IMAGE_ID": "disk"}
+                    "AZURE_REGION": "swedencentral", "API_SERVER_KEY": "key", "AGENT_RUNTIME_DISK_IMAGE_ID": "disk",
+                    "GENERATED_CHAT_FILES_ENABLED": "true"}
         with (
             patch("scripts.sandbox_services.deploy_agent_sandbox", return_value=runtime) as deploy,
             patch("scripts.sandbox_services.require_runtime_ready", return_value=9.5) as ready,
@@ -339,6 +343,8 @@ class SandboxServicesTests(unittest.TestCase):
             result = deploy_runtime(settings, "https://gateway.example", "credential")
         config = deploy.call_args.args[0]
         self.assertEqual(config.environment["AUTOPILOT_BRIDGE_URL"], "https://gateway.example")
+        self.assertEqual(config.environment["GENERATED_CHAT_FILES_ENABLED"], "true")
+        self.assertEqual(gateway_environment(settings)["GENERATED_CHAT_FILES_ENABLED"], "true")
         self.assertEqual(deploy.call_args.kwargs, {"credential": "credential"})
         ready.assert_called_once_with("https://runtime.example")
         self.assertEqual(result, {
@@ -346,6 +352,35 @@ class SandboxServicesTests(unittest.TestCase):
             "runtime_application_release": self.release.digest,
         })
 
+    def test_teardown_drains_owned_instances_before_native_connection_deletion(self):
+        group = {"name": "owned", "id": "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/sandboxGroups/owned"}
+        labels = {"app": "autopilots-on-azure", "worker": "agent-1"}
+        with patch("scripts.sandbox_services.AzureCliCredential"), patch(
+            "scripts.sandbox_services.SandboxGroupClient",
+        ) as factory:
+            client = factory.return_value.__enter__.return_value
+            client._group_path = "/owned"
+            client._dp_get.side_effect = [[{"id": "instance", "labels": labels}], []]
+            delete_owned_sandboxes([group], labels, subscription_id="sub", resource_group="rg", location="region")
+            client.get_sandbox_client.assert_called_once_with("instance")
+            client.get_sandbox_client.return_value.begin_delete.return_value.result.assert_called_once()
+
+    def test_teardown_rejects_unowned_instances_and_out_of_scope_groups(self):
+        group = {"name": "owned", "id": "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/sandboxGroups/owned"}
+        with patch("scripts.sandbox_services.AzureCliCredential"), patch(
+            "scripts.sandbox_services.SandboxGroupClient",
+        ) as factory:
+            client = factory.return_value.__enter__.return_value
+            client._group_path = "/owned"
+            client._dp_get.return_value = [{"id": "unowned", "labels": {"worker": "someone-else"}}]
+            with self.assertRaisesRegex(ValueError, "ownership"):
+                delete_owned_sandboxes([group], {"worker": "agent-1"},
+                                      subscription_id="sub", resource_group="rg", location="region")
+            client.get_sandbox_client.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "resource group"):
+                delete_owned_sandboxes([{**group, "id": group["id"].replace("/rg/", "/unrelated/")}],
+                                      {"worker": "agent-1"}, subscription_id="sub",
+                                      resource_group="rg", location="region")
     def test_gateway_settings_receive_runtime_url_derived_from_gateway_url(self):
         service = SandboxService("gateway", "image@sha256:123", 8000, ("python3",), {}, release=self.release)
         client = Mock()

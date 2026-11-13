@@ -18,6 +18,9 @@ VOLUME = "simulator-data"
 CONFIG_PATH = "/tmp/simulator-service.json"
 BOOTSTRAP = """
 import json, os, pathlib, subprocess, time
+log = open("/tmp/simulator-service.log", "a", buffering=1)
+os.dup2(log.fileno(), 1)
+os.dup2(log.fileno(), 2)
 volume = pathlib.Path("/mnt/tsim")
 if os.geteuid() != 0:
     raise RuntimeError("Sandbox volume initialization requires the root-bootstrap image")
@@ -45,7 +48,7 @@ while True:
             process.wait(timeout=45)
         environment = dict(os.environ)
         environment.update(config["environment"])
-        process = subprocess.Popen(config["command"], env=environment)
+        process = subprocess.Popen(config["command"], cwd="/app", env=environment)
         previous = content
     if process.poll() is not None:
         raise RuntimeError("Simulator exited: " + str(process.returncode))
@@ -140,7 +143,7 @@ def configure_host(config: dict, binding: dict, identities: dict, agents: list[d
     payload = {
         "environment": environment,
         "command": config.get("simulator_command", [
-            "python", "-m", "uvicorn", "backend.app:create_app", "--factory", "--host", "0.0.0.0",
+            "/app/.venv/bin/python", "-m", "uvicorn", "backend.app:create_app", "--factory", "--host", "0.0.0.0",
             "--port", "8000", "--no-access-log",
         ]),
     }

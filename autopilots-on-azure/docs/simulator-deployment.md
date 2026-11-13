@@ -422,6 +422,21 @@ each selected stack. Check a denied/unassigned user,
 expired DEMO session, and a restart retaining chat and uploaded files. Inspect
 Foundry/App Insights traces for real inference, not a canned response.
 Transport/unit fixtures that stub Hermes are not real-runtime feature evidence.
+
+The simulator deployment enables `GENERATED_CHAT_FILES_ENABLED` on both
+gateway and runtime; Agent 365 defaults remain off and unchanged. Native
+Hermes `MEDIA:` exports are limited to the exact turn's workspace and are
+retrieved through authenticated opaque file IDs, not arbitrary host paths.
+The private runner must download fresh DOCX and UTF-8 TXT bytes through the
+browser, verify their contents and hashes, and retain both through a real
+restart. Implementation/unit checks do not waive this live acceptance.
+Set `generated_chat_files_enabled = false` only for an explicitly reduced
+deployment that is not claiming complete file acceptance.
+
+For startup failures, read the owned simulator's
+`/tmp/simulator-service.log` through its authenticated Sandbox client.
+Teardown drains all ownership-checked native instances before deleting their
+VNet connections, including instances left by a partial deployment.
 Generic Hermes-local-file to outgoing attachment delivery is currently
 unimplemented; uploaded-document transport and fixture attachment downloads
 must not be described as model-generated-file acceptance. Card transport is

@@ -345,6 +345,15 @@ variable "simulator_auth_mode" {
   }
 }
 
+variable "generated_chat_files_enabled" {
+  type    = bool
+  default = false
+  validation {
+    condition     = !var.generated_chat_files_enabled || var.channel == "simulator"
+    error_message = "Generated chat files are enabled only for simulator Workers."
+  }
+}
+
 variable "simulator_url" {
   type    = string
   default = ""

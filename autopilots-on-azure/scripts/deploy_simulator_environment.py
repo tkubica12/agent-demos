@@ -33,6 +33,8 @@ def validate_config(config: dict, *, validate_expiry: bool = True) -> dict:
     config.setdefault("auth_mode", "entra")
     if config["auth_mode"] not in {"entra", "demo"}:
         raise ValueError("auth_mode must be entra or demo.")
+    if not isinstance(config.get("generated_chat_files_enabled", True), bool):
+        raise ValueError("generated_chat_files_enabled must be a boolean.")
     config["worker_owner_id"] = config["owner_id"]
     if "demo_owner_display_name" in config:
         name = config["demo_owner_display_name"]
@@ -284,6 +286,7 @@ def worker_values(config: dict, root: Path, agent: dict, ownership: dict, identi
     )
     values.update({
         "channel": "simulator", "demo_mcp_enabled": False, "document_retry_enabled": False,
+        "generated_chat_files_enabled": config.get("generated_chat_files_enabled", True),
         "private_network_enabled": config.get("network_mode", "private") == "private",
         "required_tags": config.get("platform", {}).get("required_tags", {}),
         "hermes_role_bundle_sha256": release.get("bundle_sha256", ""),
@@ -597,6 +600,7 @@ def remove_owned_smart_alert(config: dict, platform: dict) -> None:
 
 
 def destroy(config: dict, root: Path) -> None:
+    from scripts.sandbox_services import delete_owned_sandboxes
     from scripts.simulator_identity import destroy_identities
 
     ownership = load(root / "environment.json")
@@ -606,8 +610,22 @@ def destroy(config: dict, root: Path) -> None:
     for agent in reversed(config["agents"]):
         layer = root / agent["name"]
         if state_path(root, agent["name"], config["environment"]).exists():
+            infrastructure = terraform_output(layer)
+            if infrastructure.get("sandbox_groups"):
+                delete_owned_sandboxes(
+                    list(infrastructure["sandbox_groups"].values()),
+                    {"app": "autopilots-on-azure", "worker": agent["name"]},
+                    subscription_id=config["subscription_id"],
+                    resource_group=infrastructure["resource_group_name"], location=infrastructure["sandbox_location"],
+                )
             terraform(layer, config["environment"], load(layer / "generated.simulator.auto.tfvars.json"), destroy=True)
     if state_path(root, "simulator", config["environment"]).exists():
+        binding = load(root / "bindings.json")["channel"]
+        delete_owned_sandboxes(
+            [binding], {"app": "autopilots-on-azure", "environment": config["environment"], "service": "simulator"},
+            subscription_id=config["subscription_id"], resource_group=binding["resource_group_name"],
+            location=binding["location"],
+        )
         terraform(root / "simulator", config["environment"],
                   load(root / "simulator" / "generated.simulator.auto.tfvars.json"), destroy=True)
     if (root / "identities.json").exists():

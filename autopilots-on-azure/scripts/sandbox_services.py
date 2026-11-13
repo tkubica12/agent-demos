@@ -263,6 +263,8 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         from scripts.simulator_channel import simulator_worker_environment
 
         environment = simulator_worker_environment(config, infrastructure, environment)
+        if config.get("generated_chat_files_enabled"):
+            environment["GENERATED_CHAT_FILES_ENABLED"] = "true"
     return environment
 
 
@@ -296,6 +298,9 @@ def gateway_environment(settings: dict[str, str]) -> dict[str, str]:
 def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) -> dict[str, Any]:
     """Create or reuse runtime compute at deployment and return its native OnDemand endpoint."""
     config = config_from_environment({**settings, "AUTOPILOT_BRIDGE_URL": gateway_url})
+    if settings.get("GENERATED_CHAT_FILES_ENABLED") == "true":
+        config = replace(config, environment={**config.environment, "GENERATED_CHAT_FILES_ENABLED": "true"})
+        config = replace(config, runtime_config_revision=runtime_config_revision(config))
     if settings.get("USE_AGENTIC_AUTH", "true") == "false":
         environment = {
             key: value for key, value in config.environment.items()
@@ -438,6 +443,38 @@ def service_body(service: SandboxService, group: dict, disk_id: str, worker: str
 def require_exec_success(result: Any, operation: str) -> None:
     if result.exit_code != 0:
         raise RuntimeError(f"{operation} failed: {result.stderr}")
+
+
+def delete_owned_sandboxes(
+    groups: list[dict], labels: dict[str, str], *, subscription_id: str, resource_group: str, location: str,
+) -> None:
+    with AzureCliCredential(subscription=subscription_id, process_timeout=150) as credential, ExitStack() as stack:
+        pending = []
+        for group in groups:
+            expected = (
+                f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
+                f"/providers/Microsoft.App/sandboxGroups/{group['name']}"
+            )
+            if group["id"].lower() != expected.lower():
+                raise ValueError("Sandbox teardown group is outside the captured resource group.")
+            client = stack.enter_context(SandboxGroupClient(
+                endpoint_for_region(location), credential, subscription_id=subscription_id,
+                resource_group=resource_group, sandbox_group=group["name"], audience=DISK_IMAGE_AUDIENCE,
+            ))
+            try:
+                sandboxes = list(client._dp_get(client._group_path + "/sandboxes"))
+            except ResourceNotFoundError:
+                print(f"Sandbox Group {group['name']} is already absent.")
+                continue
+            if any(any(item.get("labels", {}).get(key) != value for key, value in labels.items())
+                   for item in sandboxes):
+                raise ValueError("Sandbox teardown found an instance outside the captured ownership.")
+            pending.append((client, sandboxes))
+        for client, sandboxes in pending:
+            for item in sandboxes:
+                client.get_sandbox_client(item["id"]).begin_delete(polling_timeout=600).result()
+            if list(client._dp_get(client._group_path + "/sandboxes")):
+                raise RuntimeError("Sandbox instances remain; Terraform teardown is refused.")
 
 
 def configure_callback_port(sandbox: Any, environment: dict[str, str]) -> str:
