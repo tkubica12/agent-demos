@@ -13,11 +13,11 @@ import time
 def application_command(role: str) -> list[str]:
     if role == "runtime":
         return [sys.executable, "/app/start_hermes.py"]
-    target = "bridge.app:app" if role == "gateway" else "backend.app:create_app"
+    if role == "gateway":
+        return [sys.executable, "-m", "bridge.server"]
     return [
-        sys.executable, "-m", "uvicorn", target,
-        *(["--factory"] if role == "simulator" else []),
-        "--host", "0.0.0.0", "--port", "8000" if role == "simulator" else "8001", "--no-access-log",
+        sys.executable, "-m", "uvicorn", "backend.app:create_app", "--factory",
+        "--host", "0.0.0.0", "--port", "8000", "--no-access-log",
     ]
 
 

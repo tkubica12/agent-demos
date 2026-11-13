@@ -881,10 +881,9 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
             if role == "gateway":
                 settings = worker_settings(config, platform, infrastructure, endpoints)
                 service = SandboxService(
-                    role="gateway", image=bridge_image, port=8001 if source_commit else 8000,
+                    role="gateway", image=bridge_image, port=8000,
                     disk_source_image=bridge_source,
-                    command=(("/app/.venv/bin/python", "-m", "uvicorn", "bridge.app:app")
-                             if source_commit else ("/app/.venv/bin/python", "-m", "bridge.server")),
+                    command=("/app/.venv/bin/python", "-m", "bridge.server"),
                     environment=gateway_environment(settings),
                     auto_suspend=not bool(source_commit),
                     release=None if source_commit else build_release("gateway", base_image=bridge_image),

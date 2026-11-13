@@ -58,6 +58,13 @@ def main() -> None:
             "TSIM_REDIRECT_URI": "https://container-startup.invalid",
             "TSIM_SERVICE_URL": "https://container-startup.invalid", "ENV": "production",
         }
+
+    def show_logs(value: str) -> None:
+        for key in ("API_SERVER_KEY", "TSIM_DEMO_ACCESS_CODE"):
+            if environment.get(key):
+                value = value.replace(environment[key], "[redacted]")
+        print("\n".join(value.splitlines()[-100:]))
+
     name = "autopilots-startup-" + uuid.uuid4().hex
     run("pull", options.image, timeout=600)
     created = False
@@ -74,7 +81,7 @@ def main() -> None:
             run("exec", "--user", "0:0", name, "sh", "-c",
                 "chown " + owner + " /tmp/service.json.next && chmod 0600 /tmp/service.json.next"
                 " && mv /tmp/service.json.next /tmp/service.json")
-        probe = PROBE.replace("PORT", {"runtime": "8642", "gateway": "8001", "simulator": "8000"}[role])
+        probe = PROBE.replace("PORT", "8642" if role == "runtime" else "8000")
         probe = probe.replace("HEALTH", "api/health" if role == "simulator" else "health").replace("ROLE", repr(role))
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
@@ -94,16 +101,12 @@ def main() -> None:
     except (subprocess.SubprocessError, OSError, RuntimeError) as error:
         if created:
             try:
-                logs = run("logs", "--tail", "100", name)
+                show_logs(run("logs", "--tail", "100", name))
                 log = "/tmp/simulator-service.log" if role == "simulator" else "/app/.sandbox-service.log"
                 with tempfile.TemporaryDirectory() as temporary:
                     target = Path(temporary) / "service.log"
                     run("cp", name + ":" + log, str(target))
-                    logs += target.read_text(encoding="utf-8")
-                for key in ("API_SERVER_KEY", "TSIM_DEMO_ACCESS_CODE"):
-                    if environment.get(key):
-                        logs = logs.replace(environment[key], "[redacted]")
-                print(logs)
+                    show_logs(target.read_text(encoding="utf-8"))
             except (subprocess.SubprocessError, OSError) as diagnostic_error:
                 error.add_note("Container startup logs could not be collected: " + type(diagnostic_error).__name__)
         raise

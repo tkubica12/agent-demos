@@ -78,7 +78,7 @@ class SandboxServicesTests(unittest.TestCase):
 
     def test_prebuilt_gateway_uses_packaged_startup_and_disables_both_lifecycle_policies(self):
         service = SandboxService(
-            role="gateway", image="image", port=8001, command=("unused",), environment={},
+            role="gateway", image="image", port=8000, command=("unused",), environment={},
             source_commit="a" * 40,
         )
         body = service_body(service, self.group(), "disk", "worker")
@@ -469,7 +469,7 @@ class SandboxServicesTests(unittest.TestCase):
         for healthy in (True, False):
             with self.subTest(healthy=healthy):
                 service = SandboxService(
-                    "gateway", "new-image", 8001, ("python3",), {}, source_commit="a" * 40,
+                    "gateway", "new-image", 8000, ("python3",), {}, source_commit="a" * 40,
                 )
                 client = Mock()
                 client._group_path = "/group"
@@ -484,7 +484,7 @@ class SandboxServicesTests(unittest.TestCase):
                 old.get.return_value = SimpleNamespace(state="Stopped")
                 new.sandbox_id = "new"
                 new.get.return_value = SimpleNamespace(
-                    state="Running", ports=[SimpleNamespace(port=8001, url="https://gateway.example")],
+                    state="Running", ports=[SimpleNamespace(port=8000, url="https://gateway.example")],
                 )
                 new.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
                 client.get_sandbox_client.side_effect = lambda identity: old if identity == "old" else new
