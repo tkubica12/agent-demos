@@ -115,6 +115,12 @@ export async function runWidgetAcceptance({ first, agent, chat, send, reply, dir
       turn: "producing", conversationId: cid, requestActivityId: sent.id,
       replyActivityId: received.id, widgetActivityId: received.id, requestedAt,
     });
+    assert.ok(report.producing.native?.widgetSkillLoads?.some(load =>
+      load.tool === "skill_view" && load.skillName === "teams-html-widget" &&
+      load.skillContentReturned === true && load.error === false &&
+      /^[0-9a-f]{64}$/.test(load.skillContentSha256)),
+    "Producing native run must independently prove the exact widget skill content was loaded.");
+    report.checks.push("producing-native-run-returned-exact-widget-skill-content");
     report.followup = await prove({
       turn: "followup", conversationId: cid, replyActivityId: followup.id,
       widgetActivityId: received.id, requestedAt: submittedAt,
