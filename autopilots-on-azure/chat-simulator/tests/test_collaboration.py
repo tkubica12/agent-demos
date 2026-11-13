@@ -65,6 +65,7 @@ def test_every_openapi_resource_id_method_is_outsider_tested(idor_client, idor_a
         "agentId": agent["id"], "deliveryId": delivery_id, "activityId": resources["message"]["id"],
         "replyToId": resources["message"]["id"], "reactionType": "like",
         "attachmentId": resources["file"]["id"], "viewId": "original",
+        "message_id": resources["message"]["id"], "index": 0, "capability": "invalid-frame-capability",
     }
     cases = {
         ("get", "/api/teams/{teamId}"): {},
@@ -95,6 +96,13 @@ def test_every_openapi_resource_id_method_is_outsider_tested(idor_client, idor_a
         ("post", "/api/agents/{agentId}/deliveries/{deliveryId}/retry"): {},
         ("get", "/api/agent-files/{fileId}/content"): {"params": {"capability": "invalid-capability-for-explicit-hostile-test"}},
         ("post", "/api/messages/{messageId}/actions"): {"json": {"action": {"type": "Action.Submit", "data": {}}}},
+        ("post", "/api/messages/{message_id}/widgets/{index}/frame"): {},
+        ("post", "/api/messages/{message_id}/widgets/{index}/tools"): {
+            "json": {"name": "autopilot.widget.submit", "arguments": {}},
+        },
+        ("get", "/api/widget-frames/{capability}"): {
+            "headers": {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin"},
+        },
         ("post", "/v3/conversations/{conversationId}/activities"): {
             "headers": agent_headers, "json": {"type": "message", "text": "Forbidden"},
         },

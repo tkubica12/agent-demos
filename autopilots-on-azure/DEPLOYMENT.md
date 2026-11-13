@@ -321,6 +321,20 @@ The 2026-11-13 end-to-end check used a real Teams message and native skill disco
 
 ## Scheduling and release changes
 
+For Agent Chat Simulator HTML widgets, deploy the simulator host image together
+with the existing gateway/runtime source-update flow. Required new source paths
+are `bridge/html_widgets.py` and
+`runtime_skills/teams-html-widget/SKILL.md` in the runtime release
+(`runtimes/hermes/runtime_skills/teams-html-widget/SKILL.md` in the repository).
+The recursive release bundler includes them; preserve the existing
+`HERMES_BUNDLED_SKILLS` source-release path. No new environment variable, port,
+Azure resource or blueprint RoleCommit is needed. The simulator's frame grants
+are process-local: retain one backend process/replica. See
+[widget limits, isolation and local checks](chat-simulator/README.md#html-widgets).
+After image/source replacement, acceptance must exercise a fresh personal chat:
+widget initialization, input recompute, selection acknowledgment and same-chat
+follow-up. A source-only gateway update cannot add the simulator browser host.
+
 To configure Service Bus Dreaming on an existing Worker:
 
 ```powershell

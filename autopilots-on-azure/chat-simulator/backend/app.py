@@ -18,6 +18,7 @@ from .auth import Identity, TokenVerifier
 from .channel import AgentChannel, require_agent
 from .config import ROOT, TEST_PERSONAS, Settings
 from .connector import register_routes
+from .html_widgets import register_widget_routes
 from .demo import DemoAuth, DemoExpiry, DemoLogin
 from .registration import registrations, seed_agents
 from .realtime import Connection, Hub
@@ -35,7 +36,7 @@ class SecurityHeaders:
         self.csp = (
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; font-src 'self' data:; "
-            f"connect-src {connect}; frame-src https://login.microsoftonline.com; "
+            f"connect-src {connect}; frame-src 'self' https://login.microsoftonline.com; "
             "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
         )
 
@@ -47,13 +48,17 @@ class SecurityHeaders:
         async def secured(message):
             if message["type"] == "http.response.start":
                 headers = message.setdefault("headers", [])
+                widget_frame = (
+                    scope["path"].startswith("/api/widget-frames/") and message["status"] == 200
+                    and any(name.lower() == b"content-security-policy" for name, _ in headers)
+                )
                 policy = [
-                    (b"content-security-policy", self.csp.encode("ascii")),
                     (b"x-content-type-options", b"nosniff"),
                     (b"referrer-policy", b"no-referrer"),
-                    (b"x-frame-options", b"DENY"),
                     (b"cache-control", b"no-store"),
                 ]
+                if not widget_frame:
+                    policy += [(b"content-security-policy", self.csp.encode("ascii")), (b"x-frame-options", b"DENY")]
                 names = {name for name, _ in policy}
                 message["headers"] = [(name, value) for name, value in headers if name.lower() not in names] + policy
             await send(message)
@@ -130,6 +135,8 @@ def create_app(settings: Settings | None = None):
         channel = db.Channel(id=channel_id, team_id=team.id, name=name, conversation_id=conversation_id)
         session.add(channel)
         return channel
+
+    register_widget_routes(app, channel_service, session, current_user)
 
     def installable_agent(session, user):
         if user.source == "agent":

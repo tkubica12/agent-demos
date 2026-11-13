@@ -168,7 +168,7 @@ function MessageRow(props: Props & { message: Message; grouped: boolean; rootPre
             <textarea aria-label="Edit message" value={draft} onChange={(event) => setDraft(event.target.value)} />
             <div><button onClick={() => setEditing(false)}>Cancel edit</button>
               <button onClick={() => void save()} disabled={saving}>Save edit</button></div>
-          </div> : <MessageBody message={message} />}
+          </div> : <MessageBody message={message} api={api} dark={!!props.dark} />}
           {!message.deleted && message.attachments.map((file) => <FileCard key={file.id} file={file} onDownload={download}
             onCopyLink={() => copy(messageLink)} />)}
           {!message.deleted && message.activityAttachments?.map((attachment, index) =>

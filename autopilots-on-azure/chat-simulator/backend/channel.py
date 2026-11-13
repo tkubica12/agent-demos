@@ -316,6 +316,7 @@ class AgentChannel:
             endpoint = validate_transport_url(agent.endpoint_url, self.settings.environment)
             client_id, agent_id = agent.client_id, agent.id
             activity = self.file_capabilities(session, agent, delivery.activity)
+            widget_call = activity["type"] == "invoke" and activity.get("name") == "htmlwidget/calltool"
             session.rollback()  # Agent handlers can call Connector without a held SQLite transaction.
             if self.settings.auth_mode == "demo":
                 headers = {"X-Demo-Channel-Key": agent.demo_key}
@@ -334,13 +335,22 @@ class AgentChannel:
                                           headers=headers) as response:
                 if response.status_code not in {200, 201, 202, 204}:
                     raise HTTPException(502, f"Agent delivery failed (HTTP {response.status_code})")
+                if widget_call and response.status_code != 200:
+                    raise HTTPException(502, "Widget invokes require synchronous HTTP 200")
                 raw = bytearray()
                 async for chunk in response.aiter_bytes():
-                    if len(raw) + len(chunk) > 1024 * 1024:
+                    if len(raw) + len(chunk) > (65_536 if widget_call else 1024 * 1024):
                         raise HTTPException(502, "Agent response is too large")
                     raw.extend(chunk)
             invoke_response = None
-            if activity["type"] == "invoke":
+            if widget_call:
+                from .html_widgets import strict_json, validate_tool_result
+
+                try:
+                    invoke_response = validate_tool_result(strict_json(raw))
+                except (ValueError, UnicodeError, RecursionError):
+                    raise HTTPException(502, "Agent returned malformed widget JSON") from None
+            elif activity["type"] == "invoke":
                 try:
                     invoke_response = json.loads(raw)
                 except (ValueError, UnicodeDecodeError):

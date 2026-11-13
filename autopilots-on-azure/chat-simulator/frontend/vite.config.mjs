@@ -8,7 +8,7 @@ export default defineConfig({
       "Content-Security-Policy": [
         "default-src 'self'", "base-uri 'none'", "object-src 'none'", "frame-ancestors 'none'",
         "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
-        "font-src 'self'", "frame-src https://login.microsoftonline.com",
+        "font-src 'self'", "frame-src 'self' https://login.microsoftonline.com",
         "connect-src 'self' ws://localhost:5173 ws://127.0.0.1:5173 http://127.0.0.1:* http://localhost:* https://login.microsoftonline.com",
       ].join("; "),
     },

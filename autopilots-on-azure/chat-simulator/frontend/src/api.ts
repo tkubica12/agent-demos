@@ -31,7 +31,7 @@ export type Mention = { userId: string; displayName: string };
 export type Reaction = { emoji: string; count: number; userIds: string[]; users: User[] };
 export type Message = {
   id: string; snapshotRevision: number; conversationId: string; replyToId: string | null; text: string;
-  textFormat: "markdown" | "plain"; author: User; createdAt: string; updatedAt: string | null;
+  textFormat: "markdown" | "plain" | "extendedmarkdown"; author: User; createdAt: string; updatedAt: string | null;
   deleted: boolean; mentions: Mention[]; attachments: FileItem[]; reactions: Reaction[];
   activityAttachments?: ActivityAttachment[];
   suggestedActions?: { actions: SuggestedAction[]; to?: string[] } | null;
@@ -79,12 +79,12 @@ export async function readApiResponse<T>(response: Response): Promise<T> {
 export class Api {
   constructor(readonly getToken: GetToken, private readonly onError?: (error: ApiError) => void) {}
 
-  async request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  async request<T>(path: string, method = "GET", body?: unknown, signal?: AbortSignal): Promise<T> {
     const token = await this.getToken();
     const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     const response = await fetch(`/api${path}`, {
-      method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+      method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal,
     });
     return this.read<T>(response);
   }

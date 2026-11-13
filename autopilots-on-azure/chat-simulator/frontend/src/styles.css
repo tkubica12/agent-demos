@@ -102,6 +102,7 @@ svg { flex-shrink: 0; }
 .message-line { display: flex; align-items: flex-start; min-width: 0; }
 .message-avatar { flex: 0 0 32px; padding-top: 1px; position: relative; z-index: 1; }
 .message-content { position: relative; min-width: 0; max-width: min(100%, 590px); }
+.message-content:has(.html-widget) { width: 590px; }
 .foreign .message-content { margin-left: -8px; }
 .message-row.no-avatar.foreign .message-content { margin-left: 0; }
 .own .message-line { justify-content: flex-end; }

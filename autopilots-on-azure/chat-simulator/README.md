@@ -2,6 +2,8 @@
 
 A standalone, neutral collaboration UI for personal/group chats, workspaces and
 channels, threaded replies, typing, reactions, Adaptive Cards and shared files.
+Agent-authored `extendedmarkdown` messages also support the same self-contained
+HTML widgets used by the Hermes `teams-html-widget` skill in real Teams.
 It **emulates the Teams channel protocol for testing agents built with the
 Microsoft 365 Agents SDK**; it does not connect to real Teams or Microsoft Graph
 and is not a Microsoft product. Protocol identifiers such as `msteams`, `28:`,
@@ -86,6 +88,67 @@ Multiple registrations remain supported for other testing scenarios.
 Participants discover agents in the directory and add them to a chat or workspace.
 No fake replies or runtime substitute is bundled. The bridge/hosted agent must
 implement the real response flow; delivery errors remain visible.
+
+## HTML widgets
+
+Only agent `message` activities with `textFormat: extendedmarkdown` execute valid
+`html-widget` fences. Ordinary markdown, human messages and invalid fences remain
+text/code. Surrounding markdown is preserved. The Hermes skill, widget bootstrap,
+payload and 30-minute Worker/conversation-bound Fernet capabilities are unchanged.
+The host implements MCP UI initialization (`2026-01-26`), initialized/size
+notifications and `autopilot.widget.submit`. It sends the real
+`htmlwidget/calltool` invoke to the message's agent with the current user identity,
+same conversation and host-overwritten `__msteams__`. Synchronous
+`htmlwidget/calltoolresult` acknowledgments and proactive follow-up messages stay
+in that chat. The bridge handles capability expiry and idempotence.
+
+Widgets load on demand near the viewport. Snapshot refreshes and new messages
+do not reload mounted frames or discard inputs. Initialization failures offer a
+retry; leaving/reopening a conversation creates a fresh widget view.
+Messages are bounded to 100,000 UTF-8 bytes (ordinary text keeps its 28,000-character
+limit), tool arguments to 16 KiB, results to 64 KiB, height to 32-4096 px, tool
+delivery to 15 seconds, and calls to one in flight plus six per minute per widget
+and 30 per minute per user. Timeouts explicitly report an unknown gateway outcome;
+retry the same selection, not a new capability.
+
+An authenticated API mints a single-use, 60-second HMAC frame capability bound to
+the stored message/widget/user/HTML hash. The frame rechecks membership and content;
+direct, cross-origin, expired, replayed and tampered URL requests fail closed.
+Only that route has its own HTTP CSP/ancestry policy. The iframe has **only**
+`sandbox="allow-scripts"`: no same-origin access, top navigation, popups, forms or
+downloads. HTTP CSP allows inline scripts/styles and data images but denies
+fetch/resources/nested frames even if a payload requests broader `securityPolicy`
+domains; DNS prefetch is disabled. The parent CSP restricts frame navigation to
+its origin and the host closes a frame on subsequent navigation. Window messages
+are accepted only from that widget's `contentWindow`.
+
+This is a narrow self-contained host, not a full MCP Apps client: external MCP
+URLs are metadata, not network destinations; model-context updates, permissions,
+fullscreen and open-link requests are not implemented. Unknown requests get
+JSON-RPC errors; unsupported notifications are ignored. Browser CSP/sandbox is
+not an OS-level network sandbox (for example WebRTC is not covered by `connect-src`).
+Do not use it as a general arbitrary-code execution environment.
+
+No new deployment settings, identities, resources or ports are required. Use the
+existing single backend process/replica. Replace the simulator image for host
+changes and the gateway/runtime source releases for the widget implementation.
+The separately pinned blueprint RoleCommit does not change.
+
+From the parent `autopilots-on-azure` directory, the local real-SDK widget smoke
+and Chromium UI/security checks are:
+
+```powershell
+uv run python tests\simulator_channel_smoke.py --simulator-root chat-simulator --widgets-browser
+uv run python tests\simulator_channel_smoke.py --simulator-root chat-simulator --mode demo --widgets-browser
+```
+
+These use the real gateway, Activity model, Connector and SDK HTTP invoke adapter;
+only Hermes/model responses, native claim storage and explicit failing transports
+are fixtures. They use isolated local identities, never Azure. Add `--media-dir`
+with an external artifact directory to record a Playwright screenshot-sequence
+demo (GIF/MP4 via installed ffmpeg). Installed Chromium-based Edge is used.
+Run simulator API tests with `uv run python -m pytest -q`; from `frontend`,
+run `npm test` and `npm run build`. Existing browser runners remain unchanged.
 
 ## Explicit, expiring demo mode
 

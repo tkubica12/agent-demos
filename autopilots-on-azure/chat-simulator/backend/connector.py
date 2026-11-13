@@ -235,7 +235,14 @@ def register_routes(app, channel, session_dependency, current_user, commit, chan
         if supplied_conversation is not None and supplied_conversation not in valid_ids:
             raise HTTPException(403, "Activity conversation does not match the authorized route")
         text = body.get("text", "")
-        if not isinstance(text, str) or len(text) > 28000:
+        if body.get("textFormat") == "extendedmarkdown" and body.get("type") == "message":
+            from .html_widgets import widgets
+
+            if not isinstance(text, str) or len(text.encode()) > 100_000:
+                raise HTTPException(422, "Widget message text exceeds the 100000 byte limit")
+            if len(text) > 28000 and not widgets(body):
+                raise HTTPException(422, "Only valid widget messages may exceed the 28000 character limit")
+        elif not isinstance(text, str) or len(text) > 28000:
             raise HTTPException(422, "Message text exceeds the 28000 character limit")
         value = d.make_activity(session, settings, conversation, author, activity_id, text,
                                 body.get("textFormat", "markdown"), root_id)
