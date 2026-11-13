@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -29,6 +30,7 @@ RUN_HEADER = "X-Autopilot-File-Run"
 ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 RUN_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,160}")
 MEDIA_LINE = re.compile(r"^[ \t]*MEDIA:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+MAX_EVIDENCE_BYTES = 1024 * 1024
 
 
 class GeneratedFileError(RuntimeError):
@@ -87,6 +89,78 @@ def validate_generated_bytes(name: str, data: bytes) -> str:
         except zipfile.BadZipFile as exc:
             raise GeneratedFileError("Generated DOCX is not a valid Word package.") from exc
     return content_type
+
+
+def completed_run_evidence(run_id: str, status: Any, events: bytes) -> dict[str, Any]:
+    """Project completed native status/SSE into metadata without prompts, previews, or file claims."""
+    if not isinstance(status, dict) or status.get("run_id") != run_id or status.get("status") != "completed":
+        raise GeneratedFileError("Native evidence requires the exact completed run.")
+    if len(events) > MAX_EVIDENCE_BYTES:
+        raise GeneratedFileError("Native evidence exceeds the 1 MiB limit.")
+    tools = []
+    completed = False
+    try:
+        for line in events.decode("utf-8").splitlines():
+            if not line.startswith("data:"):
+                continue
+            event = json.loads(line[5:].strip())
+            if not isinstance(event, dict) or event.get("run_id") != run_id:
+                raise GeneratedFileError("Native evidence contains a mismatched run.")
+            kind = event.get("event")
+            if kind == "replay.truncated":
+                raise GeneratedFileError("Native evidence replay was truncated.")
+            if kind == "run.completed":
+                completed = True
+            if kind not in {"tool.started", "tool.completed"}:
+                continue
+            name = event.get("tool")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,160}", name):
+                raise GeneratedFileError("Native evidence contains an invalid tool identity.")
+            tool = {"event": kind, "tool": name}
+            call_id = event.get("tool_call_id")
+            if call_id is not None:
+                if not isinstance(call_id, str) or not RUN_PATTERN.fullmatch(call_id):
+                    raise GeneratedFileError("Native evidence contains an invalid tool-call identity.")
+                tool["toolCallId"] = call_id
+            if kind == "tool.completed":
+                duration = event.get("duration")
+                if type(event.get("error")) is not bool:
+                    raise GeneratedFileError("Native evidence lacks the tool outcome.")
+                if type(duration) not in {int, float} or not math.isfinite(duration) or duration < 0:
+                    raise GeneratedFileError("Native evidence contains an invalid tool duration.")
+                tool.update(error=event["error"], duration=duration)
+            tools.append(tool)
+            if len(tools) > 256:
+                raise GeneratedFileError("Native evidence exceeds the 256 tool-event limit.")
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GeneratedFileError("Native evidence is not a valid UTF-8 event stream.") from exc
+    if not completed:
+        raise GeneratedFileError("Native evidence lacks the terminal completion event.")
+    runtime = status.get("runtime")
+    runtime = runtime if isinstance(runtime, dict) else {}
+    runtime_ids = {}
+    for key in ("provider", "model", "route_source"):
+        value = runtime.get(key)
+        if value == "":
+            value = None
+        if value is not None and (
+            not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,160}", value)
+        ):
+            raise GeneratedFileError("Native evidence contains an invalid runtime identity.")
+        runtime_ids[key] = value
+    usage = status.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    counts = {
+        key: value for key in (
+            "input_tokens", "output_tokens", "total_tokens", "cache_read_tokens", "cache_write_tokens",
+            "prompt_tokens", "completion_tokens",
+        ) if type(value := usage.get(key)) is int and value >= 0
+    }
+    return {
+        "runId": run_id, "status": "completed", "runtime": runtime_ids,
+        "runtimeMetadataAvailable": bool(runtime_ids["provider"] and runtime_ids["model"]),
+        "usage": counts, "tools": tools,
+    }
 
 
 class GeneratedFileStore:

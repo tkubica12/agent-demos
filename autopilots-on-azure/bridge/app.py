@@ -101,7 +101,8 @@ from bridge.scheduled_learning import (
     ScheduledLearningCoordinator,
     ScheduledLearningSettings,
 )
-from bridge.telemetry import configure_telemetry, flush_telemetry, operation_span
+from bridge.telemetry import configure_telemetry, flush_telemetry, operation_span, runtime_trace_headers
+from bridge.generated_files import RUN_PATTERN, generated_files_enabled
 from bridge.telemetry_http import TelemetryMiddleware
 from bridge.work_activity import ActiveWorkMiddleware, start_active_work
 from bridge.transport_ingress import NativeTransportIngressMiddleware
@@ -218,6 +219,7 @@ async def flush_bridge_telemetry() -> None:
 
 
 _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
+_generated_file_evidence: deque[dict[str, Any]] = deque(maxlen=64)
 _teams_memory: dict[str, deque[dict[str, Any]]] = {}
 _SUPPORTED_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat", "channel", "team"}
 _CHANNEL_TEAMS_CONVERSATION_TYPES = {"channel", "team"}
@@ -949,6 +951,16 @@ def require_operator_key(request: Request) -> None:
     supplied = request.headers.get("x-autopilot-key", "")
     if not expected or expected == "not-configured" or not secrets.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
+
+
+@app.get("/internal/generated-files/evidence")
+def generated_file_evidence(request: Request, conversation_id: str) -> dict[str, Any]:
+    require_operator_key(request)
+    if not generated_files_enabled():
+        raise HTTPException(status_code=503, detail="Generated chat files are disabled in this gateway.")
+    return {"events": [
+        event for event in _generated_file_evidence if event["conversationId"] == conversation_id
+    ]}
 
 
 async def collective_learning_result(operation: Awaitable[dict[str, Any]]) -> dict[str, Any]:
@@ -3297,12 +3309,18 @@ async def run_agent_runtime_for_teams(
             file_delivery = await send_proactive_activity(
                 agent365_adapter, delivery_reference, file=file,
             )
-            record_teams_diag({
-                "event": "generatedFileSent", "conversationId": conversation_id,
+            correlation = result.raw.get("generatedFileEvidence")
+            correlation = correlation if isinstance(correlation, dict) else {}
+            evidence = {
+                "ts": time.time(), "event": "generatedFileSent", "conversationId": conversation_id,
+                "requestActivityId": str(field_value(ctx.activity, "id") or ""),
                 "name": file.name, "size": len(file.data),
                 "sha256": hashlib.sha256(file.data).hexdigest(),
                 "activityId": file_delivery["activityId"],
-            })
+                "nativeRunId": correlation.get("nativeRunId"), "traceId": correlation.get("traceId"),
+            }
+            _generated_file_evidence.appendleft(evidence)
+            record_teams_diag(evidence)
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
         if owner_personal_chat(ctx.activity) and not attachments:
             try:
@@ -3417,7 +3435,17 @@ async def invoke_agent_runtime(
             "autopilots.invocation.source": source,
         },
     ):
-        return await runtime_adapter().invoke(request)
+        result = await runtime_adapter().invoke(request)
+        if result.files:
+            payload = result.raw.get("payload")
+            run_id = payload.get("run_id") if isinstance(payload, dict) else None
+            traceparent = runtime_trace_headers().get("traceparent", "")
+            trace_match = re.fullmatch(r"[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}", traceparent)
+            result.raw["generatedFileEvidence"] = {
+                "nativeRunId": run_id if isinstance(run_id, str) and RUN_PATTERN.fullmatch(run_id) else None,
+                "traceId": trace_match[1] if trace_match else None,
+            }
+        return result
 
 
 async def deliver_known_schedule_result(body: dict[str, Any], proof: dict[str, Any]) -> dict[str, Any]:

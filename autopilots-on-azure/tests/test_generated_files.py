@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -8,8 +9,59 @@ from unittest.mock import patch
 import zipfile
 
 from bridge.generated_files import (
-    GeneratedFileError, GeneratedFileStore, MAX_FILE_BYTES, conversation_file_scope,
+    GeneratedFileError, GeneratedFileStore, MAX_EVIDENCE_BYTES, MAX_FILE_BYTES,
+    completed_run_evidence, conversation_file_scope,
 )
+
+
+class GeneratedFileEvidenceTests(unittest.TestCase):
+    def test_only_native_safe_status_and_tool_fields_are_returned(self):
+        status = {
+            "run_id": "run-1", "status": "completed", "output": "secret",
+            "generatedAttachments": {"claim": "secret"}, "instructions": "secret",
+            "runtime": {"provider": "azure-foundry", "model": "gpt-5", "route_source": "global", "key": "secret"},
+            "usage": {"input_tokens": 7, "output_tokens": 3, "key": "secret"},
+        }
+        events = [
+            {"event": "tool.started", "tool": "terminal", "tool_call_id": "call-1", "preview": "secret"},
+            {"event": "tool.completed", "tool": "terminal", "tool_call_id": "call-1", "duration": 1.25, "error": False,
+             "preview": "secret"},
+            {"event": "reasoning.available", "text": "secret"},
+            {"event": "run.completed", "output": "secret"},
+        ]
+        wire = b"".join(
+            ("data: " + json.dumps({"run_id": "run-1", **event}) + "\n\n").encode() for event in events
+        )
+        actual = completed_run_evidence("run-1", status, wire)
+        self.assertEqual(actual["runtime"], {"provider": "azure-foundry", "model": "gpt-5", "route_source": "global"})
+        self.assertEqual(actual["usage"], {"input_tokens": 7, "output_tokens": 3})
+        self.assertEqual(actual["tools"], [
+            {"event": "tool.started", "tool": "terminal", "toolCallId": "call-1"},
+            {"event": "tool.completed", "tool": "terminal", "toolCallId": "call-1", "duration": 1.25, "error": False},
+        ])
+        self.assertNotIn("secret", json.dumps(actual))
+
+    def test_mismatched_truncated_incomplete_invalid_and_oversized_evidence_is_refused(self):
+        status = {"run_id": "run-1", "status": "completed"}
+        for data in (
+            b'data: {"run_id":"other","event":"run.completed"}\n',
+            b'data: {"run_id":"run-1","event":"replay.truncated"}\n',
+            b'data: {"run_id":"run-1","event":"tool.started","tool":"terminal"}\n',
+            b"data: not-json\n", b"\xff", b"x" * (MAX_EVIDENCE_BYTES + 1),
+        ):
+            with self.subTest(data=data[:80]), self.assertRaises(GeneratedFileError):
+                completed_run_evidence("run-1", status, data)
+        for invalid in ({**status, "run_id": "other"}, {**status, "status": "running"}):
+            with self.assertRaises(GeneratedFileError):
+                completed_run_evidence("run-1", invalid, b"")
+
+    def test_missing_served_model_is_explicitly_unavailable_not_inferred(self):
+        actual = completed_run_evidence(
+            "run-1", {"run_id": "run-1", "status": "completed", "runtime": {"provider": "", "model": ""}},
+            b'data: {"run_id":"run-1","event":"run.completed"}\n',
+        )
+        self.assertFalse(actual["runtimeMetadataAvailable"])
+        self.assertIsNone(actual["runtime"]["model"])
 
 
 @unittest.skipUnless(hasattr(os, "O_NOFOLLOW"), "Native generated-file storage requires Linux")

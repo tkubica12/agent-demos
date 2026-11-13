@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from microsoft_agents.activity import (
     Activity,
     ChannelAccount,
@@ -495,14 +496,17 @@ class TeamsBridgeTests(unittest.TestCase):
         )
         reference = {"conversationId": "conversation-1"}
         for error in (None, GeneratedFileError("Connector upload refused")):
-            ctx = SimpleNamespace(activity=object(), send_activity=AsyncMock())
+            bridge_app._generated_file_evidence.clear()
+            ctx = SimpleNamespace(activity=SimpleNamespace(id="request-1"), send_activity=AsyncMock())
             proactive = AsyncMock(return_value={"activityId": "file-sent"}, side_effect=error)
             direct = AsyncMock()
             with self.subTest(error=error), patch.multiple(
                 bridge_app,
                 agent_auth_context=lambda activity: auth,
                 delivery_reference_metadata=lambda *args, **kwargs: reference,
-                invoke_agent_runtime=AsyncMock(return_value=AgentResponse(text="", files=(file,))),
+                invoke_agent_runtime=AsyncMock(return_value=AgentResponse(text="", files=(file,), raw={
+                    "generatedFileEvidence": {"nativeRunId": "run-file-1", "traceId": "c" * 32, "claim": "secret"},
+                })),
                 send_proactive_activity=proactive, send_teams_response=direct,
                 teams_runtime_source=lambda activity: "teams_group",
                 user_id=lambda activity: "user-1",
@@ -518,8 +522,57 @@ class TeamsBridgeTests(unittest.TestCase):
             direct.assert_not_awaited()
             if error is None:
                 ctx.send_activity.assert_not_awaited()
+                evidence, = bridge_app._generated_file_evidence
+                self.assertEqual(evidence["requestActivityId"], "request-1")
+                self.assertEqual(evidence["activityId"], "file-sent")
+                self.assertEqual(evidence["nativeRunId"], "run-file-1")
+                self.assertNotIn("secret", json.dumps(evidence))
             else:
                 self.assertIn("Connector upload refused", ctx.send_activity.await_args.args[0])
+                self.assertEqual(list(bridge_app._generated_file_evidence), [])
+
+    def test_generated_delivery_evidence_requires_key_and_exact_conversation(self):
+        bridge_app._generated_file_evidence.clear()
+        self.addCleanup(bridge_app._generated_file_evidence.clear)
+        bridge_app._generated_file_evidence.append({
+            "conversationId": "conversation-1", "requestActivityId": "request-1", "nativeRunId": "run-1",
+        })
+
+        async def exercise():
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=bridge_app.app), base_url="http://bridge",
+            ) as client:
+                url = "/internal/generated-files/evidence?conversation_id=conversation-1"
+                self.assertEqual((await client.get(url)).status_code, 401)
+                headers = {"X-Autopilot-Key": "operator-test"}
+                actual = await client.get(url, headers=headers)
+                self.assertEqual(actual.status_code, 200)
+                self.assertEqual(actual.json()["events"][0]["nativeRunId"], "run-1")
+                other = await client.get(url.replace("conversation-1", "other"), headers=headers)
+                self.assertEqual(other.json(), {"events": []})
+                with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "false"}):
+                    self.assertEqual((await client.get(url, headers=headers)).status_code, 503)
+
+        with patch.dict(os.environ, {"API_SERVER_KEY": "operator-test", "GENERATED_CHAT_FILES_ENABLED": "true"}):
+            asyncio.run(exercise())
+
+    def test_native_file_run_and_active_invocation_trace_are_correlated(self):
+        from bridge.generated_files import GeneratedAttachment
+
+        result = AgentResponse(text="", files=(GeneratedAttachment("report.txt", "text/plain", b"report"),),
+                               raw={"payload": {"run_id": "native-file-run"}})
+        adapter = SimpleNamespace(invoke=AsyncMock(return_value=result))
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=adapter),
+            patch.object(bridge_app, "runtime_trace_headers", return_value={
+                "traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01", "X-Secret": "never-record",
+            }),
+        ):
+            actual = asyncio.run(bridge_app.invoke_agent_runtime(
+                conversation_id="conversation-1", session_key="teams:personal:conversation-1",
+                message="Generate report", source="teams_personal", user_id="user-1", must_answer=True,
+            ))
+        self.assertEqual(actual.raw["generatedFileEvidence"], {"nativeRunId": "native-file-run", "traceId": "a" * 32})
 
     def test_word_notification_prompt_preserves_stable_document_context(self):
         activity = Activity(

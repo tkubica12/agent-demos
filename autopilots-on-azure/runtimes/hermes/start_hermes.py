@@ -34,7 +34,8 @@ from bridge.hermes_telemetry import (
 from bridge.telemetry import configure_telemetry, flush_telemetry, runtime_trace_headers
 from bridge.telemetry_http import TelemetryMiddleware
 from bridge.generated_files import (
-    GeneratedFileError, GeneratedFileStore, RUN_HEADER, SCOPE_HEADER, generated_files_enabled,
+    GeneratedFileError, GeneratedFileStore, MAX_EVIDENCE_BYTES, RUN_HEADER, RUN_PATTERN,
+    SCOPE_HEADER, completed_run_evidence, generated_files_enabled,
 )
 from autopilots_identity.document_operations import (
     acknowledge_delivery as acknowledge_document_delivery,
@@ -496,7 +497,7 @@ def create_health_app(
     def require_internal_key(request: Request) -> None:
         expected = os.getenv("API_SERVER_KEY", "")
         supplied = request.headers.get("x-autopilot-key", "")
-        if not expected or not secrets.compare_digest(supplied, expected):
+        if not expected or expected == "not-configured" or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
 
     @app.get("/internal/runtime/status")
@@ -714,6 +715,46 @@ def create_health_app(
     native_trace_admissions: dict[str, Any] = {}
     native_trace_runs: dict[str, str] = {}
     native_trace_sessions: dict[str, str] = {}
+
+    @app.get("/internal/runs/{run_id}/evidence")
+    async def native_run_evidence(run_id: str, request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        if generated_files is None:
+            raise HTTPException(status_code=503, detail="Generated chat files are disabled in this runtime.")
+        if not RUN_PATTERN.fullmatch(run_id):
+            raise HTTPException(status_code=400, detail="Invalid native run ID.")
+        headers = {"Authorization": "Bearer " + os.environ["API_SERVER_KEY"]}
+        target = f"http://127.0.0.1:{gateway_port()}/v1/runs/{run_id}"
+        try:
+            async with asyncio.timeout(20), httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                async def read_native(url: str, content_type: str) -> bytes:
+                    async with client.stream("GET", url, headers=headers) as response:
+                        if response.status_code != 200:
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"Native evidence is unavailable (HTTP {response.status_code}).",
+                            )
+                        if response.headers.get("content-type", "").split(";")[0] != content_type:
+                            raise GeneratedFileError("Native evidence has an unexpected content type.")
+                        data = bytearray()
+                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                            data.extend(chunk)
+                            if len(data) > MAX_EVIDENCE_BYTES:
+                                raise GeneratedFileError("Native evidence exceeds the 1 MiB limit.")
+                        return bytes(data)
+
+                status = json.loads(await read_native(target, "application/json"))
+                if not isinstance(status, dict) or status.get("status") != "completed":
+                    raise HTTPException(status_code=409, detail="Native evidence requires a completed run.")
+                events = await read_native(target + "/events", "text/event-stream")
+                return completed_run_evidence(run_id, status, events)
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise HTTPException(status_code=504, detail="Native evidence timed out.") from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="Native evidence is unreachable.") from exc
+        except (GeneratedFileError, ValueError) as exc:
+            detail = str(exc) if isinstance(exc, GeneratedFileError) else "Native evidence is not valid JSON."
+            raise HTTPException(status_code=502, detail=detail) from exc
 
     @app.get("/internal/generated-files/{turn_id}/{file_id}")
     async def download_generated_file(turn_id: str, file_id: str, request: Request) -> Response:
