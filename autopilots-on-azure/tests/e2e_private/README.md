@@ -222,6 +222,13 @@ button is required. This proves native runtime/channel/card integration, **not
 model inference**. The separate random challenge retains that inference check.
 Wrong owner, missing native tools, runtime/auth failure, or a text/error reply
 fails explicitly. No group-command/model-created-card guarantee is implied.
+This is the rendering criterion only. The full bridge checklist's action on a
+real available proposal is separate: an empty ledger leaves that action
+**NOT RUN**. Never seed a proposal to obtain a passing action. The automated
+report explicitly leaves real proposal actions and interactive Entra sign-in
+not run, and native Foundry/tool provenance requiring separate evidence.
+Its `pass` means only `private-automated-browser-subset`, not blanket simulator,
+bridge, Entra, or customer certification.
 Real agent document download remains a separate mandatory criterion. Enable
 `GENERATED_CHAT_FILES_ENABLED=true` on both gateway and runtime, with matching
 `WORKER_ID` and `API_SERVER_KEY`, and deploy the native generated-file runtime

@@ -14,7 +14,11 @@ const config = JSON.parse(await readFile(process.env.PRIVATE_E2E_CONFIG, "utf8")
 const execute = promisify(execFile);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const summary = { started: new Date().toISOString(), stacks: [] };
+const summary = {
+  scope: "private-automated-browser-subset",
+  fullCertification: "not-claimed",
+  started: new Date().toISOString(), stacks: [],
+};
 const browser = await chromium.launch({ headless: true });
 
 async function eventually(action, timeout = config.timeout_ms) {
@@ -30,7 +34,15 @@ async function eventually(action, timeout = config.timeout_ms) {
 async function runStack(stack) {
   const directory = path.join(config.output, stack.name);
   await mkdir(directory, { recursive: true });
-  const report = { name: stack.name, url: stack.url, checks: [], status: "running" };
+  const report = {
+    name: stack.name, url: stack.url, checks: [], status: "running",
+    additionalAcceptance: {
+      realProposalAction: "not-run",
+      interactiveEntra: "not-run",
+      nativeFoundryToolProvenance: "separate-evidence-required",
+      completeSimulatorAndBridgeChecklists: "not-certified",
+    },
+  };
   summary.stacks.push(report);
   const contexts = [];
   const check = async (name, action) => {
