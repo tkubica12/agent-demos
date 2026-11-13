@@ -119,6 +119,11 @@ trace, and verifies the observed Foundry host privately. No operator tokens,
 evidence keys, file contents or submission tokens go to this helper. Missing
 permission, runtime or query evidence fails explicitly. Each invocation must
 return its own completion nonce; the SDK's default exit zero alone is not proof.
+An independent Python supervisor kills its query worker after 120 seconds,
+covering imports, DNS/TLS, managed-identity token acquisition and query retries
+even if a worker call cannot cooperate with an in-process timeout. Partial
+worker output is discarded on timeout; only the matching completion nonce and
+allowlisted `private-query-deadline`/`TimeoutExpired` metadata are returned.
 Failures report only stage, exception class and available HTTP status, never
 exception messages, response bodies or stderr.
 Without this option,
@@ -206,7 +211,8 @@ attestation: `source_commit`, `runtime_release`, `bundled_skills_path`, and
 `b899de1ab25ad95f4e6719b3b3b48b24689f8f40` in the selected bundled skill directory.
 This validates the deployment's actual guest attestation, not local file copies.
 Availability/integrity alone cannot certify skill selection or use. The producing
-native run must additionally contain matching `skill_view` start/completion IDs,
+native run must additionally contain matching `skill_view` start/completion IDs
+with the start preceding completion,
 `error=false`, finite nonnegative duration, `skillName=teams-html-widget`,
 `skillContentReturned=true`, and a lowercase SHA256 of the actual returned UTF-8
 content. These completion fields come from the authenticated native observer's
