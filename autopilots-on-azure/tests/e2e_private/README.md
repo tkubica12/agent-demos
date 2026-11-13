@@ -191,6 +191,11 @@ record, including terminal script failures. Deletion acceptance is not deletion
 completion: it verifies that the exact resource GET returns HTTP404 and fails
 explicitly after a bounded wait if it remains present. Execution and cleanup
 outcomes are saved separately; cleanup cannot mask an actual script failure.
+The default cleanup wait is fifteen minutes; `--cleanup-timeout-seconds` accepts
+1-1800 seconds. A live successful probe's deletion converged to HTTP404 only
+after the original two-minute wait expired. Its original timeout stays recorded
+alongside the later removal proof; a timeout is not a script failure or a
+license to resubmit the command.
 The live service accepted an earlier deletion and later recorded
 `ResourceOperationFailure`, so `command_delete_accepted=true` alone is not a
 cleanup claim. The [REST deletion contract](https://learn.microsoft.com/rest/api/compute/virtual-machine-run-commands/delete)

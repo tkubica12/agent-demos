@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--script", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=3600)
+    parser.add_argument("--cleanup-timeout-seconds", type=int, default=900)
     args = parser.parse_args()
     if not re.fullmatch(
         r"/subscriptions/[0-9a-f-]{36}/resourceGroups/[a-z0-9_.()-]+/"
@@ -47,6 +48,8 @@ def main():
         raise ValueError("Provide an explicit VM ARM ID; no URL, query, or unrelated resource is accepted.")
     if not 1 <= args.timeout_seconds <= 7200:
         raise ValueError("timeout-seconds must be between 1 and 7200.")
+    if not 1 <= args.cleanup_timeout_seconds <= 1800:
+        raise ValueError("cleanup-timeout-seconds must be between 1 and 1800.")
     script = args.script.read_text(encoding="utf-8")
     if not script.strip():
         raise ValueError("The client script cannot be empty.")
@@ -119,7 +122,10 @@ def main():
                     request("DELETE", url)
                     evidence["command_delete_accepted"] = True
                     save()
-                    confirm_deleted(lambda: request("GET", url, allow_not_found=True).status_code)
+                    confirm_deleted(
+                        lambda: request("GET", url, allow_not_found=True).status_code,
+                        timeout=args.cleanup_timeout_seconds,
+                    )
                     evidence["command_delete_verified"] = True
                     evidence["cleanup_status"] = "pass"
                 except (RuntimeError, TimeoutError, AzureError) as error:
