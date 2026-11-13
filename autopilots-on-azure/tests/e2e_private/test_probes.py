@@ -3,14 +3,16 @@ import json
 import socket
 import ssl
 import tempfile
+from types import SimpleNamespace
 import unittest
 import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
 from fixtures import create_fixtures
 from network_probe import check, private_address, public_control
+from restart_sandbox import restart
 
 
 class PrivateProbeTests(unittest.TestCase):
@@ -66,6 +68,25 @@ class PrivateProbeTests(unittest.TestCase):
     def test_origin_with_path_is_not_accepted(self):
         with self.assertRaises(ValueError):
             check("https://simulator.example/not-health")
+
+    def test_real_restart_requires_changed_boot_identity(self):
+        sandbox = Mock()
+        sandbox.exec.side_effect = [
+            SimpleNamespace(exit_code=0, stdout=value, stderr="")
+            for value in ("10000000-0000-0000-0000-000000000001", "10000000-0000-0000-0000-000000000002")
+        ]
+        evidence = restart(sandbox, 1)
+        self.assertTrue(evidence["verifiedReboot"])
+        sandbox.begin_stop.assert_called_once()
+        sandbox.begin_resume.assert_called_once()
+
+    def test_resume_of_unchanged_guest_is_not_a_verified_restart(self):
+        sandbox = Mock()
+        sandbox.exec.return_value = SimpleNamespace(
+            exit_code=0, stdout="10000000-0000-0000-0000-000000000001", stderr="",
+        )
+        with self.assertRaisesRegex(RuntimeError, "not verified"):
+            restart(sandbox, 1)
 
 
 if __name__ == "__main__":
