@@ -1,0 +1,23 @@
+.adaptive-card { width: 500px; min-width: 0; max-width: 100%; margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); overflow: hidden; }
+.adaptive-card fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.adaptive-card .ac-pushButton { min-height: 32px; padding: 5px 12px !important; border: 1px solid var(--border) !important; border-radius: 4px; background: var(--surface) !important; font-size: 14px; font-weight: 600; color: var(--text); }
+.adaptive-card .ac-pushButton:hover:not(:disabled) { background: var(--hover) !important; }
+.adaptive-card .ac-pushButton.style-positive { background: var(--purple) !important; color: var(--surface); border-color: var(--purple) !important; }
+.adaptive-card .ac-pushButton:disabled { opacity: 0.6; }
+.adaptive-card .ac-input { min-height: 32px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-bottom-color: var(--muted); border-radius: 4px; padding: 5px 12px; font: inherit; }
+.adaptive-card .ac-multiline { min-height: 90px; resize: none; }
+.adaptive-card .ac-input:focus { border-bottom: 2px solid var(--purple); }
+.adaptive-card .ac-textBlock { overflow-wrap: anywhere; }
+.adaptive-card .ac-textBlock p { line-height: inherit; }
+.adaptive-card .ac-textBlock p:first-child { margin-top: 0; }
+.adaptive-card .ac-textBlock p:last-child { margin-bottom: 0; }
+.adaptive-card .ac-textBlock a { color: var(--purple); }
+.adaptive-card .ac-textBlock ul, .adaptive-card .ac-textBlock ol { padding-left: 22px; }
+/* SDK 3.x table-row margins do not create the host's FactSet row gaps. */
+.adaptive-card .ac-factset > tr + tr > td { padding-top: 6px !important; }
+.adaptive-card .ac-factset > tr > td:nth-child(2) { width: 16px !important; }
+.adaptive-card .ac-input-label { font-size: 14px; font-weight: 600; color: var(--text); }
+.adaptive-card .ac-input-validation-failed { border-color: #c4314b; }
+.adaptive-card .ac-input-validation-error-message { color: #c4314b; font-size: 12px; padding-top: 4px; }
+.card-fallback, .card-action-status { margin: 0; padding: 12px 16px; color: var(--muted); font-size: 13px; }
+.card-fallback[role="alert"] { color: #c4314b; }

@@ -35,6 +35,7 @@ Then:
 | [Architecture decisions](docs/adr) | Current choices and rejected alternatives |
 | [Deployment](DEPLOYMENT.md) | Worker updates, fresh Worker bootstrap, validation, diagnostics, teardown |
 | [Demo](DEMO.md) | Prompts and observable results |
+| [Agent Chat Simulator](chat-simulator/README.md) | Neutral collaboration UI, Entra sign-in and explicit expiring test-data demo mode |
 | [Specification](SPEC.md) | Domain, identity, lifecycle, learning, and current limitations |
 | [Identity runbook](docs/runbooks/identity-mcp.md) | Consent, federation, and MCP troubleshooting |
 
