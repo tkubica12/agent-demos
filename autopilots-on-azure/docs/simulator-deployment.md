@@ -316,8 +316,11 @@ inputs and base reference match the recorded fingerprint. Selection never
 redirects one stack to another's state.
 An update that would delete/replace a UAMI or Worker group is rejected before
 apply. Source-only Worker changes use the existing source-release mechanism.
-Native tracing dependencies in `runtimes\hermes\hermes-telemetry.txt` are part
-of the runtime dependency-image fingerprint. Keep that file and
+Native dependencies in `runtimes\hermes\hermes-telemetry.txt` and
+`runtimes\hermes\hermes-native.txt` are part of the runtime dependency-image
+fingerprint. The latter corrects the pinned native base's `browser-harness`
+Pillow constraint with a hash-verified Linux CP314 wheel and PNG roundtrip,
+without changing `/app/.venv`. Keep both files and
 `bridge\telemetry.py` in the Docker build context. The image checks dependencies
 and the shared telemetry initializer with the actual `/opt/hermes/.venv`
 interpreter; a successful `/app/.venv` import does not prove native readiness.

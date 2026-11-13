@@ -49,6 +49,12 @@ COPY --from=office-node /app/node_modules ./node_modules
 COPY runtimes/hermes/pyproject.toml runtimes/hermes/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --python /usr/bin/python3.13 --no-managed-python
 
+COPY runtimes/hermes/hermes-native.txt /opt/autopilots/hermes-native.txt
+RUN /opt/hermes/.venv/bin/python -B -c "from importlib.metadata import requires; from packaging.requirements import Requirement; dependencies=[Requirement(value) for value in requires('browser-harness')]; assert any(item.name.lower() == 'pillow' and str(item.specifier) == '==12.3.0' for item in dependencies), 'Review the native browser-harness Pillow constraint'" \
+    && uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes --only-binary :all: \
+        --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ -r /opt/autopilots/hermes-native.txt \
+    && /opt/hermes/.venv/bin/python -B -c "from importlib.metadata import version; from PIL import Image; from io import BytesIO; assert version('pillow') == '12.3.0'; image=Image.new('RGB', (2, 2), (1, 2, 3)); output=BytesIO(); image.save(output, format='PNG'); output.seek(0); restored=Image.open(output); restored.load(); assert restored.size == (2, 2) and restored.getpixel((0, 0)) == (1, 2, 3)"
+
 COPY runtimes/hermes/hermes-telemetry.txt /opt/autopilots/hermes-telemetry.txt
 COPY bridge/telemetry.py /tmp/autopilots-telemetry-smoke/telemetry.py
 RUN uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes \
