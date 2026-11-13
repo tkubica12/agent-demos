@@ -574,6 +574,71 @@ class TeamsBridgeTests(unittest.TestCase):
             ))
         self.assertEqual(actual.raw["generatedFileEvidence"], {"nativeRunId": "native-file-run", "traceId": "a" * 32})
 
+    def test_text_only_turn_correlation_is_enabled_explicitly_without_exposing_payload(self):
+        for enabled in ("true", "false"):
+            result = AgentResponse(text="A reply", raw={
+                "payload": {"run_id": "native-widget-run", "token": "secret"},
+            })
+            adapter = SimpleNamespace(invoke=AsyncMock(return_value=result))
+            with (
+                self.subTest(enabled=enabled),
+                patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": enabled}),
+                patch.object(bridge_app, "runtime_adapter", return_value=adapter),
+                patch.object(bridge_app, "runtime_trace_headers", return_value={
+                    "traceparent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
+                }),
+            ):
+                actual = asyncio.run(bridge_app.invoke_agent_runtime(
+                    conversation_id="chat", session_key="session", message="Make a widget",
+                    source="teams_personal", user_id="owner", must_answer=True,
+                ))
+            if enabled == "true":
+                self.assertEqual(actual.raw["turnEvidence"], {
+                    "nativeRunId": "native-widget-run", "traceId": "a" * 32,
+                })
+                self.assertNotIn("secret", json.dumps(actual.raw["turnEvidence"]))
+            else:
+                self.assertNotIn("turnEvidence", actual.raw)
+            self.assertNotIn("generatedFileEvidence", actual.raw)
+
+    def test_turn_delivery_evidence_is_private_bounded_and_filters_invalid_correlation(self):
+        bridge_app._turn_delivery_evidence.clear()
+        self.addCleanup(bridge_app._turn_delivery_evidence.clear)
+        result = AgentResponse(text="private HTML", raw={"turnEvidence": {
+            "nativeRunId": "not/a/run", "traceId": "secret-trace", "token": "fernet-secret",
+        }})
+        with patch.dict(os.environ, {"API_SERVER_KEY": "operator-test", "GENERATED_CHAT_FILES_ENABLED": "true"}):
+            for index in range(65):
+                bridge_app.record_turn_reply(
+                    result, conversation_id="chat", request_activity_id=f"request-{index}",
+                    activity_id=f"reply-{index}",
+                )
+            self.assertEqual(len(bridge_app._turn_delivery_evidence), 64)
+            self.assertEqual(bridge_app._turn_delivery_evidence[0]["requestActivityId"], "request-64")
+
+            async def exercise():
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=bridge_app.app), base_url="http://bridge",
+                ) as client:
+                    url = "/internal/turns/evidence?conversation_id=chat"
+                    self.assertEqual((await client.get(url)).status_code, 401)
+                    headers = {"X-Autopilot-Key": "operator-test"}
+                    response = await client.get(url, headers=headers)
+                    self.assertEqual(response.status_code, 200)
+                    events = response.json()["events"]
+                    self.assertIsNone(events[0]["nativeRunId"])
+                    self.assertIsNone(events[0]["traceId"])
+                    self.assertNotIn("secret", json.dumps(events))
+                    self.assertNotIn("private HTML", json.dumps(events))
+                    other = await client.get(url.replace("chat", "other"), headers=headers)
+                    self.assertEqual(other.json(), {"events": []})
+                    with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "false"}):
+                        self.assertEqual((await client.get(url, headers=headers)).status_code, 503)
+                        bridge_app.record_turn_reply(result, conversation_id="chat",
+                                                     request_activity_id="disabled", activity_id="disabled")
+            asyncio.run(exercise())
+            self.assertEqual(len(bridge_app._turn_delivery_evidence), 64)
+
     def test_word_notification_prompt_preserves_stable_document_context(self):
         activity = Activity(
             type="message",

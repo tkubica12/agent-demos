@@ -227,6 +227,7 @@ async def flush_bridge_telemetry() -> None:
 
 _teams_diag: deque[dict[str, Any]] = deque(maxlen=20)
 _generated_file_evidence: deque[dict[str, Any]] = deque(maxlen=64)
+_turn_delivery_evidence: deque[dict[str, Any]] = deque(maxlen=64)
 _teams_memory: dict[str, deque[dict[str, Any]]] = {}
 _SUPPORTED_TEAMS_CONVERSATION_TYPES = {"personal", "groupchat", "channel", "team"}
 _CHANNEL_TEAMS_CONVERSATION_TYPES = {"channel", "team"}
@@ -968,6 +969,34 @@ def generated_file_evidence(request: Request, conversation_id: str) -> dict[str,
     return {"events": [
         event for event in _generated_file_evidence if event["conversationId"] == conversation_id
     ]}
+
+
+@app.get("/internal/turns/evidence")
+def turn_delivery_evidence(request: Request, conversation_id: str) -> dict[str, Any]:
+    require_operator_key(request)
+    if not generated_files_enabled():
+        raise HTTPException(status_code=503, detail="Native turn evidence is disabled in this gateway.")
+    return {"events": [
+        event for event in _turn_delivery_evidence if event["conversationId"] == conversation_id
+    ]}
+
+
+def record_turn_reply(
+    result: AgentResponse, *, conversation_id: str, request_activity_id: str,
+    activity_id: str, reply_to_id: str = "", interaction_id: str = "",
+) -> None:
+    if not generated_files_enabled():
+        return
+    correlation = result.raw.get("turnEvidence")
+    correlation = correlation if isinstance(correlation, dict) else {}
+    run_id, trace_id = correlation.get("nativeRunId"), correlation.get("traceId")
+    _turn_delivery_evidence.appendleft({
+        "ts": time.time(), "event": "turnReplySent", "conversationId": conversation_id,
+        "requestActivityId": request_activity_id, "activityId": activity_id,
+        "replyToId": reply_to_id or None, "interactionId": interaction_id or None,
+        "nativeRunId": run_id if isinstance(run_id, str) and RUN_PATTERN.fullmatch(run_id) else None,
+        "traceId": trace_id if isinstance(trace_id, str) and re.fullmatch(r"[0-9a-f]{32}", trace_id) else None,
+    })
 
 
 async def collective_learning_result(operation: Awaitable[dict[str, Any]]) -> dict[str, Any]:
@@ -2163,6 +2192,7 @@ async def continue_interaction_action(
 async def continue_widget_selection(
     *, token: dict[str, Any], values: dict[str, str],
     delivery: dict[str, Any], auth: AgentAuthContext,
+    request_activity_id: str = "", reply_to_id: str = "",
 ) -> None:
     prompt = (
         "The user submitted a selection from the generated widget in this same personal chat.\n"
@@ -2200,6 +2230,10 @@ async def continue_widget_selection(
         else:
             activity = Activity(type="message", text=visible or "Selection processed.")
         sent = await send_proactive_activity(agent365_adapter, delivery, activity=activity)
+        record_turn_reply(
+            result, conversation_id=token["conversationId"], request_activity_id=request_activity_id,
+            activity_id=sent["activityId"], reply_to_id=reply_to_id, interaction_id=token["interactionId"],
+        )
         remember_teams_event(token["sessionKey"], agent_memory_record(visible or (spec or {}).get("title", ""),
                                                                    sent["activityId"]))
         record_teams_diag({"event": "widgetContinuationCompleted", "interactionId": token["interactionId"]})
@@ -2591,6 +2625,7 @@ async def handle_teams_invoke(
     _state: TurnState,
 ) -> None:
     if str(field_value(ctx.activity, "name") or "") == "htmlwidget/calltool":
+        accepted_evidence = None
         try:
             if teams_conversation_type(ctx.activity) != "personal":
                 raise ValueError("Widget submissions are supported only in the original personal chat.")
@@ -2609,8 +2644,20 @@ async def handle_teams_invoke(
                     agent_auth_context(ctx.activity),
                     invoking_user_id=token["userId"], invoking_user_name="Widget participant",
                 )
-                start_background_turn(continue_widget_selection(token=token, values=values, delivery=delivery, auth=auth))
+                start_background_turn(continue_widget_selection(
+                    token=token, values=values, delivery=delivery, auth=auth,
+                    request_activity_id=str(field_value(ctx.activity, "id") or ""),
+                    reply_to_id=str(field_value(ctx.activity, "reply_to_id") or ""),
+                ))
             result = widget_tool_result(data={"status": "accepted" if claim.get("claimed") else "already_submitted"})
+            accepted_evidence = {
+                "ts": time.time(), "event": "widgetSubmissionAccepted",
+                "conversationId": teams_conversation_id(ctx.activity),
+                "requestActivityId": str(field_value(ctx.activity, "id") or ""),
+                "replyToId": str(field_value(ctx.activity, "reply_to_id") or "") or None,
+                "interactionId": token["interactionId"],
+                "status": "accepted" if claim.get("claimed") else "already_submitted",
+            }
             record_teams_diag({"event": "widgetSelectionAccepted", "interactionId": token["interactionId"],
                                "duplicate": not bool(claim.get("claimed"))})
         except Exception as exc:
@@ -2619,6 +2666,8 @@ async def handle_teams_invoke(
         await ctx.send_activity(Activity(
             type="invokeResponse", value={"status": 200, "body": result},
         ))
+        if accepted_evidence is not None and generated_files_enabled():
+            _turn_delivery_evidence.appendleft(accepted_evidence)
         return
     try:
         learning_handled, learning_label = await accept_learning_action(ctx)
@@ -3289,6 +3338,7 @@ async def run_agent_runtime_for_teams(
             await delete_message_reaction(ctx, status_reaction_message_id, "1f440_eyes")
         if requested_reaction and should_add_processing_reaction():
             await send_message_reaction(ctx, field_value(ctx.activity, "id"), requested_reaction)
+        sent_activity_id = None
         if (
             document_card is None
             and generated_app_activity is None
@@ -3418,6 +3468,12 @@ async def run_agent_runtime_for_teams(
             record_teams_diag({"event": "streamCloseSkipped", "conversationId": conversation_id, "reason": "agent365"})
             if memory_session_key:
                 remember_teams_event(memory_session_key, agent_memory_record(visible_response or _NO_RESPONSE))
+        if sent_activity_id:
+            record_turn_reply(
+                result, conversation_id=conversation_id,
+                request_activity_id=str(field_value(ctx.activity, "id") or ""),
+                activity_id=sent_activity_id,
+            )
         for file in result.files:
             file_delivery = await send_proactive_activity(
                 agent365_adapter, delivery_reference, file=file,
@@ -3549,15 +3605,18 @@ async def invoke_agent_runtime(
         },
     ):
         result = await runtime_adapter().invoke(request)
-        if result.files:
+        if generated_files_enabled() or result.files:
             payload = result.raw.get("payload")
             run_id = payload.get("run_id") if isinstance(payload, dict) else None
             traceparent = runtime_trace_headers().get("traceparent", "")
             trace_match = re.fullmatch(r"[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}", traceparent)
-            result.raw["generatedFileEvidence"] = {
+            correlation = {
                 "nativeRunId": run_id if isinstance(run_id, str) and RUN_PATTERN.fullmatch(run_id) else None,
                 "traceId": trace_match[1] if trace_match else None,
             }
+            result.raw["turnEvidence"] = correlation
+            if result.files:
+                result.raw["generatedFileEvidence"] = dict(correlation)
         return result
 
 

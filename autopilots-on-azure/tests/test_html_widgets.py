@@ -104,6 +104,10 @@ class HtmlWidgetTests(unittest.TestCase):
 
 
 class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        gateway._turn_delivery_evidence.clear()
+        self.addCleanup(gateway._turn_delivery_evidence.clear)
+
     async def test_real_model_output_is_sent_as_extendedmarkdown_not_plain_code(self):
         ctx = SimpleNamespace(
             activity=Activity.model_validate({
@@ -114,9 +118,11 @@ class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
             send_activity=AsyncMock(return_value=SimpleNamespace(id="widget-activity")),
         )
         with (
-            patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2"}),
+            patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2",
+                                    "GENERATED_CHAT_FILES_ENABLED": "true"}),
             patch.object(gateway, "invoke_agent_runtime", return_value=AgentResponse(
                 text="Your planner.\n" + START + json.dumps(SPEC) + END,
+                raw={"turnEvidence": {"nativeRunId": "widget-run", "traceId": "a" * 32, "token": "secret"}},
             )),
             patch.object(gateway, "delivery_reference_metadata", return_value={"boundary": "one_to_one"}),
             patch.object(gateway, "send_typing_indicators", new_callable=AsyncMock),
@@ -129,6 +135,13 @@ class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent.text_format, "extendedmarkdown")
         self.assertNotIn(START, sent.text)
         self.assertEqual(spec_from_activity(sent)["name"], "Priority planner")
+        event, = gateway._turn_delivery_evidence
+        self.assertEqual(event["requestActivityId"], "request")
+        self.assertEqual(event["activityId"], "widget-activity")
+        self.assertEqual(event["nativeRunId"], "widget-run")
+        self.assertEqual(event["traceId"], "a" * 32)
+        self.assertNotIn("secret", json.dumps(event))
+        self.assertNotIn(SPEC["html"], json.dumps(event))
 
     async def test_widget_continuation_reuses_original_session_and_can_return_a_new_widget(self):
         token = {
@@ -136,9 +149,11 @@ class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
             "userId": "original-owner", "choiceMessage": "I selected: Discuss this plan.",
         }
         with (
-            patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2"}),
+            patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2",
+                                    "GENERATED_CHAT_FILES_ENABLED": "true"}),
             patch.object(gateway, "invoke_agent_runtime", return_value=AgentResponse(
                 text="Updated planner.\n" + START + json.dumps(SPEC) + END,
+                raw={"turnEvidence": {"nativeRunId": "followup-run", "traceId": "b" * 32}},
             )) as invoke,
             patch.object(gateway, "remember_teams_event"),
             patch.object(gateway, "send_proactive_activity", return_value={"activityId": "followup"}) as send,
@@ -147,18 +162,53 @@ class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
                 token=token, values={"budget": "7"}, delivery={"boundary": "one_to_one"},
                 auth=AgentAuthContext(selected_mode="agent_identity", available_modes=("agent_identity",),
                                       conversation_boundary="one_to_one"),
+                request_activity_id="accepted-invoke", reply_to_id="widget-activity",
             )
         self.assertEqual(invoke.await_args.kwargs["session_key"], "session")
         self.assertEqual(invoke.await_args.kwargs["user_id"], "original-owner")
         self.assertIn('"budget": "7"', invoke.await_args.kwargs["message"])
         self.assertEqual(send.await_args.kwargs["activity"].text_format, "extendedmarkdown")
+        event, = gateway._turn_delivery_evidence
+        self.assertEqual(event["requestActivityId"], "accepted-invoke")
+        self.assertEqual(event["replyToId"], "widget-activity")
+        self.assertEqual(event["activityId"], "followup")
+        self.assertEqual(event["nativeRunId"], "followup-run")
+        self.assertEqual(event["interactionId"], token["interactionId"])
+        self.assertNotIn("budget", json.dumps(event))
+
+    async def test_failed_widget_delivery_does_not_publish_success_evidence(self):
+        ctx = SimpleNamespace(
+            activity=Activity.model_validate({
+                "type": "message", "id": "request", "text": "Make a planner",
+                "channelId": "msteams", "conversation": {"id": "chat", "conversationType": "personal"},
+                "from": {"id": "owner", "aadObjectId": "owner"},
+            }),
+            send_activity=AsyncMock(side_effect=RuntimeError("Connector refused")),
+        )
+        with (
+            patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2",
+                                    "GENERATED_CHAT_FILES_ENABLED": "true"}),
+            patch.object(gateway, "invoke_agent_runtime", return_value=AgentResponse(
+                text=START + json.dumps(SPEC) + END,
+                raw={"turnEvidence": {"nativeRunId": "widget-run", "traceId": "a" * 32}},
+            )),
+            patch.object(gateway, "delivery_reference_metadata", return_value={"boundary": "one_to_one"}),
+            patch.object(gateway, "send_typing_indicators", new_callable=AsyncMock),
+            patch.object(gateway, "owner_personal_chat", return_value=False),
+        ):
+            await gateway.run_agent_runtime_for_teams(
+                ctx, conversation_id="chat", session_key="session", message="Make a planner",
+            )
+        self.assertEqual(list(gateway._turn_delivery_evidence), [])
 
     async def test_real_invoke_shape_returns_mcp_result_and_does_not_authorize_from_identity(self):
-        with patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2"}):
+        with patch.dict(os.environ, {"API_SERVER_KEY": "test-key", "WORKER_ID": "hermes2",
+                                   "GENERATED_CHAT_FILES_ENABLED": "true"}):
             token = action_token()
             ctx = TurnContext(
                 gateway.agent365_adapter, Activity.model_validate({
                     "type": "invoke", "name": "htmlwidget/calltool", "channelId": "msteams",
+                    "id": "invoke-1", "replyToId": "widget-activity",
                     "recipient": {"id": "hermes2"}, "serviceUrl": "https://smba.trafficmanager.net/teams/",
                     "conversation": {"id": "chat", "conversationType": "personal"},
                     "from": {"id": "spoofed", "aadObjectId": "not-an-authority"},
@@ -185,8 +235,20 @@ class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.body["responseType"], "htmlwidget/calltoolresult")
                 self.assertFalse(response.body["callToolResult"]["isError"])
                 self.assertEqual(continuation.call_args.kwargs["auth"].invoking_user_id, "original-owner")
+                self.assertEqual(continuation.call_args.kwargs["request_activity_id"], "invoke-1")
+                self.assertEqual(continuation.call_args.kwargs["reply_to_id"], "widget-activity")
+                ctx.activity.id = "replay-2"
                 await gateway.handle_teams_invoke(ctx, None)
                 self.assertEqual(len(tasks), 1)
+                replay, accepted = gateway._turn_delivery_evidence
+                self.assertEqual(accepted["status"], "accepted")
+                self.assertEqual(accepted["requestActivityId"], "invoke-1")
+                self.assertEqual(replay["status"], "already_submitted")
+                self.assertEqual(replay["requestActivityId"], "replay-2")
+                self.assertEqual(replay["replyToId"], "widget-activity")
+                self.assertEqual(replay["interactionId"], accepted["interactionId"])
+                self.assertNotIn(token, json.dumps(list(gateway._turn_delivery_evidence)))
+                self.assertNotIn("budget", json.dumps(list(gateway._turn_delivery_evidence)))
             for coroutine in tasks:
                 await coroutine
 
@@ -200,9 +262,11 @@ class WidgetInvokeTests(unittest.IsolatedAsyncioTestCase):
                 "value": {"name": "arbitrary.tool", "arguments": {}},
             }),
         )
-        with patch.object(gateway, "start_background_turn") as schedule:
+        with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true"}), \
+                patch.object(gateway, "start_background_turn") as schedule:
             await gateway.handle_teams_invoke(ctx, None)
         schedule.assert_not_called()
         result = gateway.agent365_adapter._process_turn_results(ctx).body["callToolResult"]
         self.assertTrue(result["isError"])
         self.assertIsInstance(result["structuredContent"], dict)
+        self.assertEqual(list(gateway._turn_delivery_evidence), [])
