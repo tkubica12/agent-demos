@@ -14,6 +14,7 @@ from fixtures import create_fixtures
 from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import execution_result
+from verify_download import verify_download
 
 
 class PrivateProbeTests(unittest.TestCase):
@@ -107,6 +108,43 @@ class PrivateProbeTests(unittest.TestCase):
     def test_private_transport_scope_cannot_be_used_as_public_negative(self):
         with self.assertRaises(ValueError):
             check("https://simulator.example", public=True, transport_only=True)
+
+    def test_download_validator_reads_word_text_and_utf8_txt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codes = create_fixtures(Path(directory), "fresh")
+            for name, nonce in codes.items():
+                with self.subTest(name=name):
+                    result = verify_download(Path(directory) / name, nonce)
+                    self.assertGreater(result["size"], 0)
+                    self.assertEqual(len(result["sha256"]), 64)
+                    with self.assertRaisesRegex(ValueError, "absent"):
+                        verify_download(Path(directory) / name, "different-turn-nonce")
+
+    def test_zip_comment_nonce_does_not_certify_word_document_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            codes = create_fixtures(Path(directory), "actual-content")
+            file = Path(directory) / "acceptance.docx"
+            with ZipFile(file, "a") as archive:
+                archive.comment = b"comment-only-nonce"
+            self.assertEqual(verify_download(file, codes[file.name])["kind"], "docx")
+            with self.assertRaisesRegex(ValueError, "absent"):
+                verify_download(file, "comment-only-nonce")
+
+    def test_download_validator_rejects_non_utf8_txt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "invalid.txt"
+            file.write_bytes(b"\xfffresh")
+            with self.assertRaises(UnicodeDecodeError):
+                verify_download(file, "fresh")
+
+    def test_download_validator_rejects_empty_nonce_and_empty_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "empty.txt"
+            file.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "nonempty verification"):
+                verify_download(file, "")
+            with self.assertRaisesRegex(ValueError, "nonempty and at most"):
+                verify_download(file, "fresh")
 
 
 if __name__ == "__main__":

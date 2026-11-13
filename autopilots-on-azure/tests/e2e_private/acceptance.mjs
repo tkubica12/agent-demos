@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(new URL("../../chat-simulator/frontend/package.json", import.meta.url));
 const { chromium, expect } = process.env.PRIVATE_PLAYWRIGHT_MODULE
@@ -183,21 +184,40 @@ async function runStack(stack) {
         persistedFiles.push({ id: file.id, sha256: sha(bytes) });
       });
     }
-    await check("agent-document-download", async () => {
-      const nonce = randomUUID().replaceAll("-", "");
-      const sent = await send(personal,
-        `Create a real downloadable TXT document containing exactly ${nonce}; attach the file using your channel file capability, not a markdown-only link or code block.`);
-      const received = await reply(personal, sent.id, (message) => message.attachments.length > 0);
-      const file = received.attachments[0];
-      await expect(first.page.locator(`[data-message-id="${received.id}"]`)).toContainText(file.name);
-      const downloadEvent = first.page.waitForEvent("download");
-      await first.page.locator(`[data-message-id="${received.id}"]`).getByRole("button", { name: file.name, exact: true }).click();
-      const download = await downloadEvent;
-      assert.equal(await download.failure(), null);
-      const bytes = await first.api(`/files/${file.id}/content`, "GET", undefined, true);
-      assert.ok(bytes.includes(Buffer.from(nonce)), "Downloaded agent document must contain the unique challenge.");
-      persistedFiles.push({ id: file.id, sha256: sha(bytes) });
-    });
+    report.generatedFiles = [];
+    for (const kind of ["docx", "txt"]) {
+      await check(`agent-generated-${kind}-browser-download`, async () => {
+        const nonce = randomUUID().replaceAll("-", "");
+        const format = kind === "docx" ? "DOCX Word" : "UTF-8 TXT";
+        const sent = await send(personal,
+          `Use your real terminal/file tools to CREATE a ${format} document containing the fresh verification code ${nonce} and RETURN it as a downloadable chat attachment. Do not return a markdown link, code block, or an existing document.`);
+        const matches = (file) => typeof file.name === "string" && path.extname(file.name).toLowerCase() === `.${kind}`;
+        const received = await reply(personal, sent.id, (message) =>
+          Array.isArray(message.attachments) && message.attachments.some(matches));
+        const file = received.attachments.find(matches);
+        const row = first.page.locator(`[data-message-id="${received.id}"]`);
+        await expect(row).toContainText(file.name);
+        const [download] = await Promise.all([
+          first.page.waitForEvent("download", { timeout: config.timeout_ms }),
+          row.getByRole("button", { name: file.name, exact: true }).click(),
+        ]);
+        assert.equal(await download.failure(), null);
+        const downloadPath = path.join(directory, `generated-${nonce}.${kind}`);
+        await download.saveAs(downloadPath);
+        const verified = await execute("uv", ["run", "python",
+          fileURLToPath(new URL("./verify_download.py", import.meta.url)),
+          "--file", downloadPath, "--nonce", nonce]);
+        const content = JSON.parse(verified.stdout.trim());
+        const bytes = await first.api(`/files/${file.id}/content`, "GET", undefined, true);
+        assert.equal(sha(bytes), content.sha256, "Browser and authenticated API download bytes must agree.");
+        report.generatedFiles.push({
+          ...content, nonce, filename: file.name, fileId: file.id,
+          requestMessage: sent.id, responseMessage: received.id,
+          requiresNativeRunToolEvidence: true,
+        });
+        persistedFiles.push({ id: file.id, sha256: content.sha256 });
+      });
+    }
     await check("restart-chat-and-file-persistence", async () => {
       assert.ok(persistedFiles.length > 0, "File persistence requires an actual uploaded/downloaded file.");
       assert.ok(Array.isArray(stack.restart_command) && stack.restart_command.length,
