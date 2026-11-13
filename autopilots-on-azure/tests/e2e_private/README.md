@@ -86,6 +86,41 @@ one named orphan removal; do not recursively delete a populated landing-zone RG.
 
 ## Browser acceptance
 
+The runner can also execute on the operator machine without a test VM.
+For an explicitly approved **empty test environment only**, set root TOML
+`network_mode = "temporary-public"` and `credential = "azure-cli"`.
+It verifies global DNS, a global trusted TLS peer and successful readiness,
+then runs the same real file/widget/native provenance and restart gates.
+This phase is labelled temporary-public, never private certification.
+After the deployment enables its Private Endpoint and disables public access,
+run the outside `--public-negative` probe against the actual current origin.
+Customer/skill deployments must start private; do not use this test phase there.
+
+Private AMPLS query access is not waived for outside-browser testing. An
+authorized, existing in-VNet Sandbox can perform the metadata-only query with
+its **own managed identity**, while the operator uses Azure CLI solely for the
+Sandbox API and ARM metadata. Add the following to that stack's TOML:
+
+```toml
+[stacks.query_sandbox]
+subscription_id = "<UUID>"
+resource_group = "<test-stack-RG>"
+group = "<authorized-test-Sandbox-group>"
+sandbox_id = "<actual-running-Sandbox-UUID>"
+region = "swedencentral"
+python_path = "/app/.venv/bin/python"
+```
+
+The guest interpreter must contain `azure-identity`; its identity needs
+Monitoring Reader on the exact Application Insights component and Log Analytics
+Reader on the exact workspace, not a broad Reader grant. The operator needs the
+existing Sandbox execution permission. The official SDK runs the pinned
+metadata-only helper, proves private query DNS/TLS, queries only the exact native
+trace, and verifies the observed Foundry host privately. No operator tokens,
+evidence keys, file contents or submission tokens go to this helper. Missing
+permission, runtime or query evidence fails explicitly. Without this option,
+the original direct private managed-identity query path remains required.
+
 Requirements: a host using the customer's private DNS and routes; Python 3.11+
 through uv; Node 20+; Chromium; the existing simulator frontend's locked
 `@playwright/test` package. `npm ci` in `chat-simulator\frontend` restores that

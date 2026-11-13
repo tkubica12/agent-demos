@@ -1,5 +1,6 @@
 import io
 import json
+import shlex
 import socket
 import ssl
 import tempfile
@@ -15,7 +16,7 @@ from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import confirm_deleted, execution_result
 from verify_download import verify_download
-from verify_native_evidence import foundry_trace, select_delivery, select_widget_turn, validate_run
+from verify_native_evidence import foundry_trace, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
 from verify_widget_attestation import EXPECTED, validate_attestation
 
 
@@ -25,6 +26,70 @@ class PrivateProbeTests(unittest.TestCase):
             self.assertTrue(private_address(value))
         for value in ("127.0.0.1", "169.254.169.254", "192.0.2.3", "100.65.0.1", "20.1.2.3"):
             self.assertFalse(private_address(value))
+
+    @patch("network_probe.socket.getaddrinfo", return_value=[(socket.AF_INET, 1, 6, "", ("20.1.2.3", 443))])
+    @patch("network_probe.socket.create_connection")
+    @patch("network_probe.ssl.create_default_context")
+    @patch("network_probe.request")
+    def test_temporary_public_is_verified_but_not_private_certification(self, request, context, connection, _):
+        tls = context.return_value.wrap_socket.return_value.__enter__.return_value
+        tls.getpeername.return_value = ("20.1.2.3", 443)
+        tls.cipher.return_value = ("trusted", "TLSv1.3", 256)
+        tls.version.return_value = "TLSv1.3"
+        response = io.BytesIO(b'{"status":"ok"}')
+        response.status = 200
+        request.return_value = response
+        result = check("https://simulator.example", temporary_public=True)
+        self.assertEqual(result["scope"], "temporary-public-readiness")
+        self.assertTrue(result["tls_verified"])
+        self.assertFalse(result["public_negative"])
+        context.return_value.wrap_socket.assert_called_once_with(
+            connection.return_value.__enter__.return_value, server_hostname="simulator.example",
+        )
+        with self.assertRaisesRegex(AssertionError, "RFC1918"):
+            check("https://simulator.example")
+        with self.assertRaisesRegex(ValueError, "separate phases"):
+            check("https://simulator.example", public=True, temporary_public=True)
+
+    @patch("network_probe.socket.getaddrinfo", return_value=[
+        (socket.AF_INET, 1, 6, "", ("20.1.2.3", 443)), (socket.AF_INET, 1, 6, "", ("10.1.2.3", 443)),
+    ])
+    def test_temporary_public_rejects_mixed_private_dns(self, _):
+        with self.assertRaisesRegex(AssertionError, "global"):
+            check("https://simulator.example", temporary_public=True)
+
+    @patch("network_probe.socket.getaddrinfo", return_value=[(socket.AF_INET, 1, 6, "", ("20.1.2.3", 443))])
+    @patch("network_probe.socket.create_connection")
+    @patch("network_probe.ssl.create_default_context")
+    def test_temporary_public_never_ignores_bad_certificates(self, context, _, __):
+        context.return_value.wrap_socket.side_effect = ssl.SSLCertVerificationError("untrusted")
+        with self.assertRaises(ssl.SSLCertVerificationError):
+            check("https://simulator.example", temporary_public=True)
+
+    @patch("azure.containerapps.sandbox.SandboxGroupClient")
+    @patch("azure.identity.AzureCliCredential")
+    def test_private_query_sandbox_uses_own_identity_and_preserves_pending_evidence(self, _, group):
+        sandbox = group.return_value.__enter__.return_value.get_sandbox_client.return_value.__enter__.return_value
+        sandbox.exec.return_value = SimpleNamespace(exit_code=0, stdout=json.dumps({
+            "queryNetwork": {"scope": "private-dns-tls", "status": "pass"}, "observed": None,
+        }))
+        configuration = {
+            "subscription_id": "10000000-0000-0000-0000-000000000001",
+            "resource_group": "test", "group": "test-query",
+            "sandbox_id": "10000000-0000-0000-0000-000000000002",
+        }
+        with patch.dict("os.environ", {"PRIVATE_AGENT_2_API_KEY": "never-export-this-key"}):
+            result = query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
+        command = shlex.split(sandbox.exec.call_args.args[0])
+        self.assertEqual(command[:2], ["/app/.venv/bin/python", "-c"])
+        compile(command[2], "private-query-helper", "exec")
+        self.assertNotIn("never-export-this-key", command[2])
+        self.assertIn("ManagedIdentityCredential(client_id=os.environ.get('AZURE_CLIENT_ID'))", command[2])
+        self.assertIsNone(result["observed"])
+        self.assertFalse(result["queryExecution"]["operatorCredentialsExported"])
+        sandbox.exec.return_value = SimpleNamespace(exit_code=3, stdout="", stderr="secret-error-body")
+        with self.assertRaisesRegex(RuntimeError, "exit 3"):
+            query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
 
     @patch("network_probe.socket.getaddrinfo", return_value=[(socket.AF_INET, 1, 6, "", ("20.1.2.3", 443))])
     @patch("network_probe.request")
