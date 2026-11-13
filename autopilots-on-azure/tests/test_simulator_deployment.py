@@ -423,6 +423,35 @@ class SimulatorDeploymentTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 require_private_endpoint(origin, binding)
 
+    def test_simulator_root_and_persistent_data_fit_native_cpu_disk_budget(self):
+        from scripts.simulator_hosting import deploy_host
+
+        group = Mock()
+        group._group_path = "/group"
+        group.list_volumes.return_value = []
+        group.get_volume.return_value.is_attached = False
+        group._dp_get.return_value = []
+        group._dp_put.return_value = {"id": "created"}
+        group.get_sandbox_client.return_value.get.return_value.ports = [
+            SimpleNamespace(port=8000, url="https://simulator.example"),
+        ]
+        binding = {"subscription_id": "subscription", "identity_client_id": "identity"}
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.simulator_hosting.AzureCliCredential",
+        ), patch("scripts.simulator_hosting.group_client") as factory, patch(
+            "scripts.simulator_hosting.prepare_disk_image", return_value="disk",
+        ), patch("scripts.simulator_hosting.require_always_running", return_value={}):
+            factory.return_value.__enter__.return_value = group
+            deploy_host(
+                {"environment": "training"}, binding, {"acr_name": ""},
+                {"image": "image", "source": "image"}, Path(temporary) / "hosting.json",
+            )
+        body = group._dp_put.call_args.args[1]
+        data_gib = int(group.create_volume.call_args.kwargs["size"].removesuffix("Gi"))
+        total_disk_gib = int(body["resources"]["disk"].removesuffix("Gi")) + data_gib
+        cpu_millicores = int(body["resources"]["cpu"].removesuffix("m"))
+        self.assertLessEqual(total_disk_gib * 1000, cpu_millicores * 20)
+
     def test_entra_verification_requires_scoped_recent_manual_browser_evidence(self):
         import httpx
         from scripts.deploy_simulator_environment import save, verify

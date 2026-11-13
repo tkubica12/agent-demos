@@ -467,6 +467,7 @@ def service_body(service: SandboxService, group: dict, disk_id: str, worker: str
         "skipEgressProxy": False,
     }
     if service.role == "gateway":
+        body["resources"]["cpu"] = "750m"
         body["volumes"] = [SandboxVolume("gateway-state", "/backup")._to_dict()]
     if service.source_commit:
         body["entrypoint"] = ["/app/.venv/bin/python", "/app/container_start.py", service.role]

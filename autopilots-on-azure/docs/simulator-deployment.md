@@ -206,8 +206,18 @@ native/backend startup remains an error.
 
 ## Cost and teardown
 
-All three services stay allocated continuously. Six complete stacks allocate
-21 vCPU/30 GiB before generated apps. Foundry tokens, disks, monitoring and
+All three services stay allocated continuously. Default resources per stack are:
+
+| Service | vCPU | Memory | Root disk | Persistent Data Disk |
+| --- | ---: | ---: | ---: | ---: |
+| Simulator | 1 | 2 GiB | 10 GiB | 5 GiB |
+| Gateway | 0.75 | 1 GiB | 10 GiB | 5 GiB |
+| Hermes runtime | 2 | 2 GiB | 20 GiB | 10 GiB |
+
+The native disk budget includes both root and attached Data Disks. The gateway
+needs at least 750m CPU for its combined 15 GiB; 500m is rejected by the service.
+Six complete stacks allocate 22.5 vCPU/30 GiB before generated apps.
+Foundry tokens, disks, monitoring and
 network/PE charges are additional; there are no per-stack registries/build pools.
 Model capacity is quota, not an included token allowance. Establish a budget
 using current regional rates; stopping one service does not make the stack free.

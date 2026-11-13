@@ -90,6 +90,9 @@ class SandboxLauncherTests(unittest.TestCase):
         self.assertIs(client.body["lifecycle"]["autoSuspendPolicy"]["enabled"], False)
         self.assertIs(client.body["lifecycle"]["autoDeletePolicy"]["enabled"], False)
         self.assertEqual(client.body["volumes"], [{"volumeName": "hermes-data", "mountpoint": "/data"}])
+        total_disk_gib = int(client.body["resources"]["disk"].removesuffix("Gi")) + 10
+        cpu_millicores = int(client.body["resources"]["cpu"].removesuffix("m"))
+        self.assertLessEqual(total_disk_gib * 1000, cpu_millicores * 20)
 
     def test_only_failed_runtime_compute_is_recreated(self):
         class Poller:

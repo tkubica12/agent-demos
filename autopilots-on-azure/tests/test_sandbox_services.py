@@ -86,6 +86,9 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertIs(body["lifecycle"]["autoSuspendPolicy"]["enabled"], False)
         self.assertIs(body["lifecycle"]["autoDeletePolicy"]["enabled"], False)
         self.assertEqual(body["environment"]["AUTOPILOTS_SERVICE_CONFIG"], SERVICE_CONFIG_PATH)
+        total_disk_gib = int(body["resources"]["disk"].removesuffix("Gi")) + 5
+        cpu_millicores = int(body["resources"]["cpu"].removesuffix("m"))
+        self.assertLessEqual(total_disk_gib * 1000, cpu_millicores * 20)
 
     def test_never_suspend_verification_rejects_missing_or_inferred_booleans(self):
         group = Mock()
@@ -232,7 +235,7 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertEqual(body["customerVnetConnectionName"], "private-tools")
         self.assertEqual(body["entrypoint"], ["python3", "-c", BOOTSTRAP])
         self.assertTrue(all(len(value) <= 63 for value in body["labels"].values()))
-        self.assertEqual(body["resources"], {"cpu": "500m", "memory": "1024Mi", "disk": "10Gi"})
+        self.assertEqual(body["resources"], {"cpu": "750m", "memory": "1024Mi", "disk": "10Gi"})
         self.assertNotIn("keepalive", BOOTSTRAP)
         self.assertIn('open("/app/.sandbox-service.log", "a")', BOOTSTRAP)
         self.assertIn("stderr=subprocess.STDOUT", BOOTSTRAP)
