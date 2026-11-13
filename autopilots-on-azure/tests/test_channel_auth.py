@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import time
 import unittest
@@ -19,6 +20,7 @@ from microsoft_agents.hosting.core import ClaimsIdentity, TurnContext
 from bridge import app as bridge_app
 from bridge.channel_auth import ChannelAuthentication, ChannelCloudAdapter, ChannelServiceClientFactory, SERVICE_SETTINGS
 from bridge.proactive_delivery import delivery_reference_metadata, send_proactive_activity
+from bridge.generated_files import GeneratedAttachment
 
 
 TENANT = "11111111-1111-4111-8111-111111111111"
@@ -233,6 +235,56 @@ class ChannelAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             stored["conversation"]["conversation_reference"]["serviceUrl"] = "https://stale.example"
             with self.assertRaisesRegex(RuntimeError, "DEMO_SERVICE_URL"):
                 await send_proactive_activity(adapter, stored, "scheduled")
+
+    async def test_demo_generated_file_upload_uses_fresh_connector_and_preserves_key_path(self):
+        with patch.dict(os.environ, DEMO, clear=True):
+            incoming = activity(DEMO["DEMO_SERVICE_URL"])
+            original = TurnContext(bridge_app.agent365_adapter, incoming)
+            stored = delivery_reference_metadata(original, worker_id="agent-1", boundary="one_to_one")
+            data = b"Native generated test bytes"
+            uploaded, delivered = [], []
+
+            class Upload:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    return False
+
+                def raise_for_status(self):
+                    pass
+
+                async def json(self):
+                    return {"id": "generated-file-1"}
+
+            def post(path, **kwargs):
+                uploaded.append((path, kwargs["json"]))
+                return Upload()
+
+            async def send(outgoing):
+                delivered.append(outgoing)
+                return {"id": "generated-reply-1"}
+
+            async def continuation(identity, outgoing, callback):
+                self.assertEqual(identity.authentication_type, "Anonymous")
+                connector = SimpleNamespace(base_uri=DEMO["DEMO_SERVICE_URL"], client=SimpleNamespace(post=post))
+                fresh = SimpleNamespace(
+                    activity=incoming, adapter=SimpleNamespace(),
+                    turn_state={"ConnectorClient": connector}, send_activity=send,
+                )
+                await callback(fresh)
+
+            result = await send_proactive_activity(
+                SimpleNamespace(continue_conversation_with_claims=continuation), stored,
+                file=GeneratedAttachment("report.txt", "text/plain", data),
+            )
+            self.assertEqual(result["activityId"], "generated-reply-1")
+            self.assertEqual(base64.b64decode(uploaded[0][1]["originalBase64"]), data)
+            self.assertEqual(uploaded[0][1]["name"], "report.txt")
+            self.assertEqual(
+                delivered[0].attachments[0].content_url,
+                DEMO["DEMO_SERVICE_URL"] + "/v3/attachments/generated-file-1/views/original",
+            )
 
     def test_demo_fails_startup_when_incomplete_short_or_combined_with_entra(self):
         cases = [

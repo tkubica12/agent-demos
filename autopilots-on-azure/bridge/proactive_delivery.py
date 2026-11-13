@@ -7,6 +7,7 @@ from typing import Any
 from microsoft_agents.activity import Activity
 from microsoft_agents.hosting.core import ClaimsIdentity, TurnContext
 from microsoft_agents.hosting.core.app.proactive import Conversation
+from bridge.generated_files import GeneratedAttachment
 
 
 SUPPORTED_BOUNDARIES = {"one_to_one", "shared_group", "public_channel"}
@@ -63,8 +64,11 @@ async def send_proactive_activity(
     *,
     activity: Activity | None = None,
     require_activity_id: bool = True,
+    file: GeneratedAttachment | None = None,
 ) -> dict[str, str]:
-    if activity is None and not text.strip():
+    if activity is not None and file is not None:
+        raise ValueError("A proactive file and an Adaptive Card must be delivered as separate activities.")
+    if activity is None and file is None and not text.strip():
         return
     boundary = str(stored.get("boundary") or "")
     if boundary not in SUPPORTED_BOUNDARIES:
@@ -82,9 +86,16 @@ async def send_proactive_activity(
 
     async def callback(turn_context: TurnContext) -> None:
         nonlocal activity_id
-        response = await turn_context.send_activity(
-            activity or Activity(type="message", text=text)
-        )
+        if file is None:
+            response = await turn_context.send_activity(
+                activity or Activity(type="message", text=text)
+            )
+        else:
+            from bridge.attachments import send_file_attachment
+
+            response = await send_file_attachment(
+                turn_context, name=file.name, content_type=file.content_type, data=file.data, text=text,
+            )
         raw_activity_id = (
             response.get("id")
             if isinstance(response, dict)

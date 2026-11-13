@@ -486,6 +486,41 @@ class TeamsBridgeTests(unittest.TestCase):
         )
         direct.assert_not_awaited()
 
+    def test_generated_file_only_reply_is_delivered_and_upload_failure_is_not_silent(self):
+        from bridge.generated_files import GeneratedAttachment, GeneratedFileError
+
+        file = GeneratedAttachment("report.txt", "text/plain", b"Generated turn output")
+        auth = AgentAuthContext(
+            selected_mode="none", available_modes=(), conversation_boundary="shared_group",
+        )
+        reference = {"conversationId": "conversation-1"}
+        for error in (None, GeneratedFileError("Connector upload refused")):
+            ctx = SimpleNamespace(activity=object(), send_activity=AsyncMock())
+            proactive = AsyncMock(return_value={"activityId": "file-sent"}, side_effect=error)
+            direct = AsyncMock()
+            with self.subTest(error=error), patch.multiple(
+                bridge_app,
+                agent_auth_context=lambda activity: auth,
+                delivery_reference_metadata=lambda *args, **kwargs: reference,
+                invoke_agent_runtime=AsyncMock(return_value=AgentResponse(text="", files=(file,))),
+                send_proactive_activity=proactive, send_teams_response=direct,
+                teams_runtime_source=lambda activity: "teams_group",
+                user_id=lambda activity: "user-1",
+                teams_conversation_type=lambda activity: "groupChat",
+                supports_typing_indicators=lambda activity: False,
+                owner_personal_chat=lambda activity: False,
+            ):
+                asyncio.run(bridge_app.run_agent_runtime_for_teams(
+                    ctx, conversation_id="conversation-1", session_key="teams:group:conversation-1",
+                    message="Generate a report",
+                ))
+            proactive.assert_awaited_once_with(bridge_app.agent365_adapter, reference, file=file)
+            direct.assert_not_awaited()
+            if error is None:
+                ctx.send_activity.assert_not_awaited()
+            else:
+                self.assertIn("Connector upload refused", ctx.send_activity.await_args.args[0])
+
     def test_word_notification_prompt_preserves_stable_document_context(self):
         activity = Activity(
             type="message",

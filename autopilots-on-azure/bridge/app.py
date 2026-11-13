@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import os
@@ -3179,6 +3180,7 @@ async def run_agent_runtime_for_teams(
                     requested_reaction
                     and not response_has_visible_text(model_response)
                 )
+                or (result.files and not response_has_visible_text(model_response))
             )
         ):
             record_teams_diag({"event": "responseSuppressed", "conversationId": conversation_id})
@@ -3291,6 +3293,16 @@ async def run_agent_runtime_for_teams(
             record_teams_diag({"event": "streamCloseSkipped", "conversationId": conversation_id, "reason": "agent365"})
             if memory_session_key:
                 remember_teams_event(memory_session_key, agent_memory_record(visible_response or _NO_RESPONSE))
+        for file in result.files:
+            file_delivery = await send_proactive_activity(
+                agent365_adapter, delivery_reference, file=file,
+            )
+            record_teams_diag({
+                "event": "generatedFileSent", "conversationId": conversation_id,
+                "name": file.name, "size": len(file.data),
+                "sha256": hashlib.sha256(file.data).hexdigest(),
+                "activityId": file_delivery["activityId"],
+            })
         record_teams_diag({"event": "streamFinalSent", "conversationId": conversation_id})
         if owner_personal_chat(ctx.activity) and not attachments:
             try:

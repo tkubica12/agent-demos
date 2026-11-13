@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import subprocess
 import shutil
 import sys
 import threading
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -19,7 +21,7 @@ import httpx
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from runtime_backup import BackupLoop, restore_latest
 from runtime_identity import agentic_auth_enabled
@@ -31,6 +33,9 @@ from bridge.hermes_telemetry import (
 )
 from bridge.telemetry import configure_telemetry, flush_telemetry, runtime_trace_headers
 from bridge.telemetry_http import TelemetryMiddleware
+from bridge.generated_files import (
+    GeneratedFileError, GeneratedFileStore, RUN_HEADER, SCOPE_HEADER, generated_files_enabled,
+)
 from autopilots_identity.document_operations import (
     acknowledge_delivery as acknowledge_document_delivery,
     claim_delivery as claim_document_delivery,
@@ -427,6 +432,14 @@ def create_health_app(
     app.router.add_event_handler("shutdown", flush_telemetry)
     keepalive = get_keepalive()
     process_nonce = secrets.token_hex(16)
+    generated_files = None
+    if generated_files_enabled():
+        worker_id = os.getenv("WORKER_ID", "").strip()
+        generated_files = GeneratedFileStore(
+            Path(tempfile.gettempdir()) / "autopilots-generated-files"
+            / hashlib.sha256(worker_id.encode("utf-8")).hexdigest()[:32],
+            worker_id=worker_id, workspace_owner=hermes_account(),
+        )
 
     @app.middleware("http")
     async def keep_runtime_request_active(request: Request, call_next):
@@ -702,6 +715,23 @@ def create_health_app(
     native_trace_runs: dict[str, str] = {}
     native_trace_sessions: dict[str, str] = {}
 
+    @app.get("/internal/generated-files/{turn_id}/{file_id}")
+    async def download_generated_file(turn_id: str, file_id: str, request: Request) -> Response:
+        require_internal_key(request)
+        if generated_files is None:
+            raise HTTPException(status_code=503, detail="Generated chat files are disabled in this runtime.")
+        try:
+            entry, data = generated_files.download(
+                turn_id, file_id, scope=request.headers.get(SCOPE_HEADER, ""),
+                run_id=request.headers.get(RUN_HEADER, ""),
+            )
+        except GeneratedFileError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return Response(
+            content=data, media_type=entry["contentType"],
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(entry['name'], safe='')}"},
+        )
+
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
@@ -714,6 +744,7 @@ def create_health_app(
         body = await request.body()
         admission = ""
         new_admission = False
+        file_turn = None
         try:
             if native_turn:
                 expected = os.getenv("API_SERVER_KEY", "")
@@ -750,6 +781,15 @@ def create_health_app(
                     native_trace_admissions[admission] = context
                     native_trace_sessions[admission] = session_id
                     new_admission = True
+                if generated_files is not None and request.headers.get(SCOPE_HEADER):
+                    file_turn = generated_files.admit(
+                        admission, session_id=native_trace_sessions[admission],
+                        scope=request.headers[SCOPE_HEADER],
+                    )
+                    payload["instructions"] = (
+                        str(payload.get("instructions") or "") + generated_files.instructions(file_turn["turnId"])
+                    )
+                    body = json.dumps(payload).encode("utf-8")
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
                     request.method,
@@ -766,6 +806,7 @@ def create_health_app(
                                 "baggage",
                                 "x-autopilot-otel-session",
                                 "x-autopilot-otel-operation",
+                                "content-length",
                             }
                         },
                         **runtime_trace_headers(),
@@ -775,6 +816,13 @@ def create_health_app(
                     response.raise_for_status()
         except GatewayTraceConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except GeneratedFileError as exc:
+            if new_admission:
+                context = native_trace_admissions.pop(admission, None)
+                native_trace_sessions.pop(admission, None)
+                if context is not None:
+                    context.__exit__(None, None, None)
+            raise HTTPException(status_code=422, detail=f"Generated-file handoff refused: {exc}") from exc
         except httpx.HTTPStatusError as exc:
             response = exc.response
         except httpx.ConnectError as exc:
@@ -783,6 +831,11 @@ def create_health_app(
             result = response.json()
             if native_turn and response.status_code == 202:
                 native_trace_runs[str(result["run_id"])] = admission
+                if file_turn is not None:
+                    try:
+                        generated_files.bind_run(file_turn["turnId"], str(result["run_id"]))
+                    except GeneratedFileError as exc:
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
             elif native_turn and new_admission and 400 <= response.status_code < 500:
                 context = native_trace_admissions.pop(admission, None)
                 native_trace_sessions.pop(admission, None)
@@ -794,6 +847,17 @@ def create_health_app(
                 native_trace_sessions.pop(identity, None)
                 if context is not None:
                     context.__exit__(None, None, None)
+                if generated_files is not None and result.get("status") == "completed":
+                    try:
+                        sealed = generated_files.seal(
+                            native_status.group(1), str(result.get("output") or ""),
+                            scope=request.headers.get(SCOPE_HEADER, ""),
+                        )
+                    except GeneratedFileError as exc:
+                        raise HTTPException(status_code=422, detail=f"Generated-file handoff refused: {exc}") from exc
+                    if sealed is not None:
+                        result["output"] = sealed["output"]
+                        result["generatedAttachments"] = {"protocolVersion": 1, "files": sealed["files"]}
             return JSONResponse(content=result, status_code=response.status_code)
         raise HTTPException(status_code=response.status_code, detail=response.text)
 

@@ -176,6 +176,20 @@ class HermesBootstrapTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 503)
                     self.assertEqual(response.json()["status"], "gateway-unavailable")
 
+    def test_generated_file_endpoint_requires_runtime_key_and_explicit_feature(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "operations-key", "GENERATED_CHAT_FILES_ENABLED": "false"}),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            path = "/internal/generated-files/" + "a" * 32 + "/" + "b" * 32
+            self.assertEqual(client.get(path).status_code, 401)
+            self.assertEqual(client.get(path, headers={"X-Autopilot-Key": "wrong-key"}).status_code, 401)
+            disabled = client.get(path, headers={"X-Autopilot-Key": "operations-key"})
+            self.assertEqual(disabled.status_code, 503)
+            self.assertIn("disabled", disabled.json()["detail"])
+
     def test_public_runtime_health_is_minimal_and_detailed_health_requires_operations_key(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"API_SERVER_KEY": "operations-key"}):
             home = Path(directory)
