@@ -485,7 +485,7 @@ class PrivateProbeTests(unittest.TestCase):
             "runId": "run", "status": "completed", "runtimeMetadataAvailable": True,
             "runtime": {"provider": "actual", "model": "served"}, "usage": {},
         }
-        for call_id in ("", "a" * 161, "call\nsecret"):
+        for call_id in ("", "a" * 161, "call\nsecret", None, True, [], {}):
             with self.subTest(call_id=call_id):
                 payload["tools"] = [
                     {"event": "tool.started", "tool": "terminal", "toolCallId": call_id},
