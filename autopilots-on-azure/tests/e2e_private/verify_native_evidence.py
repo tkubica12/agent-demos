@@ -159,7 +159,7 @@ def successful_tool_completions(tools, tool):
     ]
 
 
-def validate_run(payload, run_id, *, require_terminal=True):
+def validate_run(payload, run_id, *, require_terminal=True, require_widget_skill=False):
     if payload.get("runId") != run_id or payload.get("status") != "completed":
         raise ValueError("Evidence is not the exact completed native run.")
     runtime = payload.get("runtime")
@@ -176,7 +176,7 @@ def validate_run(payload, run_id, *, require_terminal=True):
     completed = successful_tool_completions(tools, "terminal")
     if require_terminal and not completed:
         raise ValueError("No actual successful terminal start/completion with matching tool-call identity.")
-    return {
+    result = {
         "runId": run_id, "status": "completed",
         "runtime": {key: runtime.get(key) for key in ("provider", "model", "route_source")},
         "usage": {key: value for key, value in payload.get("usage", {}).items()
@@ -186,6 +186,27 @@ def validate_run(payload, run_id, *, require_terminal=True):
             {key: item[key] for key in ("tool", "toolCallId", "duration", "error")} for item in completed
         ],
     }
+    if require_widget_skill:
+        from verify_widget_attestation import EXPECTED
+
+        expected_content_sha256 = EXPECTED["runtime_skills/teams-html-widget/SKILL.md"]["sha256"]
+        loaded = [
+            item for item in successful_tool_completions(tools, "skill_view")
+            if item.get("skillName") == "teams-html-widget"
+            and item.get("skillContentReturned") is True
+            and isinstance(item.get("skillContentSha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", item["skillContentSha256"])
+            and item["skillContentSha256"] == expected_content_sha256
+        ]
+        if not loaded:
+            raise ValueError("No successful teams-html-widget content load in the exact producing native run.")
+        result["widgetSkillLoads"] = [
+            {key: item[key] for key in (
+                "tool", "toolCallId", "duration", "error", "skillName",
+                "skillContentReturned", "skillContentSha256",
+            )} for item in loaded
+        ]
+    return result
 
 
 def foundry_trace(payload):
@@ -410,7 +431,10 @@ def main():
             f"{args.runtime_url.rstrip('/')}/internal/runs/{quote(delivery['nativeRunId'], safe='')}/evidence",
             headers, "Runtime evidence",
         )
-        evidence["native"] = validate_run(native, delivery["nativeRunId"], require_terminal=not args.widget_turn)
+        evidence["native"] = validate_run(
+            native, delivery["nativeRunId"], require_terminal=not args.widget_turn,
+            require_widget_skill=args.widget_turn == "producing",
+        )
         query_sandbox = json.loads(args.query_sandbox.read_text()) if args.query_sandbox else None
         if not query_sandbox:
             evidence["queryNetwork"] = check("https://api.applicationinsights.io", transport_only=True)

@@ -205,6 +205,19 @@ attestation: `source_commit`, `runtime_release`, `bundled_skills_path`, and
 `63582be6a82b4e0ff261cc1505305372e87c74df`; the unchanged skill must match
 `b899de1ab25ad95f4e6719b3b3b48b24689f8f40` in the selected bundled skill directory.
 This validates the deployment's actual guest attestation, not local file copies.
+Availability/integrity alone cannot certify skill selection or use. The producing
+native run must additionally contain matching `skill_view` start/completion IDs,
+`error=false`, finite nonnegative duration, `skillName=teams-html-widget`,
+`skillContentReturned=true`, and a lowercase SHA256 of the actual returned UTF-8
+content. These completion fields come from the authenticated native observer's
+successful main-file load, not from the prompt or installed-file hash.
+Missing fields, deduplicated content, linked-file views, and failed loads cannot
+pass. For this frozen LF, BOM-free UTF-8 skill, the pinned native loader preserves
+the full document, including frontmatter and trailing newline, and the document
+contains no preprocessing substitutions. Its actual returned-content digest must
+therefore also equal `c2a7f13381adc0f5afdaa37ab1b825925fa673a74cd568b59de557af696020c4`.
+This is a specific content-match gate, not generic disk/result hash equivalence
+or proof of subsequent model compliance.
 
 A fresh, independently logged-in DEMO browser identity creates a personal chat
 with exactly that human and the agent (the simulator otherwise reuses personal

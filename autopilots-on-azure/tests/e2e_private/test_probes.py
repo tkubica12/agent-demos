@@ -495,6 +495,52 @@ class PrivateProbeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "matching tool-call identity"):
                     validate_run(payload, "run")
 
+    def test_widget_skill_requires_successful_returned_content_in_producing_run(self):
+        from verify_widget_attestation import EXPECTED
+
+        content_sha256 = EXPECTED["runtime_skills/teams-html-widget/SKILL.md"]["sha256"]
+        start = {"event": "tool.started", "tool": "skill_view", "toolCallId": "call-skill"}
+        completion = {
+            "event": "tool.completed", "tool": "skill_view", "toolCallId": "call-skill",
+            "error": False, "duration": 0.123, "skillName": "teams-html-widget",
+            "skillContentReturned": True, "skillContentSha256": content_sha256,
+        }
+        payload = {
+            "runId": "producing-run", "status": "completed", "runtimeMetadataAvailable": True,
+            "runtime": {"provider": "actual", "model": "served"}, "usage": {},
+            "tools": [start, completion],
+        }
+        options = {"require_terminal": False, "require_widget_skill": True}
+        result = validate_run(payload, "producing-run", **options)
+        self.assertEqual(result["widgetSkillLoads"][0]["toolCallId"], "call-skill")
+        self.assertEqual(result["widgetSkillLoads"][0]["skillContentSha256"], content_sha256)
+        with self.assertRaises(ValueError):
+            validate_run(payload, "another-run", **options)
+        for tools in (
+            [], [start], [completion],
+            [start, {**completion, "toolCallId": "another-call"}],
+            [start, {**completion, "toolCallId": {}}],
+            [start, {**completion, "error": True}],
+            [start, {**completion, "duration": True}],
+            [start, {**completion, "duration": float("nan")}],
+            [start, {**completion, "skillName": "another-skill"}],
+            [start, {**completion, "skillContentReturned": False}],
+            [start, {**completion, "skillContentReturned": 1}],
+            [start, {key: value for key, value in completion.items() if key != "skillName"}],
+            [start, {**completion, "skillContentSha256": None}],
+            [start, {**completion, "skillContentSha256": "C" * 64}],
+            [start, {**completion, "skillContentSha256": "c" * 63}],
+            [start, {**completion, "skillContentSha256": "d" * 64}],
+        ):
+            with self.subTest(tools=tools):
+                with self.assertRaisesRegex(ValueError, "successful teams-html-widget content load"):
+                    validate_run({**payload, "tools": tools}, "producing-run", **options)
+        self.assertNotIn("widgetSkillLoads", validate_run(
+            {**payload, "tools": []}, "producing-run", require_terminal=False,
+        ))
+        with self.assertRaisesRegex(ValueError, "terminal"):
+            validate_run(payload, "producing-run")
+
 
 if __name__ == "__main__":
     unittest.main()
