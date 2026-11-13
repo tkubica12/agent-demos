@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from bridge import durable_transport
 from bridge.durable_transport import (
     MAX_MESSAGE_BYTES,
     Journal,
@@ -22,6 +24,26 @@ from bridge.durable_transport import (
 
 
 class DurableTransportTests(unittest.TestCase):
+    def test_conversation_state_persists_and_restores_without_native_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.db"
+            backup = Path(directory) / "durable" / "journal.db"
+            with patch.dict(os.environ, {
+                "TRANSPORT_JOURNAL_PATH": str(path),
+                "TRANSPORT_JOURNAL_BACKUP": str(backup),
+            }, clear=True):
+                durable_transport.journal.cache_clear()
+                try:
+                    self.assertFalse(durable_transport.enabled())
+                    self.assertTrue(durable_transport.conversation_state_enabled())
+                    durable_transport.save_conversation_state("teams:conversation", [{"text": "retained"}])
+                    self.assertTrue(backup.exists())
+                    path.unlink()
+                    durable_transport.journal.cache_clear()
+                    self.assertEqual(durable_transport.journal().load_state("teams:conversation"), [{"text": "retained"}])
+                finally:
+                    durable_transport.journal.cache_clear()
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(dir=Path.cwd())
         self.addCleanup(self.temporary.cleanup)

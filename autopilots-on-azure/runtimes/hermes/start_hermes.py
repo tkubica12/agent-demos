@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from runtime_backup import BackupLoop, restore_latest
+from runtime_identity import agentic_auth_enabled
 from runtime_keepalive import get_keepalive
 from bridge.hermes_telemetry import (
     GatewayTraceConflictError,
@@ -99,6 +100,7 @@ def gateway_port() -> int:
 
 def write_env_file(home: Path) -> Path:
     configure_model_environment()
+    agentic_auth = agentic_auth_enabled()
     env_path = home / ".env"
     values = {
         "API_SERVER_ENABLED": os.getenv("API_SERVER_ENABLED", "true"),
@@ -106,6 +108,7 @@ def write_env_file(home: Path) -> Path:
         "API_SERVER_PORT": str(gateway_port()),
         "API_SERVER_KEY": os.getenv("API_SERVER_KEY", ""),
         "HERMES_HOME": str(home),
+        "USE_AGENTIC_AUTH": "true" if agentic_auth else "false",
         "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL", ""),
         "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
         "AZURE_FOUNDRY_BASE_URL": os.getenv("AZURE_FOUNDRY_BASE_URL", ""),
@@ -115,16 +118,14 @@ def write_env_file(home: Path) -> Path:
         "HERMES_MODEL": os.getenv("HERMES_MODEL", ""),
         "PRIVATE_INCIDENTS_MCP_URL": os.getenv("PRIVATE_INCIDENTS_MCP_URL", ""),
         "PUBLIC_SHIPMENTS_MCP_URL": os.getenv("PUBLIC_SHIPMENTS_MCP_URL", ""),
-        "WORKIQ_MAIL_MCP_URL": os.getenv("WORKIQ_MAIL_MCP_URL", ""),
-        "WORKIQ_WORD_MCP_URL": os.getenv("WORKIQ_WORD_MCP_URL", ""),
         **{
-            environment_name: os.getenv(environment_name, "")
+            environment_name: os.getenv(environment_name, "") if agentic_auth else ""
             for environment_name in WORKIQ_MCP_ENVIRONMENTS.values()
         },
         "M365_COLLABORATION_MCP_URL": os.getenv(
             "M365_COLLABORATION_MCP_URL",
             "",
-        ),
+        ) if agentic_auth else "",
     }
     managed = {key: value for key, value in values.items() if value}
     existing_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
@@ -213,22 +214,22 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         mcp_servers["private-incidents"] = {"url": private_mcp_url}
     if public_shipments_mcp_url:
         mcp_servers["public-shipments"] = {"url": public_shipments_mcp_url}
-    for name, environment_name in WORKIQ_MCP_ENVIRONMENTS.items():
-        url = os.getenv(environment_name, "").strip()
-        if url:
-            mcp_servers[name] = {"url": url}
-    collaboration_url = os.getenv(
-        "M365_COLLABORATION_MCP_URL",
-        "",
-    ).strip()
+    if agentic_auth_enabled():
+        for name, environment_name in WORKIQ_MCP_ENVIRONMENTS.items():
+            url = os.getenv(environment_name, "").strip()
+            if url:
+                mcp_servers[name] = {"url": url}
+    collaboration_url = (
+        os.getenv("M365_COLLABORATION_MCP_URL", "").strip()
+        if agentic_auth_enabled() else ""
+    )
     if collaboration_url:
         mcp_servers["m365-collaboration"] = {
             "url": collaboration_url,
             "connect_timeout": 30,
             "timeout": 900,
         }
-    if mcp_servers:
-        runtime_config["mcp_servers"] = mcp_servers
+    runtime_config["mcp_servers"] = mcp_servers
     if bool_env("USER_SCHEDULING_ENABLED", False):
         runtime_config["cron"].update({"provider": "azure", "mirror_delivery": False})
     config = _deep_merge(base or {}, runtime_config)
@@ -327,6 +328,9 @@ def configure_model_environment() -> None:
 
 
 def start_agent_mcp_proxy(**account: Any) -> subprocess.Popen | None:
+    if not agentic_auth_enabled():
+        print("Agent 365 authentication is disabled; Agent Identity MCP adapter is disabled.", flush=True)
+        return None
     if not os.getenv("AGENT_MCP_SERVERS_JSON"):
         print("AGENT_MCP_SERVERS_JSON is not set; Agent Identity MCP adapter is disabled.", flush=True)
         return None
@@ -349,7 +353,7 @@ def start_agent_mcp_proxy(**account: Any) -> subprocess.Popen | None:
 
 
 def start_m365_collaboration_mcp(**account: Any) -> subprocess.Popen | None:
-    if not os.getenv("M365_COLLABORATION_MCP_URL", "").strip():
+    if not agentic_auth_enabled() or not os.getenv("M365_COLLABORATION_MCP_URL", "").strip():
         return None
     port = os.getenv(
         "M365_COLLABORATION_MCP_PORT",

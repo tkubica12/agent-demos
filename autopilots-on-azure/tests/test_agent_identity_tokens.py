@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -43,6 +44,18 @@ class FakeClient:
 
 
 class AgentIdentityTokenProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_agentic_auth_blocks_cached_tokens_and_exchange(self) -> None:
+        calls = []
+        provider = self.provider(calls, [])
+        provider._store(("agent", "scope"), "cached-agent-token", 3600)
+        provider._store(("agent_user", "scope"), "cached-user-token", 3600)
+        with patch.dict(os.environ, {"USE_AGENTIC_AUTH": "false"}):
+            for operation in (provider.get_agent_token, provider.get_agent_user_token):
+                with self.assertRaisesRegex(RuntimeError, "disabled by USE_AGENTIC_AUTH"):
+                    await operation("scope")
+        self.assertEqual(calls, [])
+        self.assertIsNone(provider._credential)
+
     async def test_cache_status_exposes_server_lifetime_but_never_credentials(self) -> None:
         provider = self.provider([], [])
         key = ("agent_user", "mail-resource/.default")

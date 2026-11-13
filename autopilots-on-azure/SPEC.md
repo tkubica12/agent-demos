@@ -88,9 +88,9 @@ SandboxGroup Data Owner is broader than execute-only, and the native connection 
 
 ## Messaging, events, and sessions
 
-There is no general model-invocation HTTP API, request polling endpoint, or bridge HTTP trigger for manual Dreaming. Real interactive validation uses the Agent 365/Teams surface. Automatic Dreaming remains a native scheduled Service Bus job; `scripts.servicebus_dream_smoke` uses the Sandbox management plane to enqueue a separate ad-hoc occurrence without changing production cron. Learning Packet preparation, approval, and export remain separate explicit operations and are never triggered automatically by Dreaming.
+There is no general model-invocation HTTP API, request polling endpoint, or bridge HTTP trigger for manual Dreaming. Real interactive validation uses the Agent 365/Teams surface or the configured Agent Chat Simulator channel. Automatic Dreaming remains a native scheduled Service Bus job; `scripts.servicebus_dream_smoke` uses the Sandbox management plane to enqueue a separate ad-hoc occurrence without changing production cron. Learning Packet preparation, approval, and export remain separate explicit operations and are never triggered automatically by Dreaming.
 
-- Agent 365 Agent Users are the only Teams packaging path; no companion bot is installed.
+- Agent 365 Agent Users remain the real Teams packaging path; no companion bot is installed. Simulator channels use the same bridge with separate configuration.
 - Personal messages and explicit mentions are invocation surfaces. Delivered replies, reaction events, and message updates are handled; SDK handlers do not imply that Teams delivers every event.
 - When observation is enabled, added reactions to remembered agent-authored messages may invoke Hermes. Removed reactions do not invoke it. Message updates record diagnostics only; there is no delete-event handler.
 - The bridge adds/removes temporary `eyes` on eligible public group requests and sends typing indicators in personal/group chats. Hermes requests semantic reactions through `TEAMS_REACTION: eyes|like|heart|smile|surprised|check`; the bridge strips control lines and executes them. Undirected thanks after an agent response can receive a direct `like` acknowledgement. `NO_RESPONSE` suppresses visible text.
@@ -103,6 +103,37 @@ There is no general model-invocation HTTP API, request polling endpoint, or brid
 Teams currently receives a completed response through the Agents SDK, not raw model deltas. Personal/group chats show typing; eligible group requests also receive a temporary processing reaction. The bridge first removes provenance and UI control directives, reconciles learning and schedule bindings, then chooses text, a card, a reaction, or no visible reply. Streaming internal transport and streaming text to Teams are separate decisions.
 
 As checked on 2026-10-30, [Teams streaming documentation](https://learn.microsoft.com/microsoftteams/platform/bots/streaming-ux) describes non-notifying informative updates and one progressively populated message in personal, group and channel conversations with current SDKs. It limits a conversation to one open stream and a stream to ten minutes, and excludes proactive messaging. This documents Teams capability, not verified support for this Worker's Agent 365 identity/SDK path. Keep UI streaming disabled until that path and final-response filtering are explicitly validated.
+
+### Simulator channel configuration
+
+`USE_AGENTIC_AUTH=true` retains the Agent 365 adapter and identity path. Without it, a service-connection `CLIENTID` selects standard Agents SDK authentication; no `AGENT365_*` objects or settings are required. Set `USE_AGENTIC_AUTH=false` on both simulator gateway and runtime services to disable Work IQ/M365 sidecars and Agent Identity/User token acquisition, including cached tokens. Foundry and optional Service Bus managed-identity authentication are independent of this switch.
+
+| Standard simulator gateway setting | Value |
+| --- | --- |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE` | `FederatedCredentials` |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID` | Agent application UUID |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID` | Tenant UUID |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__FEDERATEDCLIENTID` | Gateway user-assigned managed identity client UUID |
+| `CONNECTIONS__SERVICE_CONNECTION__SETTINGS__SCOPES__0` | `<simulator channel application UUID>/.default` |
+| `CONNECTIONSMAP__0__SERVICEURL` | Anchored, regex-escaped simulator HTTPS origin, for example `^https://simulator\.example/?$` |
+| `CONNECTIONSMAP__0__CONNECTION` | `SERVICE_CONNECTION` |
+| `ATTACHMENT_DOWNLOAD_ORIGINS` | Comma-separated exact simulator HTTPS origins, with no path, query or credentials |
+
+`ClientSecret` is supported for local tests only. Standard inbound authentication requires a signed, unexpired Entra v2 application token for the agent application, from the configured tenant issuer and channel `azp`; delegated tokens and unmapped service URLs are rejected. The channel application is inferred from the configured scope. Bot Framework user-token/OBO acquisition is disabled for this channel. Proactive sends use the stored service URL and channel-scoped application token, not an Agent 365 blueprint.
+
+Hosted DEMO mode instead requires `DEMO_CHANNEL_KEY` (at least 32 URL-safe ASCII characters) and exact `DEMO_SERVICE_URL=https://<simulator>/demo/<same-key>`. It refuses startup with Agent 365 mode or a service-connection client ID. `/api/messages` requires `X-Demo-Channel-Key` using a constant-time comparison and rejects any different `serviceUrl`, including a trailing-slash variation. SDK replies and proactive continuations carry no bearer token; the simulator authenticates the key-bearing base path. Startup logs an explicit test-data-only warning. This is not Entra authentication and is unsuitable for confidential data.
+
+File downloads retain public-address validation and pinned DNS. Explicitly allowlisted simulator capability URLs (`/api/agent-files/<id>/content?capability=...`) are downloaded without forwarding a service token; Connector original views use the connector token only on the service origin. HTTP loopback requires both an explicit origin and `ALLOW_LOOPBACK_ATTACHMENTS=1`; neither private-network targets nor cross-origin token forwarding are enabled by this test switch. `send_file_attachment` uploads DOCX/TXT bytes through the Connector and sends the original-view attachment. Automatic discovery/delivery of arbitrary Hermes-generated local files is not implemented: the native Runs API has no verified artifact retrieval contract. Existing M365 document publication still requires Agent 365 tools.
+
+Interactive chat does not require native scheduling transport. With no `TRANSPORT_CONNECTION_ID`, `TRANSPORT_JOURNAL_PATH` enables bounded conversation persistence; `TRANSPORT_JOURNAL_BACKUP`, when configured, is checkpointed after each state write and restored if local state is absent. `/internal/transport/status` still requires `X-Autopilot-Key` and reports actual gateway work with `enabled=false` and zero scheduling work. This does not enable cron wake-up or automatic Dreaming. Unless scheduling is enabled and namespace/queue are present, cron tools return an explicit scheduling-unavailable error without creating a job or falling back to container-local scheduling. Configured non-agentic cron uses `DefaultAzureCredential` and requires its own Service Bus sender permission and scheduling infrastructure.
+
+### Worker owner and shared conversations
+
+`WORKER_OWNER_ID` is the invoking human's Entra object UUID, not a UPN, app ID, managed identity, simulator database user ID or Agent User ID. The bridge reads `from.aadObjectId` first. DEMO mode supplies the simulator's deterministic UUIDv5 display-name identity; use that emitted identity for a demo owner.
+
+The owner setting is **not a chat or scheduling allowlist**. Other authenticated simulator members can chat with an installed agent. Personal messages invoke it; group mentions are strong invocation signals. With `AUTOPILOT_TEAMS_OBSERVE_UNMENTIONED=true` (default), delivered unmentioned group messages can also reach Hermes, which may return `NO_RESPONSE`. Setting it false restricts non-personal admission to explicit mentions or targeted messages. Group context/transcripts are shared; a mention does not grant private or delegated resource access.
+
+Only the owner's personal chat can receive `/learning`/`/learned` digests, save the owner delivery reference, or act on learning decisions; group chats cannot do so even when the owner mentions the agent. Learning tokens also bind the user, conversation, Worker and expiry. Collective Learning administration requires the dedicated Entra operator token, owner `oid`, Azure CLI caller and review scope; its tenant accepts the existing `AGENT365_TENANT_ID`, then `TENANT_ID`, then service-connection `TENANTID`. Other internal administration routes retain their `API_SERVER_KEY` boundary. Native cron requires a trusted conversation/session origin, not `WORKER_OWNER_ID`; schedules must not be described as owner-only or isolated by group participant. Native upstream per-user cron authorization is not established by bridge transport tests.
 
 ## Persistent state
 

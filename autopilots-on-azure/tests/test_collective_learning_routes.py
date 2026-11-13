@@ -49,6 +49,19 @@ class CollectiveLearningRouteTests(unittest.TestCase):
             **overrides,
         }, self.key, algorithm="RS256")
 
+    def test_operator_tenant_accepts_standard_channel_or_explicit_tenant(self):
+        for environment in (
+            {"TENANT_ID": self.tenant_id},
+            {"CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID": self.tenant_id},
+        ):
+            with patch.dict(os.environ, {
+                **environment,
+                "COLLECTIVE_LEARNING_OPERATOR_CLIENT_ID": self.audience,
+                "WORKER_OWNER_ID": self.owner_id,
+            }, clear=True):
+                principal = operator_auth._operator_principal(self.token())
+            self.assertEqual(principal, f"entra:{self.tenant_id}:{self.owner_id}")
+
     def test_operator_routes_require_human_identity_and_derive_receipt_principal(self):
         adapter = SimpleNamespace(
             runtime_kind="hermes",

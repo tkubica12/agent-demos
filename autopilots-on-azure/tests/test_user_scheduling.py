@@ -27,9 +27,52 @@ RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
 sys.path.insert(0, str(RUNTIME_DIR))
 
 import cron_runtime  # noqa: E402
+from runtime_identity import AGENT_IDENTITY_ENVIRONMENTS  # noqa: E402
 
 
 class UserSchedulingTests(unittest.TestCase):
+    def test_runtime_scheduler_selects_managed_identity_unless_agent365_auth_is_enabled(self):
+        spec = importlib.util.spec_from_file_location(
+            "azure_provider_identity_test", RUNTIME_DIR / "azure_cron_provider.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"cron.scheduler_provider": SimpleNamespace(CronScheduler=object)}):
+            spec.loader.exec_module(module)
+        queue_environment = {
+            "SCHEDULER_SERVICEBUS_NAMESPACE": "demo.servicebus.windows.net",
+            "SCHEDULER_SERVICEBUS_QUEUE": "schedules",
+        }
+        agent_environment = dict.fromkeys(AGENT_IDENTITY_ENVIRONMENTS, "agent365-id")
+        for identity_environment, agentic, available in (
+            ({}, False, True),
+            ({"USE_AGENTIC_AUTH": "false", **agent_environment}, False, True),
+            (agent_environment, True, True),
+            ({"USE_AGENTIC_AUTH": "true", **agent_environment}, True, True),
+            ({"USE_AGENTIC_AUTH": "true"}, True, False),
+        ):
+            with (
+                self.subTest(identity_environment=identity_environment),
+                patch.dict(os.environ, {**queue_environment, **identity_environment}, clear=True),
+                patch.object(module, "DefaultAzureCredential") as managed_credential,
+                patch.object(module, "AgentIdentityCredential") as agent_credential,
+            ):
+                client = MagicMock()
+                provider = module.AzureCronScheduler(client_factory=client)
+                self.assertEqual(provider.is_available(), available)
+                if not available:
+                    continue
+                self.assertIs(provider._servicebus_client(), client.return_value)
+                selected = agent_credential if agentic else managed_credential
+                rejected = managed_credential if agentic else agent_credential
+                selected.assert_called_once_with()
+                rejected.assert_not_called()
+                client.assert_called_once_with(
+                    queue_environment["SCHEDULER_SERVICEBUS_NAMESPACE"],
+                    credential=selected.return_value,
+                )
+                self.assertIs(provider._servicebus_client(), client.return_value)
+                selected.assert_called_once()
+
     def test_completed_dream_retires_consumed_schedule_before_reconciling_next_occurrence(self):
         calls = []
 

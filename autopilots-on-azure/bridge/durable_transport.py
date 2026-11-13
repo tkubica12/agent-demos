@@ -41,6 +41,10 @@ def enabled() -> bool:
     return bool(os.getenv("TRANSPORT_CONNECTION_ID", "").strip())
 
 
+def conversation_state_enabled() -> bool:
+    return enabled() or bool(os.getenv("TRANSPORT_JOURNAL_PATH", "").strip())
+
+
 @dataclass(frozen=True)
 class TransportSettings:
     worker: str
@@ -367,7 +371,26 @@ def settings() -> TransportSettings:
 
 @cache
 def journal() -> Journal:
-    return Journal(settings().journal_path)
+    if enabled():
+        return Journal(settings().journal_path)
+    path = Path(os.environ["TRANSPORT_JOURNAL_PATH"])
+    backup = os.getenv("TRANSPORT_JOURNAL_BACKUP", "").strip()
+    if not path.exists() and backup and Path(backup).exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(backup, path)
+    instance = Journal(path)
+    with closing(instance.connect()) as connection:
+        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("The restored conversation journal failed SQLite integrity validation.")
+    return instance
+
+
+def save_conversation_state(key: str, payload: Any) -> None:
+    instance = journal()
+    instance.save_state(key, payload)
+    backup = os.getenv("TRANSPORT_JOURNAL_BACKUP", "").strip()
+    if not enabled() and backup:
+        instance.backup(Path(backup))
 
 
 @contextmanager

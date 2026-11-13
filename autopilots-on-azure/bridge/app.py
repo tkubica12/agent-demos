@@ -23,7 +23,6 @@ from microsoft_agents.activity import (
     Attachment,
     CardAction,
     SuggestedActions,
-    load_configuration_from_env,
 )
 from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.core import AgentApplication, Authorization, MemoryStorage, TurnContext, TurnState
@@ -38,9 +37,17 @@ from pydantic import BaseModel, Field
 from bridge.attachments import (
     AttachmentProcessingError,
     ProcessedAttachment,
+    attachment_download_origins,
     format_attachment_context,
     has_file_attachments,
     process_turn_attachments,
+)
+from bridge.channel_auth import (
+    ChannelAuthentication,
+    ChannelCloudAdapter,
+    ChannelServiceClientFactory,
+    agent365_auth_configured,
+    simulator_channel_configured,
 )
 from bridge.document_cards import (
     action_data as document_action_data,
@@ -107,16 +114,27 @@ app.add_middleware(NativeTransportIngressMiddleware)
 PROCESS_NONCE = uuid.uuid4().hex
 
 
-def agent365_auth_configured() -> bool:
-    return (os.getenv("USE_AGENTIC_AUTH") or "").lower() in {"1", "true", "yes"}
+channel_authentication = ChannelAuthentication.from_environment()
+channel_connection_manager: MsalConnectionManager | None = None
 
 
 def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
+    global channel_connection_manager
+    attachment_download_origins()
     storage = MemoryStorage()
-    if agent365_auth_configured():
-        configuration = load_configuration_from_env(os.environ)
+    if channel_authentication.mode in {"agent365", "standard"}:
+        configuration = channel_authentication.configuration
         connection_manager = MsalConnectionManager(**configuration)
-        adapter = CloudAdapter(connection_manager=connection_manager)
+        channel_connection_manager = connection_manager
+        adapter_type = ChannelCloudAdapter if channel_authentication.mode == "standard" else CloudAdapter
+        adapter = adapter_type(
+            connection_manager=connection_manager,
+            channel_service_client_factory=(
+                ChannelServiceClientFactory(connection_manager)
+                if channel_authentication.mode == "standard"
+                else None
+            ),
+        )
         authorization = Authorization(storage, connection_manager, **configuration)
         agent = AgentApplication(
             storage=storage,
@@ -128,7 +146,14 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
         )
         return agent, adapter
 
-    adapter = CloudAdapter()
+    adapter_type = ChannelCloudAdapter if channel_authentication.mode == "demo" else CloudAdapter
+    adapter = adapter_type(
+        channel_service_client_factory=(
+            ChannelServiceClientFactory(None, demo_service_url=channel_authentication.demo_service_url)
+            if channel_authentication.mode == "demo"
+            else None
+        ),
+    )
     agent = AgentApplication(
         storage=storage,
         adapter=adapter,
@@ -428,6 +453,14 @@ def teams_conversation_boundary(activity: Activity) -> str:
 
 
 def agent_auth_context(activity: Activity) -> AgentAuthContext:
+    if simulator_channel_configured():
+        return AgentAuthContext(
+            selected_mode="none",
+            available_modes=(),
+            conversation_boundary=teams_conversation_boundary(activity),
+            invoking_user_id=user_id(activity),
+            invoking_user_name=user_display_name(activity),
+        )
     get_instance_id = getattr(activity, "get_agentic_instance_id", None)
     get_agent_user = getattr(activity, "get_agentic_user", None)
     instance_id = str((get_instance_id() if callable(get_instance_id) else "") or env_optional("AGENT365_AGENT_IDENTITY_CLIENT_ID"))
@@ -458,6 +491,12 @@ def agent_auth_context(activity: Activity) -> AgentAuthContext:
 
 def format_auth_boundary(context: AgentAuthContext) -> str:
     available = ", ".join(context.available_modes) or "none"
+    tool_boundary = (
+        "- Use agent_identity for unattended private services, agent_user only for resources owned by the digital worker, "
+        "and never claim user-delegated access when OBO is unavailable.\n"
+        if context.available_modes
+        else "- Agent 365/Work IQ tool identities are unavailable. Channel transport authentication does not grant tool access.\n"
+    )
     return (
         "Authorization boundary:\n"
         f"- Selected default mode: {context.selected_mode}\n"
@@ -467,8 +506,7 @@ def format_auth_boundary(context: AgentAuthContext) -> str:
         f"- Agent instance: {context.agent_instance_id or 'unknown'}\n"
         f"- Agent User: {context.agent_user_principal_name or context.agent_user_id or 'not configured'}\n"
         f"- Human OBO available for this turn: {context.obo_available}\n"
-        "- Use agent_identity for unattended private services, agent_user only for resources owned by the digital worker, "
-        "and never claim user-delegated access when OBO is unavailable.\n"
+        f"{tool_boundary}"
         "- In shared_group or public_channel conversations, do not reveal private user data in the public response."
     )
 
@@ -596,7 +634,7 @@ def truncate_text(value: str, limit: int) -> str:
 def teams_memory(session_key: str) -> deque[dict[str, Any]]:
     max_events = env_int("AUTOPILOT_TEAMS_MEMORY_MAX_EVENTS", 30)
     memory = _teams_memory.get(session_key)
-    if memory is None and durable_transport.enabled():
+    if memory is None and durable_transport.conversation_state_enabled():
         saved = durable_transport.journal().load_state("teams:" + session_key)
         if saved is not None:
             if not isinstance(saved, list) or any(not isinstance(item, dict) for item in saved):
@@ -614,8 +652,8 @@ def remember_teams_event(session_key: str, event: dict[str, Any]) -> None:
         stored["text"] = truncate_text(stored["text"], env_int("AUTOPILOT_TEAMS_MEMORY_EVENT_CHARS", 1200))
     stored.setdefault("ts", time.time())
     teams_memory(session_key).append(stored)
-    if durable_transport.enabled():
-        durable_transport.journal().save_state("teams:" + session_key, list(teams_memory(session_key)))
+    if durable_transport.conversation_state_enabled():
+        durable_transport.save_conversation_state("teams:" + session_key, list(teams_memory(session_key)))
 
 
 def context_window_size(signal_type: str, response_contract: str) -> int:
@@ -800,6 +838,7 @@ def health_detailed(request: Request) -> dict[str, Any]:
 @app.post("/api/messages")
 async def agent365_messages(request: Request):
     body = await request.body()
+    await channel_authentication.authenticate(request, body, channel_connection_manager)
     body, normalized_product_info = (
         normalize_agent365_activity_body(body)
     )
