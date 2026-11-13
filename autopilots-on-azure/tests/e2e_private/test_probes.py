@@ -13,6 +13,7 @@ from zipfile import ZipFile
 from fixtures import create_fixtures
 from network_probe import check, private_address, public_control
 from restart_sandbox import restart
+from run_on_client import execution_result
 
 
 class PrivateProbeTests(unittest.TestCase):
@@ -87,6 +88,25 @@ class PrivateProbeTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "not verified"):
             restart(sandbox, 1)
+
+    def test_pending_exit_zero_is_not_managed_execution_success(self):
+        self.assertIsNone(execution_result({"executionState": "Pending", "exitCode": 0}))
+
+    def test_execution_success_does_not_depend_on_stale_arm_creation_state(self):
+        view = {"executionState": "Succeeded", "exitCode": 0, "output": "verified"}
+        self.assertEqual(execution_result(view), view)
+        with self.assertRaises(RuntimeError):
+            execution_result({"executionState": "Succeeded", "exitCode": 1})
+
+    @patch("network_probe.socket.getaddrinfo", return_value=[(socket.AF_INET, 1, 6, "", ("10.1.2.3", 443))])
+    @patch("network_probe.request", side_effect=urllib.error.HTTPError("https://simulator.example", 503, "", {}, None))
+    def test_private_service_503_cannot_be_a_readiness_pass(self, _, __):
+        with self.assertRaises(urllib.error.HTTPError):
+            check("https://simulator.example")
+
+    def test_private_transport_scope_cannot_be_used_as_public_negative(self):
+        with self.assertRaises(ValueError):
+            check("https://simulator.example", public=True, transport_only=True)
 
 
 if __name__ == "__main__":
