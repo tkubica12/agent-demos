@@ -18,6 +18,10 @@ Hermes 0.22.6, pinned by digest in a dependency image and paired with a verified
 
 The Git Role Blueprint and the Agent 365 platform blueprint are different objects. The latter binds one Worker's Microsoft 365 endpoint and permission envelope.
 
+For an offline source snapshot, set `HERMES_ROLE_BLUEPRINT_SOURCE=local`, retain the role name, semantic release and full commit settings, and set `HERMES_ROLE_BLUEPRINT_PATH` relative to the installed `AUTOPILOTS_APPLICATION_ROOT` (for example `blueprints/junior-project-manager`). The runtime source-release package must include that complete role tree and `role-release.json` at its root. `HERMES_ROLE_BUNDLE_SHA256` pins the SHA-256 of the manifest's exact bytes independently through deployment configuration.
+
+The manifest has `schemaVersion: 1`, `roleBlueprint`, `roleBlueprintPath` (POSIX relative path), `roleRelease`, `roleReleaseCommit`, and `files`, a mapping of every role-relative regular-file path to its lowercase SHA-256. The packager must derive the commit and files from the same verified snapshot, not an uncommitted checkout. Runtime checks the manifest hash, configured role/release/commit/path, exact file inventory, every content hash and `distribution.yaml`; it rejects links and path escape. Verification also runs before reusing an already installed release. The Worker manifest records `roleBundleSha256` alongside the existing release commit. Local mode never invokes Git or fetches a repository; Git metadata and GitHub access are unnecessary on the customer host. Existing remote sources retain their immutable Git checkout and Worker Refresh behavior. This is snapshot integrity tied to deployment configuration, not an independent publisher signature.
+
 ## Hosting and ownership
 
 Shared Terraform infrastructure supplies Foundry, ACR, networking, private DNS, an Express managed environment for private ingress, Service Bus infrastructure, and keyless monitoring. Foundry and Sandboxes use Sweden Central; ACR and the application network use North Europe, connected through VNet peering.

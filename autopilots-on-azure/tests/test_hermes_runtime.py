@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -419,6 +421,125 @@ class HermesRuntimeTests(unittest.TestCase):
 
         self.assertFalse(reused.changed)
         self.assertEqual(memory_after, "private memory\n")
+
+    def _local_bundle(self, root: Path, relative: str = "blueprints/junior-project-manager") -> tuple[Path, RoleReleaseSettings]:
+        package = root / "application"
+        distribution = package / relative
+        shutil.copytree(RUNTIME_DIR.parents[1] / "blueprints" / "junior-project-manager", distribution)
+        settings = replace(self._settings(package, "4.0.0", "a" * 40), source="local", repository_path=relative)
+        payload = {
+            "schemaVersion": 1,
+            "roleBlueprint": settings.role_blueprint,
+            "roleBlueprintPath": relative,
+            "roleRelease": settings.role_release,
+            "roleReleaseCommit": settings.commit,
+            "files": {
+                path.relative_to(distribution).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in sorted(distribution.rglob("*")) if path.is_file()
+            },
+        }
+        manifest = package / "role-release.json"
+        manifest.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        return package, replace(settings, bundle_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest())
+
+    def test_local_role_installs_and_reuses_without_git_and_preserves_private_memory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, settings = self._local_bundle(root)
+            environment = {
+                "AUTOPILOTS_APPLICATION_ROOT": str(package),
+                "HERMES_ROLE_BLUEPRINT_SOURCE": "local",
+                "HERMES_ROLE_BLUEPRINT": settings.role_blueprint,
+                "HERMES_ROLE_BLUEPRINT_PATH": settings.repository_path,
+                "HERMES_ROLE_RELEASE": settings.role_release,
+                "HERMES_ROLE_RELEASE_COMMIT": settings.commit,
+                "HERMES_ROLE_BUNDLE_SHA256": settings.bundle_sha256,
+                "WORKER_ID": settings.worker_id,
+                "WORKER_ASSIGNMENT_SCOPE": settings.assignment_scope,
+            }
+            with (
+                patch.dict(os.environ, environment, clear=True),
+                patch("blueprint.subprocess.run", side_effect=AssertionError("Offline roles must not invoke Git")),
+            ):
+                parsed = role_release_settings_from_environment()
+                self.assertEqual(parsed, settings)
+                installed = install_or_refresh_role_release(root / "home", parsed)
+                memory = installed.profile_home / "memories" / "MEMORY.md"
+                memory.write_text("private", encoding="utf-8")
+                reused = install_or_refresh_role_release(root / "home", parsed)
+            self.assertTrue(installed.changed)
+            self.assertFalse(reused.changed)
+            self.assertEqual(reused.manifest["roleBundleSha256"], settings.bundle_sha256)
+            self.assertEqual(reused.manifest["roleReleaseCommit"], settings.commit)
+            self.assertEqual(memory.read_text(encoding="utf-8"), "private")
+            self.assertFalse((package / ".git").exists())
+
+    def test_local_bundle_supports_custom_application_relative_role_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, settings = self._local_bundle(root, relative="customer/roles/project-manager")
+            with patch.dict(os.environ, {"AUTOPILOTS_APPLICATION_ROOT": str(package)}):
+                installed = install_or_refresh_role_release(root / "home", settings)
+            self.assertEqual(installed.manifest["roleBlueprintPath"], "customer/roles/project-manager")
+
+    def test_local_role_revalidates_exact_content_inventory_even_on_reused_release(self):
+        for mutation in ("changed", "extra", "missing", "manifest"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package, settings = self._local_bundle(root)
+                with patch.dict(os.environ, {"AUTOPILOTS_APPLICATION_ROOT": str(package)}):
+                    install_or_refresh_role_release(root / "home", settings)
+                    original = (root / "home" / "SOUL.md").read_bytes()
+                    source = package / settings.repository_path / "SOUL.md"
+                    if mutation == "changed":
+                        source.write_text("tampered", encoding="utf-8")
+                    elif mutation == "extra":
+                        (source.parent / "unexpected.txt").write_text("extra", encoding="utf-8")
+                    elif mutation == "missing":
+                        source.unlink()
+                    else:
+                        with (package / "role-release.json").open("ab") as manifest:
+                            manifest.write(b"\n")
+                    with self.assertRaisesRegex(ValueError, "SHA-256|inventory"):
+                        install_or_refresh_role_release(root / "home", settings)
+                self.assertEqual((root / "home" / "SOUL.md").read_bytes(), original)
+
+    def test_local_bundle_metadata_must_match_configured_release_and_commit(self):
+        for field, value in (
+            ("roleRelease", "99.0.0"), ("roleReleaseCommit", "f" * 40),
+            ("roleBlueprintPath", "blueprints/other"), ("roleBlueprint", "other"),
+            ("schemaVersion", 2),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                package, settings = self._local_bundle(root)
+                manifest = package / "role-release.json"
+                payload = json.loads(manifest.read_bytes())
+                payload[field] = value
+                manifest.write_text(json.dumps(payload), encoding="utf-8")
+                settings = replace(settings, bundle_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest())
+                with patch.dict(os.environ, {"AUTOPILOTS_APPLICATION_ROOT": str(package)}):
+                    with self.assertRaisesRegex(ValueError, "configured role"):
+                        install_or_refresh_role_release(root / "home", settings)
+                self.assertFalse((root / "home").exists())
+
+    def test_local_role_requires_expected_hash_and_rejects_nonrelative_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package, settings = self._local_bundle(root)
+            with patch.dict(os.environ, {"AUTOPILOTS_APPLICATION_ROOT": str(package)}):
+                for relative in ("../outside", "/absolute", "C:\\outside", ""):
+                    with self.subTest(path=relative), self.assertRaisesRegex(ValueError, "relative"):
+                        install_or_refresh_role_release(root / "home", replace(settings, repository_path=relative))
+                with self.assertRaisesRegex(ValueError, "SHA-256"):
+                    install_or_refresh_role_release(root / "home", replace(settings, bundle_sha256=""))
+            with patch.dict(os.environ, {
+                "HERMES_ROLE_BLUEPRINT_SOURCE": "local",
+                "HERMES_ROLE_RELEASE": settings.role_release,
+                "HERMES_ROLE_RELEASE_COMMIT": settings.commit,
+            }, clear=True):
+                with self.assertRaisesRegex(ValueError, "HERMES_ROLE_BUNDLE_SHA256"):
+                    role_release_settings_from_environment()
 
     def test_private_playbook_and_work_history_survive_worker_refresh(self):
         with tempfile.TemporaryDirectory() as temp_dir:
