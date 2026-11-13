@@ -159,6 +159,11 @@ federated credentials, delegated consent, and role assignments. Tenant consent
 policies may require a higher-privilege admin for consent. User/group assignment
 requires permission to read the selected principals and assign enterprise-app
 roles. Azure Owner alone does **not** grant these directory permissions.
+Publishing a new delegated scope can briefly precede Graph's permission-set
+visibility. Only the exact `InvalidValue` preauthorization publication error is
+retried for the intended self-scope consent PATCH, with bounded delays. Other
+400 errors and exhausted retries remain explicit; retained identity IDs make
+the same command rerunnable without duplicate applications.
 
 The identity command emits an admin request manifest on a Graph authorization
 failure instead of inventing an identity or using a client secret. Give the
@@ -311,6 +316,11 @@ inputs and base reference match the recorded fingerprint. Selection never
 redirects one stack to another's state.
 An update that would delete/replace a UAMI or Worker group is rejected before
 apply. Source-only Worker changes use the existing source-release mechanism.
+Native tracing dependencies in `runtimes\hermes\hermes-telemetry.txt` are part
+of the runtime dependency-image fingerprint. Keep that file and
+`bridge\telemetry.py` in the Docker build context. The image checks dependencies
+and the shared telemetry initializer with the actual `/opt/hermes/.venv`
+interpreter; a successful `/app/.venv` import does not prove native readiness.
 Teardown removes only the exact Application Insights-generated failure-anomaly
 alert inside the captured stack RG before Terraform deletes the platform;
 Terraform's guard against deleting unexpected resources remains enabled.

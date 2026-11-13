@@ -32,6 +32,10 @@ TAG = "autopilots-simulator"
 APP_SELECT = "id,appId,displayName,tags,signInAudience,api,appRoles,spa,identifierUris,requiredResourceAccess"
 SP_SELECT = "id,appId,tags,appOwnerOrganizationId,appRoleAssignmentRequired"
 READINESS_DELAYS = (1, 2, 4, 8, 16)
+PERMISSION_PUBLICATION_MESSAGE = (
+    "Property api.preAuthorizedApplications.delegatedPermissionIds has a Permission Id "
+    "that cannot be found in the AppPermissions sets."
+)
 
 
 class GraphPermissionsError(PermissionError):
@@ -269,14 +273,32 @@ class _Reconciler:
         return self.graph.request(method, path, body=body)
 
     def dependent_call(self, parent: tuple[str, str], method: str, path: str,
-                       body: dict | None = None) -> dict:
-        """Bound 404 readiness retries to new resources or incomplete app state."""
-        delays = iter(READINESS_DELAYS if parent in self.pending_creations else ())
+                       body: dict | None = None, *, consent_scope: tuple[str, str] | None = None) -> dict:
+        """Bound resource-readiness and intended self-scope publication retries."""
+        pending_creation = parent in self.pending_creations
+        permission_publication = (
+            consent_scope is not None and parent[0] == "applications" and method == "PATCH"
+            and path == f"/applications/{parent[1]}"
+            and any(item.get("appId") == consent_scope[0]
+                    and consent_scope[1] in item.get("delegatedPermissionIds", [])
+                    for item in (body or {}).get("api", {}).get("preAuthorizedApplications", []))
+        )
+        delays = iter(READINESS_DELAYS if pending_creation or permission_publication else ())
         while True:
             try:
                 return self.call(method, path, body)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 404:
+                if exc.response.status_code == 404 and pending_creation:
+                    pass
+                elif exc.response.status_code == 400 and permission_publication:
+                    try:
+                        error = exc.response.json().get("error")
+                    except (ValueError, AttributeError):
+                        raise exc
+                    if (not isinstance(error, dict) or error.get("code") != "InvalidValue"
+                            or error.get("message") != PERMISSION_PUBLICATION_MESSAGE):
+                        raise
+                else:
                     raise
                 delay = next(delays, None)
                 if delay is None:
@@ -379,7 +401,8 @@ class _Reconciler:
                          "api": {"preAuthorizedApplications": authorized}}
             consent_changes = {key: value for key, value in delegated.items() if not _matches(app.get(key), value)}
             if consent_changes:
-                self.dependent_call(resource, "PATCH", f"/applications/{record['object_id']}", consent_changes)
+                self.dependent_call(resource, "PATCH", f"/applications/{record['object_id']}", consent_changes,
+                                    consent_scope=(record["client_id"], scope_id))
         self.ensure_owner("applications", record["object_id"])
         principals = self.values(_filter("servicePrincipals", f"appId eq '{record['client_id']}'", SP_SELECT))
         if len(principals) > 1:

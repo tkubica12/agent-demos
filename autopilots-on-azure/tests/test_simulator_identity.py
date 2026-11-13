@@ -15,13 +15,23 @@ import httpx
 from scripts import simulator_identity as identity
 
 
+PERMISSION_PUBLICATION_ERROR = {
+    "code": "InvalidValue",
+    "message": "Property api.preAuthorizedApplications.delegatedPermissionIds has a Permission Id "
+               "that cannot be found in the AppPermissions sets.",
+    "innerError": {"request-id": "test-request"},
+}
+
+
 def guid(label: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"simulator-test:{label}"))
 
 
-def graph_error(status: int, method: str, path: str) -> httpx.HTTPStatusError:
+def graph_error(status: int, method: str, path: str, *, error: dict | None = None) -> httpx.HTTPStatusError:
     request = httpx.Request(method, identity.GRAPH + path)
-    response = httpx.Response(status, request=request, json={"error": {"code": "Authorization_RequestDenied"}})
+    response = httpx.Response(status, request=request, json={
+        "error": {"code": "Authorization_RequestDenied"} if error is None else error,
+    })
     return httpx.HTTPStatusError("Graph request failed", request=request, response=response)
 
 
@@ -324,6 +334,103 @@ class SimulatorIdentityTests(unittest.TestCase):
         self.assertEqual(authorized[1]["delegatedPermissionIds"], [app["api"]["oauth2PermissionScopes"][0]["id"]])
         writes = [call for call in self.graph.calls[before:] if call["method"] != "GET"]
         self.assertEqual([(call["method"], call["path"]) for call in writes], [("PATCH", f"/applications/{app['id']}")])
+
+    def test_exact_permission_publication_error_retries_intended_consent_with_stable_ids(self) -> None:
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                if existing:
+                    app = next(app for app in self.graph.apps.values()
+                               if app["displayName"] == "Autopilots Simulator classroom")
+                    app["api"]["preAuthorizedApplications"][0]["delegatedPermissionIds"] = []
+                failures_left = 2
+                persisted_record = None
+
+                def delayed_permissions(method: str, path: str, body: dict | None) -> None:
+                    nonlocal failures_left, persisted_record
+                    if method == "PATCH" and "preAuthorizedApplications" in (body or {}).get("api", {}):
+                        state = json.loads(self.path.read_text(encoding="utf-8"))
+                        if persisted_record is None:
+                            persisted_record = state["spa"]
+                        self.assertEqual(state["spa"], persisted_record)
+                        app = self.graph.apps[state["spa"]["object_id"]]
+                        scope_id = app["api"]["oauth2PermissionScopes"][0]["id"]
+                        self.assertEqual(body["api"]["preAuthorizedApplications"], [
+                            {"appId": state["spa"]["client_id"], "delegatedPermissionIds": [scope_id]},
+                        ])
+                        if failures_left:
+                            failures_left -= 1
+                            raise graph_error(400, method, path, error=PERMISSION_PUBLICATION_ERROR)
+
+                before = len(self.graph.calls)
+                self.graph.fail = delayed_permissions
+                with patch.object(identity.time, "sleep") as sleep:
+                    result = self.reconcile()
+                self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+                consent = [call for call in self.graph.calls[before:]
+                           if "preAuthorizedApplications" in (call["body"] or {}).get("api", {})]
+                self.assertEqual(len(consent), 3)
+                self.assertTrue(all(call == consent[0] for call in consent))
+                self.assertEqual(result["spa"]["object_id"], persisted_record["object_id"])
+                self.assertEqual(result["spa"]["client_id"], persisted_record["client_id"])
+                self.assertEqual(len(self.graph.apps), 3)
+
+    def test_unrelated_consent_400_errors_propagate_without_retry(self) -> None:
+        errors = [
+            {"code": "InvalidValue", "message": "Property spa.redirectUris is invalid."},
+            {"code": "Request_BadRequest", "message": PERMISSION_PUBLICATION_ERROR["message"]},
+            {"code": "InvalidValue", "message": PERMISSION_PUBLICATION_ERROR["message"] + " Extra validation error."},
+        ]
+        for error in errors:
+            with self.subTest(error=error):
+                def invalid_consent(method: str, path: str, body: dict | None) -> None:
+                    if method == "PATCH" and "preAuthorizedApplications" in (body or {}).get("api", {}):
+                        raise graph_error(400, method, path, error=error)
+
+                before = len(self.graph.calls)
+                self.graph.fail = invalid_consent
+                with patch.object(identity.time, "sleep") as sleep:
+                    with self.assertRaises(httpx.HTTPStatusError) as raised:
+                        self.reconcile()
+                sleep.assert_not_called()
+                self.assertEqual(raised.exception.response.json()["error"], error)
+                self.assertEqual(sum("preAuthorizedApplications" in (call["body"] or {}).get("api", {})
+                                     for call in self.graph.calls[before:]), 1)
+
+    def test_permission_publication_exhaustion_is_explicit_and_partial_state_can_resume(self) -> None:
+        def unavailable_permissions(method: str, path: str, body: dict | None) -> None:
+            if method == "PATCH" and "preAuthorizedApplications" in (body or {}).get("api", {}):
+                raise graph_error(400, method, path, error=PERMISSION_PUBLICATION_ERROR)
+
+        self.graph.fail = unavailable_permissions
+        with patch.object(identity.time, "sleep") as sleep:
+            with self.assertRaises(httpx.HTTPStatusError) as raised:
+                self.reconcile()
+        self.assertEqual(raised.exception.response.status_code, 400)
+        self.assertEqual(raised.exception.response.json()["error"], PERMISSION_PUBLICATION_ERROR)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4, 8, 16])
+        self.assertEqual(sum("preAuthorizedApplications" in (call["body"] or {}).get("api", {})
+                             for call in self.graph.calls), 6)
+        state = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("service_principal_id", state["spa"])
+        self.assertEqual(len(self.graph.apps), 1)
+        self.graph.fail = None
+        result = self.reconcile()
+        self.assertEqual(result["spa"]["object_id"], state["spa"]["object_id"])
+        self.assertEqual(result["spa"]["client_id"], state["spa"]["client_id"])
+        self.assertEqual(len(self.graph.apps), 3)
+
+    def test_exact_permission_error_outside_consent_patch_is_not_retried(self) -> None:
+        def invalid_publication(method: str, path: str, body: dict | None) -> None:
+            if method == "PATCH" and "oauth2PermissionScopes" in (body or {}).get("api", {}):
+                raise graph_error(400, method, path, error=PERMISSION_PUBLICATION_ERROR)
+
+        self.graph.fail = invalid_publication
+        with patch.object(identity.time, "sleep") as sleep:
+            with self.assertRaises(httpx.HTTPStatusError):
+                self.reconcile()
+        sleep.assert_not_called()
+        self.assertEqual(sum("oauth2PermissionScopes" in (call["body"] or {}).get("api", {})
+                             for call in self.graph.calls), 1)
 
     def test_rejects_foreign_display_name_before_any_graph_writes(self) -> None:
         app_id = guid("foreign")

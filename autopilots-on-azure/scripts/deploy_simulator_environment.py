@@ -447,7 +447,7 @@ def build_images(config: dict, root: Path, *, source_root: Path | None = None) -
         if private else import_hermes_upstream(registry, server)
     )
     dependencies = (
-        "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "package.json", "package-lock.json",
+        "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "hermes-telemetry.txt", "package.json", "package-lock.json",
         "office_helper/OfficeCollaboration.csproj", "office_helper/Program.cs",
     )
     build_fingerprint = hashlib.sha256(json.dumps({

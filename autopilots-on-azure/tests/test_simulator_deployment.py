@@ -360,7 +360,7 @@ class SimulatorDeploymentTests(unittest.TestCase):
             source = root / "snapshot"
             runtime = source / "runtimes" / "hermes"
             dependencies = (
-                "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "package.json", "package-lock.json",
+                "Dockerfile", "pyproject.toml", "uv.lock", "hermes-site.txt", "hermes-telemetry.txt", "package.json", "package-lock.json",
                 "office_helper/OfficeCollaboration.csproj", "office_helper/Program.cs",
             )
             for name in dependencies:
@@ -388,6 +388,10 @@ class SimulatorDeploymentTests(unittest.TestCase):
                 build_images(config, root)
                 self.assertEqual(build.call_count, 2)
                 (runtime / "Dockerfile").write_text("changed dependency")
+                build.reset_mock()
+                build_images(config, root)
+                self.assertEqual(build.call_count, 3)
+                (runtime / "hermes-telemetry.txt").write_text("changed native telemetry dependency")
                 build.reset_mock()
                 build_images(config, root)
                 self.assertEqual(build.call_count, 3)
