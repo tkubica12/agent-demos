@@ -1,0 +1,16 @@
+[project]
+name = "tsim-reference-echo"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "microsoft-agents-activity==1.1.0",
+  "microsoft-agents-hosting-core==1.1.0",
+  "microsoft-agents-hosting-aiohttp==1.1.0",
+  "microsoft-agents-authentication-msal==1.1.0",
+  "python-dotenv==1.2.1",
+]
+
+[[tool.uv.index]]
+name = "microsoft-approved"
+url = "https://packagefeedproxy.microsoft.io/pypi/simple/"
+default = true
