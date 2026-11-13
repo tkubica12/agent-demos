@@ -39,18 +39,22 @@ async function runStack(stack) {
     additionalAcceptance: {
       realProposalAction: "not-run",
       interactiveEntra: "not-run",
-      nativeFoundryToolProvenance: "separate-evidence-required",
+      nativeFoundryToolProvenance: "not-proven",
       completeSimulatorAndBridgeChecklists: "not-certified",
     },
   };
   summary.stacks.push(report);
   const contexts = [];
+  const sanitized = (message) => [stack.access_code_env, stack.evidence_key_env].reduce(
+    (text, name) => process.env[name] ? text.replaceAll(process.env[name], "[REDACTED]") : text,
+    String(message),
+  );
   const check = async (name, action) => {
     try {
       await action();
       report.checks.push({ name, status: "pass", at: new Date().toISOString() });
     } catch (error) {
-      const failure = String(error.message).replaceAll(process.env[stack.access_code_env], "[REDACTED]");
+      const failure = sanitized(error.message);
       report.checks.push({ name, status: "fail", failure, at: new Date().toISOString() });
       console.error(`${stack.name}/${name}: ${failure}`);
     }
@@ -201,8 +205,9 @@ async function runStack(stack) {
       await check(`agent-generated-${kind}-browser-download`, async () => {
         const nonce = randomUUID().replaceAll("-", "");
         const format = kind === "docx" ? "DOCX Word" : "UTF-8 TXT";
+        const requestedAt = Date.now() / 1000;
         const sent = await send(personal,
-          `Use your real terminal/file tools to CREATE a ${format} document containing the fresh verification code ${nonce} and RETURN it as a downloadable chat attachment. Do not return a markdown link, code block, or an existing document.`);
+          `Use your real terminal tool to CREATE a ${format} document containing the fresh verification code ${nonce} and RETURN it as a downloadable chat attachment. Do not return a markdown link, code block, or an existing document.`);
         const matches = (file) => typeof file.name === "string" && path.extname(file.name).toLowerCase() === `.${kind}`;
         const received = await reply(personal, sent.id, (message) =>
           Array.isArray(message.attachments) && message.attachments.some(matches));
@@ -222,13 +227,33 @@ async function runStack(stack) {
         const content = JSON.parse(verified.stdout.trim());
         const bytes = await first.api(`/files/${file.id}/content`, "GET", undefined, true);
         assert.equal(sha(bytes), content.sha256, "Browser and authenticated API download bytes must agree.");
-        report.generatedFiles.push({
+        const generated = {
           ...content, nonce, filename: file.name, fileId: file.id,
           requestMessage: sent.id, responseMessage: received.id,
-          requiresNativeRunToolEvidence: true,
-        });
+          nativeEvidenceStatus: "fail",
+        };
+        report.generatedFiles.push(generated);
         persistedFiles.push({ id: file.id, sha256: content.sha256 });
+        const expectedPath = path.join(directory, `native-target-${nonce}.json`);
+        await writeFile(expectedPath, JSON.stringify({
+          conversationId: personal, requestActivityId: sent.id, replyActivityId: received.id,
+          filename: file.name, ...content, requestedAt,
+        }));
+        const nativeOutput = path.join(directory, `native-evidence-${nonce}.json`);
+        const native = await execute("uv", ["run", "python",
+          fileURLToPath(new URL("./verify_native_evidence.py", import.meta.url)),
+          "--gateway-url", stack.gateway_url, "--runtime-url", stack.runtime_url,
+          "--key-env", stack.evidence_key_env, "--app-insights-resource-id", stack.app_insights_resource_id,
+          "--expected", expectedPath, "--output", nativeOutput,
+          "--timeout-seconds", String(Math.min(config.timeout_ms / 1000, 600)),
+        ], { timeout: Math.min(config.timeout_ms, 600_000) + 120_000 });
+        generated.nativeEvidence = JSON.parse(native.stdout.trim());
+        generated.nativeEvidenceStatus = "pass";
       });
+    }
+    if (report.generatedFiles.length === 2 &&
+        report.generatedFiles.every((file) => file.nativeEvidenceStatus === "pass")) {
+      report.additionalAcceptance.nativeFoundryToolProvenance = "pass-for-generated-file-turns";
     }
     await check("restart-chat-and-file-persistence", async () => {
       assert.ok(persistedFiles.length > 0, "File persistence requires an actual uploaded/downloaded file.");
@@ -261,7 +286,7 @@ async function runStack(stack) {
   } catch (error) {
     report.status = "fail";
     // Error messages only: stack traces and browser traces can contain access codes or bearer tokens.
-    report.failure = String(error.message).replaceAll(process.env[stack.access_code_env], "[REDACTED]");
+    report.failure = sanitized(error.message);
     console.error(`${stack.name}: ${report.failure}`);
   } finally {
     await Promise.all(contexts.map((context) => context.close()));
