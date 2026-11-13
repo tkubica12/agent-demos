@@ -23,7 +23,7 @@ from bridge.durable_transport import (
 
 class DurableTransportTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        self.temporary = tempfile.TemporaryDirectory(dir=Path.cwd())
         self.addCleanup(self.temporary.cleanup)
         self.settings = TransportSettings(
             "worker", "gateway", "client", "bus.servicebus.windows.net",
@@ -42,8 +42,8 @@ class DurableTransportTests(unittest.TestCase):
         }
         self.journal = Journal(self.settings.journal_path)
 
-    def encoded(self):
-        return base64.b64encode(json.dumps(self.envelope).encode()).decode()
+    def callback(self):
+        return json.loads(json.dumps(self.envelope))
 
     def admit(self, queue="worker", body=None, envelope=None, connection_id="connection"):
         return self.journal.admit(
@@ -51,13 +51,13 @@ class DurableTransportTests(unittest.TestCase):
         )
 
     def test_schedule_callback_accepts_supported_job_and_trace(self):
-        envelope, body = decode_callback(self.encoded(), "worker", self.settings)
+        envelope, body = decode_callback(self.callback(), "worker", self.settings)
         self.assertEqual(body, self.body)
         self.assertEqual(envelope["Properties"]["DeliveryCount"], 1)
 
     def test_callback_rejects_other_queues_workers_and_job_types(self):
         with self.assertRaisesRegex(ValueError, "settling actor"):
-            decode_callback(self.encoded(), "worker-activities", self.settings)
+            decode_callback(self.callback(), "worker-activities", self.settings)
         for body in (
             {**self.body, "workerId": "another-worker"},
             {**self.body, "type": "unsupported"},
@@ -67,22 +67,22 @@ class DurableTransportTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.envelope["ContentData"] = base64.b64encode(canonical(body).encode()).decode()
                 with self.assertRaises(ValueError):
-                    decode_callback(self.encoded(), "worker", self.settings)
+                    decode_callback(self.callback(), "worker", self.settings)
 
     def test_document_retry_requires_its_operation_identity(self):
         body = {"version": "1.0", "type": "document.publish.retry", "workerId": "worker"}
         self.envelope["ContentData"] = base64.b64encode(canonical(body).encode()).decode()
         with self.assertRaisesRegex(ValueError, "operation identity"):
-            decode_callback(self.encoded(), "worker", self.settings)
+            decode_callback(self.callback(), "worker", self.settings)
 
     def test_invalid_envelope_and_delivery_count_are_rejected(self):
         self.envelope["Properties"]["DeliveryCount"] = True
         with self.assertRaisesRegex(ValueError, "delivery count"):
-            decode_callback(self.encoded(), "worker", self.settings)
+            decode_callback(self.callback(), "worker", self.settings)
         self.envelope["Properties"]["DeliveryCount"] = 1
         self.envelope["LockToken"] = ""
         with self.assertRaisesRegex(ValueError, "PeekLock"):
-            decode_callback(self.encoded(), "worker", self.settings)
+            decode_callback(self.callback(), "worker", self.settings)
 
     def test_duplicate_message_id_cannot_change_effect_payload(self):
         self.admit()
@@ -113,6 +113,37 @@ class DurableTransportTests(unittest.TestCase):
         self.admit(connection_id="first")
         with self.assertRaisesRegex(ValueError, "owning connection"):
             self.admit(connection_id="second")
+
+    def test_old_lease_settlement_does_not_settle_new_redelivery(self):
+        self.admit()
+        self.admit(envelope={**self.envelope, "LockToken": "new-lease"})
+        self.journal.mark_settled("worker", "message-one", "lease-one")
+        self.assertEqual(self.journal.get("worker", "message-one")["settled"], 0)
+
+    def test_stranded_last_attempt_is_terminalized_but_live_and_earlier_attempts_are_not(self):
+        self.admit(envelope={**self.envelope, "Properties": {"DeliveryCount": 10}})
+        self.journal.update("worker", "message-one", phase="running", effect_stage="native", updated_at=1)
+        self.assertEqual(self.journal.sweep({("worker", "message-one")}, max_attempts=10, stale_seconds=1800), 0)
+        self.assertEqual(self.journal.sweep(set(), max_attempts=10, stale_seconds=1800), 1)
+        self.assertEqual(self.journal.get("worker", "message-one")["phase"], "unknown")
+        self.journal.update("worker", "message-one", phase="retryable", effect_stage="preclaim", updated_at=1)
+        self.assertEqual(self.journal.sweep(set(), max_attempts=10, stale_seconds=1800), 1)
+        self.assertEqual(self.journal.get("worker", "message-one")["phase"], "failed")
+
+    def test_historical_recovery_receipts_do_not_exhaust_new_admission(self):
+        for index in range(40):
+            self.admit(envelope={**self.envelope, "MessageId": f"old-{index}"})
+        self.assertEqual(self.admit()["phase"], "pending")
+
+    def test_operator_resolution_preserves_a_replay_tombstone(self):
+        self.admit()
+        with self.assertRaisesRegex(ValueError, "quarantined"):
+            self.journal.resolve("worker", "message-one", outcome="completed", operator="owner", reason="evidence")
+        self.journal.update("worker", "message-one", phase="unknown")
+        self.journal.resolve("worker", "message-one", outcome="skipped", operator="owner", reason="manually verified")
+        row = self.admit(envelope={**self.envelope, "LockToken": "new-lease"})
+        self.assertEqual(row["phase"], "completed")
+        self.assertEqual(json.loads(row["resolution"])["outcome"], "skipped")
 
     def test_backup_is_an_independent_valid_database(self):
         self.admit()
@@ -161,7 +192,7 @@ class DurableTransportTests(unittest.TestCase):
 
     def test_callback_size_limit_is_enforced(self):
         with self.assertRaisesRegex(ValueError, "bounded envelope size"):
-            decode_callback("x" * (MAX_MESSAGE_BYTES * 3 + 1), "worker", self.settings)
+            decode_callback({"oversize": "x" * (MAX_MESSAGE_BYTES * 3 + 1)}, "worker", self.settings)
 
 
 if __name__ == "__main__":

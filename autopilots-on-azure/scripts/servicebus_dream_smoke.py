@@ -20,7 +20,7 @@ from scripts.demo_ops import worker_sandbox
 
 
 MANAGEMENT_DREAM = r"""
-import json,os,sys
+import json,os,pwd,sys
 from pathlib import Path
 config=json.load(open('/app/.sandbox-service.json'))
 environment=config['environment']
@@ -29,8 +29,16 @@ for variable in ('PYTHONPATH','AUTOPILOTS_PLUGIN_PATH'):
  for path in reversed([item for item in environment.get(variable,'').split(os.pathsep) if item]):
   sys.path.insert(0,path)
 sys.path.insert(0,environment['AUTOPILOTS_APPLICATION_ROOT'])
+account=pwd.getpwnam('hermes')
+if os.geteuid()==0:
+ os.setgroups([])
+ os.setgid(account.pw_gid)
+ os.setuid(account.pw_uid)
+elif os.geteuid()!=account.pw_uid:
+ raise RuntimeError('Dream management requires the native Hermes account.')
+home=Path(environment['HERMES_HOME'])
+os.environ['HOME']=str(home/'home')
 from cron_runtime import cron_diagnostics,enqueue_system_dream_now
-home=Path('/data/hermes')
 diagnostics=cron_diagnostics(home)
 def job():
  matches=[item for item in diagnostics['jobs'] if item.get('name')=='Platform Dreaming']
@@ -92,7 +100,7 @@ def completed_receipt(receipt: dict[str, Any]) -> bool:
 
 def run_in_runtime(outputs: dict[str, Any], action: str, *arguments: str) -> dict[str, Any]:
     runtime = worker_sandbox(outputs, "runtime")
-    command = "/app/.venv/bin/python -c " + shlex.quote(MANAGEMENT_DREAM)
+    command = "/opt/hermes/.venv/bin/python -c " + shlex.quote(MANAGEMENT_DREAM)
     command += " " + " ".join(shlex.quote(value) for value in (action, *arguments))
     with AzureCliCredential(subscription=str(outputs["subscription_id"])) as credential:
         with SandboxGroupClient(

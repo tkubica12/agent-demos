@@ -9,10 +9,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from azure.identity import AzureCliCredential
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from scripts.setup_app_tfvars import runtime_app_tfvars_path, runtime_outputs_path
+
+
+OPERATOR_SCOPE = "CollectiveLearning.Review"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -33,15 +37,25 @@ def _operator_request(
     outputs = _load_json(runtime_outputs_path("hermes", state_name))
     tfvars = _load_json(runtime_app_tfvars_path("hermes", state_name))
     bridge_url = str(outputs.get("bridge_url") or "").rstrip("/")
-    api_key = str(tfvars.get("api_server_key") or "")
-    if not bridge_url or not api_key:
-        raise RuntimeError("Hermes bridge_url and api_server_key must be configured.")
+    tenant_id = str(tfvars.get("agent365_tenant_id") or "")
+    client_id = str(tfvars.get("collective_learning_operator_client_id") or "")
+    if not bridge_url or not tenant_id or not client_id:
+        raise RuntimeError("Hermes bridge_url and Entra operator API must be configured. Run scripts.setup_identity.")
+    scope = f"api://{client_id}/{OPERATOR_SCOPE}"
+    try:
+        with AzureCliCredential(tenant_id=tenant_id) as credential:
+            access_token = credential.get_token(f"api://{client_id}/.default").token
+    except Exception as exc:
+        raise RuntimeError(
+            "Sign in as the Worker owner using device code, then retry: "
+            f"az login --use-device-code --tenant {tenant_id} --scope {scope}"
+        ) from exc
     request = urllib.request.Request(
         f"{bridge_url}{path}",
         data=json.dumps(body).encode("utf-8") if body is not None else None,
         headers={
             "Content-Type": "application/json",
-            "X-Autopilot-Key": api_key,
+            "Authorization": f"Bearer {access_token}",
         },
         method=method,
     )
@@ -104,12 +118,10 @@ def main() -> None:
     rejection.add_argument("--timeout", type=int, default=600)
     reject = subparsers.add_parser("reject", help="Reject local governed changes and authorize a normal future refresh.")
     reject.add_argument("--disposition-digest", required=True)
-    reject.add_argument("--rejected-by", required=True)
     reject.add_argument("--reason", required=True)
     reject.add_argument("--timeout", type=int, default=600)
     approve = subparsers.add_parser("approve", help="Approve exactly one prepared Learning Packet digest.")
     approve.add_argument("--packet-digest", required=True)
-    approve.add_argument("--approved-by", required=True)
     approve.add_argument("--timeout", type=int, default=600)
     export = subparsers.add_parser("export", help="Download the approved Learning Packet.")
     export.add_argument("--output", type=Path, required=True)
@@ -137,29 +149,30 @@ def main() -> None:
     elif args.command == "reject":
         if not re.fullmatch(r"[0-9a-f]{64}", args.disposition_digest):
             parser.error("--disposition-digest must be a lowercase SHA-256 digest.")
-        if not args.rejected_by.strip() or not args.reason.strip():
-            parser.error("--rejected-by and --reason cannot be blank.")
-        args.rejected_by, args.reason = args.rejected_by.strip(), args.reason.strip()
+        if not args.reason.strip():
+            parser.error("--reason cannot be blank.")
+        args.reason = args.reason.strip()
         tfvars = _load_json(runtime_app_tfvars_path("hermes", args.state_name))
         public_key = str(tfvars.get("collective_learning_approval_public_key") or "")
         if not public_key:
             raise RuntimeError("The existing Collective Learning approval public key is required.")
         result = _operator_request(
             "/internal/collective-learning/reject", method="POST",
-            body={"dispositionDigest": args.disposition_digest, "rejectedBy": args.rejected_by, "reason": args.reason},
+            body={"dispositionDigest": args.disposition_digest, "reason": args.reason},
             timeout=args.timeout, state_name=args.state_name,
         )
         verify_rejection_receipt(
             result, public_key=public_key, digest=args.disposition_digest,
-            rejected_by=args.rejected_by, reason=args.reason,
+            rejected_by=f"entra:{tfvars['agent365_tenant_id']}:{tfvars['worker_owner_id']}", reason=args.reason,
         )
     elif args.command == "approve":
+        if not re.fullmatch(r"[0-9a-f]{64}", args.packet_digest):
+            parser.error("--packet-digest must be a lowercase SHA-256 digest.")
         result = _operator_request(
             "/internal/collective-learning/approve",
             method="POST",
             body={
                 "packetDigest": args.packet_digest,
-                "approvedBy": args.approved_by,
             },
             timeout=args.timeout,
             state_name=args.state_name,

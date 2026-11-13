@@ -101,6 +101,29 @@ class FakeTypingContext:
 
 
 class TeamsBridgeTests(unittest.TestCase):
+    def test_restored_history_retains_new_events_after_cache_reload(self):
+        stored = [{"text": "old-1"}, {"text": "old-2"}]
+
+        class Journal:
+            def load_state(self, key):
+                return list(stored)
+
+            def save_state(self, key, events):
+                stored[:] = events
+
+        with (
+            patch.dict(os.environ, {"AUTOPILOT_TEAMS_MEMORY_MAX_EVENTS": "2"}),
+            patch.object(bridge_app.durable_transport, "enabled", return_value=True),
+            patch.object(bridge_app.durable_transport, "journal", return_value=Journal()),
+            patch.dict(_teams_memory, {}, clear=True),
+        ):
+            remember_teams_event("restored", {"text": "new"})
+            _teams_memory.clear()
+            self.assertEqual(
+                [event["text"] for event in bridge_app.teams_memory("restored")],
+                ["old-2", "new"],
+            )
+
     def test_agent365_product_info_entity_casing_is_normalized(self):
         body, changed = normalize_agent365_activity_body(
             json.dumps(

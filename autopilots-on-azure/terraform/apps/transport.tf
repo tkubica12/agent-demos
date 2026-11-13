@@ -26,14 +26,6 @@ resource "azurerm_role_assignment" "transport_schedule_receive" {
   principal_type       = "ServicePrincipal"
 }
 
-resource "azurerm_role_assignment" "transport_wake" {
-  for_each           = toset(["gateway"])
-  scope              = azapi_resource.sandbox_group[each.key].id
-  role_definition_id = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.sandbox_data_owner_role_id}"
-  principal_id       = azapi_resource.transport.output.identity.principalId
-  principal_type     = "ServicePrincipal"
-}
-
 resource "azurerm_role_definition" "transport_invoke" {
   name        = "autopilots-${var.autopilot_name}-${local.suffix}-native-connection"
   scope       = local.resource_group_id

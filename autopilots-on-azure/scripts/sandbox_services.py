@@ -27,6 +27,7 @@ from scripts.sandbox_runtime import (
 from scripts.application_releases import (
     PYTHON_BASE_IMAGE, ApplicationRelease, build_release, install_release,
 )
+from bridge.transport_ingress import CALLBACK_PORT
 
 
 DISK_IMAGE_AUDIENCE = "https://management.azuredevcompute.io/.default"
@@ -202,6 +203,7 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "AGENT365_AGENT_USER_ID": config["agent365_agent_user_id"],
         "AGENT365_AGENT_USER_PRINCIPAL_NAME": config["agent365_agent_user_principal_name"],
         "WORKER_OWNER_ID": config["worker_owner_id"],
+        "COLLECTIVE_LEARNING_OPERATOR_CLIENT_ID": config.get("collective_learning_operator_client_id", ""),
         "USE_AGENTIC_AUTH": "true",
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID": config["agent365_client_id"],
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID": tenant,
@@ -225,6 +227,8 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         raise ValueError("Apply the Worker's native transport infrastructure before deploying applications.")
     environment.update({
         "TRANSPORT_ROLE": "gateway",
+        "TRANSPORT_CALLBACK_PRINCIPAL_ID": transport["connector_principal_id"],
+        "TRANSPORT_CALLBACK_TENANT_ID": infrastructure["tenant_id"],
         "TRANSPORT_CONNECTION_ID": transport["connection_ids"]["gateway"],
         "TRANSPORT_JOURNAL_PATH": "/data/autopilots/transport.db",
         "TRANSPORT_JOURNAL_BACKUP": "/backup/transport/journal.db",
@@ -385,6 +389,58 @@ def require_exec_success(result: Any, operation: str) -> None:
         raise RuntimeError(f"{operation} failed: {result.stderr}")
 
 
+def configure_callback_port(sandbox: Any, environment: dict[str, str]) -> str:
+    principal = environment.get("TRANSPORT_CALLBACK_PRINCIPAL_ID", "")
+    tenant = environment.get("TRANSPORT_CALLBACK_TENANT_ID", "")
+    if not principal or not tenant:
+        raise ValueError("Native scheduling ingress requires the namespace principal and tenant.")
+    desired = {
+        "port": CALLBACK_PORT, "protocol": "Http", "activationMode": "OnDemand",
+        "auth": {"anonymous": False, "entraId": {
+            "enabled": True, "tenantIds": [tenant], "objectIds": [principal],
+        }},
+    }
+
+    def matches(port: dict) -> bool:
+        auth = port.get("auth") or {}
+        entra = auth.get("entraId") or {}
+        return (
+            port.get("protocol") == "Http" and port.get("activationMode") == "OnDemand"
+            and port.get("url") == desired["url"]
+            and auth.get("anonymous") is False and entra.get("enabled") is True
+            and entra.get("tenantIds") == [tenant] and entra.get("objectIds") == [principal]
+            and not entra.get("emails")
+        )
+
+    current = sandbox._dp_get(sandbox._sbx_path)
+    ports = current.get("ports", [])
+    if {port["port"] for port in ports} - {8000, CALLBACK_PORT}:
+        raise ValueError("The gateway has unexpected ports; refusing to replace its ingress policy.")
+    public = next((port for port in ports if port["port"] == 8000), None)
+    if public is None:
+        raise ValueError("The gateway public Teams port is missing.")
+    public_url = urlsplit(public.get("url", ""))
+    prefix = f"{sandbox.sandbox_id}--8000."
+    if (
+        public_url.scheme != "https" or not public_url.hostname or not public_url.hostname.startswith(prefix)
+        or public_url.path not in ("", "/") or public_url.query or public_url.fragment
+        or public_url.port is not None or public_url.username is not None
+    ):
+        raise ValueError("The existing gateway URL does not match the native Sandbox port URL contract.")
+    desired["url"] = f"https://{sandbox.sandbox_id}--{CALLBACK_PORT}.{public_url.hostname[len(prefix):]}"
+    native = next((port for port in ports if port["port"] == CALLBACK_PORT), {})
+    if not matches(native):
+        sandbox._dp_put(sandbox._sbx_path + "/ports", {"ports": [public, desired]})
+        current = sandbox._dp_get(sandbox._sbx_path)
+        native = next((port for port in current.get("ports", []) if port["port"] == CALLBACK_PORT), {})
+    if not matches(native):
+        raise RuntimeError("The native callback port did not retain its namespace MI access policy.")
+    url = native.get("url", "")
+    if urlsplit(url).scheme != "https" or not urlsplit(url).hostname:
+        raise RuntimeError("The native callback port did not return an HTTPS endpoint.")
+    return url.rstrip("/")
+
+
 def require_service_health(client: Any, port: int, release: str = "") -> None:
     probe = (
         "import urllib.request; "
@@ -419,7 +475,7 @@ def require_quiescent_service(sandbox: Any, previous: dict, port: int) -> None:
     if gateway and not environment.get("TRANSPORT_CONNECTION_ID"):
         raise RuntimeError("The previous gateway has no durable scheduling configuration.")
     probe = """
-import json,sqlite3,urllib.request
+import json,urllib.request
 config=json.load(open('/app/.sandbox-service.json'))
 environment=config['environment']
 gateway=environment.get('TRANSPORT_ROLE')=='gateway'
@@ -431,14 +487,8 @@ with urllib.request.urlopen(request,timeout=30) as response:
  result=json.load(response)
 if result['active']:
  raise RuntimeError('Application update refused while durable work is unfinished')
-if gateway and (result['unfinished'] or result['unsettled']):
- connection=sqlite3.connect(environment['TRANSPORT_JOURNAL_PATH'])
- connection.row_factory=sqlite3.Row
- rows=list(connection.execute("SELECT queue,phase,native_scope,native_run_id FROM deliveries WHERE settled=0 OR phase IN ('pending','running')"))
- connection.close()
- if any(row['phase'] not in ('completed','failed','unknown') for row in rows):
-  raise RuntimeError('Gateway effects cannot be replayed automatically during an update')
- result['terminalReceiptsAwaitingSettlement']=len(rows)
+if gateway:
+ result['retainedReceiptsAwaitingSettlement']=result['unsettled']
 print(json.dumps(result))
 """.replace("__PORT__", str(port)).strip()
     result = sandbox.exec("python3 -c " + shlex.quote(probe))
@@ -510,6 +560,7 @@ def deploy_service(
     created = not matching
     previous = None
     config_changed = False
+    callback_url = ""
     maintenance = ExitStack()
     try:
         if matching:
@@ -547,6 +598,7 @@ def deploy_service(
                     pass
                 maintenance.enter_context(service_maintenance(sandbox))
                 require_quiescent_service(sandbox, previous, service.port)
+            callback_url = configure_callback_port(sandbox, environment)
         if endpoint_environment is not None:
             environment.update(endpoint_environment(endpoint.rstrip("/")))
         directory = install_release(sandbox, service.release)
@@ -586,6 +638,7 @@ def deploy_service(
     finally:
         maintenance.close()
     return {"sandbox_id": sandbox.sandbox_id, "url": endpoint.rstrip("/"),
+            **({"callback_url": callback_url} if service.role == "gateway" else {}),
             "image": service.image, "disk_image_id": disk_image_id,
             "application_release": service.release.digest,
             "superseded_sandbox_ids": superseded_ids}
@@ -639,7 +692,7 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                 service = SandboxService(
                     role="gateway", image=PYTHON_BASE_IMAGE, port=8000,
                     disk_source_image=PYTHON_BASE_IMAGE,
-                    command=("/app/.venv/bin/python", "-m", "uvicorn", "bridge.app:app", "--host", "0.0.0.0", "--port", "8000"),
+                    command=("/app/.venv/bin/python", "-m", "bridge.server"),
                     environment=gateway_environment(settings),
                     auto_suspend=True,
                     release=build_release("gateway"),

@@ -15,6 +15,7 @@ import httpx
 from azure.core.credentials import AccessToken, TokenCredential
 from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
+from azure.servicebus.exceptions import MessageNotFoundError
 from opentelemetry.trace import SpanKind
 
 from bridge.telemetry import operation_span, trace_headers
@@ -201,6 +202,23 @@ class AzureCronScheduler(CronScheduler):
         self._ensure_system_dream()
         self.reconcile()
 
+    def register_job(self, job: dict[str, Any]) -> None:
+        """Arm the persisted occurrence before native create can report scheduling success."""
+        if not job.get("enabled", True) or job.get("state") == "paused":
+            return
+        self.reconcile()
+        observed = self._load_state().get(str(job["id"])) or {}
+        if (
+            not job.get("next_run_at")
+            or observed.get("revision") != schedule_revision(job)
+            or observed.get("fireAt") != job["next_run_at"]
+            or observed.get("sequenceNumber") is None
+        ):
+            raise RuntimeError(
+                f"Persisted cron job {job['id']} was not armed for its native occurrence. "
+                "Inspect its trusted origin and scheduler diagnostics; do not create a duplicate."
+            )
+
     def _ensure_system_dream(self) -> None:
         from cron.jobs import CRON_DIR
         from cron_runtime import ensure_system_dream_schedule
@@ -224,6 +242,8 @@ class AzureCronScheduler(CronScheduler):
         *,
         adapters: Any = None,
         loop: Any = None,
+        force: bool = False,
+        manual: bool = False,
         output_callback: Callable[[Path, str], None] | None = None,
     ) -> bool:
         _install_output_capture()
@@ -231,17 +251,34 @@ class AzureCronScheduler(CronScheduler):
             (job_id, output_callback) if output_callback is not None else None
         )
         try:
-            ran = super().fire_due(job_id, adapters=adapters, loop=loop)
+            ran = super().fire_due(job_id, adapters=adapters, loop=loop, force=force, manual=manual)
         finally:
             _OUTPUT_CAPTURE.reset(token)
-        self.reconcile()
         return ran
 
     def reconcile(self) -> None:
         from cron.jobs import CRON_DIR, load_jobs
+        from cron_runtime import bind_cron_delivery, get_delivery_reference
 
         with self._lock:
             bindings_path = CRON_DIR.parent / "local" / "cron-delivery.json"
+            previous_bindings = (
+                json.loads(bindings_path.read_text(encoding="utf-8")) if bindings_path.is_file() else {}
+            )
+            jobs = load_jobs()
+            for job in jobs:
+                previous = previous_bindings.get(str(job["id"])) or {}
+                if previous.get("local") is True or previous.get("systemType") == "dream":
+                    continue
+                origin = job.get("origin") or {}
+                if origin.get("platform") != "autopilots":
+                    continue
+                reference_key = str(origin.get("chat_id") or "")
+                if not reference_key or not get_delivery_reference(CRON_DIR.parent, reference_key):
+                    raise ValueError("Native cron origin has no trusted proactive delivery reference.")
+                bind_cron_delivery(
+                    CRON_DIR.parent, job_ids=[str(job["id"])], reference_key=reference_key,
+                )
             bindings: dict[str, Any] = {}
             if bindings_path.is_file():
                 payload = json.loads(bindings_path.read_text(encoding="utf-8"))
@@ -249,7 +286,7 @@ class AzureCronScheduler(CronScheduler):
                     bindings = payload
             desired = {
                 job["id"]: job
-                for job in load_jobs()
+                for job in jobs
                 if job.get("enabled")
                 and job.get("next_run_at")
                 and job.get("state") != "paused"
@@ -359,6 +396,7 @@ class AzureCronScheduler(CronScheduler):
 
     def _enqueue_message(
         self, job: dict[str, Any], revision: str, binding: dict[str, Any], *, occurrence_id: str,
+        delivery_id: str = "",
     ) -> dict[str, str]:
         worker_id = required_env("WORKER_ID")
         message_type = (
@@ -366,7 +404,7 @@ class AzureCronScheduler(CronScheduler):
             if binding.get("systemType") == "dream"
             else "hermes.cron.fire"
         )
-        message_id = f"{worker_id}:{job['id']}:{occurrence_id}"
+        message_id = delivery_id or f"{worker_id}:{job['id']}:{occurrence_id}"
         carrier = trace_headers()
         message = ServiceBusMessage(
             canonical_json({
@@ -393,6 +431,26 @@ class AzureCronScheduler(CronScheduler):
             "occurrenceId": occurrence_id,
         }
 
+    def rearm(
+        self, job: dict[str, Any], revision: str, binding: dict[str, Any], *, repair_id: str,
+    ) -> dict[str, str]:
+        digest = hashlib.sha256(
+            canonical_json([job["id"], revision, repair_id]).encode("utf-8")
+        ).hexdigest()
+        return self._enqueue_message(
+            job, revision, binding, occurrence_id=revision,
+            delivery_id=f"{required_env('WORKER_ID')}:repair:{digest}",
+        )
+
+    def forget_fired_occurrence(self, job_id: str, revision: str, due_at: str) -> None:
+        """Retire an authenticated consumed occurrence without cancelling its active delivery."""
+        with self._lock:
+            observed = self._load_state()
+            current = observed.get(job_id) or {}
+            if current.get("revision") == revision and current.get("fireAt") == due_at:
+                observed.pop(job_id)
+                self._write_state(observed)
+
     def _cancel(self, sequence_number: Any) -> None:
         if sequence_number in (None, ""):
             return
@@ -401,7 +459,7 @@ class AzureCronScheduler(CronScheduler):
                 required_env("SCHEDULER_SERVICEBUS_QUEUE")
             ) as sender:
                 sender.cancel_scheduled_messages(int(sequence_number))
-        except Exception:
+        except MessageNotFoundError:
             # Service Bus cancellation racing activation is non-atomic.
             # Revision validation at fire time remains the correctness boundary.
             return

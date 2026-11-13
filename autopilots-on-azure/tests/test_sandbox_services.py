@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import hashlib
 import ast
+import io
 import json
 import os
 import unittest
 import shlex
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, mock_open, patch
 
 from scripts.sandbox_services import (
     BOOTSTRAP,
     SERVICE_CONFIG_PATH,
     SandboxService,
+    configure_callback_port,
     convert_disk_image,
     deploy_service,
     deploy_runtime,
@@ -20,6 +23,7 @@ from scripts.sandbox_services import (
     gateway_environment,
     mcp_service,
     prepare_disk_image,
+    require_service_health,
     service_body,
     worker_settings,
 )
@@ -33,6 +37,7 @@ class SandboxServicesTests(unittest.TestCase):
         for target, value in (
             ("scripts.sandbox_services.build_release", self.release),
             ("scripts.sandbox_services.install_release", self.release.directory),
+            ("scripts.sandbox_services.configure_callback_port", "https://gateway--8001.example"),
         ):
             item = patch(target, return_value=value)
             item.start()
@@ -45,19 +50,33 @@ class SandboxServicesTests(unittest.TestCase):
             "vnet_connection_name": "private-tools" if role in {"runtime", "gateway"} else "",
         }
 
+    def test_source_release_readiness_accepts_minimal_public_health(self):
+        response = io.BytesIO(json.dumps({"status": "ok", "release": self.release.digest}).encode())
+        response.status = 200
+        sandbox = Mock()
+
+        def execute(command):
+            probe = shlex.split(command)[2]
+            with patch("urllib.request.urlopen", return_value=response) as request:
+                exec(compile(probe, "<source-release-health-probe>", "exec"), {})
+            request.assert_called_once_with("http://127.0.0.1:8000/health", timeout=5)
+            return SimpleNamespace(exit_code=0, stderr="")
+
+        sandbox.exec.side_effect = execute
+        require_service_health(sandbox, 8000, self.release.digest)
+        sandbox.exec.assert_called_once()
+
     def test_remote_bootstrap_and_quiescence_commands_are_valid_python(self):
         from scripts.sandbox_services import require_quiescent_service
         from scripts.application_releases import INSTALL_RELEASE
-        from scripts.native_transport import CALLBACK
-
-        for source in (BOOTSTRAP, INSTALL_RELEASE, CALLBACK):
+        for source in (BOOTSTRAP, INSTALL_RELEASE):
             ast.parse(source)
         sandbox = Mock()
         def execute(command):
             script = shlex.split(command)[2]
             ast.parse(script)
             self.assertIn("TRANSPORT_ROLE", script)
-            self.assertIn("TRANSPORT_JOURNAL_PATH", script)
+            self.assertIn("retainedReceiptsAwaitingSettlement", script)
             self.assertIn("127.0.0.1:8000", script)
             self.assertNotIn("TRANS8000", script)
             return SimpleNamespace(exit_code=0, stderr="")
@@ -65,6 +84,40 @@ class SandboxServicesTests(unittest.TestCase):
         require_quiescent_service(
             sandbox, {"environment": {"TRANSPORT_CONNECTION_ID": "/connection"}}, 8000,
         )
+
+    def test_quiescence_preserves_inactive_pending_receipts_but_rejects_live_work(self):
+        from scripts.sandbox_services import require_quiescent_service
+
+        environment = {
+            "TRANSPORT_ROLE": "gateway", "TRANSPORT_CONNECTION_ID": "/connection",
+            "TRANSPORT_JOURNAL_PATH": "retained.db", "API_SERVER_KEY": "test-key",
+        }
+        for active in (0, 1):
+            with self.subTest(active=active):
+                sandbox = Mock()
+                connection = Mock()
+                connection.execute.return_value = [{"phase": "retry"}]
+                result = {"active": active, "unfinished": 1, "unsettled": 1}
+
+                def execute(command):
+                    script = shlex.split(command)[2]
+                    with (
+                        patch("builtins.open", mock_open(read_data=json.dumps({"environment": environment}))),
+                        patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(result).encode())),
+                        patch("sqlite3.connect", return_value=connection) as database,
+                        redirect_stdout(io.StringIO()),
+                    ):
+                        exec(compile(script, "<quiescence>", "exec"), {})
+                        database.assert_not_called()
+                    return SimpleNamespace(exit_code=0, stderr="")
+
+                sandbox.exec.side_effect = execute
+                if active:
+                    with self.assertRaisesRegex(RuntimeError, "unfinished"):
+                        require_quiescent_service(sandbox, {"environment": environment}, 8000)
+                else:
+                    require_quiescent_service(sandbox, {"environment": environment}, 8000)
+                connection.execute.assert_not_called()
 
     def config(self):
         values = dict.fromkeys([
@@ -89,6 +142,7 @@ class SandboxServicesTests(unittest.TestCase):
             "user_scheduling_lock_renewal_seconds": 1800, "user_scheduling_max_delivery_count": 5,
             "hermes_role_blueprint": "junior-project-manager",
             "worker_owner_id": "owner-object",
+            "collective_learning_operator_client_id": "operator-api-client",
         })
         return values
 
@@ -100,6 +154,7 @@ class SandboxServicesTests(unittest.TestCase):
             "scheduler_servicebus_queue_name": "worker-schedule",
             "foundry_agent_name": "autopilots-hermes",
             "transport": {
+                "connector_principal_id": "namespace-mi",
                 "connection_ids": {"gateway": "/connections/gateway"},
                 "namespace": "schedule.servicebus.windows.net",
             },
@@ -121,6 +176,58 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertIn('open("/app/.sandbox-service.log", "a")', BOOTSTRAP)
         self.assertIn("stderr=subprocess.STDOUT", BOOTSTRAP)
         self.assertIn("subprocess.Popen", BOOTSTRAP)
+
+    def test_native_callback_port_is_reconciled_without_replacing_public_ingress(self):
+        sandbox = Mock()
+        sandbox._sbx_path = "/sandbox"
+        sandbox.sandbox_id = "sandbox"
+        public = {
+            "port": 8000, "url": "https://sandbox--8000.swedencentral.adcproxy.io",
+            "auth": {"anonymous": True},
+        }
+        native = {
+            "port": 8001, "protocol": "Http", "activationMode": "OnDemand",
+            "url": "https://sandbox--8001.swedencentral.adcproxy.io",
+            "auth": {"anonymous": False, "entraId": {
+                "enabled": True, "tenantIds": ["tenant"], "objectIds": ["namespace-mi"],
+            }},
+        }
+        sandbox._dp_get.side_effect = [
+            {"ports": [public]}, {"ports": [public, {
+                **native,
+                "auth": {**native["auth"], "entraId": {**native["auth"]["entraId"], "emails": []}},
+            }]},
+        ]
+        result = configure_callback_port(sandbox, {
+            "TRANSPORT_CALLBACK_PRINCIPAL_ID": "namespace-mi", "TRANSPORT_CALLBACK_TENANT_ID": "tenant",
+        })
+        self.assertEqual(result, "https://sandbox--8001.swedencentral.adcproxy.io")
+        sandbox._dp_put.assert_called_once_with("/sandbox/ports", {"ports": [public, native]})
+        sandbox.begin_create_sandbox.assert_not_called()
+
+    def test_native_callback_port_readback_cannot_silently_allow_another_principal(self):
+        sandbox = Mock()
+        sandbox._sbx_path = "/sandbox"
+        sandbox.sandbox_id = "sandbox"
+        sandbox._dp_get.return_value = {"ports": [
+            {"port": 8000, "url": "https://sandbox--8000.swedencentral.adcproxy.io", "auth": {"anonymous": True}},
+            {"port": 8001, "auth": {"anonymous": True}},
+        ]}
+        with self.assertRaisesRegex(RuntimeError, "namespace MI"):
+            configure_callback_port(sandbox, {
+                "TRANSPORT_CALLBACK_PRINCIPAL_ID": "namespace-mi", "TRANSPORT_CALLBACK_TENANT_ID": "tenant",
+            })
+
+    def test_native_callback_port_does_not_guess_a_url_for_unknown_public_ingress(self):
+        sandbox = Mock()
+        sandbox._sbx_path = "/sandbox"
+        sandbox.sandbox_id = "sandbox"
+        sandbox._dp_get.return_value = {"ports": [{"port": 8000, "url": "https://custom.example"}]}
+        with self.assertRaisesRegex(ValueError, "native Sandbox port URL"):
+            configure_callback_port(sandbox, {
+                "TRANSPORT_CALLBACK_PRINCIPAL_ID": "namespace-mi", "TRANSPORT_CALLBACK_TENANT_ID": "tenant",
+            })
+        sandbox._dp_put.assert_not_called()
 
     def test_private_and_public_mcp_keep_distinct_authorization(self):
         private = mcp_service("private-mcp", self.config(), self.infrastructure())
@@ -160,7 +267,10 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertFalse(any(key.startswith("WORKIQ_") for key in env))
         self.assertEqual(env["GENERATED_APPS_SANDBOX_GROUP"], "worker-generated-apps")
         self.assertEqual(env["AZURE_CLIENT_ID"], "gateway-client")
+        self.assertEqual(env["TRANSPORT_CALLBACK_PRINCIPAL_ID"], "namespace-mi")
+        self.assertEqual(env["TRANSPORT_CALLBACK_TENANT_ID"], "tenant")
         self.assertEqual(env["WORKER_OWNER_ID"], "owner-object")
+        self.assertEqual(env["COLLECTIVE_LEARNING_OPERATOR_CLIENT_ID"], "operator-api-client")
         self.assertNotIn("ACR_NAME", env)
         self.assertNotIn("AGENT_RUNTIME_REGISTRY_IDENTITY_RESOURCE_ID", env)
         self.assertEqual(env["CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE"], "FederatedCredentials")

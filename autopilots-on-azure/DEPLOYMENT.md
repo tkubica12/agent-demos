@@ -106,17 +106,83 @@ uv run python -m scripts.deploy_apps_runtime `
 
 Only runtime private-image conversion needs its managed identity's `AcrPull`. Thin-service groups convert the public Python digest directly. A failed conversion stops deployment without a registry credential fallback. Prepare all four group-scoped images before services; reuse unchanged images. Capture records endpoints, loaded source-release hashes, compute IDs, and native connections/receivers.
 
-A source-only update reuses the existing Sandbox and URL. It verifies source bytes, enters gateway maintenance before touching the runtime, checks unfinished gateway work plus actual native tasks/executor threads, switches the supervised process, and requires health to attest the exact release hash. Completed/quarantined receipts may await settlement; unknown effects are not replayed. Failure restores the preceding application configuration.
+A source-only update reuses the existing Sandbox and URL. It verifies source bytes, enters gateway maintenance before touching the runtime, checks live gateway work plus actual native tasks/executor threads, switches the supervised process, and requires health to attest the exact release hash. A cancelled HTTP request does not release a still-running native endpoint worker. Inactive receipts, including pending result recovery, remain unchanged and do not prevent source repair; startup never executes journal rows. Unknown effects are not replayed. Failure restores the preceding application configuration.
 
 A base-image, compute-setting, or Role Release change may replace runtime compute. Deployment first publishes a final native backup and stops if it fails. A new runtime restores its native Hermes home from the preserved volume. The separate gateway journal is restored with the gateway. Superseded gateway/MCP resources are captured as `superseded_sandbox_ids` for retirement only after real replacement validation.
 
-All service ports are OnDemand. Gateway, runtime, and both MCP services suspend to Memory after 300 idle seconds. Only active work sends self-ingress. Native receivers wait outside the actors, pass the whole encoded broker envelope to fixed callbacks, and never equate a callback receipt with broker ACK.
+All service ports are OnDemand. Gateway, runtime, and both MCP services suspend to Memory after 300 idle seconds. Only active work sends self-ingress. Native receivers wait outside the actors, POST the whole broker envelope to authenticated HTTPS, and never equate a callback receipt with broker ACK.
 
-The script creates the scheduling connection and receiver under the settling gateway MI, verifies immutable ownership, and removes temporary creation grants in `finally`. The native namespace MI receives and executes callbacks only on the gateway group; the gateway renews/completes through its own connection. Native trigger GET redacts authentication and normalizes method casing: only a real scheduled callback, checked journal, and successful settlement prove the live scheduling transport.
+The script creates the scheduling connection and receiver under the settling gateway MI, verifies immutable ownership, and removes temporary creation grants in `finally`. E2 remains creator-owned because delegated trigger-owned settlement is blocked by the platform. The namespace MI receives queue messages and invokes the native callback port with the ADC audience; the gateway renews/completes through its own connection. Native trigger GET redacts authentication and normalizes method casing: only a real scheduled callback, checked journal, and successful settlement prove the live scheduling transport.
+
+The gateway keeps one process/event loop with public Teams ingress on port 8000 and callback-only ingress on port 8001. Deployment reconciles port 8001 in place, preserving the existing Sandbox ID and public URL. Its native proxy requires the captured infrastructure tenant and namespace MI object ID, validating the `https://auth.adcproxy.io/` token before forwarding. The proxy strips the token; the app therefore trusts the actual receiving socket, not forwarded headers. Public-port callback requests are rejected even with the former operator key, and the callback port exposes no other routes. There is no shell callback or encoded-envelope compatibility path.
+
+The raw port-replacement API requires an explicit `url` for every port (`GlobalSandboxPortView`), although the pinned SDK request model omits it. Reconciliation preserves the public port object and derives the new port URL from its observed `<sandbox-id>--8000.<native-domain>` URL, changing only `8000` to `8001`. An unrecognized public URL fails before writing; no compute replacement or anonymous-auth fallback is used.
+
+Terraform removes the namespace MI's former SandboxGroup Data Owner callback grant, retaining queue receive and creator-owned settlement permissions. **Rollout gate:** repeat the real trigger/Memory-resume/settlement test after that grant is removed. The isolated proof retained it and does not establish that the platform allows wake without it. Report any native restriction rather than quietly restoring a broad role or changing transport.
 
 Source polling remains platform-managed and can delay scheduled work. Teams turns are handled directly and call native Runs without Service Bus admission or settlement. During idle verification, inspect only management metadata: health requests, console execution, and file access can wake compute.
 
 Unknown scheduled effects are retained in the journal and dead-lettered through the original owning connection. This is terminal quarantine, not successful execution. Inspect the error and original schedule occurrence before any manual recovery; never clear the receipt or resubmit under a fresh identity to make an update pass.
+
+For a verified completed cron result with no ambiguous outbound send, the owner can run `uv run python -m scripts.schedule_recovery --state-name hermes2 resume-known-result --queue <queue> --message-id <original-id> --execution-id <native-id> --output-sha256 <reviewed-digest> --reason <evidence>`. This delivers only that stored result to its original Teams destination, preserving the original receipt and outbound fence. It never calls native job execution, republishes the broker message, or relaxes deduplication. Retain the DLQ copy until the native Teams activity ID and gateway completion are durable; then complete only that matching DLQ message. Unknown outbound attempts remain blocked even for the owner.
+
+Scheduling outcomes are explicit: completed/duplicate/stale work completes its broker lease; retryable pre-claim failures and known continuing native runs remain recoverable; failed or unknown effects are quarantined. Dream retries reattach the journal's known `native_run_id`; a `dream_started` occurrence without that identity never starts fresh inference. Outbound scheduled Teams effects have occurrence-scoped acknowledgements: a lost response is unknown, not permission to resend.
+
+Repair decisions require the same delegated Entra Worker-owner token and existing operator app/scope as Collective Learning Review, not `API_SERVER_KEY`. The gateway derives the audit principal from the verified token; caller-supplied operator identities are rejected. Native rearm/resolve additionally require a short-lived, Worker/action/payload-bound grant signed by the gateway's existing approval key. A runtime key or loopback request alone cannot authorize repair. Gateway writes also honor application maintenance:
+
+- Gateway `GET /internal/transport/status` reports live scheduling plus `gatewayActive`, recoverable receipts, and `dlqInspectionRequired`. Startup, callbacks and status calls sweep stranded final attempts after the bounded execution window; `POST /internal/transport/recover` requests the same sweep.
+- After checking external evidence, gateway `POST /internal/transport/resolve` accepts `queue`, `messageId`, `outcome` (`completed` or `skipped`) and `reason`. This records a terminal replay tombstone without executing anything or purging the broker DLQ.
+- Gateway `POST /internal/transport/rearm-preclaim` accepts `jobId`, `revision`, a stable `repairId` and `reason`, then authorizes native `/internal/cron/rearm-preclaim` with a signed grant. It requires an unchanged, due native occurrence with no fire claim or admitted execution; a positively verified pre-claim failure is also repairable. Its repair delivery ID differs from the original broker ID, but repeated requests reuse that ID and retain the original native occurrence identity. Never change `repairId` merely because a send response was lost.
+- Gateway `POST /internal/transport/resolve-schedule` accepts `kind` (`cron` or `dream`), `jobId`, `revision`, `occurrenceId` and `reason`, then authorizes native `/internal/cron/resolve` with a signed grant to explicitly skip a terminal native failure/unknown occurrence. It cannot replay effects. Resolve native and gateway receipts separately when both require inspection.
+- Runtime `GET /internal/cron/diagnostics` includes unarmed/overdue-unclaimed schedules, pending reconciliation errors and ages of the last successful or explicitly skipped Dream. A completed result with a verified native execution/occurrence and captured file hash can resume delivery without inference even when future-schedule reconciliation failed. Missing or mismatched evidence is unknown, never permission to guess an output file. Journal quarantine is not broker depth: also inspect Service Bus dead-letter metrics and the queue's actual DLQ.
+
+Scheduling replay tombstones are retained indefinitely, including compacted native receipts beyond the most recent 20 results. There is deliberately no fourteen-day deletion rule: DLQ messages can outlive that horizon. Any future retention limit must first establish and enforce the real broker/manual replay horizon.
+
+Run repairs through `uv run python -m scripts.schedule_recovery --state-name <worker> recover|resolve|rearm|skip-native` (use each command's `--help` for evidence/identity arguments). The CLI acquires a delegated owner Bearer for the existing operator app and calls the gateway over HTTPS; it never sends the runtime key or uses a loopback bypass. If sign-in is required, use the device-code command shown by the client.
+
+#### E1/E2: isolated native HTTPS and connection-delegation proof
+
+**E1 is promoted independently; E2 remains blocked.** Production configuration now uses the authenticated native HTTPS callback and retains the existing creator-owned connection/bootstrap. The isolated proof remains useful for checking the two contracts separately. Pre-change inspection on 2026-11-12 found the `hermes2` connection owned by its gateway MI, no access policies, and two shell callbacks; this describes the inspected deployment, not the desired new callback.
+
+```powershell
+uv run python -m scripts.native_transport_probe --state-name $worker
+uv run python -m unittest tests.test_native_transport_probe -q
+```
+
+The no-argument action only reads owned ARM metadata. To run the real proof, first coordinate the additional compute and scoped infrastructure changes. The following commands **create billable isolated Sandbox compute** and a disposable queue/connection; do not run them merely to inspect the contract:
+
+```powershell
+uv run python -m scripts.native_transport_probe --state-name $worker --prepare
+$proof = ".local\$worker\transport-proof"
+terraform "-chdir=$proof" init
+terraform "-chdir=$proof" plan
+terraform "-chdir=$proof" apply
+try {
+    uv run python -m scripts.native_transport_probe --state-name $worker --apply
+} finally {
+    terraform "-chdir=$proof" destroy
+}
+```
+
+Prepare writes only local Terraform inputs, using the existing platform state. Apply creates a dedicated queue with a one-minute lock, an operator-created managed connection, and resource-scoped RBAC. The script refuses gateway-created connections, existing policies/triggers, and nonempty queues. It creates a separate receiver Sandbox using the gateway identity and prepared disk, not a port or process in the working gateway. Dependencies use the existing frozen lock and approved feed.
+
+The receiver's native proxy allows only the namespace MI and captured tenant. Anonymous, wrong-audience, and foreign-principal requests must be rejected; redirects do not count as rejection. The script then observes natural Memory suspension using management metadata only, sends one marker message, and requires the actual trigger to wake the receiver. The complete `@triggerBody()` envelope reaches HTTPS directly, with no shell callback, encoded trampoline, or shared callback key.
+
+E2 uses that same trigger-owned lock: a connection policy naming the noncreator gateway principal must provision successfully, then that MI must renew and complete after more than the initial 60-second lease. A generic successful `dynamicInvoke` is not proof. Results keep `e1_verified` and `e2_verified` separate, retain failures in `result.json` and message-ID-named evidence files, and remove the temporary trigger, policy, and Sandbox in `finally`; inspect any recorded cleanup errors before Terraform destroy. Terraform-owned resources remain for the explicit destroy above.
+
+**Live result, Sweden Central, 2026-11-12:** E1 wake/authentication passed twice: the real trigger changed the isolated receiver from `Stopped` to `Running`; anonymous and wrong-audience callers returned 401, the foreign principal returned 403, and the complete broker envelope reached the receiver. The first run stopped on an unexpected HTTP 502 without a policy rather than misclassifying it as an authorization control. The second run provisioned and read back the documented gateway policy, waited through natural suspension, and attempted renewal of the actual trigger-owned lock as the gateway MI. It failed with **HTTP 502, `ConnectorNamespaceConnectionOwnerAccessDenied`: “restricted to the original owner of the connection.”** E2 therefore remains blocked on this API/region, and completion was not attempted after renewal failed.
+
+Both probe Sandboxes, native triggers/policy, and all five Terraform-owned resources were removed; neither proof modified live callback/bootstrap resources. Each probe was configured for automatic **Memory** suspension and naturally reached `Stopped`; the same Sandbox ID then resumed through the trigger, with no explicit stop, create, or recreate operation during the observation window. The namespace MI retained its SandboxGroup Data Owner grant during those tests, so neither proves role removal (`rbac_removal_proven=false`). Validate production lease renewal/completion independently using the retained creator-owned connection after E1 rollout; do not silently fall back from an attempted delegated settlement.
+
+Contract evidence consulted on 2026-11-12:
+
+| Source | Retrieval/status | What it establishes |
+|---|---|---|
+| [Sandbox triggers](https://sandboxes.azure.com/docs/sandboxes/triggers), [connectors](https://sandboxes.azure.com/docs/sandboxes/connectors), [ingress authentication](https://sandboxes.azure.com/docs/sandboxes/sandbox/ingress-auth) | `web_fetch`, three pages, updated 2026-11-09 | Namespace MI callbacks and proxy authentication; not this deployment's live success |
+| [Official document-automation sample](https://github.com/Azure-Samples/azure-container-apps-sandboxes/tree/main/python/samples/11-connectors-document-automation) and [postdeploy source](https://github.com/Azure-Samples/azure-container-apps-sandboxes/blob/main/python/samples/11-connectors-document-automation/infra/scripts/postdeploy.py) | `web_fetch`, README and implementation | Raw `tenantIds`/`objectIds`, ADC audience, `@triggerBody()`; the sample still grants Data Owner |
+| [Connectors CLI reference](https://github.com/Azure/Connectors/blob/main/public-preview/connector-namespace-cli/complete-reference.md) | `web_fetch`, targeted reference sections, CLI 1.0.0b33 | Nested connection-policy principal, unlike the MCP policy schema |
+| Existing login, ARM connection/policy/trigger GETs, Service Bus managed-API exported Swagger; pinned `azure-containerapps-sandbox==0.1.0b4` | Read-only Azure/SDK probes succeeded | Current creator/no policies, send/renew/complete shapes; SDK port model omits tenant/object IDs |
+| GitHub authenticated CLI and Microsoft Learn discovery | GitHub CLI SAML 403; Learn searches returned no decisive connector-policy sample | Not used as proof; public sample/document retrieval supplied the contract |
 
 ### 6. Update the Agent 365 endpoint as its direct owner
 
@@ -229,7 +295,11 @@ uv run python -m scripts.deploy_apps_runtime `
 
 `setup_app_tfvars` preserves unspecified settings; `--apply` redeploys services from the updated settings. Service Bus Dreaming requires user scheduling. There is no bridge interval timer: native cron owns the schedule and wakes the gateway through its managed receiver. Manual Dreaming uses `scripts.servicebus_dream_smoke`, which enqueues a separate ad-hoc occurrence through Sandbox management and leaves production cron unchanged. Dreaming never prepares or exports a Learning Packet; run `scripts.collective_learning prepare` explicitly when desired.
 
-Only the Worker owner receives the learning digest and may undo, approve or share what the Worker learned. Set the owner's Entra object ID, normally the Agent Identity sponsor, the same way: `setup_app_tfvars --state-name $worker --autopilot-name $worker --worker-owner-id <object-id> --runtime-only`, then apply. Without it, nobody receives the digest.
+Only the Worker owner receives the learning digest and may undo, approve or share what the Worker learned. Set the owner's Entra object ID, normally the Agent Identity sponsor, the same way: `setup_app_tfvars --state-name $worker --autopilot-name $worker --worker-owner-id <object-id> --runtime-only`, then apply. Without it, nobody receives the digest and Collective Learning operator routes fail closed. `setup_identity` also provisions a single-tenant, secretless Collective Learning operator API, exposes only the delegated `CollectiveLearning.Review` scope and preauthorizes Azure CLI for it; it does not grant that scope to runtime identities. Redeploy after running setup to wire `collective_learning_operator_client_id` into the gateway only. Approval/export/rejection uses the owner's Azure CLI device-code login, never `api_server_key`. The existing gateway signing key stays per Worker; changing an owner does not rotate it, and runtime API-key rotation cannot grant approval rights.
+
+Gateway and runtime `/health` expose only status and application release for readiness/deployment probes. `/health/detailed` requires the existing `X-Autopilot-Key` operations credential and retains process/resume diagnostics; runtime details also include role, paths and backup status. This diagnostic credential does not authorize Collective Learning decisions.
+
+Source-release validation needs only the public `release` field. Scheduling smokes observe sandbox identity/state through ARM and intentionally avoid gateway HTTP probes before the due time; manual nonce/PID comparisons must use `/health/detailed` with that operations header, not public health.
 
 Before a Role Release change, approve/export governed changes or sign their explicit rejection as shown in [DEMO.md](DEMO.md). Then set the reviewed newer release and its full commit:
 

@@ -106,6 +106,23 @@ class HermesBootstrapTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 503)
                     self.assertEqual(response.json()["status"], "gateway-unavailable")
 
+    def test_public_runtime_health_is_minimal_and_detailed_health_requires_operations_key(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"API_SERVER_KEY": "operations-key"}):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(
+                home, home, None, Mock(pid=123, poll=Mock(return_value=None)),
+            ))
+            public = client.get("/health")
+            self.assertEqual(public.status_code, 200)
+            self.assertEqual(set(public.json()), {"status", "release"})
+            for headers in ({}, {"X-Autopilot-Key": "wrong-key"}):
+                self.assertEqual(client.get("/health/detailed", headers=headers).status_code, 401)
+            detailed = client.get("/health/detailed", headers={"X-Autopilot-Key": "operations-key"})
+            self.assertEqual(detailed.status_code, 200)
+            self.assertEqual(detailed.json()["profileHome"], str(home))
+            self.assertEqual(detailed.json()["gatewayPid"], 123)
+            self.assertIn("backup", detailed.json())
+
     def test_runtime_requests_keep_deterministic_work_alive_but_health_does_not(self):
         supervisor = runtime_keepalive.Keepalive(
             "https://sandbox.example/health", send=Mock(return_value=200),

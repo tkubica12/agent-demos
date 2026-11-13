@@ -22,7 +22,10 @@ from scripts.tf_helpers import APPS_DIR, REPO_ROOT, output, resolve_executable, 
 
 PRIVATE_API_STATE = REPO_ROOT / ".local" / "private-mcp-api.json"
 PUBLIC_API_STATE = REPO_ROOT / ".local" / "public-shipments-mcp-api.json"
+OPERATOR_API_STATE = REPO_ROOT / ".local" / "collective-learning-operator-api.json"
 TOOLING_MANIFEST = REPO_ROOT / "agent365" / "ToolingManifest.json"
+OPERATOR_SCOPE = "CollectiveLearning.Review"
+AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
 INCIDENTS_APP_ROLE = "Incidents.Read.All"
 INCIDENTS_DELEGATED_SCOPE = "Incidents.Read"
 SHIPMENTS_APP_ROLE = "Shipments.Read.All"
@@ -79,6 +82,65 @@ def application_by_display_name(graph: GraphClient, display_name: str) -> dict[s
             f"/applications?$filter={encoded_filter}&$select=id,appId,displayName,appRoles,api",
         )
     )
+
+
+def ensure_collective_learning_operator_api(
+    graph: GraphClient, state: dict[str, Any],
+) -> dict[str, str]:
+    display_name = "Autopilots Collective Learning Operator"
+    object_id = str(state.get("applicationObjectId") or "")
+    app = (
+        graph.request("GET", f"/applications/{object_id}?$select=id,appId,api")
+        if object_id else application_by_display_name(graph, display_name)
+    )
+    if not app:
+        app = graph.request(
+            "POST", "/applications",
+            body={"displayName": display_name, "signInAudience": "AzureADMyOrg"},
+        )
+        if graph.dry_run and not app:
+            app = {"id": "dry-run-operator-api-object-id", "appId": "00000000-0000-0000-0000-000000000009"}
+    api = app.get("api") or {}
+    scopes = api.get("oauth2PermissionScopes") or []
+    scope = next((item for item in scopes if item.get("value") == OPERATOR_SCOPE), None)
+    if scope is None:
+        scope = {
+            "id": str(uuid.uuid4()),
+            "value": OPERATOR_SCOPE,
+            "isEnabled": True,
+            "type": "Admin",
+            "adminConsentDisplayName": "Review Collective Learning as a Worker owner",
+            "adminConsentDescription": "Inspect, approve, export or reject a Worker's prepared learning changes.",
+        }
+        scopes.append(scope)
+    preauthorized = api.get("preAuthorizedApplications") or []
+    cli = next((item for item in preauthorized if item.get("appId") == AZURE_CLI_CLIENT_ID), None)
+    if cli is None:
+        preauthorized.append({"appId": AZURE_CLI_CLIENT_ID, "delegatedPermissionIds": [scope["id"]]})
+    elif scope["id"] not in cli["delegatedPermissionIds"]:
+        cli["delegatedPermissionIds"].append(scope["id"])
+    # Entra validates preauthorization against already-persisted scope IDs.
+    graph.request(
+        "PATCH", f"/applications/{app['id']}",
+        body={
+            "identifierUris": [f"api://{app['appId']}"],
+            "api": {
+                "requestedAccessTokenVersion": 2,
+                "oauth2PermissionScopes": scopes,
+            },
+        },
+        empty_ok=True,
+    )
+    graph.request(
+        "PATCH", f"/applications/{app['id']}",
+        body={"api": {"preAuthorizedApplications": preauthorized}},
+        empty_ok=True,
+    )
+    encoded_filter = urllib.parse.quote(f"appId eq '{app['appId']}'", safe="'")
+    principal = first_value(graph.request("GET", f"/servicePrincipals?$filter={encoded_filter}&$select=id"))
+    if principal is None:
+        graph.request("POST", "/servicePrincipals", body={"appId": app["appId"]})
+    return {"applicationObjectId": str(app["id"]), "applicationClientId": str(app["appId"])}
 
 
 def ensure_private_mcp_api(graph: GraphClient, state: dict[str, Any], *, display_name: str) -> dict[str, str]:
@@ -420,6 +482,7 @@ def update_runtime_tfvars(
     public_api_state: dict[str, str],
     tenant_id: str,
     blueprint_client_id: str,
+    operator_api_state: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     runtime_path = runtime_app_tfvars_path(runtime, state_name)
     if not runtime_path.exists():
@@ -438,6 +501,8 @@ def update_runtime_tfvars(
             "public_shipments_mcp_api_audience": public_api_state["audience"],
         }
     )
+    if operator_api_state is not None:
+        tfvars["collective_learning_operator_client_id"] = operator_api_state["applicationClientId"]
     write_tfvars(runtime_path, tfvars)
     write_tfvars(APPS_DIR / "generated.app.auto.tfvars.json", tfvars)
     write_tfvars(APPS_DIR / "generated.runtime.auto.tfvars.json", tfvars)
@@ -575,6 +640,7 @@ def main() -> None:
     parser.add_argument("--apps-outputs-file", default="", help="Captured apps outputs for this Worker, including Sandbox identities.")
     parser.add_argument("--api-state-file", default=str(PRIVATE_API_STATE))
     parser.add_argument("--public-api-state-file", default=str(PUBLIC_API_STATE))
+    parser.add_argument("--operator-api-state-file", default=str(OPERATOR_API_STATE))
     parser.add_argument("--api-display-name", default="Autopilots Private Incidents MCP")
     parser.add_argument("--public-api-display-name", default="Autopilots Public Shipments MCP")
     parser.add_argument("--skip-workiq-permissions", action="store_true")
@@ -623,6 +689,10 @@ def main() -> None:
     )
     if not args.dry_run:
         write_json(public_api_state_path, public_api_state)
+    operator_api_state_path = Path(args.operator_api_state_file)
+    operator_api_state = ensure_collective_learning_operator_api(graph, load_state(operator_api_state_path))
+    if not args.dry_run:
+        write_json(operator_api_state_path, operator_api_state)
 
     principals = configure_worker_federation(
         graph,
@@ -661,6 +731,7 @@ def main() -> None:
             public_api_state=public_api_state,
             tenant_id=tenant_id,
             blueprint_client_id=blueprint_client_id,
+            operator_api_state=operator_api_state,
         )
         print(
             json.dumps(
@@ -670,6 +741,7 @@ def main() -> None:
                     "agentUserPrincipalName": tfvars["agent365_agent_user_principal_name"],
                     "privateMcpAudience": tfvars["private_mcp_api_audience"],
                     "publicShipmentsMcpAudience": tfvars["public_shipments_mcp_api_audience"],
+                    "collectiveLearningOperatorClientId": tfvars["collective_learning_operator_client_id"],
                     "toolingManifest": str(TOOLING_MANIFEST),
                     "federatedManagedIdentityPrincipals": principals,
                     "next": "Deploy this Worker's apps and Sandbox services with scripts.deploy_apps_runtime.",

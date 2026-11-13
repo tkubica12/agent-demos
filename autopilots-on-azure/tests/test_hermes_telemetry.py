@@ -212,7 +212,16 @@ class HermesTelemetryTests(unittest.TestCase):
         calls = []
 
         async def gateway(request):
+            if request.url.path.endswith("/messages"):
+                identifier = request.url.path.split("/")[3]
+                return httpx.Response(200, json={
+                    "session_id": "native-session" if identifier == "pre-compression-session" else identifier,
+                })
             calls.append(request)
+            if request.method == "POST":
+                if json.loads(request.content)["session_id"] == "uncertain-session":
+                    return httpx.Response(504, json={"error": "gateway timeout"})
+                return httpx.Response(202, json={"run_id": "run-1", "status": "queued"})
             if "uncertain-session" in request.url.path:
                 return httpx.Response(504, json={"error": "gateway timeout"})
             await asyncio.get_running_loop().run_in_executor(
@@ -222,7 +231,7 @@ class HermesTelemetryTests(unittest.TestCase):
                     session_id="native-session", task_id="native-session",
                 ),
             )
-            return httpx.Response(200, json={"ok": True})
+            return httpx.Response(200, json={"run_id": "run-1", "status": "completed", "output": "done"})
 
         async def exercise():
             runtime = start_hermes.create_health_app(self.home, self.home, None, None)
@@ -230,24 +239,38 @@ class HermesTelemetryTests(unittest.TestCase):
                 transport=httpx.ASGITransport(app=runtime), base_url="http://runtime",
             ) as client:
                 with telemetry.operation_span("invoke_agent", session_id="private-session"):
-                    headers = telemetry.runtime_trace_headers()
+                    headers = {
+                        **telemetry.runtime_trace_headers(),
+                        "Authorization": "Bearer native-test",
+                        "Idempotency-Key": "admission-1",
+                    }
                     success = await client.post(
-                        "/api/sessions/native-session/chat", headers=headers, json={"input": "private prompt"},
+                        "/v1/runs", headers=headers,
+                        json={"input": "private prompt", "session_id": "pre-compression-session"},
                     )
-                    self.assertEqual(success.status_code, 200)
+                    self.assertEqual(success.status_code, 202)
+                    self.assertEqual(len(list(self.context_directory.glob("*.lease"))), 1)
+                    finished = await client.get("/v1/runs/run-1", headers=headers)
+                    self.assertEqual(finished.status_code, 200)
                     self.assertEqual(list(self.context_directory.iterdir()), [])
-                    timeout = await client.post("/api/sessions/uncertain-session/chat", headers=headers)
+                    uncertain_headers = {**headers, "Idempotency-Key": "admission-2"}
+                    timeout = await client.post(
+                        "/v1/runs", headers=uncertain_headers, json={"session_id": "uncertain-session"},
+                    )
                     self.assertEqual(timeout.status_code, 504)
                     self.assertEqual(len(list(self.context_directory.glob("*.lease"))), 1)
-                    conflict = await client.post("/api/sessions/uncertain-session/chat", headers=headers)
+                    conflict = await client.post(
+                        "/v1/runs", headers={**headers, "Idempotency-Key": "admission-3"},
+                        json={"session_id": "uncertain-session"},
+                    )
                     self.assertEqual(conflict.status_code, 409)
 
         with patch.object(
             start_hermes.httpx, "AsyncClient",
             side_effect=lambda **kwargs: original_client(transport=httpx.MockTransport(gateway), **kwargs),
-        ):
+        ), patch.dict(os.environ, {"API_SERVER_KEY": "native-test"}):
             asyncio.run(exercise())
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 3)
         spans = self.exporter.get_finished_spans()
         tool = next(span for span in spans if span.name == "execute_tool")
         wrapper = next(span for span in spans if span.context.span_id == tool.parent.span_id)

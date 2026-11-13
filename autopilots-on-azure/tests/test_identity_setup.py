@@ -22,6 +22,45 @@ class FakeGraph:
 
 
 class IdentitySetupTests(unittest.TestCase):
+    def test_operator_api_provisions_only_a_delegated_cli_scope_without_runtime_grants(self):
+        graph = MagicMock(dry_run=False)
+        app = {"id": "operator-object", "appId": "operator-client"}
+        graph.request.side_effect = [
+            {"value": []}, app, {}, {}, {"value": []}, {"id": "operator-service-principal"},
+        ]
+        state = identity.ensure_collective_learning_operator_api(graph, {})
+        self.assertEqual(state, {"applicationObjectId": app["id"], "applicationClientId": app["appId"]})
+        create = graph.request.call_args_list[1].kwargs["body"]
+        self.assertNotIn("passwordCredentials", create)
+        self.assertNotIn("appRoles", create)
+        configured = graph.request.call_args_list[2].kwargs["body"]
+        api = configured["api"]
+        self.assertEqual(api["requestedAccessTokenVersion"], 2)
+        self.assertEqual(api["oauth2PermissionScopes"][0]["value"], identity.OPERATOR_SCOPE)
+        self.assertNotIn("preAuthorizedApplications", api)
+        authorization = graph.request.call_args_list[3].kwargs["body"]["api"]
+        self.assertEqual(authorization["preAuthorizedApplications"], [{
+            "appId": identity.AZURE_CLI_CLIENT_ID,
+            "delegatedPermissionIds": [api["oauth2PermissionScopes"][0]["id"]],
+        }])
+        self.assertFalse(any("appRoleAssignments" in call.args[1] or "oauth2PermissionGrants" in call.args[1]
+                             for call in graph.request.call_args_list))
+
+    def test_operator_api_reuses_existing_scope_and_cli_authorization(self):
+        scope = {"id": "scope-id", "value": identity.OPERATOR_SCOPE, "isEnabled": True, "type": "Admin"}
+        cli = {"appId": identity.AZURE_CLI_CLIENT_ID, "delegatedPermissionIds": ["scope-id"]}
+        graph = MagicMock(dry_run=False)
+        graph.request.side_effect = [
+            {"id": "operator-object", "appId": "operator-client",
+             "api": {"oauth2PermissionScopes": [scope], "preAuthorizedApplications": [cli]}},
+            {}, {}, {"value": [{"id": "operator-service-principal"}]},
+        ]
+        identity.ensure_collective_learning_operator_api(graph, {"applicationObjectId": "operator-object"})
+        configured = graph.request.call_args_list[1].kwargs["body"]["api"]
+        self.assertEqual(configured["oauth2PermissionScopes"], [scope])
+        self.assertEqual(graph.request.call_args_list[2].kwargs["body"]["api"]["preAuthorizedApplications"], [cli])
+        self.assertEqual(graph.request.call_count, 4)
+
     def test_identity_context_rejects_wrong_tenant_or_blueprint_before_graph_writes(self):
         outputs = {"worker_id": "worker-one", "agent_runtime": "hermes", "tenant_id": "tenant",
                    "sandbox_groups": {"gateway": {"identity_principal_id": "gateway"},
@@ -50,12 +89,14 @@ class IdentitySetupTests(unittest.TestCase):
                 runtime="hermes", state_name="worker-one", identity_state=state,
                 api_state={"audience": "api://private"}, public_api_state={"audience": "api://public"},
                 tenant_id="tenant", blueprint_client_id="blueprint",
+                operator_api_state={"applicationClientId": "operator-client"},
             )
         self.assertNotIn("agent365_client_secret", config)
         self.assertEqual(config["agent365_client_id"], "blueprint")
         self.assertEqual(config["agent365_agent_identity_client_id"], "agent-client")
         self.assertEqual(config["agent365_agent_user_id"], "agent-user")
         self.assertEqual(config["runtime_image"], "pinned")
+        self.assertEqual(config["collective_learning_operator_client_id"], "operator-client")
         self.assertEqual(write.call_count, 3)
 
     def test_worker_federation_configures_gateway_and_runtime(self) -> None:

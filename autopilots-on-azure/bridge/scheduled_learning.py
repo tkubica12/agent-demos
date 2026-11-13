@@ -139,6 +139,8 @@ class ScheduledLearningCoordinator:
             except DreamExecutionUncertainError:
                 raise
             except RETRYABLE_ERRORS as exc:
+                if getattr(exc, "status", None) in {"failed", "uncertain"}:
+                    raise
                 last_error = exc
                 if attempt >= self.settings.retry_limit:
                     raise

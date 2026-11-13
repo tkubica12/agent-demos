@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
+import threading
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
+from contextvars import copy_context
 from pathlib import Path
 from typing import Any
 
@@ -32,8 +37,12 @@ from cron_runtime import (
     cron_delivery_receipt_status,
     cron_diagnostics,
     fire_cron_job,
+    known_cron_result,
     get_delivery_reference,
     get_system_schedule_checkpoint,
+    rearm_preclaim_schedule,
+    resolve_schedule,
+    verify_schedule_repair_grant,
     list_cron_jobs,
     reconcile_cron_provider,
     upsert_delivery_reference,
@@ -46,8 +55,10 @@ from native_learning import (
     record_share_choice,
     undo_entry,
 )
+from cron_origin import register_origin
 
 Handler = Callable[[web.Request], Awaitable[Any]]
+logger = logging.getLogger(__name__)
 
 
 class RouteError(Exception):
@@ -97,7 +108,7 @@ def _endpoint(handler: Handler, errors: dict[type[Exception], int] | None = None
     return wrapped
 
 
-def native_activity(adapter: Any) -> dict[str, int]:
+def native_activity(adapter: Any, *, endpoint_workers: int = 0) -> dict[str, int]:
     from gateway.platforms.api_server_runs import api_worker_live_count
     from runtime_keepalive import get_keepalive
 
@@ -114,6 +125,7 @@ def native_activity(adapter: Any) -> dict[str, int]:
         "pendingAdmissions": pending, "inflightNativeTurns": inflight,
         "liveRunTasks": sum(not task.done() for task in tasks.values()),
         "nativeWorkerThreads": api_worker_live_count(),
+        "runtimeEndpointWorkers": endpoint_workers,
         "modelToolScopes": supervisor.status()["active"] if supervisor is not None else 0,
     }
     if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in counts.values()):
@@ -124,8 +136,42 @@ def native_activity(adapter: Any) -> dict[str, int]:
 def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = None) -> None:
     """Expose cron, system schedule and collective-learning operations next to the native Hermes API."""
 
-    def threaded(function: Callable[..., Any], **kwargs: Any) -> Awaitable[Any]:
-        return asyncio.to_thread(function, profile_home, **kwargs)
+    executor = ThreadPoolExecutor(thread_name_prefix="autopilots-runtime")
+    endpoint_work: set[object] = set()
+    endpoint_lock = threading.Lock()
+
+    async def close_executor(_app: web.Application) -> None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    app.on_cleanup.append(close_executor)
+
+    async def threaded(function: Callable[..., Any], **kwargs: Any) -> Any:
+        from runtime_keepalive import get_keepalive
+
+        token = object()
+        with endpoint_lock:
+            endpoint_work.add(token)
+
+        def execute() -> Any:
+            supervisor = get_keepalive()
+            with supervisor.activity("runtime-endpoint") if supervisor is not None else nullcontext():
+                return function(profile_home, **kwargs)
+
+        try:
+            future = executor.submit(copy_context().run, execute)
+        except BaseException:
+            with endpoint_lock:
+                endpoint_work.remove(token)
+            raise
+
+        def finished(done: Future[Any]) -> None:
+            with endpoint_lock:
+                endpoint_work.remove(token)
+            if not done.cancelled() and (error := done.exception()) is not None:
+                logger.error("Native runtime operation failed.", exc_info=(type(error), error, error.__traceback__))
+
+        future.add_done_callback(finished)
+        return await asyncio.wrap_future(future)
 
     async def collective(function: Callable[..., Any], **kwargs: Any) -> Any:
         return function(profile_home, **kwargs)
@@ -140,7 +186,9 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
         return {"jobs": list_cron_jobs(profile_home)}
 
     async def activity(request: web.Request) -> Any:
-        return native_activity(adapter)
+        with endpoint_lock:
+            workers = len(endpoint_work)
+        return native_activity(adapter, endpoint_workers=workers)
 
     async def upsert_reference(request: web.Request) -> Any:
         payload = await _json_object(request)
@@ -149,6 +197,25 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
             reference_key=str(payload.get("referenceKey") or ""),
             conversation=payload.get("conversation") or {},
             boundary=str(payload.get("boundary") or ""),
+        )
+
+    async def session_origin(request: web.Request) -> Any:
+        payload = await _json_object(request)
+        reference = payload.get("deliveryReference")
+        if not isinstance(reference, dict):
+            raise ValueError("deliveryReference must be an object.")
+        session_id = str(payload.get("sessionId") or "")
+        if not session_id or len(session_id) > 256:
+            raise ValueError("A native session ID is required.")
+        db = await adapter._ensure_session_db_async()
+        if db is None:
+            raise RouteError(503, "Native session storage is unavailable.")
+        canonical = await asyncio.to_thread(db.resolve_resume_session_id, session_id)
+        if not isinstance(canonical, str) or not canonical:
+            raise RouteError(503, "Native session storage did not resolve the session.")
+        return register_origin(
+            profile_home, session_id=session_id,
+            delivery_reference=reference, canonical_session_id=canonical,
         )
 
     async def read_reference(request: web.Request) -> Any:
@@ -226,9 +293,41 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
             delivery_activity_id=str(payload.get("deliveryActivityId") or ""),
         )
 
+    async def rearm(request: web.Request) -> Any:
+        try:
+            payload, principal = verify_schedule_repair_grant(await _json_object(request), action="rearm-preclaim")
+        except (ValueError, CollectiveLearningError) as exc:
+            raise RouteError(403, str(exc)) from exc
+        return await threaded(
+            rearm_preclaim_schedule, job_id=str(payload.get("jobId") or ""),
+            revision=str(payload.get("revision") or ""), repair_id=str(payload.get("repairId") or ""),
+            operator=principal, reason=str(payload.get("reason") or ""),
+        )
+
+    async def resolve_schedule_occurrence(request: web.Request) -> Any:
+        try:
+            payload, principal = verify_schedule_repair_grant(await _json_object(request), action="resolve")
+        except (ValueError, CollectiveLearningError) as exc:
+            raise RouteError(403, str(exc)) from exc
+        return await threaded(
+            resolve_schedule, job_id=str(payload.get("jobId") or ""),
+            revision=str(payload.get("revision") or ""), occurrence_id=occurrence(payload),
+            operator=principal, reason=str(payload.get("reason") or ""),
+            kind=str(payload.get("kind") or ""),
+        )
+
     async def delivery_receipt(request: web.Request) -> Any:
         return await threaded(
             cron_delivery_receipt_status, job_id=request.match_info["job_id"], revision=request.match_info["revision"],
+        )
+
+    async def known_result(request: web.Request) -> Any:
+        payload = await _json_object(request)
+        return await threaded(
+            known_cron_result, job_id=str(payload.get("jobId") or ""),
+            revision=str(payload.get("revision") or ""),
+            execution_id=str(payload.get("executionId") or ""),
+            output_sha256=str(payload.get("outputSha256") or ""),
         )
 
     async def _with_receipt(request: web.Request, function: Callable[..., Any]) -> Any:
@@ -273,8 +372,11 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
         ("GET", "/internal/runtime/activity", activity, None),
         ("GET", "/internal/cron/jobs", jobs, None),
         ("POST", "/internal/cron/reconcile", lambda request: threaded(reconcile_cron_provider), None),
+        ("POST", "/internal/cron/rearm-preclaim", rearm, {RuntimeError: 409}),
+        ("POST", "/internal/cron/resolve", resolve_schedule_occurrence, {RuntimeError: 409}),
         ("GET", "/internal/cron/diagnostics", lambda request: threaded(cron_diagnostics), None),
         ("POST", "/internal/cron/delivery-reference", upsert_reference, None),
+        ("POST", "/internal/cron/session-origin", session_origin, None),
         ("GET", "/internal/cron/delivery-reference", read_reference, None),
         ("POST", "/internal/cron/bind-delivery", bind_delivery, None),
         ("POST", "/internal/cron/bind-local", bind_local, None),
@@ -284,6 +386,7 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
         ("POST", "/internal/cron/system/checkpoint", system_checkpoint, {RuntimeError: 409}),
         ("POST", "/internal/cron/system/complete", system_complete, {RuntimeError: 409}),
         ("POST", "/internal/cron/ack-delivery", ack_delivery, None),
+        ("POST", "/internal/cron/known-result", known_result, {RuntimeError: 409}),
         ("GET", "/internal/cron/delivery-receipt/{job_id}/{revision}", delivery_receipt, None),
         ("POST", "/internal/collective-learning/prepare",
          lambda request: collective(prepare_learning_packet), collective_errors),

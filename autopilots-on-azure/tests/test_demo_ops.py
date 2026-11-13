@@ -165,6 +165,17 @@ class DemoOpsTests(unittest.TestCase):
         ):
             self.assertFalse(ops.diag_check("hermes")["ok"])
 
+    def test_operator_readiness_check_accepts_minimal_public_health(self):
+        with (
+            patch.object(ops, "load_json", return_value={"bridge_url": "https://gateway.example"}),
+            patch.object(ops, "http_json", return_value={
+                "ok": True, "statusCode": 200, "body": {"status": "ok", "release": "source-release"},
+            }) as request,
+        ):
+            result = ops.health_check("hermes", state_name="worker-one")
+        self.assertTrue(result["ok"])
+        request.assert_called_once_with("https://gateway.example/health", timeout=120)
+
     def test_schedule_smoke_accepts_a_sleeping_gateway_with_native_wake(self):
         for state in ("Running", "Stopped", "Suspended"):
             with self.subTest(state=state), patch(

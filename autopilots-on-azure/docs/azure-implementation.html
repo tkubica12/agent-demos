@@ -277,18 +277,18 @@
       <article class="card" id="card-roles">
         <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Separate send, receive, callback, and settlement authority.</span><span class="card-sub">Permanent roles are declarative; bootstrap write grants are temporary.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
         <div class="card-body">
-          <p>Each Sandbox Group keeps its user-assigned identity. A separate native receiver resource has a system identity. Azure integrations use Entra; existing operator and runtime-local API credentials remain application boundaries. No registry key, SAS connection string, or new application secret is introduced.</p>
+          <p>Each Sandbox Group keeps its user-assigned identity. A separate native receiver resource has a system identity. Azure integrations and human Learning Packet approval use Entra. Runtime-local API credentials cannot authorize operator approval. No registry key, SAS connection string, or new application secret is introduced.</p>
           <div class="table-scroll"><table class="architecture-table"><thead><tr><th>Principal</th><th>Role</th><th>Scope</th></tr></thead><tbody>
             <tr><td>Pinned deployer</td><td>Sandbox Data Owner</td><td>All five Worker groups; unchanged by operator login</td></tr>
             <tr><td>Gateway identity</td><td>Sandbox Data Owner</td><td>Generated-apps Group only</td></tr>
             <tr><td>Runtime identity</td><td>OpenAI User and AcrPull</td><td>Foundry account and runtime dependency registry</td></tr>
-            <tr><td>Gateway identity</td><td>Service Bus Data Sender</td><td>Recovery and enabled scheduling queue</td></tr>
-            <tr><td>Native receiver system identity</td><td>Data Receiver; Sandbox Data Owner</td><td>Worker queues; gateway callback group only</td></tr>
+            <tr><td>Gateway identity</td><td>Service Bus Data Sender</td><td>Enabled scheduling queue</td></tr>
+            <tr><td>Native receiver system identity</td><td>Data Receiver; native Entra port allowlist</td><td>Scheduling queue; gateway callback port only</td></tr>
             <tr><td>Gateway identity</td><td>Native connection named actions</td><td>Its own immutable-creator connection</td></tr>
             <tr><td>Agent Identity</td><td>Service Bus Data Sender</td><td>Scheduling queue</td></tr>
             <tr><td>Runtime and gateway identities</td><td>Monitoring Metrics Publisher</td><td>Application Insights</td></tr>
           </tbody></table></div>
-          <p>Sandbox Data Owner permits more than execution, and the connection action wildcard permits more than completion. These are explicit preview-platform tradeoffs, not absolute least privilege. Deployment creates bounded bootstrap grants, verifies the caller-owned resource, and removes those grants in <code>finally</code>.</p>
+          <p>The callback uses authenticated HTTPS, not shell execution or a Sandbox Data Owner grant. The connection action wildcard still permits more than completion. A live test on 12 November 2026 confirmed that an access policy does not bypass the original-owner check for trigger-owned lock renewal. Deployment therefore retains bounded creator bootstrap grants and removes them in <code>finally</code>.</p>
           <aside class="callout callout--source"><p class="callout-label">Source</p><p><a href="../terraform/apps/main.tf">Worker role assignments</a> · <a href="../terraform/apps/monitoring.tf">Monitoring roles</a></p></aside>
         </div>
       </article>

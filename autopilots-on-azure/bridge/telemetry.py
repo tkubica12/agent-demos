@@ -36,7 +36,7 @@ _SAFE_RESOURCE_ATTRIBUTES = frozenset({
 })
 _SAFE_SPAN_NAMES = frozenset({
     "invoke_agent", "chat", "execute_tool",
-    "servicebus.schedule", "servicebus.send", "servicebus.process",
+    "servicebus.schedule", "servicebus.send", "servicebus.process", "transport.process",
 })
 _SAFE_ATTRIBUTES = frozenset(
     {

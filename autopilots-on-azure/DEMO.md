@@ -105,6 +105,10 @@ uv run python -m scripts.collective_learning --state-name hermes prepare
 uv run python -m scripts.collective_learning --state-name hermes2 prepare
 ```
 
+The CLI uses the signed-in Azure CLI user, not the runtime API key. Run `scripts.setup_identity` and redeploy first to configure the dedicated Entra operator API. Only each Worker's configured `worker_owner_id` may inspect, approve, export or reject packets. If a scope-specific login is needed, follow the CLI's `az login --use-device-code --tenant ... --scope ...` command. The gateway validates signature, tenant, audience, delegated scope, Azure CLI client and owner object ID; `approvedBy`/`rejectedBy` come from that principal, never an alias.
+
+Inspecting before preparation returns an explicit runtime `400` with “Prepare the Learning Packet before approval,” not an empty packet. Runtime HTTP errors retain their source/status; unavailable runtime RPCs return `502` and timeouts `504`. These are not successful approvals or exports.
+
 Review the returned improvements and exclusions. Packet 3.0 contains only skills whose current content the owner shared, each with its native ledger chain; `excluded` names every other governed change and why it stays local. It never contains Personal Memory, Private Playbooks, documents, or raw Work History.
 
 Approve each exact returned digest:
@@ -112,11 +116,10 @@ Approve each exact returned digest:
 ```powershell
 $hermesDigest = Read-Host "Reviewed Hermes packet digest"
 $hermes2Digest = Read-Host "Reviewed Hermes 2 packet digest"
-$operator = Read-Host "Approving operator alias"
 uv run python -m scripts.collective_learning --state-name hermes approve `
-  --packet-digest $hermesDigest --approved-by $operator
+  --packet-digest $hermesDigest
 uv run python -m scripts.collective_learning --state-name hermes2 approve `
-  --packet-digest $hermes2Digest --approved-by $operator
+  --packet-digest $hermes2Digest
 
 New-Item -ItemType Directory -Force .local\collective-learning | Out-Null
 uv run python -m scripts.collective_learning --state-name hermes export `
@@ -125,7 +128,7 @@ uv run python -m scripts.collective_learning --state-name hermes2 export `
   --output .local\collective-learning\hermes2.packet.json
 ```
 
-Each export writes its trusted Worker public-key mapping beside the packet. Runtime/review never receive the approval private key.
+Each export writes its trusted Worker public-key mapping beside the packet. Runtime/review never receive the approval private key. The gateway signs only the exact pending digest; later governed-state changes invalidate export. Teams approval of a staged skill write remains a separate owner action, not Learning Packet approval.
 
 To discard learning instead of exporting, use the separate rejection path:
 
@@ -133,7 +136,7 @@ To discard learning instead of exporting, use the separate rejection path:
 uv run python -m scripts.collective_learning --state-name hermes prepare-rejection
 $disposition = Read-Host "Reviewed rejection disposition digest"
 uv run python -m scripts.collective_learning --state-name hermes reject `
-  --disposition-digest $disposition --rejected-by $operator `
+  --disposition-digest $disposition `
   --reason "Assignment-specific guidance should not enter the shared role."
 ```
 

@@ -12,11 +12,13 @@ for _path in os.environ.get("AUTOPILOTS_PLUGIN_PATH", "/app:/opt/autopilots/herm
 def register(ctx) -> None:
     import native_learning
     import runtime_keepalive
+    import cron_origin
     from bridge import hermes_telemetry
     from runtime_routes import register_routes
 
     hermes_telemetry.register(ctx)
     runtime_keepalive.register(ctx)
+    cron_origin.register(ctx)
     native_learning.register_attachment_privacy(ctx)
     profile_home = Path(os.environ["HERMES_HOME"])
     ctx.register_platform_handler(

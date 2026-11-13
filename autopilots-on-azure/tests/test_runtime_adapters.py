@@ -722,6 +722,37 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertTrue(approved["approved"])
         self.assertEqual(exported["packet"]["packetVersion"], "3.0")
 
+    def test_pending_packet_read_does_not_wait_for_model_work_but_decisions_remain_guarded(self):
+        async def run():
+            lock = asyncio.Lock()
+            adapter = HermesRuntimeAdapter(runtime_lock=lock)
+            adapter._collective_learning_request = AsyncMock(return_value={"packetDigest": "a" * 64})
+            async with lock:
+                pending = await asyncio.wait_for(adapter.pending_collective_learning(), timeout=1)
+                self.assertEqual(pending["packetDigest"], "a" * 64)
+                guarded = [
+                    asyncio.create_task(adapter.prepare_collective_learning()),
+                    asyncio.create_task(adapter.prepare_refresh_rejection()),
+                    asyncio.create_task(adapter.approve_collective_learning(
+                        packet_digest="a" * 64, approved_by="authorized-owner",
+                    )),
+                    asyncio.create_task(adapter.export_collective_learning()),
+                    asyncio.create_task(adapter.reject_and_refresh(
+                        disposition_digest="b" * 64, rejected_by="authorized-owner", reason="Keep local",
+                    )),
+                ]
+                try:
+                    await asyncio.sleep(0)
+                    self.assertTrue(all(not task.done() for task in guarded))
+                    adapter._collective_learning_request.assert_awaited_once_with(
+                        "GET", "/internal/collective-learning/pending",
+                    )
+                finally:
+                    for task in guarded:
+                        task.cancel()
+                    await asyncio.gather(*guarded, return_exceptions=True)
+        asyncio.run(run())
+
     def test_hermes_serializes_runtime_turns(self):
         calls: list[dict] = []
         active = 0

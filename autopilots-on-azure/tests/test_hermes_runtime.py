@@ -44,22 +44,26 @@ class HermesRuntimeTests(unittest.TestCase):
                 with (
                     self.subTest(outcome=outcome),
                     tempfile.TemporaryDirectory() as directory,
-                    patch.dict(os.environ, {}),
+                    patch.dict(os.environ, {"API_SERVER_KEY": "test-key"}),
                 ):
                     home = Path(directory)
                     handoff_directory = hermes_telemetry.install_gateway_telemetry(home)
                     calls = []
 
                     def handle(request):
+                        if request.url.path.endswith("/messages"):
+                            return httpx.Response(200, json={"session_id": "native-session"})
                         calls.append(request)
                         handoff = hermes_telemetry._handoff("native-session", "")
-                        self.assertEqual(handoff["traceparent"], request.headers["traceparent"])
+                        if request.method == "POST":
+                            self.assertEqual(handoff["traceparent"], request.headers["traceparent"])
                         self.assertEqual(len(list(handoff_directory.glob("*.lease"))), 1)
                         if outcome == "timeout":
                             raise httpx.ReadTimeout("Native executor may still run.", request=request)
                         return httpx.Response(
-                            200 if outcome == "success" else 503,
-                            json={"output": "done"} if outcome == "success" else {"error": "uncertain"},
+                            (202 if request.method == "POST" else 200) if outcome == "success" else 503,
+                            json={"run_id": "native-run", "status": "queued" if request.method == "POST" else "completed"}
+                            if outcome == "success" else {"error": "uncertain"},
                         )
 
                     with patch.object(
@@ -74,23 +78,30 @@ class HermesRuntimeTests(unittest.TestCase):
                             raise_server_exceptions=False,
                         )
                         response = client.post(
-                            "/api/sessions/native-session/chat", json={"input": "hello"}
+                            "/v1/runs", json={"input": "hello", "session_id": "native-session"},
+                            headers={"Authorization": "Bearer test-key", "Idempotency-Key": "first"},
                         )
+                        if outcome == "success":
+                            self.assertEqual(len(list(handoff_directory.glob("*.lease"))), 1)
+                            client.get("/v1/runs/native-run")
                         repeated = client.post(
-                            "/api/sessions/native-session/chat", json={"input": "hello"}
+                            "/v1/runs", json={"input": "hello", "session_id": "native-session"},
+                            headers={"Authorization": "Bearer test-key", "Idempotency-Key": "second"},
                         )
+                        if outcome == "success":
+                            client.get("/v1/runs/native-run")
 
                     if outcome == "success":
-                        self.assertEqual(response.status_code, 200)
-                        self.assertEqual(repeated.status_code, 200)
-                        self.assertEqual(len(calls), 2)
+                        self.assertEqual(response.status_code, 202)
+                        self.assertEqual(repeated.status_code, 202)
+                        self.assertEqual(len(calls), 4)
                         self.assertEqual(list(handoff_directory.iterdir()), [])
                     else:
                         self.assertEqual(response.status_code, 503 if outcome == "server-error" else 500)
                         if outcome == "server-error":
                             self.assertEqual(response.json(), {"error": "uncertain"})
                         self.assertEqual(repeated.status_code, 409)
-                        self.assertIn("already active", repeated.json()["detail"])
+                        self.assertIn("different admission", repeated.json()["detail"])
                         self.assertEqual(len(calls), 1)
                         self.assertEqual(len(list(handoff_directory.glob("*.lease"))), 1)
 
@@ -99,7 +110,7 @@ class HermesRuntimeTests(unittest.TestCase):
         active = False
 
         @contextmanager
-        def handoff(session_id, *, profile_home):
+        def handoff(session_id, *, profile_home, admission_id, ttl_seconds):
             nonlocal active
             self.assertEqual(profile_home, home)
             self.assertEqual(session_id, "teams:shared:thread")
@@ -112,13 +123,19 @@ class HermesRuntimeTests(unittest.TestCase):
                 events.append("exit")
 
         async def handle(request):
-            self.assertEqual(active, request.method == "POST")
+            if request.url.path.endswith("/messages"):
+                return httpx.Response(200, json={"session_id": "teams:shared:thread"})
+            self.assertEqual(active, request.url.path.startswith("/v1/runs"))
             events.append(request.method)
-            return httpx.Response(200, json={"output": "Done"})
+            return httpx.Response(
+                202 if request.method == "POST" else 200,
+                json={"run_id": "native-run", "status": "completed"},
+            )
 
         client_class = httpx.AsyncClient
         with (
             tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "test-key"}),
             patch.object(start_hermes, "gateway_trace_context", side_effect=handoff) as context,
             patch.object(
                 start_hermes.httpx,
@@ -132,13 +149,16 @@ class HermesRuntimeTests(unittest.TestCase):
             client = TestClient(start_hermes.create_health_app(home, home, None, None))
             self.assertEqual(client.get("/api/sessions/teams%3Ashared%3Athread").status_code, 200)
             response = client.post(
-                "/api/sessions/teams%3Ashared%3Athread/chat",
-                json={"input": "hello", "instructions": "role"},
+                "/v1/runs", headers={"Authorization": "Bearer test-key", "Idempotency-Key": "native-admission"},
+                json={"input": "hello", "instructions": "role", "session_id": "teams:shared:thread"},
             )
+            client.get("/v1/runs/native-run")
 
-        self.assertEqual(response.status_code, 200)
-        context.assert_called_once_with("teams:shared:thread", profile_home=home)
-        self.assertEqual(events, ["GET", "enter", "POST", "exit"])
+        self.assertEqual(response.status_code, 202)
+        context.assert_called_once_with(
+            "teams:shared:thread", profile_home=home, admission_id="native-admission", ttl_seconds=3600,
+        )
+        self.assertEqual(events, ["GET", "enter", "POST", "GET", "exit"])
 
     def test_gateway_proxy_uses_current_runtime_trace_context(self):
         requests = []

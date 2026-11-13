@@ -10,10 +10,12 @@ import time
 import uuid
 import unicodedata
 from collections import deque
+from collections.abc import Awaitable
 from functools import cache
 from typing import Any
 
 from aiohttp import ClientResponseError
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from microsoft_agents.activity import (
@@ -80,6 +82,7 @@ from bridge.learning_cards import (
 )
 from bridge.runtime.base import AgentAuthContext, AgentRequest, AgentResponse
 from bridge.runtime.hermes import HermesRuntimeAdapter, runtime_error_detail
+from bridge.operator_auth import require_collective_learning_operator
 from bridge.proactive_delivery import (
     delivery_reference_metadata,
     send_proactive_activity,
@@ -92,11 +95,15 @@ from bridge.scheduled_learning import (
 )
 from bridge.telemetry import configure_telemetry, flush_telemetry, operation_span
 from bridge.telemetry_http import TelemetryMiddleware
+from bridge.work_activity import ActiveWorkMiddleware, start_active_work
+from bridge.transport_ingress import NativeTransportIngressMiddleware
 from bridge import durable_transport, event_worker
 
 
 app = FastAPI(title="Autopilot Azure Container Apps bridge")
 app.add_middleware(TelemetryMiddleware)
+app.add_middleware(ActiveWorkMiddleware)
+app.add_middleware(NativeTransportIngressMiddleware)
 PROCESS_NONCE = uuid.uuid4().hex
 
 
@@ -151,7 +158,7 @@ schedule_sender = ServiceBusScheduleSender()
 
 
 def start_background_turn(coroutine: Any) -> None:
-    task = asyncio.create_task(coroutine)
+    task = start_active_work(coroutine)
     background_turns.add(task)
     task.add_done_callback(background_turns.discard)
 
@@ -164,13 +171,13 @@ def generated_apps_manager() -> GeneratedAppsManager:
 
 
 class CollectiveLearningApprovalRequest(BaseModel):
-    packet_digest: str = Field(alias="packetDigest", min_length=64, max_length=64)
-    approved_by: str = Field(alias="approvedBy", min_length=1, max_length=200)
+    model_config = {"extra": "forbid"}
+    packet_digest: str = Field(alias="packetDigest", pattern="^[0-9a-f]{64}$")
 
 
 class CollectiveLearningRejectionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     disposition_digest: str = Field(alias="dispositionDigest", pattern="^[0-9a-f]{64}$")
-    rejected_by: str = Field(alias="rejectedBy", min_length=1, max_length=200)
     reason: str = Field(min_length=1, max_length=1000)
 
 
@@ -597,7 +604,7 @@ def teams_memory(session_key: str) -> deque[dict[str, Any]]:
             memory = deque(saved, maxlen=max_events)
     if memory is None or memory.maxlen != max_events:
         memory = deque(list(memory or [])[-max_events:], maxlen=max_events)
-        _teams_memory[session_key] = memory
+    _teams_memory[session_key] = memory
     return memory
 
 
@@ -776,6 +783,14 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "release": os.getenv("APPLICATION_RELEASE", ""),
+    }
+
+
+@app.get("/health/detailed")
+def health_detailed(request: Request) -> dict[str, Any]:
+    require_operator_key(request)
+    return {
+        **health(),
         "transport": "managed-scheduling" if durable_transport.enabled() else "local",
         "processId": os.getpid(),
         "memoryNonce": PROCESS_NONCE,
@@ -896,28 +911,53 @@ def require_operator_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
 
 
+async def collective_learning_result(operation: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        return await operation
+    except httpx.HTTPStatusError as exc:
+        response = exc.response
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        message = payload.get("detail") if isinstance(payload, dict) else None
+        if not isinstance(message, str):
+            message = "The Collective Learning runtime rejected the request."
+        raise HTTPException(
+            status_code=response.status_code if 400 <= response.status_code < 500 else 502,
+            detail={"source": "runtime", "statusCode": response.status_code, "message": message},
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={"source": "runtime", "message": "The Collective Learning runtime request timed out."},
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"source": "runtime", "message": "The Collective Learning runtime is unreachable."},
+        ) from exc
+
+
 @app.post("/internal/collective-learning/prepare")
 async def prepare_collective_learning(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
+    await require_collective_learning_operator(http_request)
     adapter = runtime_adapter()
-    try:
-        return await adapter.prepare_collective_learning()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+    return await collective_learning_result(adapter.prepare_collective_learning())
 
 
 @app.get("/internal/collective-learning/pending")
 async def pending_collective_learning(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
+    await require_collective_learning_operator(http_request)
     adapter = runtime_adapter()
-    return await adapter.pending_collective_learning()
+    return await collective_learning_result(adapter.pending_collective_learning())
 
 
 @app.post("/internal/collective-learning/prepare-rejection")
 async def prepare_refresh_rejection(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
+    await require_collective_learning_operator(http_request)
     adapter = runtime_adapter()
-    return await adapter.prepare_refresh_rejection()
+    return await collective_learning_result(adapter.prepare_refresh_rejection())
 
 
 @app.post("/internal/collective-learning/reject")
@@ -925,12 +965,12 @@ async def reject_and_refresh(
     request: CollectiveLearningRejectionRequest,
     http_request: Request,
 ) -> dict[str, Any]:
-    require_operator_key(http_request)
+    principal = await require_collective_learning_operator(http_request)
     adapter = runtime_adapter()
     try:
-        return await adapter.reject_and_refresh(
-            disposition_digest=request.disposition_digest, rejected_by=request.rejected_by, reason=request.reason,
-        )
+        return await collective_learning_result(adapter.reject_and_refresh(
+            disposition_digest=request.disposition_digest, rejected_by=principal, reason=request.reason,
+        ))
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -940,25 +980,22 @@ async def approve_collective_learning(
     request: CollectiveLearningApprovalRequest,
     http_request: Request,
 ) -> dict[str, Any]:
-    require_operator_key(http_request)
+    principal = await require_collective_learning_operator(http_request)
     adapter = runtime_adapter()
     try:
-        return await adapter.approve_collective_learning(
+        return await collective_learning_result(adapter.approve_collective_learning(
             packet_digest=request.packet_digest,
-            approved_by=request.approved_by,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+            approved_by=principal,
+        ))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/internal/collective-learning/export")
 async def export_collective_learning(http_request: Request) -> dict[str, Any]:
-    require_operator_key(http_request)
+    await require_collective_learning_operator(http_request)
     adapter = runtime_adapter()
-    try:
-        return await adapter.export_collective_learning()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"type": exc.__class__.__name__, "message": str(exc)}) from exc
+    return await collective_learning_result(adapter.export_collective_learning())
 
 
 @app.get("/internal/user-scheduling/status")
@@ -1250,6 +1287,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 operation_id=operation_id,
                 activity_id=delivered_activity_id,
             )
+        await event_worker.native_effect_started()
         result = await adapter.process_document_background(
             operation_id
         )
@@ -1278,12 +1316,13 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
         async def send_document_activity(
             activity: Activity,
         ) -> dict[str, str]:
-            sent = await send_proactive_activity(
-                agent365_adapter,
-                delivery,
-                activity=activity,
-            )
-            return {"id": str(sent.get("activityId") or "")}
+            async def send() -> dict[str, str]:
+                sent = await send_proactive_activity(
+                    agent365_adapter, delivery, activity=activity,
+                )
+                return {"id": str(sent.get("activityId") or "")}
+
+            return await event_worker.external_effect("document-teams", send)
 
         delivery_result = await deliver_or_schedule_reconciliation(
             adapter=adapter,
@@ -1306,6 +1345,8 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
             }
         return {
             **result,
+            "terminalStatus": result.get("status"),
+            "status": "completed",
             "delivered": True,
             "deliveryActivityId": delivery_result["activityId"],
         }
@@ -1316,6 +1357,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
         occurrence_id = str(
             payload.get("occurrenceId") or revision
         )
+        await event_worker.native_effect_started()
         claim = await adapter.claim_system_schedule(
             job_id=job_id,
             revision=revision,
@@ -1328,14 +1370,14 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
         )
         while claim.get("status") == "in_progress":
             if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError("Scheduled Dreaming is still in progress.")
+                raise event_worker.InvocationPendingError("Scheduled Dreaming is still in progress.")
             await asyncio.sleep(15)
             claim = await adapter.claim_system_schedule(
                 job_id=job_id,
                 revision=revision,
                 occurrence_id=occurrence_id,
             )
-        if claim.get("status") in {"duplicate", "stale"}:
+        if claim.get("status") in {"duplicate", "stale", "unknown", "failed", "retryable_preclaim"}:
             return {
                 "status": str(claim["status"]),
                 "type": message_type,
@@ -1348,6 +1390,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 occurrence_id=occurrence_id,
                 success=False,
                 error="Scheduled Dreaming was interrupted after execution began.",
+                summary={"outcome": "unknown"},
                 owner_token=str(claim.get("ownerToken") or ""),
             )
             return {
@@ -1364,12 +1407,15 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
         try:
             result = await scheduled_learning.run_once(operation=claim)
         except Exception as exc:
+            if getattr(exc, "status", None) not in {"uncertain", "failed"}:
+                raise
             completion = await adapter.complete_system_schedule(
                 job_id=job_id,
                 revision=revision,
                 occurrence_id=occurrence_id,
                 success=False,
                 error=f"{exc.__class__.__name__}: {str(exc)[:1000]}",
+                summary={"outcome": "unknown" if getattr(exc, "status", None) == "uncertain" else "failed"},
                 owner_token=str(claim.get("ownerToken") or ""),
             )
             return {
@@ -1380,6 +1426,17 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 **({"reason": str(exc)} if getattr(exc, "status", None) == "uncertain" else {}),
             }
         summary = {"dream": result.get("dream")}
+        try:
+            digest_delivery = await event_worker.external_effect(
+                "dream-digest", deliver_learning_digest_to_owner,
+            )
+        except event_worker.AmbiguousEffectError as exc:
+            await adapter.complete_system_schedule(
+                job_id=job_id, revision=revision, occurrence_id=occurrence_id, success=False,
+                error=str(exc), summary={"outcome": "unknown"},
+                owner_token=str(claim.get("ownerToken") or ""),
+            )
+            raise
         completion = await adapter.complete_system_schedule(
             job_id=job_id,
             revision=revision,
@@ -1394,11 +1451,12 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
             "jobId": job_id,
             "result": result,
             "completion": completion,
-            "learningDigestDelivery": await deliver_learning_digest_to_owner(),
+            "learningDigestDelivery": digest_delivery,
         }
     if message_type != "hermes.cron.fire":
         raise ValueError(f"Unsupported scheduled message type: {message_type!r}.")
     adapter = runtime_adapter()
+    await event_worker.native_effect_started()
     result = await adapter.fire_cron_job(
         job_id=str(payload.get("jobId") or ""),
         revision=str(payload.get("revision") or ""),
@@ -1410,7 +1468,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
     )
     while result.get("status") == "in_progress":
         if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError("Scheduled Hermes execution is still in progress.")
+            raise event_worker.InvocationPendingError("Scheduled Hermes execution is still in progress.")
         await asyncio.sleep(15)
         result = await adapter.fire_cron_job(
             job_id=str(payload.get("jobId") or ""),
@@ -1422,10 +1480,9 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
         if not output:
             raise RuntimeError("Scheduled Hermes execution returned no output.")
         if isinstance(delivery, dict):
-            delivery_result = await send_proactive_activity(
-                agent365_adapter,
-                delivery,
-                output,
+            delivery_result = await event_worker.external_effect(
+                "cron-teams",
+                lambda: send_proactive_activity(agent365_adapter, delivery, output),
             )
             result["delivered"] = True
         elif result.get("deliveryMode") == "local":
@@ -1442,6 +1499,7 @@ async def process_scheduled_message(payload: dict[str, Any]) -> dict[str, Any]:
                 or ""
             ),
         )
+        result["status"] = "completed"
     else:
         result["delivered"] = False
     return result
@@ -3311,6 +3369,37 @@ async def invoke_agent_runtime(
         return await runtime_adapter().invoke(request)
 
 
+async def deliver_known_schedule_result(body: dict[str, Any], proof: dict[str, Any]) -> dict[str, Any]:
+    adapter = runtime_adapter()
+    job_id, revision = str(body["jobId"]), str(body["revision"])
+    result = await adapter.known_cron_result(
+        job_id=job_id, revision=revision, execution_id=proof["executionId"],
+        output_sha256=proof["outputSha256"],
+    )
+    if result["status"] == "delivered":
+        if not result.get("deliveryActivityId"):
+            raise RuntimeError("The native receipt has no acknowledged Teams activity.")
+        return {"status": "completed", "deliveryActivityId": result["deliveryActivityId"]}
+    delivery = result.get("deliveryReference")
+    if result["status"] != "pending_delivery" or not isinstance(delivery, dict):
+        raise ValueError("The authenticated result has no original Teams destination.")
+    sent = await event_worker.external_effect(
+        "cron-teams",
+        lambda: send_proactive_activity(agent365_adapter, delivery, str(result["output"])),
+    )
+    activity_id = str(sent.get("activityId") or "")
+    if not activity_id:
+        raise RuntimeError("Teams did not acknowledge the stored result.")
+    await adapter.acknowledge_cron_delivery(
+        job_id=job_id, revision=revision, delivery_activity_id=activity_id,
+    )
+    return {"status": "completed", "deliveryActivityId": activity_id}
+
+
 event_worker.attach(
     app, schedule_handler=process_scheduled_message,
+    known_result_handler=deliver_known_schedule_result,
+    schedule_repair_handler=lambda action, payload, principal: runtime_adapter().repair_schedule(
+        action, payload, operator=principal,
+    ),
 )

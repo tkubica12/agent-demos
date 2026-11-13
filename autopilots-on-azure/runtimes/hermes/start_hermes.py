@@ -11,8 +11,8 @@ import shutil
 import sys
 import threading
 import time
-from contextlib import nullcontext
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any
 
 import httpx
@@ -448,6 +448,15 @@ def create_health_app(
     @app.get("/health")
     def health() -> JSONResponse:
         running = gateway is not None and gateway.poll() is None
+        return JSONResponse({
+            "status": "ok" if running else "gateway-unavailable",
+            "release": os.getenv("APPLICATION_RELEASE", ""),
+        }, status_code=200 if running else 503)
+
+    @app.get("/health/detailed")
+    def health_detailed(request: Request) -> JSONResponse:
+        require_internal_key(request)
+        running = gateway is not None and gateway.poll() is None
         payload = {
             "status": "ok" if running else "gateway-unavailable",
             "release": os.getenv("APPLICATION_RELEASE", ""),
@@ -466,10 +475,6 @@ def create_health_app(
             "backup": backup.status() if backup else None,
         }
         return JSONResponse(payload, status_code=200 if running else 503)
-
-    @app.get("/health/detailed")
-    def health_detailed() -> JSONResponse:
-        return health()
 
     def require_internal_key(request: Request) -> None:
         expected = os.getenv("API_SERVER_KEY", "")
@@ -689,46 +694,81 @@ def create_health_app(
                 detail=str(exc),
             ) from exc
 
+    native_trace_admissions: dict[str, Any] = {}
+    native_trace_runs: dict[str, str] = {}
+    native_trace_sessions: dict[str, str] = {}
+
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
-        native_session = re.fullmatch(r"api/sessions/([^/]+)/chat", path)
-        native_turn = request.method == "POST" and native_session is not None
-        trace_context = (
-            gateway_trace_context(native_session.group(1), profile_home=profile_home)
-            if native_turn
-            else nullcontext()
-        )
+        native_turn = request.method == "POST" and path == "v1/runs"
+        native_status = re.fullmatch(r"v1/runs/([A-Za-z0-9_-]{1,160})", path)
         timeout = httpx.Timeout(
             float(os.getenv("HERMES_BRIDGE_TIMEOUT_SECONDS", "600")),
             connect=10,
         )
         body = await request.body()
+        admission = ""
+        new_admission = False
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                with trace_context:
-                    response = await client.request(
-                        request.method,
-                        target,
-                        content=body,
-                        headers={
-                            **{
-                                key: value
-                                for key, value in request.headers.items()
-                                if key.lower() not in {
-                                    "host",
-                                    "traceparent",
-                                    "tracestate",
-                                    "baggage",
-                                    "x-autopilot-otel-session",
-                                    "x-autopilot-otel-operation",
-                                }
-                            },
-                            **runtime_trace_headers(),
-                        },
+            if native_turn:
+                expected = os.getenv("API_SERVER_KEY", "")
+                supplied = request.headers.get("authorization", "")
+                if not expected or not secrets.compare_digest(supplied, "Bearer " + expected):
+                    raise HTTPException(status_code=401, detail="A valid native Bearer credential is required.")
+                try:
+                    payload = json.loads(body)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail="Run admission body must be JSON.") from exc
+                session_id = payload.get("session_id") if isinstance(payload, dict) else None
+                if not isinstance(session_id, str) or not session_id or len(session_id) > 256:
+                    raise HTTPException(status_code=400, detail="An explicit native session_id is required.")
+                admission = request.headers.get("idempotency-key", "")
+                if not admission or len(admission) > 256:
+                    raise HTTPException(status_code=400, detail="An Idempotency-Key is required.")
+                if admission in native_trace_sessions and native_trace_sessions[admission] != session_id:
+                    raise HTTPException(status_code=409, detail="The admission belongs to another native session.")
+                if admission not in native_trace_admissions:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        canonical = await client.get(
+                            f"http://127.0.0.1:{gateway_port()}/api/sessions/{quote(session_id, safe='')}/messages",
+                            params={"limit": 0}, headers={"Authorization": supplied},
+                        )
+                    canonical.raise_for_status()
+                    resolved = canonical.json().get("session_id")
+                    if not isinstance(resolved, str) or not resolved or len(resolved) > 256:
+                        raise HTTPException(status_code=502, detail="Native API did not resolve the session identity.")
+                    context = gateway_trace_context(
+                        resolved, profile_home=profile_home, admission_id=admission,
+                        ttl_seconds=3600,
                     )
-                    if native_turn and response.status_code >= 500:
-                        response.raise_for_status()
+                    context.__enter__()
+                    native_trace_admissions[admission] = context
+                    native_trace_sessions[admission] = session_id
+                    new_admission = True
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.request(
+                    request.method,
+                    target,
+                    content=body,
+                    headers={
+                        **{
+                            key: value
+                            for key, value in request.headers.items()
+                            if key.lower() not in {
+                                "host",
+                                "traceparent",
+                                "tracestate",
+                                "baggage",
+                                "x-autopilot-otel-session",
+                                "x-autopilot-otel-operation",
+                            }
+                        },
+                        **runtime_trace_headers(),
+                    },
+                )
+                if native_turn and response.status_code >= 500:
+                    response.raise_for_status()
         except GatewayTraceConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except httpx.HTTPStatusError as exc:
@@ -736,7 +776,21 @@ def create_health_app(
         except httpx.ConnectError as exc:
             raise HTTPException(status_code=503, detail="Hermes native API is not accepting requests yet.") from exc
         if response.headers.get("content-type", "").startswith("application/json"):
-            return JSONResponse(content=response.json(), status_code=response.status_code)
+            result = response.json()
+            if native_turn and response.status_code == 202:
+                native_trace_runs[str(result["run_id"])] = admission
+            elif native_turn and new_admission and 400 <= response.status_code < 500:
+                context = native_trace_admissions.pop(admission, None)
+                native_trace_sessions.pop(admission, None)
+                if context is not None:
+                    context.__exit__(None, None, None)
+            if request.method == "GET" and native_status and result.get("status") in {"completed", "failed"}:
+                identity = native_trace_runs.pop(native_status.group(1), "")
+                context = native_trace_admissions.pop(identity, None)
+                native_trace_sessions.pop(identity, None)
+                if context is not None:
+                    context.__exit__(None, None, None)
+            return JSONResponse(content=result, status_code=response.status_code)
         raise HTTPException(status_code=response.status_code, detail=response.text)
 
     return app

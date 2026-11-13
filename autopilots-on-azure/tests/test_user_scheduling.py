@@ -13,7 +13,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -30,6 +30,674 @@ import cron_runtime  # noqa: E402
 
 
 class UserSchedulingTests(unittest.TestCase):
+    def test_completed_dream_retires_consumed_schedule_before_reconciling_next_occurrence(self):
+        calls = []
+
+        def forget(*args):
+            calls.append(("retire", args))
+
+        def reconcile():
+            self.assertEqual(calls, [("retire", ("dream", "revision", "2026-11-13T02:00:00+00:00"))])
+            calls.append(("reconcile",))
+
+        provider = SimpleNamespace(forget_fired_occurrence=forget, reconcile=reconcile)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(sys.modules, {
+                "cron.jobs": SimpleNamespace(
+                    get_job=lambda job_id: {"last_run_at": "already-marked", "next_run_at": "tomorrow"},
+                    mark_job_run=lambda *args: self.fail("Completed Dream was marked twice"),
+                ),
+                "cron.scheduler_provider": SimpleNamespace(resolve_cron_scheduler=lambda: provider),
+            }),
+        ):
+            home = Path(directory)
+            cron_runtime.atomic_write_json(cron_runtime.system_schedule_receipts_path(home), {
+                "dream:revision": {
+                    "state": "completing", "operationKind": "scheduled", "revision": "revision",
+                    "scheduledNextRunAt": "2026-11-13T02:00:00+00:00", "lastRunAtBefore": None,
+                    "success": True,
+                },
+            })
+            result = cron_runtime._finish_system_schedule_completion(
+                home, job_id="dream", receipt_key="dream:revision",
+            )
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(calls[-1], ("reconcile",))
+
+    def test_owner_known_result_delivery_never_calls_native_fire(self):
+        from unittest.mock import AsyncMock
+
+        adapter = SimpleNamespace(
+            known_cron_result=AsyncMock(return_value={
+                "status": "pending_delivery", "output": "Stored reminder",
+                "deliveryReference": {"boundary": "one_to_one", "conversation": {}},
+            }),
+            acknowledge_cron_delivery=AsyncMock(),
+            fire_cron_job=AsyncMock(),
+        )
+
+        async def effect(_name, operation):
+            return await operation()
+
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=adapter),
+            patch.object(bridge_app.event_worker, "external_effect", side_effect=effect),
+            patch.object(bridge_app, "send_proactive_activity", return_value={"activityId": "teams-ack"}) as send,
+        ):
+            result = asyncio.run(bridge_app.deliver_known_schedule_result(
+                {"jobId": "job", "revision": "revision"},
+                {"executionId": "execution", "outputSha256": "a" * 64},
+            ))
+        self.assertEqual(result["deliveryActivityId"], "teams-ack")
+        adapter.fire_cron_job.assert_not_awaited()
+        adapter.acknowledge_cron_delivery.assert_awaited_once_with(
+            job_id="job", revision="revision", delivery_activity_id="teams-ack",
+        )
+        self.assertEqual(send.await_args.args[2], "Stored reminder")
+
+    def test_known_result_never_claims_or_executes_and_checks_exact_native_output(self):
+        output = "Stored reminder"
+        receipt = {
+            "nativeExecutionId": "native-execution", "nativeOutputSha256": "file-digest",
+            "executionId": "receipt-execution", "output": output, "state": "pending_delivery",
+        }
+        digest = hashlib.sha256(output.encode()).hexdigest()
+        with (
+            patch.object(cron_runtime, "read_json_object", return_value={"job:revision": receipt}),
+            patch.object(cron_runtime, "_cron_execution_outcome", return_value={"state": "pending_delivery"}),
+            patch.object(cron_runtime, "_reconcile_delivery", return_value=receipt) as reconciled,
+            patch.object(cron_runtime, "fire_cron_job") as inference,
+        ):
+            result = cron_runtime.known_cron_result(
+                Path("profile"), job_id="job", revision="revision",
+                execution_id="native-execution", output_sha256=digest,
+            )
+            self.assertEqual(result["status"], "pending_delivery")
+            for identity, output_hash in (("other", digest), ("native-execution", "wrong")):
+                with self.assertRaises(ValueError):
+                    cron_runtime.known_cron_result(
+                        Path("profile"), job_id="job", revision="revision",
+                        execution_id=identity, output_sha256=output_hash,
+                    )
+            inference.assert_not_called()
+            reconciled.assert_called_once()
+
+    def test_acknowledged_known_result_retires_only_its_consumed_broker_occurrence(self):
+        from unittest.mock import Mock
+
+        provider = Mock()
+        receipt = {
+            "delivered": True, "nativeExecutionId": "execution", "outputSha256": "digest",
+            "scheduledNextRunAt": "due", "deliveryActivityId": "ack",
+        }
+        with (
+            patch.object(cron_runtime, "read_json_object", return_value={"job:revision": receipt}),
+            patch.dict(sys.modules, {"cron.scheduler_provider": SimpleNamespace(
+                resolve_cron_scheduler=lambda: provider,
+            )}),
+            patch.object(cron_runtime, "fire_cron_job") as inference,
+        ):
+            result = cron_runtime.known_cron_result(
+                Path("profile"), job_id="job", revision="revision", execution_id="execution", output_sha256="digest",
+            )
+        self.assertEqual(result["status"], "delivered")
+        provider.forget_fired_occurrence.assert_called_once_with("job", "revision", "due")
+        provider.reconcile.assert_called_once()
+        inference.assert_not_called()
+
+    def test_completed_native_occurrence_retires_consumed_trigger_and_recovers_only_delivery(self):
+        due_at = "2026-11-12T19:17:50.906717+00:00"
+        native_id = "completed-native-execution"
+        job = {
+            "id": "job", "enabled": False, "state": "completed", "next_run_at": None,
+            "last_run_at": "2026-11-12T19:18:28+00:00", "last_status": "ok",
+            "deliver": "local", "origin": {"platform": "autopilots", "chat_id": "trusted-reference"},
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            modules = {
+                "cron": types.ModuleType("cron"),
+                "cron.jobs": SimpleNamespace(
+                    CRON_DIR=profile / "cron", load_jobs=lambda: [job], get_job=lambda _: job,
+                ),
+                "cron.scheduler_provider": SimpleNamespace(CronScheduler=object, resolve_cron_scheduler=lambda: provider),
+                "cron.executions": SimpleNamespace(get_execution=lambda _: {
+                    "id": native_id, "job_id": "job", "status": "completed",
+                    "scheduled_instant": due_at, "delivery_outcome": "suppressed",
+                }),
+            }
+            spec = importlib.util.spec_from_file_location(
+                "azure_provider_completed_delivery_test", RUNTIME_DIR / "azure_cron_provider.py",
+            )
+            module = importlib.util.module_from_spec(spec)
+            with patch.dict(sys.modules, modules):
+                spec.loader.exec_module(module)
+                provider = module.AzureCronScheduler()
+                provider._client = MagicMock()
+                provider._write_state({"job": {
+                    "revision": "revision", "fireAt": due_at, "sequenceNumber": 120,
+                }})
+                cron_runtime.upsert_delivery_reference(
+                    profile, reference_key="trusted-reference", conversation={}, boundary="one_to_one",
+                )
+                receipt_path = cron_runtime.cron_delivery_receipts_path(profile)
+                cron_runtime.atomic_write_json(receipt_path, {"job:revision": {
+                    "executionId": "gateway-execution", "state": "executing", "delivered": False,
+                    "scheduledNextRunAt": due_at, "startedAtEpoch": 1, "reconciled": False,
+                }})
+                output_path = profile / "cron" / "output" / "job" / "native-owned-output.md"
+                output_path.parent.mkdir(parents=True)
+                output_path.write_text("# Cron Job\n\n## Response\n\nCompleted reminder", encoding="utf-8")
+                cron_runtime._record_cron_output(
+                    profile, job_id="job", revision="revision", execution_id="gateway-execution",
+                    output_path=output_path, native_execution_id=native_id,
+                )
+                with (
+                    patch.dict(sys.modules, {"azure_cron_provider": module}),
+                    patch.object(provider, "fire_due", side_effect=AssertionError("must never rerun inference")) as fire,
+                ):
+                    result = cron_runtime.fire_cron_job(profile, job_id="job", revision="revision")
+                    status = cron_runtime.cron_delivery_receipt_status(profile, job_id="job", revision="revision")
+                self.assertEqual(result["status"], "pending_delivery")
+                self.assertEqual(result["output"], "Completed reminder")
+                self.assertEqual(result["lastStatus"], "ok")
+                self.assertIsNone(result["nextRunAt"])
+                self.assertEqual(status["status"], "pending_delivery")
+                self.assertEqual(provider._load_state(), {})
+                provider._client.get_queue_sender.assert_not_called()
+                fire.assert_not_called()
+                provider._write_state({"job": {
+                    "revision": "newer-revision", "fireAt": due_at, "sequenceNumber": 121,
+                }})
+                provider.forget_fired_occurrence("job", "revision", due_at)
+                self.assertEqual(provider._load_state()["job"]["sequenceNumber"], 121)
+
+    def test_unverifiable_native_results_are_unknown_not_pending_or_reexecuted(self):
+        due_at = "2026-11-12T19:17:50+00:00"
+        valid = {"id": "native", "job_id": "job", "status": "completed", "scheduled_instant": due_at}
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            output_path = profile / "cron" / "output" / "job" / "owned.md"
+            output_path.parent.mkdir(parents=True)
+            content = "# Cron Job\n\n## Response\n\nKnown output"
+            modules = {
+                "cron": types.ModuleType("cron"),
+                "cron.jobs": SimpleNamespace(get_job=lambda _: {"id": "job", "last_status": "ok"}),
+                "cron.scheduler_provider": SimpleNamespace(resolve_cron_scheduler=MagicMock()),
+                "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision"),
+            }
+            for native, corrupt in (
+                (None, False), ({**valid, "job_id": "another-job"}, False),
+                ({**valid, "scheduled_instant": "2026-11-12T19:20:00+00:00"}, False),
+                ({**valid, "scheduled_instant": "invalid"}, False), (valid, True),
+            ):
+                with self.subTest(native=native, corrupt=corrupt):
+                    output_path.write_text(content, encoding="utf-8")
+                    cron_runtime.atomic_write_json(cron_runtime.cron_delivery_receipts_path(profile), {"job:revision": {
+                        "executionId": "gateway-execution", "state": "executing", "delivered": False,
+                        "scheduledNextRunAt": due_at, "startedAtEpoch": 1,
+                    }})
+                    cron_runtime._record_cron_output(
+                        profile, job_id="job", revision="revision", execution_id="gateway-execution",
+                        output_path=output_path, native_execution_id="native",
+                    )
+                    if corrupt:
+                        output_path.write_text("Another execution's output", encoding="utf-8")
+                    with patch.dict(sys.modules, {
+                        **modules, "cron.executions": SimpleNamespace(get_execution=lambda _: native),
+                    }):
+                        status = cron_runtime.cron_delivery_receipt_status(profile, job_id="job", revision="revision")
+                        result = cron_runtime.fire_cron_job(profile, job_id="job", revision="revision")
+                    self.assertEqual(status["status"], "unknown")
+                    self.assertEqual(result["status"], "unknown")
+            modules["cron.scheduler_provider"].resolve_cron_scheduler.assert_not_called()
+
+    def test_native_change_hook_replaces_pauses_resumes_and_removes_broker_occurrences(self):
+        events = []
+
+        class Sender:
+            sequence = 100
+            cancellation_error = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def schedule_messages(self, message, due_at):
+                self.sequence += 1
+                events.append(("schedule", self.sequence))
+                return [self.sequence]
+
+            def cancel_scheduled_messages(self, sequence):
+                if self.cancellation_error:
+                    raise self.cancellation_error
+                events.append(("cancel", sequence))
+
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            job = {
+                "id": "job", "prompt": "original reminder", "enabled": True, "state": "scheduled",
+                "next_run_at": "2030-01-01T10:00:00+00:00", "deliver": "local",
+                "origin": {"platform": "autopilots", "chat_id": "trusted-reference"},
+            }
+            native_jobs = [job]
+            modules = {
+                "cron": types.ModuleType("cron"),
+                "cron.jobs": SimpleNamespace(
+                    CRON_DIR=profile / "cron", load_jobs=lambda: native_jobs,
+                    get_job=lambda job_id: next((job for job in native_jobs if job["id"] == job_id), None),
+                ),
+                "cron.scheduler_provider": SimpleNamespace(CronScheduler=object),
+            }
+            spec = importlib.util.spec_from_file_location(
+                "azure_provider_lifecycle_test", RUNTIME_DIR / "azure_cron_provider.py",
+            )
+            module = importlib.util.module_from_spec(spec)
+            sender = Sender()
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, {"WORKER_ID": "worker", "SCHEDULER_SERVICEBUS_QUEUE": "schedule"}),
+            ):
+                spec.loader.exec_module(module)
+                provider = module.AzureCronScheduler()
+                provider._client = SimpleNamespace(get_queue_sender=lambda _: sender)
+                cron_runtime.upsert_delivery_reference(
+                    profile, reference_key="trusted-reference", conversation={}, boundary="one_to_one",
+                )
+                with patch.object(provider, "_ensure_system_dream"):
+                    provider.register_job(job)
+                    job.update(prompt="edited reminder", next_run_at="2030-01-01T11:00:00+00:00")
+                    provider.on_jobs_changed()
+                    self.assertEqual(provider._load_state()["job"]["sequenceNumber"], 102)
+                    job.update(enabled=False, state="paused")
+                    sender.cancellation_error = ConnectionError("broker unavailable")
+                    with self.assertRaisesRegex(ConnectionError, "broker unavailable"):
+                        provider.on_jobs_changed()
+                    self.assertEqual(provider._load_state()["job"]["sequenceNumber"], 102)
+                    sender.cancellation_error = None
+                    provider.on_jobs_changed()
+                    self.assertEqual(provider._load_state(), {})
+                    provider.on_jobs_changed()
+                    job.update(enabled=True, state="scheduled", next_run_at="2030-01-01T12:00:00+00:00")
+                    provider.on_jobs_changed()
+                    self.assertEqual(provider._load_state()["job"]["sequenceNumber"], 103)
+                    native_jobs.clear()
+                    provider.on_jobs_changed()
+                    self.assertEqual(provider._load_state(), {})
+            self.assertEqual(events, [
+                ("schedule", 101), ("cancel", 101), ("schedule", 102),
+                ("cancel", 102), ("schedule", 103), ("cancel", 103),
+            ])
+
+    def test_provider_forwards_the_pinned_native_force_and_manual_fire_contract(self):
+        native_fire = MagicMock(return_value=False)
+
+        class NativeScheduler:
+            fire_due = native_fire
+
+        spec = importlib.util.spec_from_file_location(
+            "azure_provider_fire_contract_test", RUNTIME_DIR / "azure_cron_provider.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"cron.scheduler_provider": SimpleNamespace(CronScheduler=NativeScheduler)}):
+            spec.loader.exec_module(module)
+        provider = module.AzureCronScheduler()
+        with patch.object(module, "_install_output_capture"), patch.object(provider, "reconcile") as reconcile:
+            self.assertFalse(provider.fire_due("job", force=True, manual=True))
+        native_fire.assert_called_once_with("job", adapters=None, loop=None, force=True, manual=True)
+        reconcile.assert_not_called()
+
+    def test_cancellation_tolerates_only_the_native_missing_message_race(self):
+        from azure.servicebus.exceptions import MessageNotFoundError
+
+        spec = importlib.util.spec_from_file_location(
+            "azure_provider_cancel_test", RUNTIME_DIR / "azure_cron_provider.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"cron.scheduler_provider": SimpleNamespace(CronScheduler=object)}):
+            spec.loader.exec_module(module)
+        provider = module.AzureCronScheduler()
+        sender = MagicMock()
+        sender.__enter__.return_value = sender
+        provider._client = SimpleNamespace(get_queue_sender=lambda _: sender)
+        with patch.dict(os.environ, {"SCHEDULER_SERVICEBUS_QUEUE": "schedule"}):
+            sender.cancel_scheduled_messages.side_effect = MessageNotFoundError()
+            provider._cancel(42)
+            sender.cancel_scheduled_messages.side_effect = ConnectionError("broker unavailable")
+            with self.assertRaisesRegex(ConnectionError, "broker unavailable"):
+                provider._cancel(42)
+
+    def test_operator_can_finish_an_expired_completed_dream_but_not_ambiguous_inference(self):
+        modules = {
+            "cron.jobs": SimpleNamespace(get_job=lambda _: None, mark_job_run=MagicMock()),
+            "cron.scheduler_provider": SimpleNamespace(resolve_cron_scheduler=lambda: None),
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            path = cron_runtime.system_schedule_receipts_path(profile)
+            receipt = {
+                "state": "running", "phase": "dream_started", "operationKind": "adhoc",
+                "revision": "revision", "ownerToken": "owner", "startedAtEpoch": 1,
+            }
+            kwargs = dict(
+                job_id="dream", revision="revision", occurrence_id="occurrence",
+                operator="owner", reason="inspected completed inference; skip lost delivery", kind="dream",
+            )
+            cron_runtime.atomic_write_json(path, {"dream:occurrence": receipt})
+            with self.assertRaisesRegex(ValueError, "inference-ambiguous"):
+                cron_runtime.resolve_schedule(profile, **kwargs)
+            receipt["phase"] = "status_completed"
+            cron_runtime.atomic_write_json(path, {"dream:occurrence": receipt})
+            with patch.dict(sys.modules, modules):
+                result = cron_runtime.resolve_schedule(profile, **kwargs)
+            self.assertEqual(result["status"], "skipped")
+            stored = cron_runtime.read_json_object(path)["dream:occurrence"]
+            self.assertEqual(stored["state"], "completed")
+            self.assertEqual(stored["summary"]["outcome"], "skipped")
+            modules["cron.jobs"].mark_job_run.assert_not_called()
+
+    def test_completed_cron_delivery_recovery_returns_a_completed_transport_outcome(self):
+        adapter = SimpleNamespace(
+            fire_cron_job=AsyncMock(return_value={
+                "status": "pending_delivery", "output": "Saved output", "deliveryMode": "local",
+            }),
+            acknowledge_cron_delivery=AsyncMock(return_value={"status": "delivered"}),
+        )
+        with patch.object(bridge_app, "runtime_adapter", return_value=adapter):
+            outcome = asyncio.run(bridge_app.process_scheduled_message({
+                "type": "hermes.cron.fire", "jobId": "job", "revision": "revision",
+            }))
+        self.assertEqual(outcome["status"], "completed")
+        adapter.acknowledge_cron_delivery.assert_awaited_once()
+
+    def test_unknown_dream_digest_is_terminalized_without_repeating_inference(self):
+        adapter = SimpleNamespace(
+            claim_system_schedule=AsyncMock(return_value={"status": "claimed", "ownerToken": "owner"}),
+            complete_system_schedule=AsyncMock(),
+        )
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=adapter),
+            patch.object(bridge_app.scheduled_learning, "run_once", return_value={"dream": {}}),
+            patch.object(bridge_app.event_worker, "external_effect", side_effect=bridge_app.event_worker.AmbiguousEffectError("unknown digest")),
+        ):
+            with self.assertRaises(bridge_app.event_worker.AmbiguousEffectError):
+                asyncio.run(bridge_app.process_scheduled_message({
+                    "type": "system.dream", "jobId": "dream", "revision": "revision",
+                }))
+        call = adapter.complete_system_schedule.await_args.kwargs
+        self.assertFalse(call["success"])
+        self.assertEqual(call["summary"], {"outcome": "unknown"})
+
+    def test_native_preclaim_failure_can_retry_only_while_occurrence_is_unchanged(self):
+        job = {
+            "id": "job", "next_run_at": "2026-01-01T00:00:00+00:00",
+            "enabled": True, "state": "scheduled", "last_run_at": None,
+        }
+        provider = SimpleNamespace(
+            fire_due=MagicMock(side_effect=ConnectionError("failed before native claim")),
+            rearm=MagicMock(return_value={"messageId": "repair", "occurrenceId": "revision"}),
+        )
+        modules = {
+            "cron.jobs": SimpleNamespace(get_job=lambda _: job),
+            "cron.scheduler_provider": SimpleNamespace(resolve_cron_scheduler=lambda: provider),
+            "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision"),
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            cron_runtime.atomic_write_json(cron_runtime.cron_delivery_path(profile), {"job": {"local": True}})
+            with patch.dict(sys.modules, modules):
+                with self.assertRaises(ConnectionError):
+                    cron_runtime.fire_cron_job(profile, job_id="job", revision="revision")
+                receipt = cron_runtime.read_json_object(cron_runtime.cron_delivery_receipts_path(profile))["job:revision"]
+                self.assertEqual(receipt["state"], "preclaim_failed")
+                cron_runtime.rearm_preclaim_schedule(
+                    profile, job_id="job", revision="revision", repair_id="ticket", operator="owner", reason="preclaim",
+                )
+                with self.assertRaises(ConnectionError):
+                    cron_runtime.fire_cron_job(profile, job_id="job", revision="revision")
+                self.assertEqual(provider.fire_due.call_count, 2)
+                job["fire_claim"] = {"at": "2020-01-01T00:00:00+00:00"}
+                outcome = cron_runtime.fire_cron_job(profile, job_id="job", revision="revision")
+                self.assertEqual(outcome["status"], "unknown")
+                self.assertEqual(provider.fire_due.call_count, 2)
+
+    def test_dream_preclaim_failure_retries_native_claim_not_inference(self):
+        job = {
+            "id": "dream", "next_run_at": "2026-01-01T00:00:00+00:00",
+            "enabled": True, "state": "scheduled", "last_run_at": None,
+        }
+        claim = MagicMock(side_effect=[ConnectionError("before claim"), True])
+        modules = {
+            "cron.jobs": SimpleNamespace(get_job=lambda _: job, claim_job_for_fire=claim),
+            "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision"),
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            cron_runtime.atomic_write_json(
+                cron_runtime.cron_delivery_path(profile), {"dream": {"systemType": "dream"}},
+            )
+            with patch.dict(sys.modules, modules):
+                with self.assertRaises(ConnectionError):
+                    cron_runtime.claim_system_schedule(
+                        profile, job_id="dream", revision="revision", occurrence_id="revision",
+                    )
+                result = cron_runtime.claim_system_schedule(
+                    profile, job_id="dream", revision="revision", occurrence_id="revision",
+                )
+            self.assertEqual(claim.call_count, 2)
+            self.assertEqual(result["status"], "claimed")
+            self.assertEqual(result["phase"], "pending")
+
+    def test_provider_binds_trusted_native_origin_and_refuses_changed_destination(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            job = {
+                "id": "job", "next_run_at": "2026-11-12T14:25:06.723496+00:00",
+                "enabled": True, "state": "scheduled",
+                "schedule": {
+                    "kind": "once", "run_at": "2026-11-12T14:25:06.723496+00:00",
+                    "display": "once in 2m",
+                },
+                "schedule_display": "once in 2m", "repeat": {"times": 1, "completed": 0},
+                "created_at": "2026-11-12T14:23:06.723631+00:00",
+                "last_run_at": None, "last_status": None, "script": None, "no_agent": False,
+                "deliver": "local",
+                "origin": {
+                    "platform": "autopilots", "chat_id": "trusted-reference",
+                    "chat_name": None, "thread_id": None, "user_id": None, "scope_id": None,
+                },
+            }
+            modules = {
+                "cron": types.ModuleType("cron"),
+                "cron.jobs": SimpleNamespace(
+                    CRON_DIR=profile / "cron", load_jobs=lambda: [job], get_job=lambda _: job,
+                ),
+                "cron.scheduler_provider": SimpleNamespace(CronScheduler=object),
+            }
+            spec = importlib.util.spec_from_file_location(
+                "azure_provider_origin_test", RUNTIME_DIR / "azure_cron_provider.py",
+            )
+            module = importlib.util.module_from_spec(spec)
+            with patch.dict(sys.modules, modules):
+                spec.loader.exec_module(module)
+                provider = module.AzureCronScheduler()
+                cron_runtime.upsert_delivery_reference(
+                    profile, reference_key="trusted-reference", conversation={}, boundary="one_to_one",
+                )
+                with patch.object(provider, "_schedule", return_value=42) as schedule:
+                    provider.register_job(job)
+                self.assertEqual(
+                    cron_runtime.read_json_object(cron_runtime.cron_delivery_path(profile))["job"],
+                    {"referenceKey": "trusted-reference"},
+                )
+                schedule.assert_called_once()
+                schedule.assert_called_once_with(
+                    job, module.schedule_revision(job), {"referenceKey": "trusted-reference"},
+                )
+                self.assertEqual(provider._load_state()["job"], {
+                    "revision": module.schedule_revision(job),
+                    "fireAt": job["next_run_at"], "sequenceNumber": 42,
+                })
+                with patch.object(provider, "reconcile"):
+                    provider._write_state({})
+                    with self.assertRaisesRegex(RuntimeError, "was not armed"):
+                        provider.register_job(job)
+                cron_runtime.atomic_write_json(
+                    cron_runtime.cron_delivery_path(profile), {"job": {"referenceKey": "different-reference"}},
+                )
+                with self.assertRaisesRegex(ValueError, "different reference"):
+                    provider.register_job(job)
+                cron_runtime.atomic_write_json(
+                    cron_runtime.cron_delivery_path(profile), {},
+                )
+                with patch.object(provider, "_schedule", side_effect=ConnectionError("broker unavailable")):
+                    with self.assertRaisesRegex(ConnectionError, "broker unavailable"):
+                        provider.register_job(job)
+                cron_runtime.atomic_write_json(
+                    cron_runtime.delivery_references_path(profile), {},
+                )
+                with self.assertRaisesRegex(ValueError, "trusted proactive delivery reference"):
+                    provider.register_job(job)
+                cron_runtime.upsert_delivery_reference(
+                    profile, reference_key="trusted-reference", conversation={}, boundary="one_to_one",
+                )
+                cron_runtime.atomic_write_json(
+                    cron_runtime.cron_delivery_path(profile), {"job": {"local": True}},
+                )
+                with patch.object(provider, "_schedule", return_value=43):
+                    provider.register_job(job)
+                self.assertEqual(
+                    cron_runtime.read_json_object(cron_runtime.cron_delivery_path(profile))["job"],
+                    {"local": True},
+                )
+
+    def test_provider_repair_bypasses_broker_dedup_without_changing_native_occurrence(self):
+        sent = []
+
+        class Sender:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def send_messages(self, message):
+                sent.append(message)
+
+        modules = {"cron.scheduler_provider": SimpleNamespace(CronScheduler=object)}
+        spec = importlib.util.spec_from_file_location(
+            "azure_provider_repair_test", RUNTIME_DIR / "azure_cron_provider.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, modules):
+            spec.loader.exec_module(module)
+        provider = module.AzureCronScheduler()
+        client = SimpleNamespace(get_queue_sender=lambda _: Sender())
+        job = {"id": "job", "next_run_at": "2026-01-01T00:00:00+00:00"}
+        with (
+            patch.dict(os.environ, {"WORKER_ID": "worker", "SCHEDULER_SERVICEBUS_QUEUE": "schedule"}),
+            patch.object(provider, "_servicebus_client", return_value=client),
+        ):
+            first = provider.rearm(job, "native-revision", {"local": True}, repair_id="ticket-42")
+            second = provider.rearm(job, "native-revision", {"local": True}, repair_id="ticket-42")
+        self.assertEqual(first, second)
+        self.assertNotEqual(first["messageId"], "worker:job:native-revision")
+        self.assertEqual(sent[0].message_id, sent[1].message_id)
+        payload = json.loads(b"".join(bytes(part) for part in sent[0].body))
+        self.assertEqual(payload["revision"], "native-revision")
+        self.assertEqual(payload["occurrenceId"], "native-revision")
+
+    def test_preclaim_rearm_preserves_occurrence_identity_and_is_idempotent(self):
+        job = {
+            "id": "job", "next_run_at": "2026-01-01T00:00:00+00:00",
+            "enabled": True, "state": "scheduled",
+        }
+        provider = SimpleNamespace(rearm=MagicMock(return_value={
+            "messageId": "worker:repair:stable", "occurrenceId": "revision",
+        }))
+        modules = {
+            "cron.jobs": SimpleNamespace(get_job=lambda _: job),
+            "cron.scheduler_provider": SimpleNamespace(resolve_cron_scheduler=lambda: provider),
+            "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision"),
+        }
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            cron_runtime.atomic_write_json(cron_runtime.cron_delivery_path(profile), {"job": {"local": True}})
+            kwargs = dict(job_id="job", revision="revision", repair_id="ticket-42", operator="owner", reason="preclaim failure")
+            with patch.dict(sys.modules, modules):
+                first = cron_runtime.rearm_preclaim_schedule(profile, **kwargs)
+                second = cron_runtime.rearm_preclaim_schedule(profile, **kwargs)
+                self.assertEqual(first["status"], "rearmed")
+                self.assertEqual(second["status"], "duplicate")
+                self.assertEqual(first["occurrenceId"], "revision")
+                provider.rearm.assert_called_once_with(job, "revision", {"local": True}, repair_id="ticket-42")
+                job["fire_claim"] = {"at": "native admission after successful repair"}
+                self.assertEqual(cron_runtime.rearm_preclaim_schedule(profile, **kwargs)["status"], "duplicate")
+                job.pop("fire_claim")
+                cron_runtime.atomic_write_json(
+                    cron_runtime.cron_delivery_receipts_path(profile),
+                    {"job:revision": {"state": "unknown", "startedAtEpoch": 1}},
+                )
+                with self.assertRaisesRegex(ValueError, "already admitted"):
+                    cron_runtime.rearm_preclaim_schedule(profile, **{**kwargs, "repair_id": "ticket-43"})
+
+    def test_native_claim_age_is_never_permission_to_rearm(self):
+        job = {
+            "id": "job", "next_run_at": "2026-01-01T00:00:00+00:00", "enabled": True,
+            "state": "scheduled", "fire_claim": {"at": "2020-01-01T00:00:00+00:00"},
+        }
+        modules = {
+            "cron.jobs": SimpleNamespace(get_job=lambda _: job),
+            "cron.scheduler_provider": SimpleNamespace(resolve_cron_scheduler=lambda: None),
+            "azure_cron_provider": SimpleNamespace(schedule_revision=lambda _: "revision"),
+        }
+        with patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(ValueError, "no native fire claim"):
+                cron_runtime.rearm_preclaim_schedule(
+                    Path.cwd(), job_id="job", revision="revision",
+                    repair_id="ticket", operator="owner", reason="old lock",
+                )
+
+    def test_failed_dream_receipt_remains_unknown_until_explicit_skip(self):
+        with tempfile.TemporaryDirectory(dir=RUNTIME_DIR.parent.parent) as directory:
+            profile = Path(directory)
+            path = cron_runtime.system_schedule_receipts_path(profile)
+            receipt = {
+                "state": "completed", "revision": "revision", "success": False,
+                "summary": {"outcome": "unknown"}, "error": "native outcome unknown",
+            }
+            cron_runtime.atomic_write_json(path, {"dream:revision": receipt})
+            self.assertEqual(cron_runtime._terminal_system_outcome(receipt, "dream")["status"], "unknown")
+            resolved = cron_runtime.resolve_schedule(
+                profile, job_id="dream", revision="revision", occurrence_id="revision",
+                operator="owner", reason="inspected run and explicitly skipped", kind="dream",
+            )
+            self.assertEqual(resolved["status"], "skipped")
+            self.assertFalse(resolved["replayed"])
+            updated = cron_runtime.read_json_object(path)["dream:revision"]
+            self.assertEqual(cron_runtime._terminal_system_outcome(updated, "dream")["status"], "duplicate")
+
+    def test_dream_pending_native_run_is_not_completed_as_a_failed_occurrence(self):
+        adapter = SimpleNamespace(
+            claim_system_schedule=AsyncMock(return_value={
+                "status": "claimed", "ownerToken": "owner", "jobId": "dream",
+                "revision": "revision", "occurrenceId": "revision",
+            }),
+            complete_system_schedule=AsyncMock(),
+        )
+        with (
+            patch.object(bridge_app, "runtime_adapter", return_value=adapter),
+            patch.object(bridge_app.scheduled_learning, "run_once", side_effect=bridge_app.event_worker.InvocationPendingError("native run continues")),
+        ):
+            with self.assertRaises(bridge_app.event_worker.InvocationPendingError):
+                asyncio.run(bridge_app.process_scheduled_message({
+                    "type": "system.dream", "jobId": "dream", "revision": "revision",
+                }))
+        adapter.complete_system_schedule.assert_not_awaited()
+
     def test_cron_provider_is_a_separate_exclusive_plugin_and_autopilots_is_standalone(self):
         plugins = RUNTIME_DIR / "plugins"
         self.assertEqual(sorted(path.name for path in plugins.iterdir() if path.is_dir()), ["autopilots", "azure"])
@@ -53,6 +721,7 @@ class UserSchedulingTests(unittest.TestCase):
             "native_learning": types.SimpleNamespace(
                 register_attachment_privacy=lambda ctx: calls.append(("privacy", None)),
             ),
+            "cron_origin": types.SimpleNamespace(register=lambda ctx: calls.append(("origin", None))),
         }
         spec = importlib.util.spec_from_file_location("autopilots_plugin_under_test", plugins / "autopilots" / "__init__.py")
         module = importlib.util.module_from_spec(spec)
@@ -65,7 +734,7 @@ class UserSchedulingTests(unittest.TestCase):
         ):
             spec.loader.exec_module(module)
             module.register(Context())
-        self.assertEqual(calls, [("telemetry", None), ("keepalive", None), ("privacy", None), ("handler", "api_server")])
+        self.assertEqual(calls, [("telemetry", None), ("keepalive", None), ("origin", None), ("privacy", None), ("handler", "api_server")])
         dockerfile = (RUNTIME_DIR / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("ENV AUTOPILOTS_PLUGIN_PATH=/app:/opt/autopilots/hermes-site", dockerfile)
 
@@ -535,11 +1204,21 @@ class UserSchedulingTests(unittest.TestCase):
                         "\n\n## Response\n\nScheduled hello",
                         encoding="utf-8",
                     )
-                    output_callback(output_path)
+                    output_callback(output_path, "native-execution")
                     return True
+
+                def forget_fired_occurrence(self, *args):
+                    pass
+
+                def reconcile(self):
+                    pass
 
             cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = Provider
             cron_modules["azure_cron_provider"].schedule_revision = lambda value: revision
+            cron_modules["cron.executions"] = SimpleNamespace(get_execution=lambda native_id: {
+                "id": native_id, "job_id": "job-1", "status": "completed",
+                "scheduled_instant": job["next_run_at"],
+            })
             (profile / "local").mkdir()
             cron_runtime.atomic_write_json(
                 cron_runtime.delivery_references_path(profile),
@@ -627,6 +1306,7 @@ class UserSchedulingTests(unittest.TestCase):
                 "state": "executing",
                 "lastRunAtBefore": None,
                 "executionId": "execution-1",
+                "scheduledNextRunAt": job["next_run_at"],
             }
             cron_runtime.atomic_write_json(
                 cron_runtime.cron_delivery_receipts_path(profile),
@@ -639,7 +1319,7 @@ class UserSchedulingTests(unittest.TestCase):
             )
             cron_runtime._record_cron_output(
                 profile, job_id="job-1", revision=revision,
-                execution_id="execution-1", output_path=output_path,
+                execution_id="execution-1", output_path=output_path, native_execution_id="native-execution",
             )
             (output_dir / "2026-07-22_17-06-00.md").write_text(
                 "# Cron Job\n\n## Response\n\nLater occurrence output",
@@ -654,11 +1334,16 @@ class UserSchedulingTests(unittest.TestCase):
             cron_modules["cron.jobs"].get_job = lambda job_id: job
             cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = lambda: SimpleNamespace(
                 reconcile=lambda: None,
+                forget_fired_occurrence=lambda *args: None,
                 fire_due=lambda job_id: (_ for _ in ()).throw(
                     AssertionError("must not rerun")
                 ),
             )
             cron_modules["azure_cron_provider"].schedule_revision = lambda value: revision
+            cron_modules["cron.executions"] = SimpleNamespace(get_execution=lambda native_id: {
+                "id": native_id, "job_id": "job-1", "status": "completed",
+                "scheduled_instant": job["next_run_at"],
+            })
 
             with patch.dict(sys.modules, cron_modules):
                 recovered = cron_runtime.fire_cron_job(
@@ -670,7 +1355,7 @@ class UserSchedulingTests(unittest.TestCase):
         self.assertEqual(recovered["status"], "pending_delivery")
         self.assertEqual(recovered["output"], "Recovered output")
 
-    def test_processing_failure_is_delivered_instead_of_marked_duplicate(self):
+    def test_finished_execution_without_identity_or_output_is_unknown_not_a_fake_result(self):
         initial = {
             "id": "job-1",
             "schedule": {"kind": "interval", "minutes": 3},
@@ -706,8 +1391,8 @@ class UserSchedulingTests(unittest.TestCase):
                     revision="revision-1",
                 )
 
-        self.assertEqual(result["status"], "completed")
-        self.assertIn("scheduled task failed", result["output"].lower())
+        self.assertEqual(result["status"], "unknown")
+        self.assertIn("without an authenticated execution/output binding", result["reason"])
 
     def test_active_execution_receipt_stays_in_progress(self):
         job = {
@@ -757,7 +1442,7 @@ class UserSchedulingTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "in_progress")
 
-    def test_delivered_receipts_are_bounded_per_job(self):
+    def test_delivered_receipts_retain_old_dlq_replay_tombstones(self):
         receipts = {
             f"job-1:revision-{index:02d}": {
                 "delivered": True,
@@ -785,7 +1470,7 @@ class UserSchedulingTests(unittest.TestCase):
         delivered = [
             value for value in receipts.values() if value.get("delivered")
         ]
-        self.assertEqual(len(delivered), 20)
+        self.assertEqual(len(delivered), 25)
         self.assertIn("job-1:pending", receipts)
         self.assertEqual(
             len([
@@ -839,6 +1524,7 @@ class UserSchedulingTests(unittest.TestCase):
         )
         cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = (
             lambda: SimpleNamespace(
+                forget_fired_occurrence=lambda *args: None,
                 reconcile=lambda: reconciled.append(True)
             )
         )
@@ -923,6 +1609,7 @@ class UserSchedulingTests(unittest.TestCase):
         )
         cron_modules["cron.scheduler_provider"].resolve_cron_scheduler = (
             lambda: SimpleNamespace(
+                forget_fired_occurrence=lambda *args: None,
                 reconcile=lambda: reconciled.append(True)
             )
         )
@@ -1023,10 +1710,10 @@ class UserSchedulingTests(unittest.TestCase):
             }
             with patch.dict(sys.modules, modules):
                 result = cron_runtime.fire_cron_job(profile, job_id="job-1", revision="revision-1")
-        self.assertEqual(result["status"], "pending_delivery")
+        self.assertEqual(result["status"], "unknown")
         self.assertEqual(result["lastStatus"], "error")
-        self.assertNotIn("Not this occurrence", result["output"])
-        self.assertIn("no unambiguous output", result["output"])
+        self.assertNotIn("Not this occurrence", result.get("output", ""))
+        self.assertIn("no unambiguous output", result["reason"])
 
     def test_native_output_checkpoint_survives_provider_reconcile_failure(self):
         job = {
@@ -1065,6 +1752,10 @@ class UserSchedulingTests(unittest.TestCase):
                 "cron": SimpleNamespace(scheduler=scheduler),
                 "cron.scheduler_provider": native_module,
                 "cron.jobs": SimpleNamespace(get_job=lambda _: job),
+                "cron.executions": SimpleNamespace(get_execution=lambda native_id: {
+                    "id": native_id, "job_id": "job-1", "status": "completed",
+                    "scheduled_instant": "2026-09-01T00:00:00+00:00",
+                }),
             }
             with patch.dict(sys.modules, modules):
                 spec = importlib.util.spec_from_file_location(
@@ -1076,10 +1767,13 @@ class UserSchedulingTests(unittest.TestCase):
                 with (
                     patch.dict(sys.modules, {"azure_cron_provider": module}),
                     patch.object(provider, "reconcile", side_effect=[RuntimeError("broker unavailable"), None]),
+                    patch.object(provider, "forget_fired_occurrence"),
                 ):
                     revision = module.schedule_revision(job)
-                    with self.assertRaisesRegex(RuntimeError, "broker unavailable"):
-                        cron_runtime.fire_cron_job(profile, job_id="job-1", revision=revision)
+                    first = cron_runtime.fire_cron_job(profile, job_id="job-1", revision=revision)
+                    self.assertEqual(first["status"], "pending_delivery")
+                    self.assertFalse(first["reconciled"])
+                    self.assertIn("broker unavailable", first["reconciliationError"])
                     recovered = cron_runtime.fire_cron_job(
                         profile, job_id="job-1", revision=revision
                     )

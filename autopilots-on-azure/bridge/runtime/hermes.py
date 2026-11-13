@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, nullcontext
 from typing import Any
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -20,7 +20,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
 from bridge.telemetry import runtime_trace_headers
-from bridge.hermes_telemetry import CONTEXT_DIRECTORY_ENV, gateway_trace_context
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
 ROLE_POLICY_REFERENCE = (
@@ -179,7 +178,7 @@ def bridge_instructions(request: AgentRequest) -> str:
     if _configured_env("USER_SCHEDULING_ENABLED") == "true":
         scheduling = (
             "\n\nUser scheduling is enabled through Hermes native cron. When the user explicitly asks for a reminder, "
-            "one-shot task, or recurring task, use the cronjob tool. Use a self-contained prompt, reviewed Role Skills where "
+            "one-shot task, or recurring task, use the cronjob_manage tool. Use a self-contained prompt, reviewed Role Skills where "
             "helpful, and deliver='local' because the bridge performs proactive delivery to the originating Teams conversation. "
             "Never create script or no_agent cron jobs in hosted mode. Ask for missing date, time, timezone, recurrence, or "
             "destination instead of guessing. Do not schedule access to human-owned resources that would require retained OBO. "
@@ -359,98 +358,8 @@ class HermesRuntimeAdapter:
         from bridge import durable_transport
 
         base_url, api_key = await self._ready_runtime()
-        cron_jobs_before: dict[str, str] = {}
-        delivery_reference = request.metadata.get("deliveryReference")
-        if _configured_env("USER_SCHEDULING_ENABLED") == "true":
-            correlation = durable_transport.delivery_identity.get()
-            snapshot_key = "cron-before:" + correlation
-            saved = (
-                durable_transport.journal().load_state(snapshot_key)
-                if correlation and durable_transport.enabled() else None
-            )
-            if saved is not None:
-                if not isinstance(saved, dict):
-                    raise ValueError("The queued cron comparison snapshot is invalid.")
-                cron_jobs_before = saved
-            else:
-                cron_jobs_before = {
-                    str(job.get("id") or ""): str(job.get("revision") or "")
-                    for job in await self._cron_jobs(base_url, api_key)
-                }
-                if correlation and durable_transport.enabled():
-                    durable_transport.journal().save_state(snapshot_key, cron_jobs_before)
-                    from bridge.event_worker import checkpoint
-
-                    await checkpoint()
-            if isinstance(delivery_reference, dict):
-                await self._cron_request(
-                    base_url,
-                    api_key,
-                    "POST",
-                    "/internal/cron/delivery-reference",
-                    body=delivery_reference,
-                )
         endpoint, payload = await self._invoke_hermes(base_url, api_key, request)
         visible_text = self._response_text(payload)
-        scheduled_jobs: list[str] = []
-        if _configured_env("USER_SCHEDULING_ENABLED") == "true":
-            cron_jobs_after = await self._cron_jobs(base_url, api_key)
-            cron_jobs_after_by_id = {
-                str(job.get("id") or ""): str(job.get("revision") or "")
-                for job in cron_jobs_after
-            }
-            changed_jobs = {
-                job_id for job_id, revision in cron_jobs_after_by_id.items()
-                if cron_jobs_before.get(job_id) != revision
-            }
-            scheduled_jobs = [
-                str(job.get("id") or "")
-                for job in cron_jobs_after
-                if str(job.get("id") or "") not in cron_jobs_before
-            ]
-            if scheduled_jobs and not isinstance(delivery_reference, dict):
-                raise RuntimeError(
-                    "Hermes created a cron job without a supported proactive delivery destination."
-                )
-            if scheduled_jobs and isinstance(delivery_reference, dict):
-                await self._cron_request(
-                    base_url,
-                    api_key,
-                    "POST",
-                    "/internal/cron/bind-delivery",
-                    body={
-                        "jobIds": scheduled_jobs,
-                        "referenceKey": delivery_reference.get("referenceKey"),
-                    },
-                )
-            reconciliation = await self._cron_request(
-                base_url,
-                api_key,
-                "POST",
-                "/internal/cron/reconcile",
-                body={},
-            )
-            if reconciliation.get("status") == "error" and cron_jobs_after_by_id != cron_jobs_before:
-                raise RuntimeError(
-                    "Hermes saved the cron change, but Service Bus reconciliation failed: "
-                    + str(reconciliation.get("error") or reconciliation.get("errorType") or "unknown error")
-                )
-            if cron_jobs_after_by_id != cron_jobs_before:
-                cron_jobs_after = await self._cron_jobs(base_url, api_key)
-            unscheduled_jobs = [
-                str(job.get("id") or "")
-                for job in cron_jobs_after
-                if str(job.get("id") or "") in changed_jobs
-                and job.get("enabled")
-                and job.get("state") != "paused"
-                and job.get("nextRunAt")
-                and not job.get("externallyScheduled")
-            ]
-            if unscheduled_jobs:
-                raise RuntimeError(
-                    "Hermes saved new or changed cron jobs that were not armed in Service Bus: "
-                    + ", ".join(unscheduled_jobs)
-                )
         return AgentResponse(
             text=visible_text,
             raw={
@@ -459,7 +368,6 @@ class HermesRuntimeAdapter:
                 "payload": payload,
                 "transportMessageId": durable_transport.delivery_identity.get(),
                 "privateSession": _private_context_enabled(request),
-                "scheduledJobs": scheduled_jobs,
             },
         )
 
@@ -481,12 +389,21 @@ class HermesRuntimeAdapter:
                 raise ValueError("Dream session does not match the scheduled occurrence.")
             phase = checkpoint.get("phase")
             if phase == "dream_started":
-                raise DreamExecutionUncertainError(
-                    "The previous Dream execution outcome is uncertain. Automatic inference retry "
-                    "is blocked. Inspect Worker diagnostics and, if needed, explicitly start a new "
-                    "ad-hoc Dream instead of replaying this occurrence."
+                from bridge import durable_transport
+
+                correlation = durable_transport.delivery_identity.get()
+                queue = durable_transport.delivery_queue.get()
+                receipt = (
+                    durable_transport.journal().get(queue, correlation)
+                    if correlation and queue and durable_transport.enabled() else {}
                 )
-            if phase == "pending":
+                if not receipt.get("native_run_id"):
+                    raise DreamExecutionUncertainError(
+                        "The previous Dream execution outcome is uncertain and has no known native run. "
+                        "Automatic inference retry is blocked. Inspect Worker diagnostics and, if needed, "
+                        "explicitly start a new ad-hoc Dream instead of replaying this occurrence."
+                    )
+            elif phase == "pending":
                 await self.checkpoint_system_schedule(
                     **identity, owner_token=operation["ownerToken"],
                     expected_phase="pending", phase="dream_started", payload={},
@@ -534,8 +451,8 @@ class HermesRuntimeAdapter:
             return await self._collective_learning_request("POST", "/internal/collective-learning/prepare")
 
     async def pending_collective_learning(self) -> dict[str, Any]:
-        async with self._runtime_lock:
-            return await self._collective_learning_request("GET", "/internal/collective-learning/pending")
+        """Read an advisory snapshot; approval rechecks the digest under the runtime lock."""
+        return await self._collective_learning_request("GET", "/internal/collective-learning/pending")
 
     async def prepare_refresh_rejection(self) -> dict[str, Any]:
         async with self._runtime_lock:
@@ -662,7 +579,8 @@ class HermesRuntimeAdapter:
     async def _runtime_request(
         self, method: str, path: str, *, body: dict[str, Any] | None = None, timeout: int = 120,
     ) -> dict[str, Any]:
-        async with self._runtime_lock:
+        advisory_read = method == "GET" and "markPresented=true" not in path
+        async with nullcontext() if advisory_read else self._runtime_lock:
             base_url, api_key = await self._ready_runtime()
             return await self._cron_request(base_url, api_key, method, path, body=body, timeout=timeout)
 
@@ -825,6 +743,13 @@ class HermesRuntimeAdapter:
                 timeout=300,
             )
 
+    async def known_cron_result(
+        self, *, job_id: str, revision: str, execution_id: str, output_sha256: str,
+    ) -> dict[str, Any]:
+        return await self._runtime_request("POST", "/internal/cron/known-result", body={
+            "jobId": job_id, "revision": revision, "executionId": execution_id, "outputSha256": output_sha256,
+        })
+
     async def acknowledge_cron_delivery(
         self,
         *,
@@ -920,17 +845,24 @@ class HermesRuntimeAdapter:
             body=body,
         )
 
-    async def _cron_jobs(self, base_url: str, api_key: str) -> list[dict[str, Any]]:
-        payload = await self._cron_request(
-            base_url,
-            api_key,
-            "GET",
-            "/internal/cron/jobs",
+    async def repair_schedule(
+        self, action: str, payload: dict[str, Any], *, operator: str,
+    ) -> dict[str, Any]:
+        if action not in {"rearm-preclaim", "resolve"} or not operator.startswith("entra:"):
+            raise ValueError("Schedule repair requires a verified owner and a supported repair action.")
+        base_url, api_key = await self._ready_runtime()
+        issued_at = int(time.time())
+        grant = {
+            "version": "1.0", "action": action, "workerId": _env_required("WORKER_ID"),
+            "operator": operator, "authorizedAt": issued_at, "expiresAt": issued_at + 300,
+            "payload": payload,
+        }
+        grant["signature"] = base64.b64encode(_collective_approval_private_key().sign(
+            json.dumps(grant, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        )).decode("ascii")
+        return await self._cron_request(
+            base_url, api_key, "POST", f"/internal/cron/{action}", body=grant,
         )
-        jobs = payload.get("jobs")
-        if not isinstance(jobs, list):
-            raise RuntimeError("Hermes cron jobs endpoint returned no jobs array.")
-        return [job for job in jobs if isinstance(job, dict)]
 
     async def _cron_request(
         self,
@@ -1046,6 +978,16 @@ class HermesRuntimeAdapter:
             request,
             transcript_id,
         )
+        delivery_reference = request.metadata.get("deliveryReference")
+        if (
+            _configured_env("USER_SCHEDULING_ENABLED") == "true"
+            and isinstance(delivery_reference, dict)
+            and not _private_context_enabled(request)
+        ):
+            await self._cron_request(
+                base_url, api_key, "POST", "/internal/cron/session-origin",
+                body={"sessionId": transcript_id, "deliveryReference": delivery_reference},
+            )
         body = {
             "input": request.prompt,
             "instructions": bridge_instructions(request),
@@ -1075,8 +1017,6 @@ class HermesRuntimeAdapter:
         run_id = receipt["native_run_id"] if receipt else ""
         key = "autopilots-" + (correlation or uuid.uuid4().hex)
         async with AsyncExitStack() as resources:
-            if os.getenv(CONTEXT_DIRECTORY_ENV):
-                resources.enter_context(gateway_trace_context(transcript_id, admission_id=key))
             client = await resources.enter_async_context(self._client_factory(
                 timeout=int(_env_optional("HERMES_BRIDGE_TIMEOUT_SECONDS", default="600")),
             ))

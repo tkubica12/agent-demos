@@ -2579,6 +2579,7 @@ body.architecture-focus-open { overflow: hidden; }
         <h3 class="card-head"><button type="button" class="card-toggle" aria-expanded="false"><span class="card-num" aria-hidden="true"></span><span class="card-titles"><span class="card-title">Approval binds the packet and the current Worker state.</span><span class="card-sub">A later edit makes the prior approval stale.</span></span><span class="card-mark" aria-hidden="true"></span></button></h3>
         <div class="card-body">
           <p>The runtime verifies an Ed25519-signed receipt against the packet digest, Worker, release commit, and governed-state hash. A signature over a different or stale packet cannot authorize export. The gateway holds the private key; runtime and review receive public keys only.</p>
+          <p>The operator authenticates through Entra as the Worker owner. The gateway derives the approver from that verified identity; a runtime API key or caller-supplied name cannot approve a packet. Owner-bound Teams skill decisions remain a separate workflow.</p>
           <div class="summary-grid">
             <div class="summary-item"><span class="summary-label">Approve export</span>Allows the exact reviewed packet to leave the Worker; it does not approve merging or release.</div>
             <div class="summary-item"><span class="summary-label">Reject and refresh</span>Records the signed rejection and permits discarding those governed local changes during the controlled refresh.</div>

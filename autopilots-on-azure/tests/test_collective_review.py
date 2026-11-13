@@ -1,10 +1,11 @@
 import hashlib
 import base64
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -22,6 +23,7 @@ from scripts.collective_review import (
     create_role_release_pull_request,
 )
 from scripts.collective_learning import attested_envelope
+import scripts.collective_learning as operator_cli
 from collective_learning import exported_artifact_hash, file_hashes
 
 
@@ -46,6 +48,31 @@ class CollectiveReviewTests(unittest.TestCase):
         )
 
         self.assertEqual(envelope, {"packet": packet, "receipt": receipt})
+
+    def test_operator_cli_sends_scoped_entra_token_not_runtime_key_or_caller_identity(self):
+        config = {
+            "agent365_tenant_id": "operator-tenant",
+            "collective_learning_operator_client_id": "operator-client",
+            "api_server_key": "runtime-key-must-not-be-sent",
+        }
+        credential = MagicMock()
+        credential.__enter__.return_value = credential
+        credential.get_token.return_value.token = "owner-access-token"
+        response = io.BytesIO(b'{"approved": true}')
+        with (
+            patch.object(operator_cli, "_load_json", side_effect=[{"bridge_url": "https://bridge.example"}, config]),
+            patch.object(operator_cli, "AzureCliCredential", return_value=credential) as login,
+            patch.object(operator_cli.urllib.request, "urlopen", return_value=response) as send,
+        ):
+            result = operator_cli._operator_request("/internal/collective-learning/approve", method="POST",
+                                                    body={"packetDigest": "a" * 64})
+        self.assertTrue(result["approved"])
+        login.assert_called_once_with(tenant_id="operator-tenant")
+        credential.get_token.assert_called_once_with("api://operator-client/.default")
+        request = send.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer owner-access-token")
+        self.assertIsNone(request.get_header("X-autopilot-key"))
+        self.assertEqual(json.loads(request.data), {"packetDigest": "a" * 64})
 
     @staticmethod
     def improvement_id(worker_id: str) -> str:

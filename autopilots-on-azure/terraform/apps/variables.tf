@@ -154,6 +154,11 @@ variable "scheduled_learning_retry_backoff_seconds" {
   }
 }
 
+variable "collective_learning_operator_client_id" {
+  type    = string
+  default = ""
+}
+
 variable "collective_learning_approval_private_key" {
   type      = string
   default   = ""

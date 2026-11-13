@@ -1,55 +1,35 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import shlex
 import time
 import uuid
-from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import urlsplit
 
 import httpx
 from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
 from azure.identity import AzureCliCredential
 
 from scripts.setup_app_tfvars import runtime_outputs_path
+from bridge.transport_ingress import CALLBACK_PATH
 
 
 API = "2026-05-01-preview"
 ROLE_API = "2022-04-01"
-CALLBACK = r"""
-import json,sys,urllib.request
-config=json.load(open('/app/.sandbox-service.json'))
-environment=config['environment']
-request=urllib.request.Request(
- 'http://127.0.0.1:8000/internal/transport/callback',
- method='POST',headers={'Content-Type':'application/json','X-Autopilot-Key':environment['API_SERVER_KEY']},
- data=json.dumps({'queue':sys.argv[1],'envelope':sys.argv[2]}).encode())
-with urllib.request.urlopen(request,timeout=90) as response:
- result=json.load(response)
-if result.get('acknowledged') is not False or not result.get('messageId'):
- raise RuntimeError('No durable unacknowledged transport receipt')
-print(json.dumps(result))
-""".strip()
-
-
 def expected_trigger(
     outputs: dict[str, Any], role: str, queue: str, sandbox_id: str,
+    *, callback_url: str = "",
 ) -> dict[str, Any]:
     if role != "gateway":
         raise ValueError("Only the gateway receives managed scheduling callbacks.")
     group = outputs["sandbox_groups"][role]
     region = outputs["sandbox_location"]
-    callback = (
-        endpoint_for_region(region).rstrip("/")
-        + f"/subscriptions/{outputs['subscription_id']}/resourceGroups/{outputs['resource_group_name']}"
-        + f"/sandboxGroups/{quote(group['name'], safe='')}/sandboxes/{sandbox_id}/executeShellCommand"
-        + "?api-version=2026-02-01-preview"
-    )
-    expression = '"@{base64(string(triggerBody()))}"'
-    command = f"python3 -c {shlex.quote(CALLBACK)} {shlex.quote(queue)} {expression}"
+    callback = callback_url or outputs["sandbox_services"]["gateway"]["callback_url"]
+    parsed = urlsplit(callback)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+        raise ValueError("The gateway callback requires its captured native HTTPS port URL.")
     return {
         "location": region,
         "properties": {
@@ -65,14 +45,11 @@ def expected_trigger(
                 {"name": "sessionId", "value": "None"},
             ],
             "notificationDetails": {
-                "callbackUrl": callback, "httpMethod": "POST",
-                "body": {
-                    "command": command, "shell": "/bin/bash",
-                    "workingDirectory": "/app", "activationMode": "OnDemand",
-                },
+                "callbackUrl": callback.rstrip("/") + CALLBACK_PATH, "httpMethod": "POST",
+                "body": "@triggerBody()",
                 "authentication": {
                     "type": "ManagedServiceIdentity",
-                    "audience": "https://management.azuredevcompute.io/",
+                    "audience": "https://auth.adcproxy.io/",
                 },
             },
             "metadata": {

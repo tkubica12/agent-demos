@@ -1,9 +1,4 @@
-"""Hermes native execution middleware and local subprocess trace handoff.
-
-The native gateway drops ContextVars at run_in_executor and has no W3C ingress
-hook. The wrapper lends its context to one awaited, explicit-session request.
-Only W3C context and opaque correlation IDs cross the local process boundary.
-"""
+"""Metadata-only executor handoff published by the runtime at native Runs admission."""
 
 from __future__ import annotations
 

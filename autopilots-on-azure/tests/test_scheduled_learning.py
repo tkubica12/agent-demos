@@ -1,17 +1,23 @@
 import asyncio
+import io
+import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
+from contextlib import redirect_stdout
 
 import bridge.app as bridge_app
 from bridge.runtime.base import AgentResponse, DreamResponse
+from bridge.runtime.hermes import NativeRunFailedError
 from bridge.scheduled_learning import (
     ScheduledLearningCoordinator,
     ScheduledLearningSettings,
 )
+from scripts.servicebus_dream_smoke import MANAGEMENT_DREAM
 
 RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtimes" / "hermes"
 sys.path.insert(0, str(RUNTIME_DIR))
@@ -19,6 +25,40 @@ import cron_runtime
 
 
 class ScheduledLearningTests(unittest.TestCase):
+    def test_management_dream_uses_native_account_before_accessing_cron_state(self):
+        calls = []
+
+        def diagnostics(home):
+            calls.append(("diagnostics", str(home)))
+            return {"jobs": [{"id": "dream", "name": "Platform Dreaming", "schedule": "0 2 * * *"}]}
+
+        environment = {
+            "HERMES_HOME": "/data/hermes",
+            "AUTOPILOTS_APPLICATION_ROOT": str(RUNTIME_DIR),
+        }
+        account = SimpleNamespace(pw_uid=1019, pw_gid=1019)
+        with (
+            patch.dict(os.environ, {}),
+            patch.dict(sys.modules, {
+                "pwd": SimpleNamespace(getpwnam=lambda name: account),
+                "cron_runtime": SimpleNamespace(
+                    cron_diagnostics=diagnostics, enqueue_system_dream_now=lambda home: None,
+                ),
+            }),
+            patch.object(sys, "path", list(sys.path)),
+            patch.object(sys, "argv", ["management", "schedule"]),
+            patch("builtins.open", mock_open(read_data=json.dumps({"environment": environment}))),
+            patch.object(os, "geteuid", return_value=0, create=True),
+            patch.object(os, "setgroups", side_effect=lambda value: calls.append(("groups", value)), create=True),
+            patch.object(os, "setgid", side_effect=lambda value: calls.append(("gid", value)), create=True),
+            patch.object(os, "setuid", side_effect=lambda value: calls.append(("uid", value)), create=True),
+            redirect_stdout(io.StringIO()),
+        ):
+            exec(compile(MANAGEMENT_DREAM, "<management-dream>", "exec"), {})
+        self.assertEqual(calls, [
+            ("groups", []), ("gid", 1019), ("uid", 1019), ("diagnostics", str(Path("/data/hermes"))),
+        ])
+
     def test_system_dream_message_claims_runs_and_completes_schedule(self):
         calls = []
         runs = []
@@ -75,7 +115,7 @@ class ScheduledLearningTests(unittest.TestCase):
 
         class Coordinator:
             async def run_once(self, **kwargs):
-                raise ValueError("invalid Dreaming result")
+                raise NativeRunFailedError("native Dream run failed")
 
         with (
             patch.object(bridge_app, "runtime_adapter", return_value=Adapter()),
@@ -90,7 +130,7 @@ class ScheduledLearningTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertFalse(calls[0]["success"])
-        self.assertIn("ValueError", calls[0]["error"])
+        self.assertIn("NativeRunFailedError", calls[0]["error"])
 
     def test_interrupted_system_dream_is_not_rerun(self):
         calls = []

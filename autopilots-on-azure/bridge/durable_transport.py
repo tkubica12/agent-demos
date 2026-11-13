@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import sqlite3
-import tempfile
 import time
 import urllib.request
 from collections.abc import Iterator
@@ -93,9 +92,20 @@ class Journal:
                     settled INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
                     native_scope TEXT NOT NULL DEFAULT '', admission_at REAL NOT NULL DEFAULT 0,
                     native_run_id TEXT NOT NULL DEFAULT '',
+                    updated_at REAL NOT NULL DEFAULT 0,
+                    effect_stage TEXT NOT NULL DEFAULT 'preclaim',
+                    resolution TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY(queue, message_id)
                 )
             """)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(deliveries)")}
+            for name, definition in {
+                "updated_at": "REAL NOT NULL DEFAULT 0",
+                "effect_stage": "TEXT NOT NULL DEFAULT 'preclaim'",
+                "resolution": "TEXT NOT NULL DEFAULT ''",
+            }.items():
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE deliveries ADD COLUMN {name} {definition}")
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS conversation_state (
                     key TEXT PRIMARY KEY, payload TEXT NOT NULL
@@ -126,21 +136,16 @@ class Journal:
                 connection.execute("""
                     UPDATE deliveries SET
                     settled=CASE WHEN lock_token<>? THEN 0 ELSE settled END,
-                    lock_token=?, connection_id=?, delivery_count=?
+                    lock_token=?, connection_id=?, delivery_count=?, updated_at=?
                     WHERE queue=? AND message_id=?
                 """, (envelope["LockToken"], envelope["LockToken"], connection_id,
-                      envelope["Properties"]["DeliveryCount"], queue, message_id))
+                      envelope["Properties"]["DeliveryCount"], time.time(), queue, message_id))
             else:
-                pending = connection.execute(
-                    "SELECT count(*) FROM deliveries WHERE phase NOT IN ('completed','failed','unknown')",
-                ).fetchone()[0]
-                if pending >= 32:
-                    raise RuntimeError("The bounded transport inbox is full; leave the lease for redelivery.")
                 connection.execute("""
-                    INSERT INTO deliveries(queue,message_id,payload,lock_token,connection_id,delivery_count)
-                    VALUES (?,?,?,?,?,?)
+                    INSERT INTO deliveries(queue,message_id,payload,lock_token,connection_id,delivery_count,updated_at)
+                    VALUES (?,?,?,?,?,?,?)
                 """, (queue, message_id, payload, envelope["LockToken"], connection_id,
-                      envelope["Properties"]["DeliveryCount"]))
+                      envelope["Properties"]["DeliveryCount"], time.time()))
         return self.get(queue, message_id)
 
     def get(self, queue: str, message_id: str) -> dict[str, Any]:
@@ -156,9 +161,11 @@ class Journal:
         permitted = {
             "phase", "result", "settled", "error",
             "native_scope", "admission_at", "native_run_id",
+            "updated_at", "effect_stage", "resolution",
         }
         if not values or set(values) - permitted:
             raise ValueError("Invalid transport receipt update.")
+        values.setdefault("updated_at", time.time())
         with closing(self.connect()) as connection, connection:
             cursor = connection.execute(
                 "UPDATE deliveries SET " + ",".join(f"{key}=?" for key in values)
@@ -170,9 +177,7 @@ class Journal:
     def backup(self, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with locked_file(self.path.with_suffix(self.path.suffix + ".backup.lock")):
-            descriptor, name = tempfile.mkstemp(prefix="transport-checkpoint-", suffix=".tmp")
-            os.close(descriptor)
-            local = Path(name)
+            local = self.path.with_name(f".{self.path.name}.checkpoint")
             staged = destination.with_name(f".{destination.name}-{local.name}.next")
             try:
                 with closing(self.connect()) as source, closing(sqlite3.connect(local)) as target:
@@ -184,6 +189,52 @@ class Journal:
             finally:
                 local.unlink(missing_ok=True)
                 staged.unlink(missing_ok=True)
+
+    def mark_settled(self, queue: str, message_id: str, lock_token: str) -> None:
+        with closing(self.connect()) as connection, connection:
+            connection.execute(
+                "UPDATE deliveries SET settled=1, updated_at=? WHERE queue=? AND message_id=? AND lock_token=?",
+                (time.time(), queue, message_id, lock_token),
+            )
+
+    def sweep(self, active: set[tuple[str, str]], *, max_attempts: int, stale_seconds: int) -> int:
+        changed = 0
+        with closing(self.connect()) as connection, connection:
+            rows = connection.execute(
+                "SELECT * FROM deliveries WHERE phase NOT IN ('completed','failed','unknown')"
+            ).fetchall()
+            for row in rows:
+                if (row["queue"], row["message_id"]) in active:
+                    continue
+                if row["delivery_count"] < max_attempts or time.time() - row["updated_at"] < stale_seconds:
+                    continue
+                phase = (
+                    "failed" if row["effect_stage"] == "preclaim"
+                    and not row["native_scope"] and not row["native_run_id"] else "unknown"
+                )
+                connection.execute(
+                    "UPDATE deliveries SET phase=?, error=?, updated_at=? WHERE queue=? AND message_id=?",
+                    (phase, "Last broker attempt stranded; inspect the DLQ and resolve without replaying effects.",
+                     time.time(), row["queue"], row["message_id"]),
+                )
+                changed += 1
+        return changed
+
+    def resolve(self, queue: str, message_id: str, *, outcome: str, operator: str, reason: str) -> None:
+        if outcome not in {"completed", "skipped"} or not operator.strip() or not reason.strip():
+            raise ValueError("Resolution requires completed/skipped, operator identity and evidence/reason.")
+        with closing(self.connect()) as connection, connection:
+            row = connection.execute(
+                "SELECT phase FROM deliveries WHERE queue=? AND message_id=?", (queue, message_id),
+            ).fetchone()
+            if row is None or row["phase"] not in {"unknown", "failed"}:
+                raise ValueError("Only a quarantined delivery can be resolved.")
+            connection.execute(
+                "UPDATE deliveries SET phase=?, resolution=?, updated_at=? WHERE queue=? AND message_id=?",
+                ("completed",
+                 canonical({"outcome": outcome, "operator": operator.strip(), "reason": reason.strip(),
+                            "at": time.time()}), time.time(), queue, message_id),
+            )
 
     def load_state(self, key: str) -> Any:
         with closing(self.connect()) as connection:
@@ -198,6 +249,20 @@ class Journal:
                 "INSERT INTO conversation_state(key,payload) VALUES (?,?) "
                 "ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", (key, canonical(payload)),
             )
+
+    def claim_effect(self, key: str) -> Any:
+        with closing(self.connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT payload FROM conversation_state WHERE key=?", (key,),
+            ).fetchone()
+            if row:
+                return json.loads(row["payload"])
+            connection.execute(
+                "INSERT INTO conversation_state(key,payload) VALUES (?,?)",
+                (key, canonical({"phase": "started"})),
+            )
+        return None
 
 
     def remove_obsolete_recovery_data(self, activity_queue: str) -> bool:
@@ -216,20 +281,24 @@ class Journal:
 
 
 def decode_callback(
-    encoded: str, queue: str, settings: TransportSettings,
+    envelope: dict[str, Any], queue: str, settings: TransportSettings,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not settings.schedule_queue or queue != settings.schedule_queue:
         raise ValueError("Native callback queue does not belong to this settling actor.")
-    if len(encoded) > MAX_MESSAGE_BYTES * 3:
+    if not isinstance(envelope, dict):
+        raise ValueError("Native callback envelope must be an object.")
+    if len(canonical(envelope).encode("utf-8")) > MAX_MESSAGE_BYTES * 3:
         raise ValueError("Native callback exceeds the bounded envelope size.")
-    envelope = json.loads(base64.b64decode(encoded, validate=True))
     body = json.loads(base64.b64decode(envelope["ContentData"], validate=True))
     message_id = envelope.get("MessageId")
     if not isinstance(message_id, str) or not message_id or len(message_id) > 128:
         raise ValueError("Native callback has no bounded broker MessageId.")
     if not isinstance(envelope.get("LockToken"), str) or not envelope["LockToken"]:
         raise ValueError("Native callback has no PeekLock token.")
-    count = envelope.get("Properties", {}).get("DeliveryCount")
+    properties = envelope.get("Properties")
+    if not isinstance(properties, dict):
+        raise ValueError("Native callback has no broker properties.")
+    count = properties.get("DeliveryCount")
     if isinstance(count, bool) or not str(count).isdigit() or int(count) < 1:
         raise ValueError("Native callback has no valid broker delivery count.")
     envelope["Properties"]["DeliveryCount"] = int(count)

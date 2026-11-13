@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import httpx
 from aiohttp import web
@@ -14,6 +16,8 @@ from aiohttp.test_utils import TestServer
 
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
 from bridge.runtime.hermes import DreamExecutionUncertainError, HermesRuntimeAdapter
+from bridge import durable_transport, event_worker
+from bridge.durable_transport import Journal
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -26,7 +30,7 @@ from tests.native_hermes_fakes import FakeSkillLedger, FakeWriteApproval  # noqa
 
 class DreamRecoveryTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory()
+        directory = tempfile.TemporaryDirectory(dir=Path.cwd())
         self.addCleanup(directory.cleanup)
         self.profile = Path(directory.name)
         native = patch.dict(sys.modules, {
@@ -125,6 +129,53 @@ class DreamRecoveryTests(unittest.TestCase):
         self.assertEqual(error.status, "uncertain")
         self.assertIn("explicitly start a new ad-hoc Dream", str(error))
 
+    def test_started_dream_reattaches_known_native_run_without_new_inference(self):
+        operation = self.create_operation(phase="dream_started")
+        journal = Journal(self.profile / "gateway.db")
+        journal.admit("schedule", {
+            "MessageId": "dream-delivery", "LockToken": "lease", "Properties": {"DeliveryCount": 2},
+        }, {"type": "system.dream"}, "connection")
+        journal.update("schedule", "dream-delivery", native_run_id="known-dream-run")
+        native_requests = []
+
+        async def scenario(base_url):
+            async with httpx.AsyncHTTPTransport() as real:
+                async def transport(outgoing):
+                    if outgoing.url.path.startswith("/v1/runs"):
+                        native_requests.append((outgoing.method, outgoing.url.path))
+                        self.assertEqual((outgoing.method, outgoing.url.path), ("GET", "/v1/runs/known-dream-run"))
+                        return httpx.Response(200, json={
+                            "run_id": "known-dream-run", "status": "completed", "output": "Recovered Dream",
+                        })
+                    return await real.handle_async_request(outgoing)
+
+                adapter = self.create_adapter(base_url, httpx.MockTransport(transport))
+                delivery_token = durable_transport.delivery_identity.set("dream-delivery")
+                queue_token = durable_transport.delivery_queue.set("schedule")
+                try:
+                    with (
+                        patch.object(durable_transport, "enabled", return_value=True),
+                        patch.object(durable_transport, "journal", return_value=journal),
+                        patch.object(event_worker, "checkpoint", new_callable=AsyncMock),
+                        patch.object(adapter, "_resolve_transcript_id", return_value="known-transcript"),
+                        patch.object(adapter, "_ensure_session", new_callable=AsyncMock),
+                    ):
+                        return await adapter.dream(
+                            DreamRequest(session_id=operation["sessionId"]), operation=operation,
+                        )
+                finally:
+                    durable_transport.delivery_identity.reset(delivery_token)
+                    durable_transport.delivery_queue.reset(queue_token)
+
+        result = self.with_runtime(scenario)
+        self.assertEqual(result.agent.text, "Recovered Dream")
+        self.assertEqual(native_requests, [("GET", "/v1/runs/known-dream-run")])
+        self.assertEqual(
+            cron_runtime.get_system_schedule_checkpoint(
+                self.profile, job_id="dream-job", revision="revision", occurrence_id="occurrence",
+            )["phase"], "dream_completed",
+        )
+
     def test_lost_completed_checkpoint_ack_does_not_repeat_inference(self):
         operation = self.create_operation()
         request = DreamRequest(session_id=operation["sessionId"])
@@ -178,29 +229,52 @@ class DreamRecoveryTests(unittest.TestCase):
         self.assertEqual(current["phase"], "pending")
         self.assertEqual(current["ownerToken"], operation["ownerToken"])
 
-    def test_updated_enabled_job_surfaces_reconcile_failure_or_missing_arm(self):
-        for reconcile in ({"status": "error", "error": "broker unavailable"}, {"status": "ok"}):
-            with self.subTest(reconcile=reconcile):
-                before = {
-                    "id": "existing", "revision": "before", "enabled": True,
-                    "state": "scheduled", "nextRunAt": "2026-09-07T02:00:00Z",
-                    "externallyScheduled": True,
-                }
-                after = {**before, "revision": "after", "externallyScheduled": False}
-                adapter = HermesRuntimeAdapter(runtime_url_factory=lambda: "http://runtime.test")
-                with (
-                    patch.dict(os.environ, {"USER_SCHEDULING_ENABLED": "true"}),
-                    patch.object(adapter, "_wait_for_health", new_callable=AsyncMock),
-                    patch.object(adapter, "_cron_jobs", side_effect=[[before], [after], [after]]),
-                    patch.object(adapter, "_cron_request", return_value=reconcile),
-                    patch.object(adapter, "_invoke_hermes", return_value=("sessions", {"output": "Updated"})),
-                ):
-                    with self.assertRaisesRegex(RuntimeError, "reconciliation failed|not armed"):
-                        asyncio.run(adapter.invoke(AgentRequest(
-                            prompt="Change the schedule", conversation_id="conversation",
-                            user_id="operator", source="teams_personal", must_answer=True,
-                        )))
+    def test_native_repair_requires_gateway_owner_grant_not_runtime_key(self):
+        private_key = Ed25519PrivateKey.generate()
+        payload = {"jobId": "job", "revision": "revision", "repairId": "ticket", "reason": "owner evidence"}
+        principal = "entra:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222"
+        signed = []
 
+        async def scenario(base_url):
+            adapter = self.create_adapter(base_url)
+            original_request = adapter._cron_request
+
+            async def capture(*args, **kwargs):
+                signed.append(kwargs["body"])
+                return await original_request(*args, **kwargs)
+
+            async with httpx.AsyncClient() as client:
+                denied = await client.post(
+                    base_url + "/internal/cron/rearm-preclaim",
+                    headers={"X-Autopilot-Key": "operator-key"}, json={**payload, "operator": principal},
+                )
+                self.assertEqual(denied.status_code, 403)
+                with patch.object(adapter, "_cron_request", side_effect=capture):
+                    result = await adapter.repair_schedule("rearm-preclaim", payload, operator=principal)
+                self.assertEqual(result["status"], "rearmed")
+                tampered = {**signed[0], "payload": {**payload, "revision": "different"}}
+                for path, body in (
+                    ("rearm-preclaim", tampered), ("resolve", signed[0]),
+                    ("rearm-preclaim", {**signed[0], "operator": "entra:forged"}),
+                ):
+                    response = await client.post(
+                        base_url + "/internal/cron/" + path,
+                        headers={"X-Autopilot-Key": "operator-key"}, json=body,
+                    )
+                    self.assertEqual(response.status_code, 403, response.text)
+
+        with (
+            patch.dict(os.environ, {
+                "WORKER_ID": "worker",
+                "COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY": base64.b64encode(private_key.private_bytes_raw()).decode(),
+                "COLLECTIVE_LEARNING_APPROVAL_PUBLIC_KEY": base64.b64encode(private_key.public_key().public_bytes_raw()).decode(),
+            }),
+            patch.object(runtime_routes, "rearm_preclaim_schedule", return_value={"status": "rearmed"}) as repair,
+        ):
+            self.with_runtime(scenario)
+        repair.assert_called_once_with(
+            self.profile, job_id="job", revision="revision", repair_id="ticket", operator=principal, reason="owner evidence",
+        )
 
 if __name__ == "__main__":
     unittest.main()
