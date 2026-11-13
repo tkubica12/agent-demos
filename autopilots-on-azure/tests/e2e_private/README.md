@@ -13,16 +13,17 @@ central DNS, experiments, and six initially empty stack groups. Its hub/spoke
 have six dedicated delegated `/26` Sandbox subnets, separate private-endpoint,
 client and build subnets, peerings, twelve private DNS zones linked to both
 VNets, central PrivateOnly AMPLS plus PE, a NAT gateway for client/build outbound
-dependencies, private Linux/Windows clients, and Basic Bastion. Only Bastion and
-the outbound NAT have public IPs; neither client has public ingress.
+dependencies, a private Windows side-test jump host, and Basic Bastion.
+Only Bastion and the outbound NAT have public IPs; the jump host has no public
+ingress. It is an optional manual GUI tool, not part of any deployed agent or
+skill. Its system identity has no operator role grants. The landing zone does
+not provision a Linux runner or its former operator identity/roles.
 
-The Linux system-assigned identity has Contributor, RBAC Administrator and
-SandboxGroup Data Owner only on the six test stack groups; Network Contributor
-on the test network group; Private DNS Zone Contributor on the test DNS group;
-and Monitoring Contributor on the central test AMPLS. It has no directory
-administration or subscription-wide custom-role-definition permissions.
-Windows has an unprivileged system identity. These are **test operator**
-permissions, not the workload identities to use in customer stacks.
+**Existing Linux deployments are on deletion HOLD until protected state export
+is verified and the owner explicitly authorizes retirement.** Do not apply this
+changed root to such a deployment before that authorization. Preserve original
+command failure receipts and verify exact resource absence after authorized
+cleanup; do not rerun stuck guest workloads.
 
 From `autopilots-on-azure`, with Azure CLI device-code login, Terraform and uv:
 
@@ -37,7 +38,7 @@ state. Keep this directory private. `deployment-inputs.json` contains
 `network_mode`, `resource_group_mode`, shared `platform` inputs and six
 `stacks[].platform` overrides. `private-dns-zone-ids.json` is the preflight
 `{ "full.zone.name": "/subscriptions/.../privateDnsZones/full.zone.name" }` map.
-`clients.json` contains VM IDs, private addresses and the Linux principal ID.
+`clients.json` contains the Windows/Bastion IDs and the Windows private address.
 No tenant/customer identifier is hard-coded into the Terraform.
 
 The nested `experiments` root is separate and optional. It has its own local
@@ -54,21 +55,19 @@ conflicts. Foundry PE creation retries only the explicit
 `AccountProvisioningStateInvalid` provisioning race. Responses for changing VNet
 subnet arrays are not exported, avoiding a provider tuple-length mismatch.
 
-Client preparation is explicit:
+Windows side-test preparation is explicit:
 
 ```powershell
-az vm run-command invoke -g <network-RG> -n <linux-VM> --command-id RunShellScript --scripts "@tests\e2e_private\prepare_linux.sh"
-az vm run-command invoke -g <network-RG> -n <linux-VM> --command-id RunShellScript --scripts "@tests\e2e_private\install_linux_tools.sh"
 az vm run-command invoke -g <network-RG> -n <windows-VM> --command-id RunPowerShellScript --scripts "@tests\e2e_private\prepare_windows.ps1"
 ```
 
-The first Linux script inspects configuration and queries approved-feed tool
-versions. Review/update the explicit tool pins in the second script only after
-that query; the pins were resolved on 2026-11-13. Python/npm tools use the
-approved Microsoft feed. Terraform is checksum-verified from HashiCorp.
-Chromium is installed by the existing Playwright version's installer. This
-needs approved outbound routes to package sources/browser distributions;
-private ingress does not imply an offline environment.
+Run browser acceptance on the operator host through authorized private routes
+or the explicit temporary-public phase below. Linux operator hosts can use
+`prepare_linux.sh` to inspect approved-feed versions and `install_linux_tools.sh`
+only after reviewing those pins. Python/npm tools use the approved Microsoft
+feed; Chromium uses the existing Playwright version's installer. This needs
+approved outbound routes to package sources/browser distributions; private
+ingress does not imply an offline environment.
 
 To stop compute costs, use `manage.py stop-clients` with the same arguments,
 or deallocate just the idle Windows VM with `az vm deallocate`. Bastion, NAT,
@@ -176,9 +175,10 @@ restart_command = ["uv", "run", "python", "tests/e2e_private/restart_sandbox.py"
 
 Supply each existing DEMO code and matching internal `API_SERVER_KEY` through
 the named private environment variables without printing them. The evidence
-collector uses the private client's system managed identity to query the
-explicitly configured Application Insights resource; it needs scoped Reader
-query access, private AMPLS DNS/routes, and no exported operator credentials.
+collector uses the explicitly selected credential or the query Sandbox's own
+managed identity for the configured Application Insights resource; it needs
+exact-resource query roles, private AMPLS DNS/routes, and no exported operator
+credentials.
 Repeat `[[stacks]]` for every deployed stack. From the extracted
 `autopilots-on-azure` directory inside the VNet:
 
@@ -186,7 +186,7 @@ Repeat `[[stacks]]` for every deployed stack. From the extracted
 uv run python tests\e2e_private\run.py --config .local\private-acceptance.toml
 ```
 
-On the prepared Linux host, set `PRIVATE_PLAYWRIGHT_MODULE` as above first.
+On the operator host, set `PRIVATE_PLAYWRIGHT_MODULE` as above first.
 No Git access is used. The output is `private-network.json`, per-stack
 `result.json`, a final `summary.json`, test upload fixtures, and a screenshot
 after authentication. Actual agent-generated DOCX/TXT browser downloads are
@@ -224,57 +224,13 @@ an approved `ffmpeg` on the private client; absence is an explicit failure.
 Only current browser screenshots are encoded. Widget tokens, submitted values,
 HTML bodies and HTTP traces are not persisted.
 
-For an operator outside the VNet, `run_on_client.py` submits a uniquely named
-**Managed Run Command** to the explicitly authorized private Linux VM. Write
-the actual in-VM invocation into a local `.sh` file, using paths in the extracted
-package and sourcing the existing private access-code environment file inside
-the VM. Do not put codes, operator tokens or credentials into that script.
-
-```sh
-#!/usr/bin/env bash
-set -eu
-cd "/opt/<extracted-package>/autopilots-on-azure"
-set -a
-. "/opt/<private-access-code-environment-file>"
-set +a
-export PRIVATE_PLAYWRIGHT_MODULE=/opt/private-playwright/node_modules/@playwright/test
-uv run python tests/e2e_private/run.py --config .local/private-acceptance.toml
-```
-
-Use the full extracted project with its frozen dependencies restored for
-native SDK lifecycle calls, not just a standalone copy of the browser scripts.
-
-```powershell
-uv run python tests\e2e_private\run_on_client.py --vm-id "<Linux-VM-ARM-ID>" --script .local\run-private-acceptance.sh --output .local\managed-acceptance.json
-```
-
-The ARM script is ordinary source text; secrets must remain in the VM's private
-environment file, not in its public `source.script` property. CLI credentials
-authenticate only the ARM request and are never sent to the guest. The helper
-sets `asyncExecution=true`, reads expanded `instanceView`, and requires
-`executionState=Succeeded` **and** `exitCode=0`. It does not mistake Pending/exit0
-for success or wait forever on stale parent resource `Creating`. It preserves
-private execution evidence and deletes only its own terminal temporary command
-record, including terminal script failures. Deletion acceptance is not deletion
-completion: it verifies that the exact resource GET returns HTTP404 and fails
-explicitly after a bounded wait if it remains present. Execution and cleanup
-outcomes are saved separately; cleanup cannot mask an actual script failure.
-The default cleanup wait is fifteen minutes; `--cleanup-timeout-seconds` accepts
-1-1800 seconds. A live successful probe's deletion converged to HTTP404 only
-after the original two-minute wait expired. Its original timeout stays recorded
-alongside the later removal proof; a timeout is not a script failure or a
-license to resubmit the command.
-The live service accepted an earlier deletion and later recorded
-`ResourceOperationFailure`, so `command_delete_accepted=true` alone is not a
-cleanup claim. The [REST deletion contract](https://learn.microsoft.com/rest/api/compute/virtual-machine-run-commands/delete)
-also distinguishes HTTP202 acceptance from completed removal.
-Pending/running timeouts leave that
-record for diagnosis; inspect it rather than blindly resubmitting or stopping
-another session's job.
-Legacy `az vm run-command invoke` returned `InternalExecutionError` during
-concurrent deployment in the live test; the named managed alternative
-succeeded and verified the runner file hash. Prefer this method for prepared
-private-client execution. The operator must have scoped VM run-command rights.
+An operator outside the VNet uses the explicit temporary-public test phase or
+an authorized tunnel/private route, never a Linux VM execution adapter.
+Use the full project with its frozen dependencies restored for native SDK
+lifecycle calls, not a standalone copy of the browser scripts.
+Earlier managed-command failure receipts remain private evidence until exact
+authorized cleanup is verified. HTTP202 deletion acceptance alone is not
+resource removal; the exact GET must return HTTP404.
 
 Checks include RFC1918-only DNS and verified HTTPS; anonymous API rejection;
 two separate real DEMO browser sessions and websocket readiness; exactly one

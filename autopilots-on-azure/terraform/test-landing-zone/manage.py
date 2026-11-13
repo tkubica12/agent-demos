@@ -41,11 +41,8 @@ def main():
     if args.action == "prepare":
         if inputs.exists():
             raise FileExistsError("Inputs already exist; do not overwrite existing credentials or state.")
-        key = local / "client-key"
-        run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)])
         settings = {
             "prefix": args.prefix, "subscription_id": args.subscription, "location": args.location,
-            "ssh_public_key": key.with_suffix(".pub").read_text().strip(),
             "windows_password": f"Az!{secrets.token_urlsafe(32)}9x",
         }
         inputs.write_text(json.dumps(settings, indent=2), encoding="utf-8")
@@ -55,10 +52,9 @@ def main():
     if settings["prefix"] != args.prefix or settings["subscription_id"] != args.subscription:
         raise ValueError("Existing state belongs to another prefix or subscription.")
     if args.action == "stop-clients":
-        for kind in ("linux", "windows"):
-            run(["az", "vm", "deallocate", "--subscription", args.subscription,
-                 "--resource-group", f"rg-{args.prefix}-network", "--name", f"vm-{args.prefix}-{kind}",
-                 "--only-show-errors", "--output", "none"])
+        run(["az", "vm", "deallocate", "--subscription", args.subscription,
+             "--resource-group", f"rg-{args.prefix}-network", "--name", f"vm-{args.prefix}-windows",
+             "--only-show-errors", "--output", "none"])
         return
     if args.action == "destroy":
         for suffix in [*[f"agent-{n}" for n in range(1, 7)], "experiments"]:

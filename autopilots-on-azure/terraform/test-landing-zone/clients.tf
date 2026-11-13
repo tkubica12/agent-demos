@@ -1,5 +1,5 @@
 resource "azapi_resource" "nics" {
-  for_each  = toset(["linux", "windows"])
+  for_each  = toset(["windows"])
   type      = "Microsoft.Network/networkInterfaces@2024-05-01"
   name      = "nic-${var.prefix}-${each.key}"
   parent_id = azapi_resource.groups["network"].id
@@ -17,49 +17,6 @@ resource "azapi_resource" "nics" {
     }
   }
   response_export_values = ["properties.ipConfigurations"]
-}
-
-resource "azapi_resource" "linux" {
-  type      = "Microsoft.Compute/virtualMachines@2024-11-01"
-  name      = "vm-${var.prefix}-linux"
-  parent_id = azapi_resource.groups["network"].id
-  location  = var.location
-  tags      = local.tags
-  identity {
-    type = "SystemAssigned"
-  }
-  response_export_values = ["identity.principalId"]
-  body = {
-    properties = {
-      hardwareProfile = { vmSize = var.linux_vm_size }
-      storageProfile = {
-        imageReference = {
-          publisher = "Canonical"
-          offer     = "ubuntu-24_04-lts"
-          sku       = "server"
-          version   = "latest"
-        }
-
-        osDisk = {
-          createOption = "FromImage"
-          managedDisk  = { storageAccountType = "StandardSSD_LRS" }
-          diskSizeGB   = 32
-        }
-      }
-      osProfile = {
-        computerName  = "private-client"
-        adminUsername = "azureuser"
-        linuxConfiguration = {
-          disablePasswordAuthentication = true
-          ssh = { publicKeys = [{
-            path    = "/home/azureuser/.ssh/authorized_keys"
-            keyData = var.ssh_public_key
-          }] }
-        }
-      }
-      networkProfile = { networkInterfaces = [{ id = azapi_resource.nics["linux"].id }] }
-    }
-  }
 }
 
 resource "azapi_resource" "windows" {
