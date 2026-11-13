@@ -193,7 +193,8 @@ def validate_run(payload, run_id, *, require_terminal=True, require_widget_skill
         expected_content_sha256 = EXPECTED["runtime_skills/teams-html-widget/SKILL.md"]["sha256"]
         loaded = [
             item for item in successful_tool_completions(tools, "skill_view", require_preceding_start=True)
-            if item.get("skillName") == "teams-html-widget"
+            if item["duration"] <= 3600
+            and item.get("skillName") == "teams-html-widget"
             and item.get("skillContentReturned") is True
             and isinstance(item.get("skillContentSha256"), str)
             and re.fullmatch(r"[0-9a-f]{64}", item["skillContentSha256"])
