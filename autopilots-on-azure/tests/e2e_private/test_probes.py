@@ -17,7 +17,7 @@ from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import confirm_deleted, execution_result
 from verify_download import verify_download
-from verify_native_evidence import foundry_trace, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
+from verify_native_evidence import foundry_trace, query_failure_metadata, query_trace_in_sandbox, select_delivery, select_widget_turn, validate_run
 from verify_widget_attestation import EXPECTED, validate_attestation
 
 
@@ -160,6 +160,36 @@ class PrivateProbeTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(RuntimeError, "execution failed"):
                     query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
+
+    def test_query_failure_metadata_excludes_messages_and_response_bodies(self):
+        cause = urllib.error.HTTPError("https://private.example", 403, "never-export-message", {}, None)
+        error = RuntimeError("never-export-token")
+        error.__context__ = cause
+        result = query_failure_metadata(error, "private-query")
+        self.assertEqual(result["httpStatus"], 403)
+        self.assertEqual(result["causes"], ["RuntimeError", "HTTPError"])
+        self.assertNotIn("never-export", json.dumps(result))
+        self.assertNotIn("private.example", json.dumps(result))
+
+    @patch("azure.containerapps.sandbox.SandboxGroupClient")
+    @patch("azure.identity.AzureCliCredential")
+    @patch("verify_native_evidence.uuid.uuid4", return_value=SimpleNamespace(hex="e" * 32))
+    def test_correlated_query_failure_cannot_pass_even_with_sdk_exit_zero(self, _, __, group):
+        sandbox = group.return_value.__enter__.return_value.get_sandbox_client.return_value.__enter__.return_value
+        configuration = {
+            "subscription_id": "10000000-0000-0000-0000-000000000001",
+            "resource_group": "test", "group": "test-query",
+            "sandbox_id": "10000000-0000-0000-0000-000000000002",
+        }
+        for exit_code in (0, 1):
+            with self.subTest(exit_code=exit_code):
+                sandbox.exec.return_value = SimpleNamespace(exit_code=exit_code, stdout=json.dumps({
+                    "completionNonce": "e" * 32,
+                    "failure": {"stage": "private-query", "errorType": "HTTPError", "httpStatus": 403},
+                }), stderr="never-export-secret")
+                with self.assertRaisesRegex(RuntimeError, "stage=private-query; class=HTTPError; HTTP=403") as failure:
+                    query_trace_in_sandbox(configuration, "10000000-0000-0000-0000-000000000003", "a" * 32)
+                self.assertNotIn("never-export-secret", str(failure.exception))
 
     @patch("network_probe.socket.getaddrinfo", return_value=[(socket.AF_INET, 1, 6, "", ("20.1.2.3", 443))])
     @patch("network_probe.request")

@@ -243,6 +243,20 @@ def query_trace(credential, app_id, trace_id):
     return observed
 
 
+def query_failure_metadata(error, stage):
+    causes = []
+    status = None
+    current = error
+    while current is not None and len(causes) < 6:
+        causes.append(type(current).__name__)
+        for field in ("status_code", "code"):
+            value = getattr(current, field, None)
+            if status is None and type(value) is int and 100 <= value <= 599:
+                status = value
+        current = current.__cause__ or current.__context__
+    return {"stage": stage, "errorType": type(error).__name__, "causes": causes, "httpStatus": status}
+
+
 def query_trace_in_sandbox(configuration, app_id, trace_id):
     from azure.containerapps.sandbox import SandboxGroupClient, endpoint_for_region
     from azure.identity import AzureCliCredential
@@ -267,11 +281,18 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         "\n m=types.ModuleType(name);sys.modules[name]=m;exec(compile(source,name,'exec'),m.__dict__)"
         "\nimport os"
         "\nfrom azure.identity import ManagedIdentityCredential"
+        "\nfrom azure.core.exceptions import AzureError"
         "\nfrom network_probe import check"
-        "\nfrom verify_native_evidence import query_trace"
-        "\nnetwork=check('https://api.applicationinsights.io',transport_only=True)"
-        "\nwith ManagedIdentityCredential(client_id=os.environ.get('AZURE_CLIENT_ID')) as credential:"
-        "\n observed=query_trace(credential,p['app_id'],p['trace_id'])"
+        "\nfrom verify_native_evidence import query_trace,query_failure_metadata"
+        "\nstage='private-query-network'"
+        "\ntry:"
+        "\n network=check('https://api.applicationinsights.io',transport_only=True)"
+        "\n stage='private-query'"
+        "\n with ManagedIdentityCredential(client_id=os.environ.get('AZURE_CLIENT_ID')) as credential:"
+        "\n  observed=query_trace(credential,p['app_id'],p['trace_id'])"
+        "\nexcept (AzureError,OSError,ValueError,RuntimeError,AssertionError) as error:"
+        "\n print(json.dumps({'completionNonce':p['completion_nonce'],'failure':query_failure_metadata(error,stage)}))"
+        "\n raise SystemExit(1)"
         "\nprint(json.dumps({'queryNetwork':network,'observed':observed,'completionNonce':p['completion_nonce']}))"
     )
     python = configuration.get("python_path", "/app/.venv/bin/python")
@@ -283,11 +304,32 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         resource_group=configuration["resource_group"], sandbox_group=configuration["group"],
     ) as group, group.get_sandbox_client(sandbox_id) as sandbox:
         result = sandbox.exec(f"{shlex.quote(python)} -c {shlex.quote(script)}")
-    if type(result.exit_code) is not int or result.exit_code != 0:
+    if type(result.exit_code) is not int:
         raise RuntimeError(f"In-VNet Sandbox query execution failed exit {result.exit_code}; no credentials or stderr exported.")
-    result = json.loads(result.stdout)
+    exit_code = result.exit_code
+    try:
+        result = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        if exit_code != 0:
+            raise RuntimeError(f"In-VNet Sandbox query execution failed exit {exit_code}; no credentials or stderr exported.") from None
+        raise ValueError("Sandbox query did not return completed metadata.") from None
     if not isinstance(result, dict) or result.get("completionNonce") != completion_nonce:
         raise ValueError("Sandbox query did not return this invocation's completed output.")
+    failure = result.get("failure")
+    if failure is not None:
+        if not isinstance(failure, dict) or failure.get("stage") not in ("private-query-network", "private-query") \
+                or not isinstance(failure.get("errorType"), str) \
+                or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", failure["errorType"]):
+            raise ValueError("Sandbox query returned invalid failure metadata.")
+        status = failure.get("httpStatus")
+        if status is not None and (type(status) is not int or not 100 <= status <= 599):
+            raise ValueError("Sandbox query returned invalid failure HTTP status.")
+        raise RuntimeError(
+            f"In-VNet Sandbox query failed exit {exit_code}; stage={failure['stage']}; "
+            f"class={failure['errorType']}; HTTP={status}; no messages or stderr exported."
+        )
+    if exit_code != 0:
+        raise RuntimeError(f"In-VNet Sandbox query execution failed exit {exit_code}; no credentials or stderr exported.")
     if result.get("queryNetwork", {}).get("scope") != "private-dns-tls" or result["queryNetwork"].get("status") != "pass":
         raise ValueError("Sandbox query did not prove private App Insights DNS/TLS.")
     result["queryExecution"] = {
