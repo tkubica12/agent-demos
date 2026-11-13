@@ -91,6 +91,7 @@ resource "azapi_resource" "connections" {
   name                      = "private"
   parent_id                 = each.value.id
   location                  = var.location
+  locks                     = ["${local.network}/subnets/agent-1"]
   body                      = { properties = { subnetId = lower("${local.network}/subnets/agent-1") } }
   schema_validation_enabled = false
 }
@@ -125,7 +126,7 @@ resource "azapi_resource" "endpoints" {
   name      = "pe-${var.prefix}-${each.key}"
   parent_id = local.rg
   location  = var.location
-  locks     = ["${local.network}/subnets/agent-1"]
+  locks     = ["${local.network}/subnets/endpoints"]
   tags      = local.tags
   body = {
     properties = {
