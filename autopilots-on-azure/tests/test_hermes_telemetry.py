@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tomllib
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +15,6 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import httpx
-from packaging.requirements import Requirement
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -28,6 +26,11 @@ from bridge.generated_files import GeneratedFileError, RUN_HEADER, SCOPE_HEADER
 
 
 _ROOT = Path(__file__).resolve().parents[1]
+_SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "native_telemetry_smoke", _ROOT / "runtimes" / "hermes" / "native_telemetry_smoke.py",
+)
+native_smoke = importlib.util.module_from_spec(_SMOKE_SPEC)
+_SMOKE_SPEC.loader.exec_module(native_smoke)
 _RUNTIME_PYTHON = _ROOT / "runtimes" / "hermes" / ".venv" / (
     "Scripts/python.exe" if os.name == "nt" else "bin/python"
 )
@@ -65,37 +68,30 @@ class HermesTelemetryTests(unittest.TestCase):
         self.addCleanup(tracer_patch.stop)
         self.addCleanup(settings_patch.stop)
 
-    def test_native_telemetry_dependencies_match_frozen_runtime_closure(self):
-        runtime = _ROOT / "runtimes" / "hermes"
-        packages = {
-            package["name"]: package
-            for package in tomllib.loads((runtime / "uv.lock").read_text(encoding="utf-8"))["package"]
+    def test_native_build_guard_accepts_only_added_packages(self):
+        before = {
+            "opentelemetry-api": "1.45.1", "opentelemetry-sdk": "1.45.1",
+            "opentelemetry-semantic-conventions": "0.66b1", "packaging": "26.3",
         }
-        requirements = {}
-        manifest = (runtime / "hermes-telemetry.txt").read_text(encoding="utf-8").replace("\\\n", " ")
-        for line in manifest.splitlines():
-            tokens = line.split()
-            if tokens:
-                requirement = Requirement(tokens[0])
-                self.assertNotIn(requirement.name, requirements)
-                requirements[requirement.name] = requirement
-                package = packages[requirement.name]
-                self.assertTrue(requirement.specifier.contains(package["version"]))
-                hashes = {archive["hash"] for archive in package.get("wheels", [])}
-                if package.get("sdist"):
-                    hashes.add(package["sdist"]["hash"])
-                for token in tokens[1:]:
-                    self.assertTrue(token.startswith("--hash="))
-                    self.assertIn(token.removeprefix("--hash="), hashes)
+        after = {**before, "opentelemetry-instrumentation-httpx": "0.66b1", "wrapt": "2.5.2"}
+        native_smoke.verify_base_versions(before, after)
 
-        closure = set()
-        pending = {"opentelemetry-instrumentation-httpx", "opentelemetry-sdk"}
-        while pending:
-            name = pending.pop()
-            if name not in closure:
-                closure.add(name)
-                pending.update(dependency["name"] for dependency in packages[name].get("dependencies", []))
-        self.assertEqual(set(requirements), closure)
+    def test_native_build_guard_refuses_replaced_or_removed_base_packages(self):
+        before = {
+            "opentelemetry-api": "1.45.1", "opentelemetry-sdk": "1.45.1",
+            "opentelemetry-semantic-conventions": "0.66b1", "packaging": "26.3",
+        }
+        for name in before:
+            with self.subTest(package=name, change="downgrade"):
+                with self.assertRaisesRegex(RuntimeError, name):
+                    native_smoke.verify_base_versions(before, {**before, name: "0.1"})
+            with self.subTest(package=name, change="removal"):
+                with self.assertRaisesRegex(RuntimeError, name):
+                    native_smoke.verify_base_versions(before, {key: value for key, value in before.items() if key != name})
+
+    def test_native_build_guard_refuses_incomplete_base_snapshot(self):
+        with self.assertRaisesRegex(RuntimeError, "missing required"):
+            native_smoke.verify_base_versions({}, {})
 
     def test_each_wrapper_start_replaces_dead_generations(self):
         stale = self.context_directory

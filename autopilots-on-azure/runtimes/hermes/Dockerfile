@@ -57,11 +57,16 @@ RUN /opt/hermes/.venv/bin/python -B -c "from importlib.metadata import requires;
 
 COPY runtimes/hermes/hermes-telemetry.txt /opt/autopilots/hermes-telemetry.txt
 COPY bridge/telemetry.py /tmp/autopilots-telemetry-smoke/telemetry.py
-RUN uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes \
+COPY runtimes/hermes/native_telemetry_smoke.py /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py
+RUN /opt/hermes/.venv/bin/python -B /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py \
+        capture /tmp/autopilots-telemetry-smoke/base.json \
+    && uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes \
         -r /opt/autopilots/hermes-telemetry.txt \
     && uv pip check --python /opt/hermes/.venv/bin/python \
-    && /opt/hermes/.venv/bin/python -B -c "import sys; sys.path.insert(0, '/tmp/autopilots-telemetry-smoke'); import telemetry; from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor; telemetry.configure_telemetry('hermes-gateway'); assert HTTPXClientInstrumentor().is_instrumented_by_opentelemetry" \
+    && /opt/hermes/.venv/bin/python -B /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py \
+        verify /tmp/autopilots-telemetry-smoke/base.json \
     && rm /tmp/autopilots-telemetry-smoke/telemetry.py \
+        /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py /tmp/autopilots-telemetry-smoke/base.json \
     && rmdir /tmp/autopilots-telemetry-smoke
 
 COPY runtimes/hermes/hermes-site.txt /opt/autopilots/hermes-site.txt
