@@ -249,6 +249,16 @@ def bridge_instructions(request: AgentRequest) -> str:
             "runtime blocks memory and skill writes for this turn."
         )
     interactions = ""
+    widgets = ""
+    if request.source == "teams_personal" and not _private_context_enabled(request):
+        widgets = (
+            "\n\nInline generated HTML widgets are supported in this personal Teams chat. "
+            "For an interactive page, calculator, explorer, dashboard or form inside a message, "
+            "load the teams-html-widget skill and return its HTML_WIDGET_REQUEST contract. "
+            "You generate real HTML, CSS and JavaScript; the gateway supplies the host protocol "
+            "and narrowly scoped selection callbacks. Do not invent the wire fence, capabilities "
+            "or invoke payloads. External sites remain the generated-web-app capability."
+        )
     if (
         request.source.startswith("teams_")
         and not request.metadata.get("attachmentsPrivate")
@@ -265,8 +275,8 @@ def bridge_instructions(request: AgentRequest) -> str:
     if _configured_env("AUTOPILOT_BRIDGE_URL"):
         generated_apps = (
             "\n\nWhen the user requests a rich web application, dashboard, "
-            "presentation, visualization, or multi-step experience beyond an "
-            "Adaptive Card, or asks to list or manage generated sites, load "
+            "presentation, visualization, or multi-step experience that needs an externally hosted site "
+            "rather than an inline Teams widget, or asks to list or manage generated sites, load "
             "the generated-web-app skill. Generate and test inspectable source "
             "in the governed generated-apps workspace, then use the fixed "
             "deployment tools. Never serve user apps from the Hermes process "
@@ -284,6 +294,7 @@ def bridge_instructions(request: AgentRequest) -> str:
         f"{microsoft_365}"
         f"{attachments}"
         f"{interactions}"
+        f"{widgets}"
         f"{generated_apps}"
     )
 

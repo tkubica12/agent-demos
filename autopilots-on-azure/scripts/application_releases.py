@@ -44,7 +44,7 @@ def build_release(
     if role == "runtime":
         runtime = root / "runtimes" / "hermes"
         files.update({path.name: path.read_bytes() for path in sorted(runtime.glob("*.py"))})
-        files["dependency-lock.toml"] = (runtime / "uv.lock").read_bytes()
+        files["dependency-lock.toml"] = (runtime / "uv.lock").read_bytes().replace(b"\r\n", b"\n")
         packages = [
             (root / "bridge", "bridge"),
             (root / "autopilots_identity", "autopilots_identity"),
@@ -134,7 +134,7 @@ if reused:
     raise SystemExit(0)
 venv=target/'.venv'
 if role=='runtime':
-    if pathlib.Path('/app/uv.lock').read_bytes()!=(target/'dependency-lock.toml').read_bytes():
+    if pathlib.Path('/app/uv.lock').read_bytes().replace(b'\r\n',b'\n')!=(target/'dependency-lock.toml').read_bytes().replace(b'\r\n',b'\n'):
         raise RuntimeError('Runtime dependency lock changed; build and select its dependency image first')
     if not venv.exists():
         venv.symlink_to('/app/.venv',target_is_directory=True)
