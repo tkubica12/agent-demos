@@ -551,7 +551,8 @@ def require_service_health(client: Any, port: int, release: str = "") -> None:
 def write_service_settings(sandbox: Any, settings: dict) -> None:
     sandbox.write_file(SERVICE_CONFIG_PATH + ".next", json.dumps(settings, sort_keys=True), mode="0600")
     require_exec_success(
-        sandbox.exec(f"mv {SERVICE_CONFIG_PATH}.next {SERVICE_CONFIG_PATH}"), "Activating service configuration"
+        sandbox.exec(f"chmod 0600 {SERVICE_CONFIG_PATH}.next && mv {SERVICE_CONFIG_PATH}.next {SERVICE_CONFIG_PATH}"),
+        "Activating service configuration",
     )
 
 
