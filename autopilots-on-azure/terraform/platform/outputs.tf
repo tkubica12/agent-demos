@@ -61,6 +61,7 @@ output "private_ingress_ready" {
     azurerm_virtual_network_peering.sandbox_to_private_mcp,
     azurerm_virtual_network_peering.private_mcp_to_sandbox,
     azurerm_private_endpoint.services,
+    azapi_resource.foundry_private_dns_zone_group,
     azurerm_private_dns_zone_virtual_network_link.services_main,
     azurerm_private_dns_zone_virtual_network_link.services_sandbox,
   ]
@@ -121,7 +122,9 @@ output "private_endpoint_ids" {
   value = merge(
     { private_mcp = azurerm_private_endpoint.private_mcp.id },
     { for name, endpoint in azurerm_private_endpoint.services : name => endpoint.id },
+    { for endpoint in azapi_resource.foundry_private_endpoint : "foundry" => endpoint.id },
   )
+  depends_on = [azapi_resource.foundry_private_dns_zone_group]
 }
 
 output "private_dns_zone_ids" {

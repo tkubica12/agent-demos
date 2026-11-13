@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import subprocess
 import unittest
@@ -34,6 +35,18 @@ def resource(resource_id: str, resource_type: str, **properties) -> dict:
 
 class SimulatorPreflightTests(unittest.TestCase):
     def setUp(self):
+        from scripts.deploy_simulator_environment import environment_root
+
+        self.state_environment = patch.dict(os.environ, {
+            "AUTOPILOTS_STATE_ROOT": str(Path(__file__).resolve().parent / "preflight-state-fixture"),
+        })
+        self.state_environment.start()
+        self.addCleanup(self.state_environment.stop)
+        self.local_files = {}
+        self.local_reads = []
+        self.local_reader = patch.object(Path, "read_text", autospec=True, side_effect=self.read_local)
+        self.local_reader.start()
+        self.addCleanup(self.local_reader.stop)
         self.config = {
             "environment": "training-agent-1", "stack_name": "agent-1", "subscription_id": SUBSCRIPTION,
             "tenant_id": TENANT, "owner_id": OWNER, "auth_mode": "entra", "model_capacity": 15,
@@ -89,6 +102,13 @@ class SimulatorPreflightTests(unittest.TestCase):
         self.command = patch.object(preflight, "run", side_effect=self.azure_read)
         self.command.start()
         self.addCleanup(self.command.stop)
+
+    def read_local(self, path, *args, **kwargs):
+        key = str(path)
+        self.local_reads.append(key)
+        if key not in self.local_files:
+            raise FileNotFoundError(key)
+        return self.local_files[key]
 
     def azure_read(self, arguments, *, capture, check):
         self.commands.append(arguments)
@@ -585,6 +605,163 @@ class SimulatorPreflightTests(unittest.TestCase):
         self.assertEqual(self.config, original)
         command = next(command for command in self.commands if command[1:4] == ["cognitiveservices", "model", "list"])
         self.assertEqual(command[command.index("--location") + 1], "swedencentral")
+
+    def own_stack(self, config, capacity=10):
+        from scripts.deploy_simulator_environment import environment_root, state_path
+
+        root = environment_root(config)
+        platform_path = state_path(root, "platform", config["environment"])
+        group = config["platform"].get("existing_resource_group_name") or "rg-ap-" + config["environment"] + "-abcd"
+        boundary = f"/subscriptions/{config['subscription_id']}/resourceGroups/{group}"
+        account_id = boundary + "/providers/Microsoft.CognitiveServices/accounts/" + config["environment"]
+        deployment_name = config["platform"].get("model_deployment_name", "gpt-6-1-sol")
+        deployment_id = account_id + "/deployments/" + deployment_name
+        ownership_path = root / "environment.json"
+        self.local_files[str(ownership_path)] = json.dumps({
+            field: config[field] for field in ("environment", "subscription_id", "tenant_id", "owner_id")
+        })
+        state = {"version": 4, "resources": [
+            {"mode": "managed", "type": "azapi_resource", "name": "foundry", "instances": [{"attributes": {
+                "id": account_id, "type": "Microsoft.CognitiveServices/accounts@2025-06-01",
+            }}]},
+            {"mode": "managed", "type": "azapi_resource", "name": "foundry_deployment", "instances": [{"attributes": {
+                "id": deployment_id, "parent_id": account_id, "name": deployment_name,
+                "type": "Microsoft.CognitiveServices/accounts/deployments@2025-06-01",
+                "body": {"sku": {"capacity": 9999}},
+            }}]},
+        ]}
+        if not config["platform"].get("existing_resource_group_name"):
+            state["resources"].append({
+                "mode": "managed", "type": "azurerm_resource_group", "name": "main", "instances": [{"attributes": {
+                    "id": boundary, "name": group,
+                }}],
+            })
+        self.local_files[str(platform_path)] = json.dumps(state)
+        self.resources[account_id] = resource(account_id, "Microsoft.CognitiveServices/accounts",
+                                               location=config["platform"].get("location", "northeurope"))
+        self.resources[deployment_id] = resource(deployment_id, "Microsoft.CognitiveServices/accounts/deployments",
+            sku={"name": config["platform"].get("model_sku_name", "GlobalStandard"), "capacity": capacity},
+            properties={"provisioningState": "Succeeded", "model": {
+                "format": "OpenAI", "name": config["platform"].get("model_name", "gpt-6.1-sol"),
+                "version": config["platform"].get("model_version", "2026-09-29"),
+            }})
+        return str(ownership_path), str(platform_path), account_id, deployment_id
+
+    def six_stacks(self):
+        configs = []
+        for index in range(1, 7):
+            config = deepcopy(self.config)
+            config.update(environment=f"training-agent-{index}", stack_name=f"agent-{index}", model_capacity=10)
+            configs.append(config)
+        return configs
+
+    def test_six_new_stacks_fail_but_one_exact_owned_stack_credits_only_incremental_capacity(self):
+        configs = self.six_stacks()
+        configs[0]["owned_capacity"] = 10000
+        self.usage["value"][0].update(limit=65, currentValue=10)
+        with self.assertRaisesRegex(ValueError, "60 capacity units.*0 exact-state-owned, 60 incremental.*55 free"):
+            preflight.plan(configs)
+        ownership_path, platform_path, account_id, deployment_id = self.own_stack(configs[1])
+        reports = preflight.plan(configs)
+        self.assertTrue(all(report["model_quota"]["requested_capacity"] == 60 for report in reports))
+        self.assertTrue(all(report["model_quota"]["owned_capacity"] == 10 for report in reports))
+        self.assertTrue(all(report["model_quota"]["incremental_capacity"] == 50 for report in reports))
+        self.assertEqual(reports[1]["model_capacity_credit"]["deployment_id"], deployment_id)
+        self.assertEqual(reports[1]["model_capacity_credit"]["state_path"], platform_path)
+        self.assertEqual(reports[1]["model_capacity_credit"]["ownership_path"], ownership_path)
+        self.assertIn("preflight-state-fixture", platform_path)
+        self.assertTrue(all(path.startswith(os.environ["AUTOPILOTS_STATE_ROOT"]) for path in self.local_reads))
+        self.assertEqual(sum(deployment_id + "?" in " ".join(command) for command in self.commands), 1)
+        self.assertEqual(sum(account_id + "?" in " ".join(command) for command in self.commands), 1)
+
+    def test_six_unchanged_owned_stacks_pass_with_only_five_free_units(self):
+        configs = self.six_stacks()
+        for config in configs:
+            self.own_stack(config)
+        self.usage["value"][0].update(limit=65, currentValue=60)
+        reports = preflight.plan(configs)
+        self.assertTrue(all(report["model_quota"]["owned_capacity"] == 60 for report in reports))
+        self.assertTrue(all(report["model_quota"]["incremental_capacity"] == 0 for report in reports))
+        self.assertTrue(all(report["model_quota"]["status"] == "verified" for report in reports))
+
+    def test_owned_capacity_does_not_hide_scale_up_or_spend_future_scale_down(self):
+        self.config["model_capacity"] = 20
+        self.own_stack(self.config, capacity=10)
+        self.usage["value"][0].update(limit=15, currentValue=10)
+        with self.assertRaisesRegex(ValueError, "10 exact-state-owned, 10 incremental.*5 free"):
+            preflight.plan([self.config])
+        self.config["model_capacity"] = 5
+        new = deepcopy(self.config)
+        new.update(environment="training-agent-2", stack_name="agent-2", model_capacity=10)
+        with self.assertRaisesRegex(ValueError, "5 exact-state-owned, 10 incremental.*5 free"):
+            preflight.plan([self.config, new])
+
+    def test_unrelated_or_nonmatching_live_deployments_receive_no_credit(self):
+        self.config["model_capacity"] = 10
+        _, platform_path, account_id, deployment_id = self.own_stack(self.config)
+        original_live = deepcopy(self.resources[deployment_id])
+        for change in ("sku", "model", "version", "region", "name", "provisioning"):
+            with self.subTest(change=change):
+                self.resources[deployment_id] = deepcopy(original_live)
+                self.resources[account_id]["location"] = "northeurope"
+                if change == "sku":
+                    self.resources[deployment_id]["sku"]["name"] = "Standard"
+                elif change == "model":
+                    self.resources[deployment_id]["properties"]["model"]["name"] = "other-model"
+                elif change == "version":
+                    self.resources[deployment_id]["properties"]["model"]["version"] = "other-version"
+                elif change == "region":
+                    self.resources[account_id]["location"] = "swedencentral"
+                elif change == "name":
+                    self.resources[deployment_id]["name"] = "other-deployment"
+                else:
+                    self.resources[deployment_id]["properties"]["provisioningState"] = "Updating"
+                report, = preflight.plan([self.config])
+                self.assertEqual(report["model_capacity_credit"]["owned_capacity"], 0)
+                self.assertEqual(report["model_quota"]["incremental_capacity"], 10)
+        state = json.loads(self.local_files[platform_path])
+        state["resources"][1]["name"] = "unrelated"
+        self.local_files[platform_path] = json.dumps(state)
+        report, = preflight.plan([self.config])
+        self.assertEqual(report["model_capacity_credit"]["status"], "no_current_owned_deployment")
+        self.assertEqual(report["model_quota"]["owned_capacity"], 0)
+
+    def test_state_and_ownership_boundary_errors_are_explicit(self):
+        ownership_path, platform_path, _, _ = self.own_stack(self.config)
+        original_ownership = self.local_files[ownership_path]
+        original_state = self.local_files[platform_path]
+        for field in ("environment", "subscription_id", "tenant_id", "owner_id"):
+            with self.subTest(field=field):
+                owner = json.loads(original_ownership)
+                owner[field] = "different"
+                self.local_files[ownership_path] = json.dumps(owner)
+                with self.assertRaisesRegex(ValueError, "Environment ownership " + field):
+                    preflight.plan([self.config])
+        self.local_files[ownership_path] = original_ownership
+        for malformed in ("not-json", json.dumps({"version": 4, "resources": "invalid"})):
+            with self.subTest(malformed=malformed):
+                self.local_files[platform_path] = malformed
+                with self.assertRaisesRegex(ValueError, "platform Terraform state"):
+                    preflight.plan([self.config])
+        state = json.loads(original_state)
+        state["resources"][1]["instances"][0]["attributes"]["id"] = WORKSPACE
+        self.local_files[platform_path] = json.dumps(state)
+        with self.assertRaisesRegex(ValueError, "State-owned deployment ID"):
+            preflight.plan([self.config])
+        self.local_files[platform_path] = original_state
+        del self.local_files[ownership_path]
+        with self.assertRaisesRegex(ValueError, "without its environment ownership"):
+            preflight.plan([self.config])
+
+    def test_create_mode_credits_only_its_exact_managed_group_and_duplicate_credit_is_blocked(self):
+        self.config["resource_group_mode"] = "create"
+        self.config["platform"].pop("existing_resource_group_name")
+        self.own_stack(self.config)
+        report, = preflight.plan([self.config])
+        self.assertEqual(report["model_capacity_credit"]["owned_capacity"], 10)
+        self.assertEqual(report["model_capacity_credit"]["resource_group_name"], "rg-ap-training-agent-1-abcd")
+        with self.assertRaisesRegex(ValueError, "cannot receive capacity credit"):
+            preflight.plan([self.config, self.config])
 
 
 if __name__ == "__main__":

@@ -120,6 +120,13 @@ override_resource {
     output = { identity = { principalId = "44444444-4444-4444-4444-444444444444" } }
   }
 }
+override_resource {
+  target = azapi_resource.foundry_private_endpoint
+  override_during = plan
+  values = {
+    id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/owned/providers/Microsoft.Network/privateEndpoints/pe-foundry-demo"
+  }
+}
 variables {
   location         = "swedencentral"
   sandbox_location = "northeurope"
@@ -152,6 +159,7 @@ variables {
         'azapi_resource.log_analytics[0].body.properties.publicNetworkAccessForIngestion == "Enabled" && azapi_resource.application_insights[0].body.properties.publicNetworkAccessForQuery == "Enabled"',
         'azurerm_virtual_network.main[0].location == "westeurope" && azurerm_private_endpoint.private_mcp.location == "westeurope" && azurerm_virtual_network.sandbox[0].location == "northeurope"',
         "length(azurerm_private_endpoint.services) == 0 && length(azurerm_private_dns_zone.services) == 0",
+        "length(azapi_resource.foundry_private_endpoint) == 0 && length(azapi_resource.foundry_private_dns_zone_group) == 0",
         'length(azurerm_resource_group.main) == 1 && length(azurerm_virtual_network_peering.sandbox_to_private_mcp) == 1 && length(azurerm_private_dns_zone.private_mcp) == 1',
         'output.location == "westeurope" && output.sandbox_location == "northeurope"',
         'output.acr_agent_pool_name == "" && length(azurerm_container_registry_agent_pool.private) == 0',
@@ -172,8 +180,10 @@ variables {
         'azapi_resource.foundry_project.location == "swedencentral" && azurerm_resource_group.main[0].location == "northeurope"',
         'azurerm_container_registry.main.location == "northeurope" && azurerm_servicebus_namespace.scheduler[0].location == "northeurope" && azurerm_private_endpoint.private_mcp.location == "northeurope"',
         'alltrue([for endpoint in azurerm_private_endpoint.services : endpoint.location == "northeurope"]) && azurerm_virtual_network.main[0].location == "northeurope"',
-        'length(azurerm_private_endpoint.services) == 3 && length(azurerm_private_dns_zone.services) == 5 && length(azurerm_private_dns_zone.private_mcp) == 1',
-        'length(azurerm_private_endpoint.services["foundry"].private_dns_zone_group[0].private_dns_zone_ids) == 3',
+        'length(azurerm_private_endpoint.services) == 2 && !contains(keys(azurerm_private_endpoint.services), "foundry") && length(azapi_resource.foundry_private_endpoint) == 1 && length(azurerm_private_dns_zone.services) == 5 && length(azurerm_private_dns_zone.private_mcp) == 1',
+        'azapi_resource.foundry_private_endpoint[0].name == "pe-foundry-demo" && azapi_resource.foundry_private_endpoint[0].location == "northeurope" && azapi_resource.foundry_private_endpoint[0].body.properties.privateLinkServiceConnections[0].properties.privateLinkServiceId == azapi_resource.foundry.id && azapi_resource.foundry_private_endpoint[0].body.properties.privateLinkServiceConnections[0].properties.groupIds == ["account"]',
+        'length(azapi_resource.foundry_private_dns_zone_group[0].body.properties.privateDnsZoneConfigs) == 3 && azapi_resource.foundry_private_dns_zone_group[0].name == "foundry" && azapi_resource.foundry_private_dns_zone_group[0].parent_id == azapi_resource.foundry_private_endpoint[0].id',
+        'output.private_endpoint_ids.foundry == azapi_resource.foundry_private_endpoint[0].id',
         'azapi_resource.private_mcp_env.body.properties.environmentMode == "Express" && azapi_resource.private_mcp_env.body.properties.publicNetworkAccess == "Disabled"',
         'azapi_resource.log_analytics[0].body.properties.publicNetworkAccessForIngestion == "Disabled" && azapi_resource.log_analytics[0].body.properties.publicNetworkAccessForQuery == "Disabled" && azapi_resource.log_analytics[0].body.properties.features.disableLocalAuth',
         'azapi_resource.application_insights[0].body.properties.publicNetworkAccessForIngestion == "Disabled" && azapi_resource.application_insights[0].body.properties.publicNetworkAccessForQuery == "Disabled" && azapi_resource.application_insights[0].body.properties.DisableLocalAuth',
@@ -197,10 +207,12 @@ variables {
         f'output.sandbox_subnet_id == "{SUBNET_ROOT}/sandbox" && azurerm_private_endpoint.private_mcp.subnet_id == "{SUBNET_ROOT}/endpoints"',
         'output.resource_group_name == "customer" && azapi_resource.foundry.location == "swedencentral"',
         f'azurerm_private_endpoint.services["acr"].private_dns_zone_group[0].private_dns_zone_ids == tolist(["{dns_ids()["privatelink.azurecr.io"]}"])',
+        f'azapi_resource.foundry_private_endpoint[0].body.properties.subnet.id == "{SUBNET_ROOT}/endpoints"',
+        'toset([for zone in azapi_resource.foundry_private_dns_zone_group[0].body.properties.privateDnsZoneConfigs : zone.properties.privateDnsZoneId]) == toset([for zone in ["privatelink.cognitiveservices.azure.com", "privatelink.openai.azure.com", "privatelink.services.ai.azure.com"] : output.private_dns_zone_ids[zone]])',
     ])
     no_scheduler_assertions = [
         "length(azurerm_servicebus_namespace.scheduler) == 0",
-        '!contains(keys(azurerm_private_endpoint.services), "scheduler") && length(azurerm_private_endpoint.services) == 2',
+        '!contains(keys(azurerm_private_endpoint.services), "scheduler") && length(azurerm_private_endpoint.services) == 1 && length(azapi_resource.foundry_private_endpoint) == 1',
         '!contains(keys(output.private_dns_zone_ids), "privatelink.servicebus.windows.net") && !contains(output.private_network_handoff.required_private_dns_zones, "privatelink.servicebus.windows.net")',
         'output.scheduler_servicebus_namespace_id == "" && output.scheduler_servicebus_namespace_name == "" && output.scheduler_servicebus_fully_qualified_namespace == ""',
     ]
@@ -382,6 +394,20 @@ class PrivatePlatformTests(unittest.TestCase):
                 self.assertIn(f"from = {address}\n", sources)
                 self.assertIn(f"to   = {address}[0]\n", sources)
         self.assertIn("depends_on = [azapi_resource.foundry_deployment]", sources)
+
+    def test_foundry_private_endpoint_retries_only_known_account_state_after_setup(self):
+        sources = (PLATFORM / "networking.tf").read_text()
+        endpoint = sources.split('resource "azapi_resource" "foundry_private_endpoint" {', 1)[1].split(
+            'resource "azapi_resource" "foundry_private_dns_zone_group" {', 1
+        )[0]
+        self.assertIn('error_message_regex  = ["AccountProvisioningStateInvalid"]', endpoint)
+        dependencies = endpoint.split("depends_on = [", 1)[1].split("]", 1)[0]
+        for resource in (
+            "azapi_resource.foundry_deployment",
+            "azapi_resource.foundry_project",
+            "azapi_resource.foundry_observability_connection",
+        ):
+            self.assertIn(resource, dependencies)
 
 
 if __name__ == "__main__":

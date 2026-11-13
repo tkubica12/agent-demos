@@ -20,11 +20,6 @@ locals {
       group_id    = "registry"
       zone_names  = ["privatelink.azurecr.io"]
     }
-    foundry = {
-      resource_id = azapi_resource.foundry.id
-      group_id    = "account"
-      zone_names  = ["privatelink.cognitiveservices.azure.com", "privatelink.openai.azure.com", "privatelink.services.ai.azure.com"]
-    }
     }, var.scheduler_enabled ? {
     scheduler = {
       resource_id = azurerm_servicebus_namespace.scheduler[0].id
@@ -242,5 +237,55 @@ resource "azurerm_private_endpoint" "services" {
   private_dns_zone_group {
     name                 = each.key
     private_dns_zone_ids = compact([for zone in each.value.zone_names : lookup(local.service_private_dns_zone_ids, zone, null)])
+  }
+}
+
+resource "azapi_resource" "foundry_private_endpoint" {
+  count     = var.private_network_enabled ? 1 : 0
+  type      = "Microsoft.Network/privateEndpoints@2024-05-01"
+  name      = "pe-foundry-${local.suffix}"
+  parent_id = local.resource_group_id
+  location  = var.sandbox_location
+  tags      = local.tags
+  body = {
+    properties = {
+      subnet = { id = local.private_endpoint_subnet_id }
+      privateLinkServiceConnections = [{
+        name = "foundry"
+        properties = {
+          privateLinkServiceId = azapi_resource.foundry.id
+          groupIds             = ["account"]
+        }
+      }]
+    }
+  }
+  retry = {
+    error_message_regex  = ["AccountProvisioningStateInvalid"]
+    interval_seconds     = 10
+    max_interval_seconds = 30
+  }
+  depends_on = [
+    azapi_resource.foundry_deployment,
+    azapi_resource.foundry_project,
+    azapi_resource.foundry_observability_connection,
+  ]
+}
+
+resource "azapi_resource" "foundry_private_dns_zone_group" {
+  count     = var.private_network_enabled ? 1 : 0
+  type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01"
+  name      = "foundry"
+  parent_id = azapi_resource.foundry_private_endpoint[0].id
+  body = {
+    properties = {
+      privateDnsZoneConfigs = [for zone in [
+        "privatelink.cognitiveservices.azure.com",
+        "privatelink.openai.azure.com",
+        "privatelink.services.ai.azure.com",
+        ] : {
+        name       = replace(zone, ".", "-")
+        properties = { privateDnsZoneId = lookup(local.service_private_dns_zone_ids, zone, null) }
+      }]
+    }
   }
 }

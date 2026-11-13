@@ -33,6 +33,17 @@ def validate_config(config: dict, *, validate_expiry: bool = True) -> dict:
     config.setdefault("auth_mode", "entra")
     if config["auth_mode"] not in {"entra", "demo"}:
         raise ValueError("auth_mode must be entra or demo.")
+    config["worker_owner_id"] = config["owner_id"]
+    if "demo_owner_display_name" in config:
+        name = config["demo_owner_display_name"]
+        if config["auth_mode"] != "demo":
+            raise ValueError("demo_owner_display_name is only valid in DEMO mode.")
+        if not isinstance(name, str) or not name.strip() or len(name) > 200:
+            raise ValueError("demo_owner_display_name must contain 1-200 characters.")
+        config["demo_owner_display_name"] = name.strip()
+        config["worker_owner_id"] = str(uuid.uuid5(
+            uuid.UUID("51f8c9cd-dcd4-4c33-9ef6-48b4c5919185"), name.strip().lower(),
+        ))
     agents = config.get("agents")
     if agents is None:
         count = int(config.get("agent_count", 6))
@@ -264,7 +275,8 @@ def worker_values(config: dict, root: Path, agent: dict, ownership: dict, identi
     approval = load_or_create_collective_approval_identity(root / name / "approval.json")
     values = build_tfvars(
         runtime="hermes", autopilot_name=name, previous=previous,
-        deployer_principal_id=ownership["deployer_principal_id"], worker_owner_id=config["owner_id"],
+        deployer_principal_id=ownership["deployer_principal_id"],
+        worker_owner_id=config.get("worker_owner_id", config["owner_id"]),
         role_blueprint=release["blueprint"], role_blueprint_source=release["source"],
         role_blueprint_path=release.get("path", ""), role_release=release["release"],
         role_release_commit=release["commit"], assignment_scope=agent.get("assignment", ""),

@@ -4,6 +4,7 @@ from collections import defaultdict
 import ipaddress
 import json
 import math
+from pathlib import Path
 import re
 import uuid
 
@@ -477,6 +478,141 @@ def _model_availability(reads: _Reads, scope: dict) -> None:
     )
 
 
+def _state_json(path: Path, label: str) -> dict | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError):
+        raise RuntimeError(f"{label} is unreadable; exact state ownership cannot be verified.") from None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        raise ValueError(f"{label} contains malformed JSON.") from None
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a JSON object.")
+    return value
+
+
+def _managed_attributes(state: dict, resource_type: str, name: str) -> dict | None:
+    matches = [resource for resource in state["resources"]
+               if resource.get("mode") == "managed" and not resource.get("module")
+               and resource.get("type") == resource_type and resource.get("name") == name]
+    if len(matches) > 1:
+        raise ValueError("Exact platform state contains duplicate managed resource addresses.")
+    if not matches:
+        return None
+    instances = matches[0].get("instances")
+    if not isinstance(instances, list) or not all(isinstance(instance, dict) for instance in instances):
+        raise ValueError("Exact platform state contains malformed managed resource instances.")
+    current = [instance for instance in instances if not instance.get("deposed")]
+    if len(current) > 1:
+        raise ValueError("Exact platform state contains ambiguous managed resource instances.")
+    if not current or current[0].get("status") == "tainted":
+        return None
+    attributes = current[0].get("attributes")
+    if not isinstance(attributes, dict) or not isinstance(attributes.get("id"), str) or not attributes["id"]:
+        raise ValueError("Exact platform state contains malformed managed resource attributes.")
+    return attributes
+
+
+def _owned_capacity(reads: _Reads, config: dict, scope: dict) -> None:
+    from scripts.deploy_simulator_environment import environment_root, state_path
+
+    root = environment_root(config)
+    ownership_path = root / "environment.json"
+    platform_path = state_path(root, "platform", config["environment"])
+    evidence = {
+        "status": "missing_state", "owned_capacity": 0,
+        "requested_capacity": scope["model"]["capacity"], "incremental_capacity": scope["model"]["capacity"],
+        "ownership_path": str(ownership_path), "state_path": str(platform_path),
+        "provenance": "exact environment ownership + managed platform workspace state + live ARM GETs",
+    }
+    scope["model_capacity_credit"] = evidence
+    ownership = _state_json(ownership_path, "Environment ownership file")
+    if ownership is not None:
+        for field in ("environment", "subscription_id", "tenant_id", "owner_id"):
+            value = ownership.get(field)
+            expected = scope[field]
+            if not isinstance(value, str) or (value != expected if field == "environment" else value.casefold() != expected.casefold()):
+                raise ValueError(f"Environment ownership {field} does not match the exact configured stack.")
+    state = _state_json(platform_path, "Exact platform Terraform state")
+    if state is None:
+        return
+    if ownership is None:
+        raise ValueError("Exact platform Terraform state exists without its environment ownership file.")
+    resources = state.get("resources", [])
+    if state.get("version") != 4 or not isinstance(resources, list) or not all(isinstance(resource, dict) for resource in resources):
+        raise ValueError("Exact platform Terraform state has a malformed state/resource schema.")
+    state = {**state, "resources": resources}
+    deployment = _managed_attributes(state, "azapi_resource", "foundry_deployment")
+    if deployment is None:
+        evidence["status"] = "no_current_owned_deployment"
+        return
+    account = _managed_attributes(state, "azapi_resource", "foundry")
+    if account is None:
+        raise ValueError("Owned Foundry deployment has no current managed parent account in the exact platform state.")
+    deployment_id = _arm_id(deployment["id"], "Microsoft.CognitiveServices/accounts/deployments", "State-owned deployment ID")
+    account_id = _arm_id(account["id"], "Microsoft.CognitiveServices/accounts", "State-owned Foundry account ID")
+    if (str(deployment.get("type", "")).split("@")[0].casefold() != "microsoft.cognitiveservices/accounts/deployments"
+            or str(account.get("type", "")).split("@")[0].casefold() != "microsoft.cognitiveservices/accounts"
+            or deployment_id.rsplit("/", 2)[0].casefold() != account_id.casefold()
+            or str(deployment.get("parent_id", "")).casefold() != account_id.casefold()):
+        raise ValueError("State-owned deployment ID/type/parent does not match the state's Foundry account.")
+    group_name = scope["resource_group"]["name"]
+    if not group_name:
+        group = _managed_attributes(state, "azurerm_resource_group", "main")
+        if (group is None or not isinstance(group.get("name"), str)
+                or not re.fullmatch(r"rg-ap-" + re.escape(scope["environment"]) + r"-[a-z]{4}", group["name"])):
+            raise ValueError("Exact platform state cannot establish the configured created resource group boundary.")
+        group_name = group["name"]
+        expected_group_id = f"/subscriptions/{scope['subscription_id']}/resourceGroups/{group_name}"
+        if group["id"].casefold() != expected_group_id.casefold():
+            raise ValueError("State-owned created resource group ID does not match the configured subscription/group.")
+    expected_boundary = f"/subscriptions/{scope['subscription_id']}/resourceGroups/{group_name}/providers/"
+    if not account_id.casefold().startswith(expected_boundary.casefold()):
+        raise ValueError("State-owned Foundry account is outside the configured subscription/resource group.")
+    if str(deployment.get("name", "")).casefold() != deployment_id.rsplit("/", 1)[-1].casefold():
+        raise ValueError("State-owned deployment name does not match its deployment ID.")
+    evidence.update(deployment_id=deployment_id, account_id=account_id, resource_group_name=group_name)
+    try:
+        live = _resource(
+            reads, deployment_id, "Microsoft.CognitiveServices/accounts/deployments", "2025-06-01",
+            "State-owned live deployment",
+            "{id:id,type:type,name:name,sku:sku,properties:{model:properties.model,provisioningState:properties.provisioningState}}",
+        )
+        parent = _resource(reads, account_id, "Microsoft.CognitiveServices/accounts", "2025-06-01",
+                           "State-owned live Foundry account")
+    except RuntimeError:
+        evidence["status"] = "live_resource_unverified"
+        scope["warnings"].append("UNVERIFIED owned capacity: exact state-owned ARM resources are missing/unreadable; no capacity credit was granted.")
+        return
+    properties = live.get("properties") or {}
+    if not isinstance(properties, dict):
+        raise ValueError("State-owned live deployment has malformed model/SKU/provisioning metadata.")
+    live_model = properties.get("model") or {}
+    live_sku = live.get("sku") or {}
+    if not all(isinstance(value, dict) for value in (properties, live_model, live_sku)):
+        raise ValueError("State-owned live deployment has malformed model/SKU/provisioning metadata.")
+    model = scope["model"]
+    if (str(live.get("name", "")).casefold() != model["deployment_name"].casefold()
+            or str(live_model.get("format", "")).casefold() != "openai"
+            or str(live_model.get("name", "")).casefold() != model["name"].casefold()
+            or live_model.get("version") != model["version"]
+            or str(live_sku.get("name", "")).casefold() != model["sku"].casefold()
+            or str(parent.get("location", "")).casefold() != scope["regions"]["ai"]
+            or properties.get("provisioningState") != "Succeeded"):
+        evidence["status"] = "live_configuration_not_matching"
+        scope["warnings"].append("No owned capacity credit: exact live deployment model/version/SKU/name/state or account region differs from the configured target.")
+        return
+    capacity = live_sku.get("capacity")
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 0:
+        raise ValueError("State-owned live deployment capacity must be a nonnegative integer.")
+    owned = min(capacity, model["capacity"])
+    evidence.update(status="verified", live_capacity=capacity, owned_capacity=owned,
+                    incremental_capacity=model["capacity"] - owned)
+
+
 def _quota(reads: _Reads, scopes: list[dict]) -> None:
     groups = defaultdict(list)
     for scope in scopes:
@@ -485,7 +621,10 @@ def _quota(reads: _Reads, scopes: list[dict]) -> None:
                 _normalized(model["name"]), _normalized(model["sku"]))].append(scope)
     for (subscription, location, model, sku), members in groups.items():
         requested = sum(member["model"]["capacity"] for member in members)
-        evidence = {"status": "unverified", "requested_capacity": requested}
+        owned = sum(member["model_capacity_credit"]["owned_capacity"] for member in members)
+        incremental = requested - owned
+        evidence = {"status": "unverified", "requested_capacity": requested,
+                    "owned_capacity": owned, "incremental_capacity": incremental}
         warning = None
         try:
             usage = reads.get(
@@ -517,10 +656,11 @@ def _quota(reads: _Reads, scopes: list[dict]) -> None:
                     warning = "UNVERIFIED model quota: the exact meter lacks comparable finite Count units; no conversion was guessed."
                 else:
                     free = limit - current
-                    if requested > free:
+                    if incremental > free:
                         raise ValueError(
                             f"Insufficient model quota in {location}: selected stacks request {requested} capacity "
-                            f"units but the exact model/SKU meter has {free:g} free units."
+                            f"units ({owned} exact-state-owned, {incremental} incremental) but the exact "
+                            f"model/SKU meter has {free:g} free units."
                         )
                     evidence.update(status="verified", meter=meter["name"]["value"],
                                     limit=limit, current_usage=current, free_capacity=free)
@@ -541,12 +681,20 @@ def plan(configs: list[dict]) -> list[dict]:
     scopes = [_scope(config) for config in configs]
     scheduler_required = any(scope["scheduler_enabled"] for scope in scopes)
     reads = _Reads()
-    for scope in scopes:
+    credited_ids = set()
+    for config, scope in zip(configs, scopes):
         _account_and_providers(reads, scope, scheduler_required=scheduler_required)
         _model_availability(reads, scope)
         _group(reads, scope)
         _network(reads, scope)
         _monitoring(reads, scope)
         _build(reads, scope)
+        _owned_capacity(reads, config, scope)
+        credit = scope["model_capacity_credit"]
+        if credit["owned_capacity"]:
+            deployment_id = credit["deployment_id"].casefold()
+            if deployment_id in credited_ids:
+                raise ValueError("The same state-owned deployment cannot receive capacity credit in multiple planned stacks.")
+            credited_ids.add(deployment_id)
     _quota(reads, scopes)
     return scopes

@@ -299,6 +299,11 @@ Model catalog support (region, model, version and SKU) is checked separately
 from quota. The example uses `swedencentral`, `gpt-6.1-sol`, version
 `2026-09-29`, `GlobalStandard`, with deployment name `gpt-6-1-sol`.
 A quota meter alone does not prove regional availability or deployment admission.
+Admission reports requested, already-owned and incremental capacity. Only an
+exact deployment recorded in this stack's ownership boundary and Terraform
+workspace, verified against live ARM metadata, is credited on a rerun. Missing
+state earns no credit; mismatched state fails. Unrelated deployments and
+capacity that another operation might release are never credited.
 
 Rerunning a stack reuses its identities, platform, state and DEMO keys. The
 runtime dependency image is reused only while its Dockerfile, dependency
@@ -345,6 +350,7 @@ customer Entra authorization. Add the following to the top level of the TOML:
 auth_mode = "demo"
 demo_acknowledge = "test-data-only"
 demo_expires_at = "2026-11-15T23:59:00Z"
+demo_owner_display_name = "Teacher"
 ```
 
 Choose a future UTC expiry within 30 days for the actual exercise. Deployment
@@ -353,7 +359,15 @@ stack in that stack's ignored `secrets.json`. Share the access code through an
 approved secure channel, never a deployment log or public issue. Expiry is
 enforced by the application, not by an Azure budget. DEMO deployment does not
 require Entra app creation. To transition, reconcile identities, change
-`auth_mode` to `entra`, and rerun `deploy`; do not recreate the platform.
+`auth_mode` to `entra`, remove `demo_owner_display_name`, and rerun `deploy`;
+do not recreate the platform.
+
+The optional `demo_owner_display_name` explicitly sets the Worker's owner to
+the simulator's UUIDv5 identity for that trimmed, lower-cased name, allowing
+the owner-only `/learning` card. Log in with that exact display name. The
+Entra `owner_id`, deployment ownership and RBAC operator remain unchanged.
+Without this option, the Worker keeps its Entra owner and an unauthenticated
+DEMO persona cannot become that owner just by choosing a display name.
 
 ## Validation and boundaries
 

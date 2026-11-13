@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from scripts.deploy_simulator_environment import (
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
+    validate_config,
 )
 from scripts.simulator_channel import simulator_environment, simulator_worker_environment
 
@@ -98,6 +99,25 @@ class SimulatorDeploymentTests(unittest.TestCase):
             self.assertNotEqual(state_path(root, "platform", "training"), root / "platform" / "terraform.tfstate")
             with self.assertRaisesRegex(ValueError, "state boundary"):
                 prepare({**self.config(), "tenant_id": "different"}, root)
+
+    def test_explicit_demo_owner_matches_simulator_identity_without_changing_state_owner(self):
+        import uuid
+        config = {
+            **self.config("demo"), "demo_owner_display_name": " Teacher ",
+            "role": {"blueprint": "role", "source": "https://example.test/role.git",
+                     "release": "1.0.0", "commit": "a" * 40},
+        }
+        values = validate_config(config, validate_expiry=False)
+        self.assertEqual(values["worker_owner_id"], str(uuid.uuid5(
+            uuid.UUID("51f8c9cd-dcd4-4c33-9ef6-48b4c5919185"), "teacher",
+        )))
+        self.assertEqual(values["owner_id"], self.config()["owner_id"])
+        self.assertEqual(values["demo_owner_display_name"], "Teacher")
+        for changes in ({"auth_mode": "entra"}, {"demo_owner_display_name": "   "}):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "demo_owner_display_name"):
+                validate_config({**config, **changes}, validate_expiry=False)
+        config.pop("demo_owner_display_name")
+        self.assertEqual(validate_config(config, validate_expiry=False)["worker_owner_id"], config["owner_id"])
 
     def test_demo_expiry_and_existing_worker_names_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
