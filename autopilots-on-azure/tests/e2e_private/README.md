@@ -121,7 +121,7 @@ owner_display_name = "<configured-DEMO-Worker-owner-display-name>"
 worker_owner_id = "<deployed-WORKER_OWNER_ID-UUID>"
 # Explicit operator-approved argv that really restarts the simulator.
 # Do not use page reload, a health check, or an arbitrary sleep here.
-restart_command = ["<restart-tool>", "<actual-restart-argument>"]
+restart_command = ["uv", "run", "python", "tests/e2e_private/restart_sandbox.py", "--subscription", "<UUID>", "--resource-group", "<stack-RG>", "--group", "<simulator-group>", "--sandbox-id", "<simulator-Sandbox-UUID>"]
 ```
 
 Supply each existing DEMO code through the named environment variable without
@@ -147,6 +147,17 @@ actual mention; a real agent Adaptive Card; DOCX and TXT uploads whose contents
 the agent reads; an agent-generated downloadable document; and a genuine
 restart retaining the original chat and file hashes. Independent feature
 failures accumulate, rather than silently skipping the rest.
+
+The restart helper uses the locked native Sandbox SDK stop/resume lifecycle,
+not a Git operation or Terraform apply. It reads the guest kernel boot UUID
+before/after and fails if it did not change; a paused guest or page reload
+cannot masquerade as a reboot. Resume is attempted even if stop reports an
+error, without swallowing that error. Invoke only against the explicitly
+authorized simulator instance after obtaining C's resource/instance handoff.
+The runner allows ten minutes for this lifecycle and records the helper's JSON
+reboot evidence before checking retained chat/files. This mechanism is
+implemented and unit-tested, **not yet certified against a live private
+simulator**; if platform stop/resume preserves boot state, it fails explicitly.
 
 The first human signs in as the configured Worker owner. In DEMO mode its
 identity is UUIDv5(namespace `51f8c9cd-dcd4-4c33-9ef6-48b4c5919185`,

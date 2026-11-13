@@ -200,7 +200,12 @@ async function runStack(stack) {
     await check("restart-chat-and-file-persistence", async () => {
       assert.ok(Array.isArray(stack.restart_command) && stack.restart_command.length,
         "A real restart_command argv is mandatory; page reload is not a restart.");
-      await execute(stack.restart_command[0], stack.restart_command.slice(1), { timeout: config.timeout_ms });
+      const restarted = await execute(stack.restart_command[0], stack.restart_command.slice(1), { timeout: 600_000 });
+      const reboot = JSON.parse(restarted.stdout.trim().split("\n").at(-1));
+      assert.equal(reboot.verifiedReboot, true, "Restart command must provide real reboot evidence.");
+      assert.ok(reboot.beforeBootId && reboot.afterBootId && reboot.beforeBootId !== reboot.afterBootId,
+        "An unchanged guest boot identity is not a verified restart.");
+      report.reboot = reboot;
       await eventually(async () => {
         try { return (await fetch(`${stack.url}/api/health`, { signal: AbortSignal.timeout(5000) })).ok; }
         catch (error) {
