@@ -2,7 +2,9 @@ FROM node:24-bookworm-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm ci --no-audit --no-fund --registry=https://packagefeedproxy.microsoft.io/npm/
-COPY frontend/ ./
+COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.mjs frontend/THIRD-PARTY-NOTICES.txt ./
+COPY frontend/src/ ./src/
+COPY frontend/scripts/prepare-assets.mjs ./scripts/prepare-assets.mjs
 RUN npm run build
 
 FROM python:3.12-slim-bookworm AS python-dependencies
