@@ -49,6 +49,15 @@ COPY --from=office-node /app/node_modules ./node_modules
 COPY runtimes/hermes/pyproject.toml runtimes/hermes/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --python /usr/bin/python3.13 --no-managed-python
 
+COPY runtimes/hermes/hermes-telemetry.txt /opt/autopilots/hermes-telemetry.txt
+COPY bridge/telemetry.py /tmp/autopilots-telemetry-smoke/telemetry.py
+RUN uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes \
+        -r /opt/autopilots/hermes-telemetry.txt \
+    && uv pip check --python /opt/hermes/.venv/bin/python \
+    && /opt/hermes/.venv/bin/python -B -c "import sys; sys.path.insert(0, '/tmp/autopilots-telemetry-smoke'); import telemetry; from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor; telemetry.configure_telemetry('hermes-gateway'); assert HTTPXClientInstrumentor().is_instrumented_by_opentelemetry" \
+    && rm /tmp/autopilots-telemetry-smoke/telemetry.py \
+    && rmdir /tmp/autopilots-telemetry-smoke
+
 COPY runtimes/hermes/hermes-site.txt /opt/autopilots/hermes-site.txt
 RUN uv pip install --python /opt/hermes/.venv/bin/python --target /opt/autopilots/hermes-site \
         --no-deps --require-hashes --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ \

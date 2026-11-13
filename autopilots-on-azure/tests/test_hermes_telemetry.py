@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import httpx
+from packaging.requirements import Requirement
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -62,6 +64,38 @@ class HermesTelemetryTests(unittest.TestCase):
         settings_patch.start()
         self.addCleanup(tracer_patch.stop)
         self.addCleanup(settings_patch.stop)
+
+    def test_native_telemetry_dependencies_match_frozen_runtime_closure(self):
+        runtime = _ROOT / "runtimes" / "hermes"
+        packages = {
+            package["name"]: package
+            for package in tomllib.loads((runtime / "uv.lock").read_text(encoding="utf-8"))["package"]
+        }
+        requirements = {}
+        manifest = (runtime / "hermes-telemetry.txt").read_text(encoding="utf-8").replace("\\\n", " ")
+        for line in manifest.splitlines():
+            tokens = line.split()
+            if tokens:
+                requirement = Requirement(tokens[0])
+                self.assertNotIn(requirement.name, requirements)
+                requirements[requirement.name] = requirement
+                package = packages[requirement.name]
+                self.assertTrue(requirement.specifier.contains(package["version"]))
+                hashes = {archive["hash"] for archive in package.get("wheels", [])}
+                if package.get("sdist"):
+                    hashes.add(package["sdist"]["hash"])
+                for token in tokens[1:]:
+                    self.assertTrue(token.startswith("--hash="))
+                    self.assertIn(token.removeprefix("--hash="), hashes)
+
+        closure = set()
+        pending = {"opentelemetry-instrumentation-httpx", "opentelemetry-sdk"}
+        while pending:
+            name = pending.pop()
+            if name not in closure:
+                closure.add(name)
+                pending.update(dependency["name"] for dependency in packages[name].get("dependencies", []))
+        self.assertEqual(set(requirements), closure)
 
     def test_each_wrapper_start_replaces_dead_generations(self):
         stale = self.context_directory
