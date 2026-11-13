@@ -203,17 +203,19 @@ class PrivateProbeTests(unittest.TestCase):
 
     def test_foundry_requires_observed_http_and_served_model_usage_not_declared_alias(self):
         columns = [{"name": name} for name in (
-            "name", "success", "resultCode", "target", "responseModel", "inputTokens", "outputTokens",
+            "name", "success", "resultCode", "target", "responseModel", "inputTokens", "outputTokens", "type",
         )]
-        chat = ["chat", True, "", "azure-foundry", "served-model", 100, 20]
-        http = ["internal", True, "200", "account.openai.azure.com", "", None, None]
+        chat = ["chat", True, "", "azure-foundry", "served-model", 100, 20, "gen_ai"]
+        http = ["POST /", True, "200", "account.openai.azure.com:443", "", None, None, "HTTP"]
         def response(rows):
             return {"tables": [{"columns": columns, "rows": rows}]}
         self.assertIsNone(foundry_trace(response([chat])))
         self.assertIsNone(foundry_trace(response([http])))
         self.assertIsNone(foundry_trace(response([
-            chat, ["internal", False, "403", "account.openai.azure.com", "", None, None],
+            chat, ["internal", False, "403", "account.openai.azure.com", "", None, None, "HTTP"],
         ])))
+        self.assertIsNone(foundry_trace(response([chat, [*http[:-1], "custom"]])))
+        self.assertIsNone(foundry_trace(response([chat, [*http[:-1], None]])))
         proof = foundry_trace(response([chat, http]))
         self.assertEqual(proof["observedFoundryHost"], "account.openai.azure.com")
         self.assertEqual(proof["servedModel"], "served-model")
