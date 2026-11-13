@@ -40,6 +40,21 @@ def read_json(url, headers, label, body=None):
     return json.loads(data)
 
 
+def anonymous_evidence_check(url):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        with opener.open(urllib.request.Request(url, method="GET"), timeout=20) as response:
+            status = response.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+        error.close()
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"Anonymous evidence check transport failed: {type(error.reason).__name__}.") from None
+    if status not in (401, 403):
+        raise ValueError(f"Protected evidence endpoint must reject anonymous access with HTTP401/403, got HTTP{status}.")
+    return {"status": "pass", "httpStatus": status}
+
+
 def select_delivery(payload, expected, now):
     events = payload.get("events")
     if not isinstance(events, list):
@@ -433,9 +448,13 @@ def main():
         evidence["runtimeNetwork"] = check(args.runtime_url, transport_only=True, temporary_public=args.temporary_public)
         headers = {"X-Autopilot-Key": key}
         route = "turns" if args.widget_turn else "generated-files"
-        gateway = read_json(
+        gateway_evidence_url = (
             f"{args.gateway_url.rstrip('/')}/internal/{route}/evidence?"
-            + urlencode({"conversation_id": expected["conversationId"]}), headers, "Gateway evidence",
+            + urlencode({"conversation_id": expected["conversationId"]})
+        )
+        evidence["gatewayAnonymous"] = anonymous_evidence_check(gateway_evidence_url)
+        gateway = read_json(
+            gateway_evidence_url, headers, "Gateway evidence",
         )
         if args.widget_turn:
             evidence["activityTarget"] = {key: expected.get(key) for key in (
@@ -457,9 +476,12 @@ def main():
         else:
             delivery = select_delivery(gateway, expected, time.time())
         evidence["turn" if args.widget_turn else "delivery"] = delivery
+        native_evidence_url = (
+            f"{args.runtime_url.rstrip('/')}/internal/runs/{quote(delivery['nativeRunId'], safe='')}/evidence"
+        )
+        evidence["runtimeAnonymous"] = anonymous_evidence_check(native_evidence_url)
         native = read_json(
-            f"{args.runtime_url.rstrip('/')}/internal/runs/{quote(delivery['nativeRunId'], safe='')}/evidence",
-            headers, "Runtime evidence",
+            native_evidence_url, headers, "Runtime evidence",
         )
         evidence["native"] = validate_run(
             native, delivery["nativeRunId"], require_terminal=not args.widget_turn,
