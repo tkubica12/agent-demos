@@ -57,6 +57,13 @@ DOWNLOAD_HOSTS = {
 }
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+PRIVATE_ADDRESS_SPACES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+    SHARED_ADDRESS_SPACE,
+)
 
 
 class AttachmentProcessingError(RuntimeError):
@@ -208,6 +215,10 @@ def _public_addresses(value: str) -> tuple[str, int, tuple[str, ...]]:
     except ValueError as exc:
         raise AttachmentProcessingError("Invalid attachment download URL.") from exc
     configured = _origin(value) in attachment_download_origins()
+    allow_private_dns = (
+        configured and parsed.scheme.lower() == "https"
+        and os.getenv("PRIVATE_NETWORK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
     host = (parsed.hostname or "").lower()
     loopback = _loopback_host(host)
     allow_loopback = configured and loopback and os.getenv("ALLOW_LOOPBACK_ATTACHMENTS") == "1"
@@ -237,6 +248,8 @@ def _public_addresses(value: str) -> tuple[str, int, tuple[str, ...]]:
         or literal.is_loopback
         or literal.is_link_local
         or literal.is_reserved
+        or literal.is_multicast
+        or literal.is_unspecified
         or literal in SHARED_ADDRESS_SPACE
     ):
         raise AttachmentProcessingError(
@@ -261,11 +274,15 @@ def _public_addresses(value: str) -> tuple[str, int, tuple[str, ...]]:
         ip = ipaddress.ip_address(address)
         if allow_loopback and ip.is_loopback:
             continue
+        if allow_private_dns and literal is None and any(ip in network for network in PRIVATE_ADDRESS_SPACES):
+            continue
         if (
             ip.is_private
             or ip.is_loopback
             or ip.is_link_local
             or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
             or ip in SHARED_ADDRESS_SPACE
         ):
             raise AttachmentProcessingError(

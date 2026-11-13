@@ -18,6 +18,7 @@ from bridge.attachments import (
     AttachmentPolicy,
     AttachmentProcessingError,
     DOCX_CONTENT_TYPE,
+    _PinnedResolver,
     _extract_document,
     _public_addresses,
     _request_headers,
@@ -79,6 +80,60 @@ def turn_context(*attachments):
 
 
 class AttachmentTests(unittest.TestCase):
+    def test_private_origin_dns_requires_both_exact_origin_and_private_mode(self):
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.20.1.5", 443))]
+        for origin, mode in (
+            ("https://simulator.example", "false"),
+            ("https://simulator.example:8443", "true"),
+            ("", "true"),
+        ):
+            with (
+                self.subTest(origin=origin, mode=mode),
+                patch.dict(os.environ, {"ATTACHMENT_DOWNLOAD_ORIGINS": origin, "PRIVATE_NETWORK_ENABLED": mode}),
+                patch("bridge.attachments.socket.getaddrinfo", return_value=addresses),
+                self.assertRaises(AttachmentProcessingError),
+            ):
+                _public_addresses("https://simulator.example/api/file")
+
+    def test_configured_private_dns_is_validated_and_pinned_without_rebinding(self):
+        for address in ("10.20.1.5", "172.20.1.5", "192.168.10.5", "100.64.10.5", "fd00::5"):
+            with (
+                self.subTest(address=address),
+                patch.dict(os.environ, {
+                    "ATTACHMENT_DOWNLOAD_ORIGINS": "https://simulator.example", "PRIVATE_NETWORK_ENABLED": "true",
+                }),
+                patch("bridge.attachments.socket.getaddrinfo", return_value=[
+                    (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 443)),
+                ]) as lookup,
+            ):
+                resolver = _PinnedResolver()
+                resolver.pin("https://simulator.example/api/file")
+                lookup.return_value = [
+                    (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("169.254.169.254", 443)),
+                ]
+                self.assertEqual(asyncio.run(resolver.resolve("simulator.example", 443))[0]["host"], address)
+                lookup.assert_called_once()
+
+    def test_private_mode_still_rejects_metadata_loopback_unsafe_dns_and_ip_literals(self):
+        for address in ("169.254.169.254", "127.0.0.1", "0.0.0.0", "224.0.0.1", "240.0.0.1", "192.0.2.1",
+                        "::1", "::", "fe80::1", "ff02::1"):
+            with (
+                self.subTest(address=address),
+                patch.dict(os.environ, {
+                    "ATTACHMENT_DOWNLOAD_ORIGINS": "https://simulator.example", "PRIVATE_NETWORK_ENABLED": "true",
+                }),
+                patch("bridge.attachments.socket.getaddrinfo", return_value=[
+                    (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.20.1.5", 443)),
+                    (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (address, 443)),
+                ]),
+                self.assertRaises(AttachmentProcessingError),
+            ):
+                _public_addresses("https://simulator.example/api/file")
+        with patch.dict(os.environ, {
+            "ATTACHMENT_DOWNLOAD_ORIGINS": "https://10.20.1.5", "PRIVATE_NETWORK_ENABLED": "true",
+        }), self.assertRaises(AttachmentProcessingError):
+            _public_addresses("https://10.20.1.5/api/file")
+
     def test_explicit_origin_keeps_public_dns_and_exact_origin_boundary(self):
         addresses = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("20.30.40.50", 443))]
         with (
