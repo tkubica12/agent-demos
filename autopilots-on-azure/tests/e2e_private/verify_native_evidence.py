@@ -152,6 +152,7 @@ def successful_tool_completions(tools, tool):
     return [
         item for item in tools if isinstance(item, dict)
         and item.get("event") == "tool.completed" and item.get("tool") == tool
+        and isinstance(item.get("toolCallId"), str)
         and item.get("toolCallId") in starts and item.get("error") is False
         and type(item.get("duration")) in (int, float)
         and math.isfinite(item["duration"]) and item["duration"] >= 0

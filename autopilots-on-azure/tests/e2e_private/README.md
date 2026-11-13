@@ -129,8 +129,7 @@ Requirements: a host using the customer's private DNS and routes; Python 3.11+
 through uv; Node 20+; Chromium; the existing simulator frontend's locked
 `@playwright/test` package. `npm ci` in `chat-simulator\frontend` restores that
 lockfile without upgrading it. Alternatively set `PRIVATE_PLAYWRIGHT_MODULE`
-to an already installed `@playwright/test` directory, as on the prepared VM:
-`/opt/private-playwright/node_modules/@playwright/test`.
+to an already installed `@playwright/test` directory on the operator host.
 
 First run the negative probe **outside** the VNet/VPN/private DNS, with all
 selected simulator origins. Normal public DNS may still return a shared
@@ -168,7 +167,7 @@ worker_owner_id = "<deployed-WORKER_OWNER_ID-UUID>"
 gateway_url = "https://<native-private-gateway-FQDN>"
 runtime_url = "https://<native-private-runtime-FQDN>"
 source_commit = "<operator-approved-40-character-source-SHA>"
-widget_attestation_path = "/var/lib/<private-state>/widget-attestation.json"
+widget_attestation_path = ".local/widget-attestation.json"
 evidence_key_env = "PRIVATE_AGENT_1_INTERNAL_KEY"
 app_insights_resource_id = "/subscriptions/<UUID>/resourceGroups/<stack-RG>/providers/Microsoft.Insights/components/<component>"
 # Explicit operator-approved argv that really restarts the simulator.
