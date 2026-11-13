@@ -266,6 +266,11 @@ uv run python -m scripts.deploy_simulator_environment --config .local\customer.t
 The default action is `all` for every selected stack: isolated infrastructure and UAMIs, identities,
 immutable image builds, simulator creation, redirect reconciliation, Workers,
 registrations through `TSIM_AGENTS_JSON`, and health/anonymous-access checks.
+Image builds export only the pinned commit's tracked source into a temporary
+context, rejecting dirty or changed source. The staged archive SHA is recorded
+with the commit; local dependencies, caches and secrets are never uploaded.
+Git-free release packages must include `source_commit` and a `files` map of
+relative paths to SHA256 hashes in `deployment-manifest.json`.
 In DEMO mode it also logs in, sends a unique challenge through the simulator,
 and requires a real Hermes/model reply through the gateway and Connector API.
 Each stack has its own three Entra applications (SPA/API, channel, agent).
