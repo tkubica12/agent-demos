@@ -1,6 +1,13 @@
 output "deployment_config" {
   sensitive = true
   value = {
+    channel                                  = var.channel
+    demo_mcp_enabled                         = local.demo_mcp_enabled
+    simulator_auth_mode                      = var.simulator_auth_mode
+    simulator_url                            = var.simulator_url
+    simulator_channel_client_id              = var.simulator_channel_client_id
+    simulator_agent_client_id                = var.simulator_agent_client_id
+    simulator_demo_key                       = var.simulator_demo_key
     agent_runtime                            = var.agent_runtime
     autopilot_name                           = var.autopilot_name
     runtime_image                            = var.runtime_image

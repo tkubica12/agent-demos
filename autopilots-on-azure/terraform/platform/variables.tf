@@ -37,3 +37,8 @@ variable "model_capacity" {
   type    = number
   default = 100
 }
+
+variable "environment_name" {
+  type    = string
+  default = ""
+}

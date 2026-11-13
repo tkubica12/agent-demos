@@ -11,7 +11,9 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS minimax-docx
 
 WORKDIR /src
 COPY --from=minimax-skills /source/skills/minimax-docx/scripts/dotnet/ .
-RUN dotnet publish MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj \
+RUN dotnet restore MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj -r linux-x64 \
+    --source https://packagefeedproxy.microsoft.io/nuget/v3/index.json \
+    && dotnet publish MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj --no-restore \
     -c Release -r linux-x64 --self-contained true \
     -p:PublishSingleFile=true -p:PublishTrimmed=false -o /out
 
@@ -19,16 +21,16 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS office-helper
 
 WORKDIR /src
 COPY runtimes/hermes/office_helper/OfficeCollaboration.csproj .
-RUN dotnet restore
+RUN dotnet restore -r linux-x64 --source https://packagefeedproxy.microsoft.io/nuget/v3/index.json
 COPY runtimes/hermes/office_helper/Program.cs .
-RUN dotnet publish -c Release -r linux-x64 --self-contained true \
+RUN dotnet publish --no-restore -c Release -r linux-x64 --self-contained true \
     -p:PublishSingleFile=true -p:PublishTrimmed=false -o /out
 
 FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS office-node
 
 WORKDIR /app
 COPY runtimes/hermes/package.json runtimes/hermes/package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci --ignore-scripts --registry=https://packagefeedproxy.microsoft.io/npm/
 
 FROM ${HERMES_BASE_IMAGE}
 USER root
@@ -49,7 +51,8 @@ RUN uv sync --frozen --no-dev --no-install-project --python /usr/bin/python3.13 
 
 COPY runtimes/hermes/hermes-site.txt /opt/autopilots/hermes-site.txt
 RUN uv pip install --python /opt/hermes/.venv/bin/python --target /opt/autopilots/hermes-site \
-        --no-deps --require-hashes -r /opt/autopilots/hermes-site.txt \
+        --no-deps --require-hashes --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ \
+        -r /opt/autopilots/hermes-site.txt \
     && /opt/hermes/.venv/bin/python -c "import sys; sys.path.append('/opt/autopilots/hermes-site'); import azure.servicebus, azure.monitor.opentelemetry.exporter, yaml"
 
 COPY --from=minimax-skills /source/skills/minimax-docx ./runtime_skills/minimax-docx

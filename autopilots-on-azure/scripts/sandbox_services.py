@@ -22,6 +22,7 @@ from scripts.sandbox_runtime import (
     deploy_agent_sandbox,
     existing_named,
     require_runtime_ready,
+    runtime_config_revision,
     run_text,
 )
 from scripts.application_releases import (
@@ -193,9 +194,9 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "HERMES_MODEL": platform["model_deployment_name"],
         "GENERATED_APPS_SANDBOX_GROUP": groups["generated-apps"]["name"],
         "GENERATED_APPS_REGION": infrastructure["sandbox_location"],
-        "PRIVATE_INCIDENTS_MCP_URL": endpoints["private_mcp_url"],
+        "PRIVATE_INCIDENTS_MCP_URL": endpoints.get("private_mcp_url", ""),
         "PRIVATE_INCIDENTS_MCP_SCOPE": config["private_mcp_api_audience"] + "/.default",
-        "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL": endpoints["public_shipments_mcp_url"],
+        "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL": endpoints.get("public_shipments_mcp_url", ""),
         "PUBLIC_SHIPMENTS_MCP_SCOPE": config["public_shipments_mcp_api_audience"] + "/.default",
         "AGENT365_TENANT_ID": tenant,
         "AGENT365_BLUEPRINT_CLIENT_ID": config["agent365_client_id"],
@@ -223,17 +224,25 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
             key = name.upper().replace("_MCP_URL", "_MCP_UPSTREAM_URL")
             environment[key] = text(value)
     transport = infrastructure.get("transport")
-    if not isinstance(transport, dict):
+    simulator = config.get("channel", "agent365") == "simulator"
+    if not isinstance(transport, dict) and not simulator:
         raise ValueError("Apply the Worker's native transport infrastructure before deploying applications.")
     environment.update({
         "TRANSPORT_ROLE": "gateway",
-        "TRANSPORT_CALLBACK_PRINCIPAL_ID": transport["connector_principal_id"],
-        "TRANSPORT_CALLBACK_TENANT_ID": infrastructure["tenant_id"],
-        "TRANSPORT_CONNECTION_ID": transport["connection_ids"]["gateway"],
         "TRANSPORT_JOURNAL_PATH": "/data/autopilots/transport.db",
         "TRANSPORT_JOURNAL_BACKUP": "/backup/transport/journal.db",
-        "SCHEDULER_SERVICEBUS_NAMESPACE": transport["namespace"],
     })
+    if isinstance(transport, dict):
+        environment.update({
+            "TRANSPORT_CALLBACK_PRINCIPAL_ID": transport["connector_principal_id"],
+            "TRANSPORT_CALLBACK_TENANT_ID": infrastructure["tenant_id"],
+            "TRANSPORT_CONNECTION_ID": transport["connection_ids"]["gateway"],
+            "SCHEDULER_SERVICEBUS_NAMESPACE": transport["namespace"],
+        })
+    if simulator:
+        from scripts.simulator_channel import simulator_worker_environment
+
+        environment = simulator_worker_environment(config, infrastructure, environment)
     return environment
 
 
@@ -267,6 +276,16 @@ def gateway_environment(settings: dict[str, str]) -> dict[str, str]:
 def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) -> dict[str, Any]:
     """Create or reuse runtime compute at deployment and return its native OnDemand endpoint."""
     config = config_from_environment({**settings, "AUTOPILOT_BRIDGE_URL": gateway_url})
+    if settings.get("USE_AGENTIC_AUTH", "true") == "false":
+        environment = {
+            key: value for key, value in config.environment.items()
+            if not key.startswith(("AGENT365_", "WORKIQ_"))
+        }
+        environment.update({key: settings[key] for key in (
+            "WORKER_OWNER_ID", "USE_AGENTIC_AUTH",
+        )})
+        config = replace(config, environment=environment)
+        config = replace(config, runtime_config_revision=runtime_config_revision(config))
     config = replace(config, command=("python3", "-c", BOOTSTRAP), args=())
     runtime = deploy_agent_sandbox(config, credential=credential)
     release = build_release("runtime", base_image=config.runtime_image_reference)
@@ -472,7 +491,7 @@ def require_quiescent_service(sandbox: Any, previous: dict, port: int) -> None:
         raise RuntimeError("The previous application configuration is missing; inspect the owned Sandbox.")
     environment = previous.get("environment", {})
     gateway = environment.get("TRANSPORT_ROLE") == "gateway"
-    if gateway and not environment.get("TRANSPORT_CONNECTION_ID"):
+    if gateway and not environment.get("TRANSPORT_CONNECTION_ID") and environment.get("USE_AGENTIC_AUTH") != "false":
         raise RuntimeError("The previous gateway has no durable scheduling configuration.")
     probe = """
 import json,urllib.request
@@ -598,7 +617,8 @@ def deploy_service(
                     pass
                 maintenance.enter_context(service_maintenance(sandbox))
                 require_quiescent_service(sandbox, previous, service.port)
-            callback_url = configure_callback_port(sandbox, environment)
+            if environment.get("TRANSPORT_CONNECTION_ID"):
+                callback_url = configure_callback_port(sandbox, environment)
         if endpoint_environment is not None:
             environment.update(endpoint_environment(endpoint.rstrip("/")))
         directory = install_release(sandbox, service.release)
@@ -646,14 +666,16 @@ def deploy_service(
 
 def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
     config = infrastructure["deployment_config"]
+    simulator = config.get("channel", "agent365") == "simulator"
+    demo_mcp = config.get("demo_mcp_enabled", not simulator)
     required_identity = ("agent365_client_id", "agent365_agent_identity_client_id",
                          "agent365_agent_identity_object_id", "agent365_agent_user_id")
-    if any(not config.get(key) for key in required_identity):
+    if not simulator and any(not config.get(key) for key in required_identity):
         raise ValueError("Public gateway deployment requires the existing Agent 365 blueprint, Agent Identity and Agent User.")
-    if infrastructure["private_ingress"].get("publicNetworkAccess") != "Disabled":
+    if demo_mcp and infrastructure["private_ingress"].get("publicNetworkAccess") != "Disabled":
         raise RuntimeError("Private MCP Sandbox Group does not report disabled public ingress.")
     groups = infrastructure["sandbox_groups"]
-    roles = ("runtime", "gateway", "private-mcp", "public-mcp", "generated-apps")
+    roles = tuple(groups)
     if len({groups[role]["name"] for role in roles}) != len(roles):
         raise ValueError("Runtime, gateway and tool roles require separate Sandbox Groups.")
     if len({groups[role]["identity_client_id"] for role in roles}) != len(roles):
@@ -669,6 +691,8 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
         disks = {}
         for role, prefix in (("runtime", "runtime"), ("private-mcp", "private_mcp"),
                              ("public-mcp", "public_shipments_mcp"), ("gateway", "bridge")):
+            if role not in groups:
+                continue
             with SandboxGroupClient(
                 endpoint_for_region(infrastructure["sandbox_location"]), credential,
                 subscription_id=infrastructure["subscription_id"],
@@ -685,6 +709,8 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
         endpoints["runtime_disk_image_id"] = disks["runtime"]
         runtime: dict[str, Any] = {}
         for role in ("private-mcp", "public-mcp", "gateway"):
+            if role not in groups:
+                continue
             group = infrastructure["sandbox_groups"][role]
             endpoint_environment = None
             if role == "gateway":

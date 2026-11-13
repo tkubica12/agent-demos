@@ -1,7 +1,7 @@
 data "terraform_remote_state" "platform" {
   backend = "local"
   config = {
-    path = "../platform/terraform.tfstate"
+    path = var.platform_state_path
   }
 }
 
@@ -19,9 +19,13 @@ locals {
     agent_runtime = var.agent_runtime
     layer         = "apps"
   }
-  roles = toset(["runtime", "gateway", "private-mcp", "public-mcp", "generated-apps"])
+  demo_mcp_enabled = coalesce(var.demo_mcp_enabled, var.channel == "agent365")
+  roles = toset(concat(
+    ["runtime", "gateway", "generated-apps"],
+    local.demo_mcp_enabled ? ["private-mcp", "public-mcp"] : []
+  ))
   document_retry_active = (
-    var.document_retry_enabled && var.agent365_client_id != ""
+    var.channel == "agent365" && var.document_retry_enabled && var.agent365_client_id != ""
   )
   scheduler_transport_enabled = (
     var.user_scheduling_enabled || local.document_retry_active
@@ -54,6 +58,10 @@ resource "azapi_resource" "sandbox_group" {
   schema_validation_enabled = false
   lifecycle {
     precondition {
+      condition     = var.channel == "agent365" || (!var.user_scheduling_enabled && !var.servicebus_dream_enabled)
+      error_message = "The simulator deployment does not enable native scheduling or Dreaming."
+    }
+    precondition {
       condition     = !var.servicebus_dream_enabled || var.user_scheduling_enabled
       error_message = "Queue-driven Dreaming requires Hermes user scheduling and its Service Bus queue."
     }
@@ -61,6 +69,7 @@ resource "azapi_resource" "sandbox_group" {
 }
 
 resource "azapi_update_resource" "private_ingress" {
+  count       = local.demo_mcp_enabled ? 1 : 0
   type        = "Microsoft.App/sandboxGroups@2026-02-01-preview"
   resource_id = azapi_resource.sandbox_group["private-mcp"].id
   body = {
@@ -77,6 +86,11 @@ resource "azapi_update_resource" "private_ingress" {
   }
 }
 
+moved {
+  from = azapi_update_resource.private_ingress
+  to   = azapi_update_resource.private_ingress[0]
+}
+
 resource "azapi_resource" "vnet_connection" {
   for_each  = toset(["runtime", "gateway"])
   type      = "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
@@ -89,6 +103,11 @@ resource "azapi_resource" "vnet_connection" {
     }
   }
   schema_validation_enabled = false
+  locks                     = [local.platform.sandbox_subnet_id]
+  retry = {
+    error_message_regex = ["ServiceAssociationLinkLease"]
+    interval_seconds    = 10
+  }
 }
 
 resource "azurerm_role_assignment" "deployer_sandbox_data_owner" {

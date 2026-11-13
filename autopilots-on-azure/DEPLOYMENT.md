@@ -1,5 +1,10 @@
 # Deployment and operations
 
+For an isolated **Agent Chat Simulator** environment with standard Entra
+applications (no Agent 365 or real Teams), use
+[Simulator deployment](docs/simulator-deployment.md). The procedures below
+remain the Agent 365 channel's existing operator flow.
+
 Most commands below update **existing Workers**, preserving their Agent 365 blueprint, Agent Identity, Agent User, grants, and Worker home with its backups. Create new Workers only with [Fresh Worker bootstrap](#fresh-worker-bootstrap); do not substitute placeholder endpoints or copied identities. Other current limitations are in [SPEC.md](SPEC.md).
 
 ## Prerequisites

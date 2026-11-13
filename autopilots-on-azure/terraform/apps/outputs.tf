@@ -33,7 +33,7 @@ output "sandbox_groups" {
   depends_on = [azapi_update_resource.private_ingress]
 }
 output "private_ingress" {
-  value = azapi_update_resource.private_ingress.output.properties
+  value = try(azapi_update_resource.private_ingress[0].output.properties, {})
 }
 output "sandbox_group_name" {
   value = azapi_resource.sandbox_group["runtime"].name
@@ -54,10 +54,10 @@ output "bridge_identity_principal_id" {
   value = azurerm_user_assigned_identity.workload["gateway"].principal_id
 }
 output "private_mcp_identity_client_id" {
-  value = azurerm_user_assigned_identity.workload["private-mcp"].client_id
+  value = try(azurerm_user_assigned_identity.workload["private-mcp"].client_id, "")
 }
 output "private_mcp_identity_principal_id" {
-  value = azurerm_user_assigned_identity.workload["private-mcp"].principal_id
+  value = try(azurerm_user_assigned_identity.workload["private-mcp"].principal_id, "")
 }
 output "runtime_disk_image_name" {
   value = local.runtime_disk_image_name

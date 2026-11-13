@@ -22,11 +22,12 @@ resource "azapi_resource" "foundry" {
 }
 
 resource "azapi_resource" "foundry_project" {
-  type      = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
-  name      = "autopilots-project"
-  parent_id = azapi_resource.foundry.id
-  location  = azurerm_resource_group.main.location
-  tags      = local.tags
+  depends_on = [azapi_resource.foundry_deployment]
+  type       = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
+  name       = "autopilots-project"
+  parent_id  = azapi_resource.foundry.id
+  location   = azurerm_resource_group.main.location
+  tags       = local.tags
   identity {
     type = "SystemAssigned"
   }

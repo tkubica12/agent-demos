@@ -1,10 +1,12 @@
 locals {
-  transport_connections = {
-    gateway = "${azapi_resource.transport.id}/connections/gateway-servicebus-mi"
-  }
+  transport_enabled = var.channel == "agent365"
+  transport_connections = local.transport_enabled ? {
+    gateway = "${azapi_resource.transport[0].id}/connections/gateway-servicebus-mi"
+  } : {}
 }
 
 resource "azapi_resource" "transport" {
+  count     = local.transport_enabled ? 1 : 0
   type      = "Microsoft.Web/connectorGateways@2026-05-01-preview"
   name      = "ap-${var.autopilot_name}-transport-${local.suffix}"
   parent_id = local.resource_group_id
@@ -22,11 +24,12 @@ resource "azurerm_role_assignment" "transport_schedule_receive" {
   count                = local.scheduler_transport_enabled ? 1 : 0
   scope                = azurerm_servicebus_queue.worker_schedule[0].id
   role_definition_name = "Azure Service Bus Data Receiver"
-  principal_id         = azapi_resource.transport.output.identity.principalId
+  principal_id         = azapi_resource.transport[0].output.identity.principalId
   principal_type       = "ServicePrincipal"
 }
 
 resource "azurerm_role_definition" "transport_invoke" {
+  count       = local.transport_enabled ? 1 : 0
   name        = "autopilots-${var.autopilot_name}-${local.suffix}-native-connection"
   scope       = local.resource_group_id
   description = "Named actions on a caller-owned native Service Bus connection; no connection write or delete."
@@ -42,16 +45,26 @@ resource "azurerm_role_definition" "transport_invoke" {
 resource "azurerm_role_assignment" "transport_invoke" {
   for_each           = local.transport_connections
   scope              = each.value
-  role_definition_id = azurerm_role_definition.transport_invoke.role_definition_resource_id
+  role_definition_id = azurerm_role_definition.transport_invoke[0].role_definition_resource_id
   principal_id       = azurerm_user_assigned_identity.workload[each.key].principal_id
   principal_type     = "ServicePrincipal"
 }
 
 output "transport" {
-  value = {
-    connector_id           = azapi_resource.transport.id
-    connector_principal_id = azapi_resource.transport.output.identity.principalId
+  value = local.transport_enabled ? {
+    connector_id           = azapi_resource.transport[0].id
+    connector_principal_id = azapi_resource.transport[0].output.identity.principalId
     connection_ids         = local.transport_connections
     namespace              = local.platform.scheduler_servicebus_fully_qualified_namespace
-  }
+  } : null
+}
+
+moved {
+  from = azapi_resource.transport
+  to   = azapi_resource.transport[0]
+}
+
+moved {
+  from = azurerm_role_definition.transport_invoke
+  to   = azurerm_role_definition.transport_invoke[0]
 }

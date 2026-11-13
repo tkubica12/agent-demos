@@ -10,14 +10,14 @@ resource "random_string" "suffix" {
 
 locals {
   suffix = random_string.suffix.result
-  tags = {
+  tags = merge({
     app   = "autopilots-on-azure"
     layer = "platform"
-  }
+  }, var.environment_name == "" ? {} : { environment = var.environment_name })
 }
 
 resource "azurerm_resource_group" "main" {
-  name     = "rg-autopilots-${local.suffix}"
+  name     = var.environment_name == "" ? "rg-autopilots-${local.suffix}" : "rg-ap-${var.environment_name}-${local.suffix}"
   location = var.location
   tags     = local.tags
 }
