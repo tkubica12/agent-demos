@@ -83,6 +83,12 @@ jobs:
             SIMULATOR_CONTAINER_USER=0:0
           cache-from: type=gha,scope=autopilots-${{ matrix.role }}
           cache-to: type=gha,mode=max,scope=autopilots-${{ matrix.role }}
+      - name: Start the packaged application without network access
+        shell: bash
+        run: |
+          python3 autopilots-on-azure/tests/container_startup_smoke.py \
+            --role "${{ matrix.role }}" \
+            --image "ghcr.io/${{ steps.source.outputs.owner }}/agent-demos-${{ matrix.role }}@${{ steps.image.outputs.digest }}"
       - name: Record immutable image
         shell: bash
         run: |

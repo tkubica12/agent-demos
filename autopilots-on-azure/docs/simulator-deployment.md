@@ -66,6 +66,10 @@ Publication/authentication alone does not establish public visibility: anonymous
 GET each exact manifest digest using the standard registry Bearer challenge and
 verify its byte hash. Native conversion checks that the Ready disk retains that
 same reference. Neither check proves application startup or feature acceptance.
+The release workflow also starts each exact image on an offline Docker network,
+loads protected service settings and checks real application health; runtime also
+checks its native activity endpoint. This is container startup evidence, not
+Azure deployment, identity, inference or end-to-end feature acceptance.
 
 Copy [simulator-private.example.toml](simulator-private.example.toml) outside the
 source snapshot. Its identifiers are synthetic and nondeployable. Replace them
