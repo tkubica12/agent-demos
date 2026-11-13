@@ -26,6 +26,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--simulator-root", type=Path, required=True)
 parser.add_argument("--simulator-site-packages", type=Path)
 parser.add_argument("--mode", choices=("standard", "demo"), default="standard")
+parser.add_argument("--widgets-browser", action="store_true", help="Exercise widgets in installed Chromium-based Edge.")
+parser.add_argument("--media-dir", type=Path, help="Optional external directory for widget demo media.")
 args = parser.parse_args()
 root = args.simulator_root.resolve()
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -129,14 +131,31 @@ async def main():
     from bridge.attachments import DOCX_CONTENT_TYPE, send_file_attachment
     from bridge.proactive_delivery import send_proactive_activity
     from bridge.runtime.base import AgentResponse
+    from bridge.html_widgets import START, END, decode_submission, render_widget, _cipher
+
+    widget_spec = {
+        "title": "Interactive budget planner",
+        "html": '<label>Budget <input aria-label="Budget" type="number" value="5" data-widget-field="budget"></label>'
+                '<p>Estimated total: <output id="total">10</output></p>'
+                '<button data-hermes-action="discuss">Discuss this plan</button>',
+        "css": "label{display:block}input{margin:8px}button{padding:8px}",
+        "javascript": "const input=document.querySelector('[data-widget-field]');"
+                      "input.addEventListener('input',()=>document.getElementById('total').textContent=String(Number(input.value)*2));",
+        "actions": [{"id": "discuss", "label": "Discuss this plan"}],
+    }
 
     invocations, references, events, token_scopes, requests = [], [], [], [], []
+    sdk_invokes, http_requests = [], []
     original_document_card = bridge.pending_document_card_activity
 
     async def invoke(**kwargs):
         invocations.append(kwargs)
         references.append(kwargs["metadata"]["deliveryReference"])
         await asyncio.sleep(.08)
+        if kwargs.get("metadata", {}).get("widgetSelection"):
+            return AgentResponse(text="Plan received in this same chat. " + kwargs["message"].split("Form fields")[1].split("\nThis")[0])
+        if "widget please" in kwargs["message"].lower():
+            return AgentResponse(text="Here is your interactive planner.\n" + START + json.dumps(widget_spec) + END)
         if "card please" in kwargs["message"].lower():
             return AgentResponse(text='Here is a card.\n<ADAPTIVE_CARD_REQUEST>{"kind":"display","title":"Smoke card","facts":[{"label":"Result","value":"Ready"}]}</ADAPTIVE_CARD_REQUEST>')
         return AgentResponse(text="Stub Hermes reply")
@@ -146,6 +165,15 @@ async def main():
 
     bridge.invoke_agent_runtime = invoke
     bridge.pending_document_card_activity = no_pending_document
+    claimed = set()
+
+    async def claim_widget(**kwargs):
+        interaction = kwargs["interaction_id"]
+        already = interaction in claimed
+        claimed.add(interaction)
+        return {"claimed": not already}
+
+    bridge.runtime_adapter().claim_interaction_action = claim_widget
     common = {
         "database_url": "sqlite:///" + (directory / "simulator.db").as_posix(),
         "storage_path": directory / "files", "service_url": sim_url,
@@ -162,7 +190,7 @@ async def main():
         )
     else:
         idp_sock, idp_url = listener()
-        issuer = idp_module.TestIssuer(idp_url)
+        issuer = idp_module.TestIssuer(idp_url, Settings(**idp_module.TEST_AUTH, allowed_origins=(sim_url,)))
         await serve(issuer.app(), idp_sock)
         jwks = jwt.PyJWKClient(idp_url + "/jwks")
 
@@ -181,8 +209,17 @@ async def main():
 
     simulator.state.hub.publish = capture
 
+    @bridge.app.middleware("http")
+    async def capture_sdk_invoke(request, call_next):
+        if request.url.path == "/api/messages":
+            incoming = json.loads(await request.body())
+            if incoming.get("name") == "htmlwidget/calltool":
+                sdk_invokes.append(incoming)
+        return await call_next(request)
+
     @simulator.middleware("http")
     async def capture_connector(request, call_next):
+        http_requests.append((request.method, request.url.path))
         if "/v3/" in request.url.path:
             requests.append((request.url.path, "authorization" in request.headers))
         return await call_next(request)
@@ -256,6 +293,72 @@ async def main():
             assert text in invocations[-1]["message"]
             assert invocations[-1]["metadata"]["attachmentsPrivate"] is True
         print("PASS Adaptive Cards and capability DOCX/TXT input")
+        await call("POST", f"/api/conversations/{pconv}/messages", status=201, json={"text": "widget please"})
+        messages = await call("GET", f"/api/conversations/{pconv}/messages")
+        widget_message = next(message for message in messages if message["textFormat"] == "extendedmarkdown")
+        payload = json.loads(widget_message["text"].split("```html-widget\n")[1].split("\n```")[0])
+        token = re.search(r'"discuss": "([^"]+)"', payload["html"]).group(1)
+        submitted = {"name": "autopilot.widget.submit", "arguments": {
+            "token": token, "values": {"budget": "7"}, "__msteams__": {"correlationId": "spoofed"},
+        }}
+        decoded, values = decode_submission(submitted, conversation_id=pconv)
+        assert decoded["sessionKey"] == invocations[-1]["session_key"] and values == {"budget": "7"}
+        widget_path = f"/api/messages/{widget_message['id']}/widgets/0"
+        before = len(invocations)
+        response = await call("POST", widget_path + "/tools", json=submitted)
+        assert response["responseType"] == "htmlwidget/calltoolresult"
+        assert response["callToolResult"]["structuredContent"]["status"] == "accepted"
+        assert response["callToolResult"]["isError"] is False
+        observed = sdk_invokes[-1]
+        assert observed["type"] == "invoke" and observed["name"] == "htmlwidget/calltool"
+        assert observed["conversation"]["id"] == pconv
+        assert observed["conversation"]["conversationType"] == "personal"
+        assert observed["recipient"]["id"] == f"28:{AGENT}"
+        assert observed["from"]["aadObjectId"] == decoded["userId"]
+        assert observed["value"]["arguments"]["__msteams__"] == {}
+        assert decode_submission(observed["value"], conversation_id=pconv)[1] == {"budget": "7"}
+        for _ in range(100):
+            followup = await call("GET", f"/api/conversations/{pconv}/messages")
+            if any(message["text"].startswith("Plan received") for message in followup):
+                break
+            await asyncio.sleep(.03)
+        else:
+            raise AssertionError("Widget proactive continuation did not arrive")
+        assert len(invocations) == before + 1
+        assert invocations[-1]["session_key"] == decoded["sessionKey"]
+        duplicate = await call("POST", widget_path + "/tools", json=submitted)
+        assert duplicate["callToolResult"]["structuredContent"]["status"] == "already_submitted"
+        expired = {**decoded, "expiresAtUnix": time.time() - 1}
+        expired_token = _cipher().encrypt(json.dumps(expired).encode()).decode()
+        rejected = await call("POST", widget_path + "/tools", json={
+            "name": submitted["name"], "arguments": {"token": expired_token, "values": {}},
+        })
+        assert rejected["callToolResult"]["isError"] is True
+        print("PASS real render_widget -> Connector extendedmarkdown -> simulator deliver -> real SDK HTTP invokeResponse")
+        print("PASS valid Fernet binding, real handle_teams_invoke/decode_submission/tool_result, duplicate and expired capability, same-session proactive follow-up")
+        if args.widgets_browser:
+            from widget_browser_checks import check_widgets
+
+            async def post_widget(activity):
+                saved_widget = Conversation.from_json_to_store_item(references[-1]["conversation"])
+                sent = []
+
+                async def send_widget(context):
+                    sent.append((await context.send_activity(activity)).id)
+
+                await bridge.agent365_adapter.continue_conversation_with_claims(
+                    saved_widget.identity_from_claims(saved_widget.claims),
+                    saved_widget.conversation_reference.get_continuation_activity(), send_widget,
+                )
+                return sent[0]
+
+            await check_widgets(
+                simulator=simulator, client=client, call=call, sim_url=sim_url, conversation=pconv,
+                owner_headers=owner_headers, spec=widget_spec, post_widget=post_widget, render_widget=render_widget,
+                cipher=_cipher(), session_key=decoded["sessionKey"], user_id=decoded["userId"],
+                media_dir=args.media_dir, demo=demo, access_code=settings.demo_access_code,
+                request_log=http_requests,
+            )
         await send_proactive_activity(bridge.agent365_adapter, references[-1], "Proactive smoke")
         without_claims = json.loads(json.dumps(references[-1]))
         without_claims["conversation"]["claims"] = {}
