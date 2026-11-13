@@ -6,6 +6,7 @@ output "deployment_inputs" {
     network_mode        = "private"
     resource_group_mode = "existing"
     platform = {
+      location                            = var.location
       sandbox_location                    = var.location
       existing_private_endpoint_subnet_id = azapi_resource.subnets["endpoints"].id
       private_dns_zone_ids                = { for name, zone in azapi_resource.dns : name => zone.id }
