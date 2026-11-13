@@ -1,4 +1,5 @@
 import io
+import importlib.util
 import json
 import shlex
 import socket
@@ -24,6 +25,48 @@ from verify_widget_attestation import EXPECTED, validate_attestation
 
 
 class PrivateProbeTests(unittest.TestCase):
+    def test_landing_zone_prepare_does_not_create_linux_credentials_or_run_tools(self):
+        spec = importlib.util.spec_from_file_location(
+            "landing_zone_manage", Path(__file__).parents[2] / "terraform" / "test-landing-zone" / "manage.py",
+        )
+        manager = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(manager)
+        with tempfile.TemporaryDirectory() as directory, patch.object(manager, "PROJECT", Path(directory)), \
+                patch.object(manager, "run") as command, patch("builtins.print"), patch("sys.argv", [
+                    "manage.py", "prepare", "--prefix", "test-client",
+                    "--subscription", "10000000-0000-0000-0000-000000000001",
+                ]):
+            manager.main()
+            command.assert_not_called()
+            local = Path(directory) / ".local" / "landing-zone-test-client"
+            settings = json.loads((local / "inputs.tfvars.json").read_text())
+            self.assertNotIn("ssh_public_key", settings)
+            self.assertFalse((local / "client-key").exists())
+            self.assertIn("windows_password", settings)
+
+    def test_landing_zone_stop_clients_only_deallocates_retained_jump_host(self):
+        spec = importlib.util.spec_from_file_location(
+            "landing_zone_manage", Path(__file__).parents[2] / "terraform" / "test-landing-zone" / "manage.py",
+        )
+        manager = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(manager)
+        with tempfile.TemporaryDirectory() as directory, patch.object(manager, "PROJECT", Path(directory)), \
+                patch.object(manager, "run") as command, patch("sys.argv", [
+                    "manage.py", "stop-clients", "--prefix", "test-client",
+                    "--subscription", "10000000-0000-0000-0000-000000000001",
+                ]):
+            local = Path(directory) / ".local" / "landing-zone-test-client"
+            local.mkdir(parents=True)
+            (local / "inputs.tfvars.json").write_text(json.dumps({
+                "prefix": "test-client", "subscription_id": "10000000-0000-0000-0000-000000000001",
+            }))
+            manager.main()
+            command.assert_called_once_with([
+                "az", "vm", "deallocate", "--subscription", "10000000-0000-0000-0000-000000000001",
+                "--resource-group", "rg-test-client-network", "--name", "vm-test-client-windows",
+                "--only-show-errors", "--output", "none",
+            ])
+
     def test_only_rfc1918_is_private(self):
         for value in ("10.1.2.3", "172.20.1.2", "192.168.3.4"):
             self.assertTrue(private_address(value))

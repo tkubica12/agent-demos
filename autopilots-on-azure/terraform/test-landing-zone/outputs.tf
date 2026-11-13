@@ -27,10 +27,8 @@ output "deployment_inputs" {
 }
 output "clients" {
   value = {
-    linux_vm_id        = azapi_resource.linux.id
-    linux_principal_id = azapi_resource.linux.output.identity.principalId
-    windows_vm_id      = azapi_resource.windows.id
-    bastion_id         = azapi_resource.bastion.id
+    windows_vm_id = azapi_resource.windows.id
+    bastion_id    = azapi_resource.bastion.id
     addresses = {
       for name, nic in azapi_resource.nics : name => nic.output.properties.ipConfigurations[0].properties.privateIPAddress
     }

@@ -13,16 +13,9 @@ variable "location" {
   type    = string
   default = "swedencentral"
 }
-variable "ssh_public_key" {
-  type = string
-}
 variable "windows_password" {
   type      = string
   sensitive = true
-}
-variable "linux_vm_size" {
-  type    = string
-  default = "Standard_B2s"
 }
 variable "windows_vm_size" {
   type    = string
