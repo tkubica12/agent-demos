@@ -9,7 +9,7 @@ def simulator_worker_environment(config: dict, infrastructure: dict, previous: d
     parsed = urlsplit(origin)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
             or parsed.path or parsed.query or parsed.fragment):
-        raise ValueError("simulator_url must be a public HTTPS origin.")
+        raise ValueError("simulator_url must be an HTTPS origin without a path or credentials.")
     if config["user_scheduling_enabled"] or config["servicebus_dream_enabled"]:
         raise ValueError("Simulator scheduling requires a separate channel-aware scheduling implementation.")
     if config.get("demo_mcp_enabled"):

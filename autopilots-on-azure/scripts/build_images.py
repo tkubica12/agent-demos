@@ -43,6 +43,7 @@ def import_hermes_upstream(registry: str, login_server: str) -> str:
 def acr_build(
     *, registry: str, repository: str, dockerfile: str, context: str, tag: str,
     build_args: dict[str, str] | None = None,
+    agent_pool_name: str = "",
 ) -> str:
     arguments = [argument for name, value in (build_args or {}).items() for argument in ("--build-arg", f"{name}={value}")]
     result = run(
@@ -56,6 +57,7 @@ def acr_build(
             f"{repository}:{tag}",
             "--file",
             dockerfile,
+            *(["--agent-pool", agent_pool_name] if agent_pool_name else []),
             *arguments,
             context,
             "--no-logs",

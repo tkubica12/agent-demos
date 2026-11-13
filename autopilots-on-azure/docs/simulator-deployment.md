@@ -3,7 +3,8 @@
 This flow deploys six fully independent stacks (`agent-1` through `agent-6`),
 each with its own resource group, Autopilots platform, persistent Agent Chat
 Simulator, gateway, and Hermes Worker. No Foundry account, model deployment,
-network, registry, monitoring, simulator, or channel audience is shared.
+registry, simulator, or channel audience is shared. Customer landing-zone
+networking, DNS and AMPLS may be shared explicitly.
 The channel is not Microsoft Teams: no Agent 365 blueprint, Agent Identity,
 Agent User, `a365`, publishing, Work IQ, or Microsoft 365 licensing is involved.
 Azure DevOps and Clarity MCP integration and Entra Agent ID are phase 2.
@@ -24,6 +25,10 @@ It stays running: automatic suspend and delete are disabled. The Data Disk
 requires Disk mode; this is not a claim of Memory suspend support with a Data
 Disk. Worker runtime and gateway retain their existing Memory-suspend policy.
 The platform's private-ingress environment uses ACA Express, never classic ACA.
+The Sandbox image variant performs only volume initialization as root: it sets
+`/mnt/tsim` ownership to UID/GID 10001 and mode 0700, then drops supplementary
+groups and UID/GID before supervising the app. Both supervisor and app run as
+10001; settings stay mode 0600. The generic image still defaults to 10001.
 Demo incidents/shipments services are not deployed for simulator Workers.
 Native scheduling connector namespaces are also omitted; interactive chat and
 its durable conversation journal do not require a connector or a queue receiver.
@@ -41,6 +46,81 @@ Do not commit it or send it to an LLM. Back it up before changing operator
 machines; losing local state is not a supported fresh-deployment procedure.
 Only one operator may deploy a given environment at a time.
 
+## Private landing-zone profile
+
+The simulator entry point defaults to `network_mode = "private"` and
+`resource_group_mode = "existing"`. Existing mode never creates/deletes customer
+RGs, VNets, subnets, peerings, routes, NSGs, central DNS zones or their VNet links.
+Supply one existing RG and dedicated delegated Sandbox subnet per stack.
+A nondelegated PE subnet and centrally managed DNS/AMPLS may be shared as
+landing-zone services. Private stack resources never fall back to public access.
+
+Run deployment and acceptance from a workstation/runner inside the VNet with
+private DNS resolution. Control-plane access from an external laptop is not
+proof that private image uploads, application URLs or telemetry are reachable.
+Express private ingress and each group's native VNet egress are independent:
+every private group is linked to Express at creation and every Sandbox also
+selects its group's VNet connection. Keep the platform's default egress proxy.
+
+Private ACR is Premium, public access disabled, managed-identity pulls only.
+Its trusted-services bypass defaults to `None`, not `AzureServices`.
+`build.mode = "source"` is the default. Quick-build cannot target a
+public-disabled registry: supply `platform.acr_agent_pool_subnet_id`, an
+existing dedicated nondelegated build subnet, for each registry's native S1
+agent pool. The pool builds and pushes runtime, simulator and gateway images
+over its VNet; this path performs no ARM image import or public staging.
+An in-VNet operator with private ACR DNS uploads the context using Azure CLI;
+Docker is not required on that operator.
+
+The pool needs approved outbound routes to the source OCI registries
+(`docker.io`, `mcr.microsoft.com`, `ghcr.io`), the pinned MiniMax skill Git source
+on GitHub, Debian/Ubuntu OS feeds, the Microsoft package-feed proxy for
+PyPI/npm/NuGet, and ACR Tasks dependencies (Entra, Key Vault, Storage, Event Hub
+and Azure Monitor). Configure customer-approved mirrors/proxies or allow these
+build destinations; this is not an air-gapped build. Optional
+`build.hermes_base_image` and `build.gateway_base_image` select customer OCI
+mirrors of the pinned bases; retain the exact approved contents/digests.
+The Hermes base remains the official v0.22.6 image, not a Hermes source checkout.
+
+`build.mode = "import"` is an optional exception, not the customer default.
+It requires **both** `build.allow_trusted_service_import = true` and
+`platform.acr_trusted_services_bypass_enabled = true`, plus an approved,
+customer-accessible source registry and immutable `repository@sha256:...`
+references in `build.runtime_image`, `build.simulator_image` and
+`build.gateway_image`. Set `build.source_registry_id` and
+`build.source_registry_server` explicitly. Cross-tenant access/distribution is
+the customer's prerequisite; a validation registry is not a distributable
+artifact. Private import sources must also keep public access disabled. Import,
+private `/v2/` connectivity and successful native Sandbox conversion are
+separate checks, never evidence of a source build.
+
+Private Foundry, ACR and Express use PEs with supplied central DNS
+zone groups. Own monitoring disables public ingestion/query at creation.
+`ampls_id` optionally creates scoped-resource links to central AMPLS; otherwise
+the customer must complete the AMPLS handoff before telemetry is accepted.
+Alternatively supply both existing monitoring IDs; they remain read-only.
+
+Global `[platform]` is merged with each `[stacks.platform]`. The exact keys are:
+`location` (AI region), `sandbox_location` (infrastructure region),
+`existing_resource_group_name`, `existing_sandbox_subnet_id`,
+`existing_private_endpoint_subnet_id`, `private_dns_zone_ids` (zone-name/ARM-ID
+map), `required_tags`, `existing_log_analytics_workspace_id`,
+`existing_application_insights_id`, `ampls_id`, `acr_agent_pool_subnet_id`,
+`acr_agent_pool_name`, `acr_agent_pool_instance_count`, and the explicit import
+exception `acr_trusted_services_bypass_enabled`.
+Top-level `private_dns_zone_ids_file` optionally loads that map from a JSON file
+relative to the TOML. `network_mode = "public"` and
+`resource_group_mode = "create"` are explicit non-customer demo options only.
+
+Required stack DNS zones are `privatelink.azurecr.io`,
+`privatelink.cognitiveservices.azure.com`, `privatelink.openai.azure.com`,
+`privatelink.services.ai.azure.com`, and
+`privatelink.<sandbox_location>.azurecontainerapps.io`. Central AMPLS also needs
+its existing `privatelink.monitor.azure.com`, `privatelink.oms.opinsights.azure.com`,
+`privatelink.ods.opinsights.azure.com`, `privatelink.agentsvc.azure-automation.net`
+and `privatelink.blob.core.windows.net` zones/links. The simulator profile has no
+Service Bus namespace, so its zone is not required.
+
 ## Customer prerequisites
 
 Install Azure CLI, Terraform >=1.7, and `uv`. Use the committed `uv.lock` and
@@ -56,12 +136,12 @@ Provide:
 | `owner_id` | Worker owner's Entra user object ID |
 | `stack_count` | Defaults to six; each stack has exactly one simulator and Worker |
 | `assignments` | User/group Entra object IDs and `User` or `Admin` role |
-| `role` | Public/reachable Role Blueprint repository, path, release, full immutable commit |
+| `role` | Bundled local Role Blueprint, path, release, immutable role commit and manifest hash |
 | `model_capacity` | Capacity per stack (default 15); explicit `stacks` can override each |
 | `platform` | Optional regions/model deployment settings and adequate total model quota |
 | `auth_mode` | `entra` by default; `demo` only for temporary test data |
 
-Azure permissions: create resources in the new resource group, assign Azure
+Azure permissions: create resources inside the selected resource groups, assign Azure
 roles, create custom role definitions, build/import ACR images, and use
 SandboxGroup data-plane operations. Subscription Owner suffices; alternatively
 combine Contributor, Role Based Access Control Administrator (including the
@@ -89,7 +169,10 @@ login. The original deployment principal is pinned in `environment.json`.
 ## Inputs and deployment
 
 From `autopilots-on-azure`, create a local TOML file (do not commit customer
-identifiers). Replace every placeholder:
+identifiers). A complete six-stack file with **synthetic, nondeployable customer
+identifiers** is [simulator-private.example.toml](simulator-private.example.toml).
+Copy it outside the source snapshot and replace its identifiers. A shorter
+two-stack example follows:
 
 ```toml
 environment = "customer-demo"
@@ -97,7 +180,9 @@ subscription_id = "<subscription UUID>"
 tenant_id = "<tenant UUID>"
 owner_id = "<owner user object UUID>"
 auth_mode = "entra"
-stack_count = 6
+network_mode = "private"
+resource_group_mode = "existing"
+private_dns_zone_ids_file = "dns-zones.json"
 model_capacity = 15
 
 [[assignments]]
@@ -112,14 +197,40 @@ role = "User"
 
 [role]
 blueprint = "junior-project-manager"
-source = "https://github.com/tkubica12/agent-demos.git"
-path = "autopilots-on-azure/blueprints/junior-project-manager"
+source = "local"
+path = "blueprints/junior-project-manager"
 release = "4.0.0"
 commit = "<full 40-character commit containing this release>"
+bundle_sha256 = "<role manifest SHA-256 supplied with the snapshot>"
+
+[platform]
+location = "northeurope"
+sandbox_location = "swedencentral"
+existing_private_endpoint_subnet_id = "<full customer PE subnet ARM ID>"
+acr_agent_pool_subnet_id = "<full dedicated build subnet ARM ID>"
+ampls_id = "<full central AMPLS ARM ID>"
+required_tags = { project = "classroom", environment = "training" }
+
+[build]
+mode = "source"
+
+[[stacks]]
+name = "agent-1"
+[stacks.platform]
+existing_resource_group_name = "<customer RG for agent-1>"
+existing_sandbox_subnet_id = "<full dedicated agent-1 Sandbox subnet ARM ID>"
+
+[[stacks]]
+name = "agent-2"
+[stacks.platform]
+existing_resource_group_name = "<customer RG for agent-2>"
+existing_sandbox_subnet_id = "<full dedicated agent-2 Sandbox subnet ARM ID>"
 ```
 
-Instead of `stack_count`, an explicit list can set display names, assignment,
-owner, role assignments, and model capacity separately:
+This example intentionally proves two stacks first. Add explicit entries for
+`agent-3` through `agent-6` with distinct RGs and Sandbox subnets before the
+six-stack deployment. An explicit stack list can also set display names,
+assignment, owner, role assignments and model capacity separately:
 
 ```toml
 [[stacks]]
@@ -140,6 +251,7 @@ Use device-code login only:
 az login --use-device-code --tenant <tenant UUID>
 az account set --subscription <subscription UUID>
 uv sync --frozen
+uv run python -m scripts.deploy_simulator_environment --config .local\customer.toml plan
 uv run python -m scripts.deploy_simulator_environment --config .local\customer.toml
 ```
 
@@ -149,6 +261,10 @@ registrations through `TSIM_AGENTS_JSON`, and health/anonymous-access checks.
 In DEMO mode it also logs in, sends a unique challenge through the simulator,
 and requires a real Hermes/model reply through the gateway and Connector API.
 Each stack has its own three Entra applications (SPA/API, channel, agent).
+Private stacks build in their own registries/pools by default. Copies between
+stacks require the explicit trusted-services import exception; different
+per-stack build settings are never silently reused. No stack runs from another
+stack's registry or shares its identity.
 The initial UAMI infrastructure must exist before Entra FICs can bind to its
 actual object IDs. The SPA redirect is captured from the native Sandbox HTTPS
 URL; no placeholder endpoint is published. The simulator listens on port 8000.
@@ -172,10 +288,46 @@ uv run python -m scripts.deploy_simulator_environment --config .local\customer.t
 uv run python -m scripts.deploy_simulator_environment --config .local\customer.toml --stack agent-3 verify
 ```
 
-Rerunning a stack reuses its identities, platform, state, DEMO keys, and runtime
-dependency image. Selection never redirects one stack to another's state.
+The `plan` action performs read-only Azure checks before any deployment lock,
+state-directory preparation, Terraform apply or Entra write. It reports exact
+per-stack scope and blocks invalid/unreadable customer boundaries. Quota or
+permissions that cannot be proven read-only remain explicit warnings.
+
+Rerunning a stack reuses its identities, platform, state and DEMO keys. The
+runtime dependency image is reused only while its Dockerfile, dependency
+inputs and base reference match the recorded fingerprint. Selection never
+redirects one stack to another's state.
 An update that would delete/replace a UAMI or Worker group is rejected before
 apply. Source-only Worker changes use the existing source-release mechanism.
+Teardown removes only the exact Application Insights-generated failure-anomaly
+alert inside the captured stack RG before Terraform deletes the platform;
+Terraform's guard against deleting unexpected resources remains enabled.
+
+## Extracted snapshots and durable state
+
+The source works without `.git`. Package `deployment-manifest.json` beside
+`pyproject.toml` containing `{"source_commit":"<full source SHA>"}`.
+Terraform copying uses only `*.tf` and `.terraform.lock.hcl`, never Git
+discovery or copied state. Use `--state-root D:\AutopilotsState` or
+`AUTOPILOTS_STATE_ROOT` on every invocation to keep durable stack state outside
+side-by-side extracted source revisions. Platform state references are absolute
+paths inside that root.
+
+Local Role Blueprints are included in the verified runtime source release.
+The package producer calls `scripts.role_bundle.build_role_bundle(role,
+verify=False)` to obtain the deterministic role manifest hash and supplies it
+as `[role].bundle_sha256`. Deployment and every runtime boot verify the exact
+file inventory, hashes, path, release and recorded immutable commit; local mode
+never clones or fetches a Git repository.
+
+An extracted source snapshot is **not** an air-gapped dependency bundle.
+Terraform providers, `uv`/Python packages, base OCI images, npm packages, OS
+packages and the pinned MiniMax skill Git source used by the runtime Dockerfile
+still need approved mirrors/proxies or a prebuilt dependency image. Gateway
+source installation also downloads hash-pinned wheels from the approved feed.
+Entra login/metadata, Azure control-plane APIs and managed-identity facilities
+remain required. Never solve a blocked private mirror by enabling PaaS public
+access or substituting an upstream package registry.
 
 ## Temporary hosted DEMO
 
@@ -205,10 +357,39 @@ uv run python -m scripts.deploy_simulator_environment --config .local\customer.t
 
 The `verify` action includes a real personal-chat challenge/reply in DEMO mode
 and saves `chat-verification.json` in the stack's local state directory.
-In Entra mode, supply `TSIM_SMOKE_ACCESS_TOKEN` from an assigned user's SPA
-session to run that same check; without it, verification explicitly reports
-that only health and anonymous-access rejection were checked. Tokens are never
-saved or printed by this command.
+In Entra mode an assigned user must use a real in-VNet browser. Never paste or
+export access tokens. After actually completing the checks, save
+`browser-acceptance.json` beside the stack's `deployment.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "environment": "customer-demo-agent-1",
+  "url": "<exact URL from deployment.json>",
+  "authMode": "entra",
+  "verifiedAt": "<UTC ISO timestamp within the last seven days>",
+  "checks": {
+    "login": true,
+    "messageReply": true,
+    "typing": true,
+    "reactions": true,
+    "cards": true,
+    "groupChat": true,
+    "files": true
+  }
+}
+```
+
+This is explicitly manual operator evidence, not an automated Entra login.
+Missing, incomplete, wrong-stack/URL or stale evidence makes `verify` exit
+nonzero after saving limited health evidence. Do not copy the `true` values
+without exercising the capabilities against real Hermes inference.
+
+Per-stack evidence is `deployment.json` (URLs, source SHA and registrations),
+`verification.json` (health, anonymous rejection and completed real chat),
+and `chat-verification.json` (unique challenge, conversation and agent reply).
+`browser-acceptance.json` records manual Entra checks. Health and DEMO challenge
+files alone do not claim typing/reaction/card/group/file acceptance.
 
 Health and unauthenticated-access checks are **not** complete chat acceptance.
 With a real assigned Entra user (or the explicit DEMO access code), verify login,
@@ -217,6 +398,11 @@ uploads/downloads, and exactly one agent registration per simulator. Repeat on
 each selected stack. Check a denied/unassigned user,
 expired DEMO session, and a restart retaining chat and uploaded files. Inspect
 Foundry/App Insights traces for real inference, not a canned response.
+Transport/unit fixtures that stub Hermes are not real-runtime feature evidence.
+Generic Hermes-local-file to outgoing attachment delivery is currently
+unimplemented; uploaded-document transport and fixture attachment downloads
+must not be described as model-generated-file acceptance. Card transport is
+not proof that a card action caused a real model/tool outcome.
 
 User scheduling, Dreaming, and Microsoft 365 document retries remain disabled
 in this simulator deployment until their channel-aware identity and delivery
@@ -227,8 +413,9 @@ changing the simulator's channel identity.
 
 ## Cost and teardown
 
-Billable per-stack resources include ACR Basic/builds, Service Bus Standard,
-monitoring, private networking, Sandbox compute and volumes, and Foundry token
+Billable private per-stack resources include Premium ACR, S1 build pool
+instances while allocated, monitoring, private endpoints/networking, Sandbox
+compute and volumes, and Foundry token
 usage. Stopped Worker compute does not make the environment free. Each simulator
 is provisioned at 1 vCPU/2 GiB continuously; its active Worker adds 2 vCPU/2 GiB
 runtime and 0.5 vCPU/1 GiB gateway. Six simultaneously active stacks therefore
@@ -247,6 +434,10 @@ limits. The live validation subscription initially had only 95k TPM free;
 six separate 15k TPM deployments need 90k TPM total. Customer quotas must cover
 the sum of per-stack capacities. A 15k TPM allocation is a constrained classroom
 starting point, not proof of an unrestricted concurrency SLA.
+The compute figures exclude the private Premium registry, agent pools and
+private endpoints; these can materially increase the total. Size/stop unused
+build capacity explicitly after builds; never leave six S1 pools outside the
+budget. The simulator profile does not provision Service Bus.
 
 Pricing evidence (public sources, retrieved with `web_fetch` on 2026-11-13;
 both retrieved successfully and used): [Sandbox cost contract](https://sandboxes.azure.com/docs/sandboxes/cost)

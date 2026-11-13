@@ -170,6 +170,8 @@ class SimulatorIdentityTests(unittest.TestCase):
         self.assertEqual(self.reconcile(), first)
         self.assertTrue(all(call["method"] == "GET" for call in self.graph.calls[before:]))
         state = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(set(state), {"environment", "tenant_id", "subscription_id", "spa", "channel", "agents"})
+        self.assertEqual({key: state[key] for key in ("spa", "channel", "agents")}, first)
         self.assertNotIn("bindings", state)
         self.assertNotIn("owner_id", state)
         self.assertNotIn("assignments", state)
@@ -458,6 +460,97 @@ class SimulatorIdentityTests(unittest.TestCase):
         self.reconcile()
         self.assertEqual(len(self.graph.apps), 3)
 
+    def test_new_app_and_sp_owner_and_fic_readiness_retries_without_duplicate_creation(self) -> None:
+        remaining = {}
+
+        def delayed_readiness(method: str, path: str, body: dict | None) -> int | None:
+            if method in {"GET", "POST"} and ("/owners" in path or "/federatedIdentityCredentials" in path):
+                key = (method, path)
+                remaining.setdefault(key, 2)
+                if remaining[key]:
+                    state = json.loads(self.path.read_text(encoding="utf-8"))
+                    persisted_ids = {record[field] for _, record in identity._records(state)
+                                     for field in ("object_id", "service_principal_id") if field in record}
+                    self.assertIn(path.split("/")[2], persisted_ids)
+                    remaining[key] -= 1
+                    return 404
+            return None
+
+        self.graph.fail = delayed_readiness
+        with patch.object(identity.time, "sleep") as sleep:
+            result = self.reconcile()
+        self.assertEqual(len(self.graph.apps), 3)
+        self.assertEqual(len(self.graph.principals), 6)
+        self.assertEqual(sum(call["method"] == "POST" and call["path"] == "/applications"
+                             for call in self.graph.calls), 3)
+        self.assertEqual(sum(call["method"] == "POST" and call["path"] == "/servicePrincipals"
+                             for call in self.graph.calls), 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2] * len(remaining))
+        self.assertEqual(len(self.graph.fics[result["agents"]["worker-one"]["object_id"]]), 2)
+
+    def test_readiness_exhaustion_preserves_partial_app_and_resume_does_not_duplicate_it(self) -> None:
+        self.graph.fail = lambda method, path, body: 404 if method == "GET" and "/owners" in path else None
+        with patch.object(identity.time, "sleep") as sleep:
+            with self.assertRaises(httpx.HTTPStatusError) as raised:
+                self.reconcile()
+        self.assertEqual(raised.exception.response.status_code, 404)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4, 8, 16])
+        self.assertEqual(sum(call["method"] == "GET" and "/owners" in call["path"]
+                             for call in self.graph.calls), 6)
+        state = json.loads(self.path.read_text(encoding="utf-8"))
+        app_id = state["spa"]["object_id"]
+        self.assertNotIn("service_principal_id", state["spa"])
+        self.assertEqual(len(self.graph.apps), 1)
+        failures_left = 2
+
+        def pending_app_readiness(method: str, path: str, body: dict | None) -> int | None:
+            nonlocal failures_left
+            if method == "GET" and path.startswith(f"/applications/{app_id}?") and failures_left:
+                failures_left -= 1
+                return 404
+            return None
+
+        self.graph.fail = pending_app_readiness
+        with patch.object(identity.time, "sleep") as sleep:
+            result = self.reconcile()
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+        self.assertEqual(result["spa"]["object_id"], app_id)
+        self.assertEqual(len(self.graph.apps), 3)
+        self.assertEqual(sum(call["method"] == "POST" and call["path"] == "/applications"
+                             for call in self.graph.calls), 3)
+
+    def test_existing_completed_resources_do_not_get_post_create_retries(self) -> None:
+        self.reconcile()
+        before = len(self.graph.calls)
+        self.graph.fail = lambda method, path, body: 404 if method == "GET" and "/owners" in path else None
+        with patch.object(identity.time, "sleep") as sleep:
+            with self.assertRaises(httpx.HTTPStatusError):
+                self.reconcile()
+        sleep.assert_not_called()
+        self.assertEqual(sum("/owners" in call["path"] for call in self.graph.calls[before:]), 1)
+        self.assertEqual(len(self.graph.apps), 3)
+
+    def test_readiness_does_not_retry_other_statuses(self) -> None:
+        for status in (403, 429, 500):
+            with self.subTest(status=status):
+                self.graph.fail = lambda method, path, body: status if method == "GET" and "/owners" in path else None
+                before = len(self.graph.calls)
+                error = identity.GraphPermissionsError if status == 403 else httpx.HTTPStatusError
+                with patch.object(identity.time, "sleep") as sleep:
+                    with self.assertRaises(error):
+                        self.reconcile()
+                sleep.assert_not_called()
+                self.assertEqual(sum("/owners" in call["path"] for call in self.graph.calls[before:]), 1)
+
+    def test_unrelated_managed_identity_404_is_not_retried(self) -> None:
+        self.graph.fail = lambda method, path, body: 404 if "servicePrincipalType" in path else None
+        with patch.object(identity.time, "sleep") as sleep:
+            with self.assertRaises(httpx.HTTPStatusError):
+                self.reconcile()
+        sleep.assert_not_called()
+        self.assertEqual(sum("servicePrincipalType" in call["path"] for call in self.graph.calls), 1)
+        self.assertFalse(self.path.exists())
+
     def test_multiple_workers_have_separate_applications_and_federation(self) -> None:
         self.config["agents"].append({"name": "worker-two", "display_name": "Worker Two"})
         self.bindings["agents"]["worker-two"] = copy.deepcopy(self.bindings["agents"]["worker-one"])
@@ -530,24 +623,32 @@ class SimulatorIdentityTests(unittest.TestCase):
 
 
 class GraphClientTests(unittest.TestCase):
-    def test_cli_credential_and_httpx_use_expected_tenant_subscription_scope_and_no_secret(self) -> None:
+    def test_cli_token_uses_tenant_without_conflicting_subscription(self) -> None:
         credential = MagicMock()
-        credential.get_token.return_value = SimpleNamespace(token="opaque-graph-token")
         requests = []
+
+        def cli_credential(**options: str) -> MagicMock:
+            def get_token(scope: str) -> SimpleNamespace:
+                if options.get("tenant_id") and options.get("subscription"):
+                    raise ValueError("Please specify only one of subscription and tenant, not both")
+                return SimpleNamespace(token="opaque-graph-token")
+
+            credential.get_token.side_effect = get_token
+            return credential
 
         def respond(request: httpx.Request) -> httpx.Response:
             requests.append(request)
             return httpx.Response(200, json={"value": []})
 
         client = httpx.Client(transport=httpx.MockTransport(respond))
-        with (patch.object(identity, "AzureCliCredential", return_value=credential) as factory,
+        with (patch.object(identity, "AzureCliCredential", side_effect=cli_credential) as factory,
               patch.object(identity.httpx, "Client", return_value=client)):
             with identity.GraphClient(guid("tenant"), guid("subscription")) as graph:
                 self.assertEqual(graph.request("GET", "/applications"), {"value": []})
-        factory.assert_called_once_with(tenant_id=guid("tenant"), subscription=guid("subscription"))
+        factory.assert_called_once_with(tenant_id=guid("tenant"))
         credential.get_token.assert_called_once_with(identity.TOKEN_SCOPE)
         self.assertEqual(str(requests[0].url), identity.GRAPH + "/applications")
-        self.assertEqual(requests[0].headers["Authorization"], f"Bearer {credential.get_token.return_value.token}")
+        self.assertEqual(requests[0].headers["Authorization"], "Bearer opaque-graph-token")
         credential.close.assert_called_once()
 
     def test_foreign_pagination_never_reaches_network(self) -> None:

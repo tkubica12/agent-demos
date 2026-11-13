@@ -9,35 +9,113 @@ resource "random_string" "suffix" {
 }
 
 locals {
-  suffix = random_string.suffix.result
-  tags = merge({
+  suffix                     = random_string.suffix.result
+  existing_network           = var.existing_sandbox_subnet_id != "" && var.existing_private_endpoint_subnet_id != ""
+  existing_monitoring        = var.existing_log_analytics_workspace_id != "" && var.existing_application_insights_id != ""
+  infrastructure_location    = var.private_network_enabled ? var.sandbox_location : var.apps_location
+  resource_group_name        = var.existing_resource_group_name != "" ? data.azurerm_resource_group.existing[0].name : azurerm_resource_group.main[0].name
+  resource_group_id          = var.existing_resource_group_name != "" ? data.azurerm_resource_group.existing[0].id : azurerm_resource_group.main[0].id
+  sandbox_subnet_id          = local.existing_network ? var.existing_sandbox_subnet_id : azurerm_subnet.sandbox[0].id
+  private_endpoint_subnet_id = local.existing_network ? var.existing_private_endpoint_subnet_id : azurerm_subnet.private_endpoints[0].id
+  tags = merge(var.required_tags, {
     app   = "autopilots-on-azure"
     layer = "platform"
   }, var.environment_name == "" ? {} : { environment = var.environment_name })
 }
 
+data "azurerm_resource_group" "existing" {
+  count = var.existing_resource_group_name != "" ? 1 : 0
+  name  = var.existing_resource_group_name
+}
+
+moved {
+  from = azurerm_resource_group.main
+  to   = azurerm_resource_group.main[0]
+}
+
 resource "azurerm_resource_group" "main" {
+  count    = var.existing_resource_group_name == "" ? 1 : 0
   name     = var.environment_name == "" ? "rg-autopilots-${local.suffix}" : "rg-ap-${var.environment_name}-${local.suffix}"
-  location = var.location
+  location = var.private_network_enabled ? var.sandbox_location : var.location
   tags     = local.tags
 }
 
 resource "azurerm_container_registry" "main" {
-  name                = "apilots${local.suffix}"
-  location            = var.apps_location
-  resource_group_name = azurerm_resource_group.main.name
-  sku                 = "Basic"
-  admin_enabled       = false
-  tags                = local.tags
+  name                          = "apilots${local.suffix}"
+  location                      = local.infrastructure_location
+  resource_group_name           = local.resource_group_name
+  sku                           = var.private_network_enabled ? "Premium" : "Basic"
+  public_network_access_enabled = !var.private_network_enabled
+  network_rule_bypass_option    = !var.private_network_enabled || var.acr_trusted_services_bypass_enabled ? "AzureServices" : "None"
+  admin_enabled                 = false
+  tags                          = local.tags
+
+  lifecycle {
+    precondition {
+      condition     = (var.existing_sandbox_subnet_id == "") == (var.existing_private_endpoint_subnet_id == "")
+      error_message = "Supply both existing_sandbox_subnet_id and existing_private_endpoint_subnet_id, or neither."
+    }
+    precondition {
+      condition     = !local.existing_network || var.private_network_enabled
+      error_message = "Existing subnet mode requires private_network_enabled=true; public fallback is not supported."
+    }
+    precondition {
+      condition     = !local.existing_network || lower(var.existing_sandbox_subnet_id) != lower(var.existing_private_endpoint_subnet_id)
+      error_message = "The delegated sandbox subnet and private endpoint subnet must be different subnets."
+    }
+    precondition {
+      condition     = (var.existing_log_analytics_workspace_id == "") == (var.existing_application_insights_id == "")
+      error_message = "Supply both existing monitoring IDs, or neither."
+    }
+    precondition {
+      condition     = var.ampls_id == "" || var.private_network_enabled
+      error_message = "ampls_id requires private_network_enabled=true."
+    }
+    precondition {
+      condition     = var.acr_agent_pool_subnet_id == "" || var.private_network_enabled
+      error_message = "acr_agent_pool_subnet_id requires private_network_enabled=true."
+    }
+    precondition {
+      condition     = var.acr_agent_pool_subnet_id == "" || (lower(var.acr_agent_pool_subnet_id) != lower(local.sandbox_subnet_id) && lower(var.acr_agent_pool_subnet_id) != lower(local.private_endpoint_subnet_id))
+      error_message = "The ACR agent pool requires a dedicated, nondelegated subnet separate from sandbox and private endpoint subnets."
+    }
+    precondition {
+      condition     = !local.existing_network || alltrue([for zone in local.required_private_dns_zones : contains(keys(var.private_dns_zone_ids), zone)])
+      error_message = "Existing subnet mode requires central DNS IDs for ACR, all three Foundry zones, the regional (or parent) Container Apps zone, and Service Bus when scheduler_enabled=true."
+    }
+    precondition {
+      condition     = alltrue([for zone, id in var.private_dns_zone_ids : lower(element(reverse(split("/", id)), 0)) == lower(zone)])
+      error_message = "Every private_dns_zone_ids key must match the zone name in its resource ID."
+    }
+  }
+}
+
+resource "azurerm_container_registry_agent_pool" "private" {
+  count                     = var.private_network_enabled && var.acr_agent_pool_subnet_id != "" ? 1 : 0
+  name                      = var.acr_agent_pool_name
+  location                  = var.sandbox_location
+  resource_group_name       = local.resource_group_name
+  container_registry_name   = azurerm_container_registry.main.name
+  instance_count            = var.acr_agent_pool_instance_count
+  tier                      = "S1"
+  virtual_network_subnet_id = var.acr_agent_pool_subnet_id
+  tags                      = local.tags
+}
+
+moved {
+  from = azurerm_servicebus_namespace.scheduler
+  to   = azurerm_servicebus_namespace.scheduler[0]
 }
 
 resource "azurerm_servicebus_namespace" "scheduler" {
+  count                         = var.scheduler_enabled ? 1 : 0
   name                          = "apschedule-${local.suffix}"
-  location                      = var.apps_location
-  resource_group_name           = azurerm_resource_group.main.name
-  sku                           = "Standard"
+  location                      = local.infrastructure_location
+  resource_group_name           = local.resource_group_name
+  sku                           = var.private_network_enabled ? "Premium" : "Standard"
+  capacity                      = var.private_network_enabled ? 1 : 0
   local_auth_enabled            = false
   minimum_tls_version           = "1.2"
-  public_network_access_enabled = true
+  public_network_access_enabled = !var.private_network_enabled
   tags                          = local.tags
 }

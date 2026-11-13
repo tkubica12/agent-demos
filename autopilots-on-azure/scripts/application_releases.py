@@ -36,7 +36,7 @@ class ApplicationRelease:
 
 
 def build_release(
-    role: str, *, root: Path = REPO_ROOT, base_image: str = PYTHON_BASE_IMAGE,
+    role: str, *, root: Path = REPO_ROOT, base_image: str = PYTHON_BASE_IMAGE, role_bundle: dict | None = None,
 ) -> ApplicationRelease:
     if role not in SERVICE_PACKAGES and role != "runtime":
         raise ValueError(f"No thin application package exists for {role!r}.")
@@ -51,6 +51,11 @@ def build_release(
             (runtime / "plugins", "runtime_plugins"),
             (runtime / "runtime_skills", "runtime_skills"),
         ]
+        if role_bundle and role_bundle.get("source") == "local":
+            from scripts.role_bundle import build_role_bundle
+
+            bundled, _ = build_role_bundle(role_bundle, root=root)
+            files.update(bundled)
     else:
         project, package = SERVICE_PACKAGES[role]
         directory = root / project

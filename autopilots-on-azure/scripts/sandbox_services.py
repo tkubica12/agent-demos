@@ -81,12 +81,15 @@ class SandboxService:
     release: ApplicationRelease | None = None
 
 
-def disk_image_request(source: str, name: str, identity_client_id: str) -> dict:
+def disk_image_request(source: str, name: str, identity_client_id: str, vnet_connection_name: str = "") -> dict:
     """Native-v2 registry conversion authenticated by the Sandbox Group's managed identity."""
-    return {
+    body = {
         "source": {"kind": "registry", "imageUrl": source, "managedIdentityClientId": identity_client_id},
         "labels": {"name": name},
     }
+    if vnet_connection_name:
+        body["customerVnetConnectionName"] = vnet_connection_name
+    return body
 
 
 def convert_disk_image(client: Any, body: dict, *, timeout_seconds: int = 900, poll_seconds: int = 5) -> str:
@@ -118,7 +121,7 @@ def convert_disk_image(client: Any, body: dict, *, timeout_seconds: int = 900, p
 
 
 def prepare_disk_image(client: Any, *, role: str, image: str, source: str, acr_name: str,
-                       subscription_id: str, identity_client_id: str) -> str:
+                       subscription_id: str, identity_client_id: str, vnet_connection_name: str = "") -> str:
     name = f"{role}-{hashlib.sha256(image.encode()).hexdigest()[:20]}"
     disk = existing_named(client.list_disk_images(), name)
     if disk is None:
@@ -144,7 +147,9 @@ def prepare_disk_image(client: Any, *, role: str, image: str, source: str, acr_n
         ])
         if actual_digest != expected_digest:
             raise ValueError(f"{role} conversion source does not match the deployed image digest.")
-        disk = client.get_disk_image(convert_disk_image(client, disk_image_request(source, name, identity_client_id)))
+        disk = client.get_disk_image(convert_disk_image(
+            client, disk_image_request(source, name, identity_client_id, vnet_connection_name),
+        ))
     if disk.status.state not in {"Ready", "Succeeded"}:
         raise RuntimeError(f"{role} disk image {disk.id} is not ready: {disk.status.state}")
     return disk.id
@@ -152,6 +157,19 @@ def prepare_disk_image(client: Any, *, role: str, image: str, source: str, acr_n
 
 def text(value: Any) -> str:
     return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def require_private_endpoint(origin: str, binding: dict) -> None:
+    if not binding.get("private_network_enabled"):
+        return
+    domain = binding.get("private_domain", "").lower().rstrip(".")
+    parsed = urlsplit(origin)
+    if (binding.get("public_network_access") != "Disabled" or not binding.get("vnet_connection_name")
+            or not domain or parsed.scheme != "https" or not parsed.hostname
+            or not parsed.hostname.lower().endswith("." + domain)
+            or parsed.username or parsed.password or parsed.path not in ("", "/")
+            or parsed.query or parsed.fragment):
+        raise RuntimeError("Private ingress must use the linked Express environment HTTPS domain; public fallback is forbidden.")
 
 
 def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoints: dict) -> dict[str, str]:
@@ -194,6 +212,8 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "HERMES_MODEL": platform["model_deployment_name"],
         "GENERATED_APPS_SANDBOX_GROUP": groups["generated-apps"]["name"],
         "GENERATED_APPS_REGION": infrastructure["sandbox_location"],
+        "GENERATED_APPS_VNET_CONNECTION_NAME": groups["generated-apps"].get("vnet_connection_name", ""),
+        "PRIVATE_NETWORK_ENABLED": text(config.get("private_network_enabled", False)),
         "PRIVATE_INCIDENTS_MCP_URL": endpoints.get("private_mcp_url", ""),
         "PRIVATE_INCIDENTS_MCP_SCOPE": config["private_mcp_api_audience"] + "/.default",
         "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL": endpoints.get("public_shipments_mcp_url", ""),
@@ -284,11 +304,23 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any) 
         environment.update({key: settings[key] for key in (
             "WORKER_OWNER_ID", "USE_AGENTIC_AUTH",
         )})
+        environment.update({key: settings[key] for key in (
+            "PRIVATE_NETWORK_ENABLED", "GENERATED_APPS_VNET_CONNECTION_NAME",
+        ) if key in settings})
+        if settings.get("HERMES_ROLE_BUNDLE_SHA256"):
+            environment["HERMES_ROLE_BUNDLE_SHA256"] = settings["HERMES_ROLE_BUNDLE_SHA256"]
         config = replace(config, environment=environment)
         config = replace(config, runtime_config_revision=runtime_config_revision(config))
     config = replace(config, command=("python3", "-c", BOOTSTRAP), args=())
     runtime = deploy_agent_sandbox(config, credential=credential)
-    release = build_release("runtime", base_image=config.runtime_image_reference)
+    release = build_release("runtime", base_image=config.runtime_image_reference, role_bundle={
+        "source": settings.get("HERMES_ROLE_BLUEPRINT_SOURCE", ""),
+        "blueprint": settings.get("HERMES_ROLE_BLUEPRINT", ""),
+        "path": settings.get("HERMES_ROLE_BLUEPRINT_PATH", ""),
+        "release": settings.get("HERMES_ROLE_RELEASE", ""),
+        "commit": settings.get("HERMES_ROLE_RELEASE_COMMIT", ""),
+        "bundle_sha256": settings.get("HERMES_ROLE_BUNDLE_SHA256", ""),
+    })
     with SandboxGroupClient(
         endpoint_for_region(config.region), credential,
         subscription_id=config.subscription_id, resource_group=config.resource_group,
@@ -606,6 +638,7 @@ def deploy_service(
         endpoint = next((p.url for p in current.ports if p.port == service.port), None)
         if not endpoint or urlsplit(endpoint).scheme != "https":
             raise RuntimeError(f"{service.role} has no native HTTPS port URL.")
+        require_private_endpoint(endpoint, group)
         environment = dict(service.environment)
         if service.role == "gateway":
             environment["AUTOPILOT_BRIDGE_URL"] = endpoint.rstrip("/")
@@ -667,6 +700,16 @@ def deploy_service(
 def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
     config = infrastructure["deployment_config"]
     simulator = config.get("channel", "agent365") == "simulator"
+    private = config.get("private_network_enabled", False)
+    if private and any(
+        group.get("public_network_access") != "Disabled" or not group.get("vnet_connection_name")
+        for group in infrastructure["sandbox_groups"].values()
+    ):
+        raise ValueError("Every private Sandbox Group requires disabled public ingress and a native VNet connection.")
+    bridge_image = config.get("bridge_image") or PYTHON_BASE_IMAGE
+    bridge_source = config.get("bridge_disk_source_image") or PYTHON_BASE_IMAGE
+    if private and not bridge_image.startswith(platform["acr_login_server"] + "/"):
+        raise ValueError("The private gateway base image must be mirrored into its stack's private ACR.")
     demo_mcp = config.get("demo_mcp_enabled", not simulator)
     required_identity = ("agent365_client_id", "agent365_agent_identity_client_id",
                          "agent365_agent_identity_object_id", "agent365_agent_user_id")
@@ -701,10 +744,11 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
             ) as client:
                 disks[role] = prepare_disk_image(
                     client, role=role,
-                    image=config["runtime_image"] if role == "runtime" else PYTHON_BASE_IMAGE,
-                    source=config["runtime_disk_source_image"] if role == "runtime" else PYTHON_BASE_IMAGE,
+                    image=config["runtime_image"] if role == "runtime" else bridge_image,
+                    source=config["runtime_disk_source_image"] if role == "runtime" else bridge_source,
                     acr_name=platform["acr_name"], subscription_id=infrastructure["subscription_id"],
                     identity_client_id=groups[role]["identity_client_id"],
+                    vnet_connection_name=groups[role].get("vnet_connection_name", "") if private else "",
                 )
         endpoints["runtime_disk_image_id"] = disks["runtime"]
         runtime: dict[str, Any] = {}
@@ -716,12 +760,12 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
             if role == "gateway":
                 settings = worker_settings(config, platform, infrastructure, endpoints)
                 service = SandboxService(
-                    role="gateway", image=PYTHON_BASE_IMAGE, port=8000,
-                    disk_source_image=PYTHON_BASE_IMAGE,
+                    role="gateway", image=bridge_image, port=8000,
+                    disk_source_image=bridge_source,
                     command=("/app/.venv/bin/python", "-m", "bridge.server"),
                     environment=gateway_environment(settings),
                     auto_suspend=True,
-                    release=build_release("gateway"),
+                    release=build_release("gateway", base_image=bridge_image),
                 )
 
                 def endpoint_environment(gateway_url: str) -> dict[str, str]:

@@ -13,12 +13,12 @@ locals {
   resource_group_name = local.platform.resource_group_name
   resource_group_id   = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${local.resource_group_name}"
   sandbox_location    = local.platform.sandbox_location
-  tags = {
+  tags = merge(var.required_tags, {
     app           = "autopilots-on-azure"
     autopilot     = var.autopilot_name
     agent_runtime = var.agent_runtime
     layer         = "apps"
-  }
+  })
   demo_mcp_enabled = coalesce(var.demo_mcp_enabled, var.channel == "agent365")
   roles = toset(concat(
     ["runtime", "gateway", "generated-apps"],
@@ -53,13 +53,22 @@ resource "azapi_resource" "sandbox_group" {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.workload[each.key].id]
   }
-  body                      = { properties = {} }
-  response_export_values    = ["properties.managementEndpoint"]
+  body = {
+    properties = var.private_network_enabled ? {
+      environmentId       = lower(local.platform.private_mcp_env_id)
+      publicNetworkAccess = "Disabled"
+    } : {}
+  }
+  response_export_values    = ["properties.managementEndpoint", "properties.publicNetworkAccess", "properties.environmentId", "properties.defaultDomain"]
   schema_validation_enabled = false
   lifecycle {
     precondition {
       condition     = var.channel == "agent365" || (!var.user_scheduling_enabled && !var.servicebus_dream_enabled)
       error_message = "The simulator deployment does not enable native scheduling or Dreaming."
+    }
+    postcondition {
+      condition     = !var.private_network_enabled || try(self.output.properties.publicNetworkAccess == "Disabled", false)
+      error_message = "Private Sandbox Groups must report publicNetworkAccess Disabled; no public fallback is permitted."
     }
     precondition {
       condition     = !var.servicebus_dream_enabled || var.user_scheduling_enabled
@@ -92,7 +101,7 @@ moved {
 }
 
 resource "azapi_resource" "vnet_connection" {
-  for_each  = toset(["runtime", "gateway"])
+  for_each  = var.private_network_enabled ? local.roles : toset(["runtime", "gateway"])
   type      = "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
   name      = "autopilots-vnet"
   parent_id = azapi_resource.sandbox_group[each.key].id
@@ -133,7 +142,7 @@ resource "azurerm_role_assignment" "runtime_foundry_user" {
 }
 
 resource "azurerm_role_assignment" "disk_image_acr_pull" {
-  for_each             = toset(["runtime"])
+  for_each             = var.private_network_enabled ? toset(["runtime", "gateway"]) : toset(["runtime"])
   scope                = local.platform.acr_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.workload[each.key].principal_id

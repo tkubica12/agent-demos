@@ -10,7 +10,7 @@ import httpx
 from azure.containerapps.sandbox import SandboxGroupClient, SandboxVolume
 from azure.identity import AzureCliCredential
 
-from scripts.sandbox_services import DISK_IMAGE_AUDIENCE, prepare_disk_image, require_exec_success
+from scripts.sandbox_services import DISK_IMAGE_AUDIENCE, prepare_disk_image, require_exec_success, require_private_endpoint
 from scripts.simulator_channel import simulator_environment
 
 
@@ -18,6 +18,16 @@ VOLUME = "simulator-data"
 CONFIG_PATH = "/tmp/simulator-service.json"
 BOOTSTRAP = """
 import json, os, pathlib, subprocess, time
+volume = pathlib.Path("/mnt/tsim")
+if os.geteuid() != 0:
+    raise RuntimeError("Sandbox volume initialization requires the root-bootstrap image")
+if volume.stat().st_uid not in (0, 10001):
+    raise RuntimeError("Simulator volume has an unexpected owner")
+os.chown(volume, 10001, 10001)
+os.chmod(volume, 0o700)
+os.setgroups([])
+os.setgid(10001)
+os.setuid(10001)
 path = pathlib.Path("/tmp/simulator-service.json")
 deadline = time.monotonic() + 1800
 while not path.exists():
@@ -60,13 +70,14 @@ def group_client(binding: dict, credential: AzureCliCredential) -> SandboxGroupC
 
 def deploy_host(config: dict, binding: dict, platform: dict, image: dict, state_path: Path) -> dict:
     labels = {"app": "autopilots-on-azure", "environment": config["environment"], "service": "simulator"}
-    fingerprint = hashlib.sha256(image["image"].encode()).hexdigest()[:32]
+    fingerprint = hashlib.sha256((image["image"] + BOOTSTRAP).encode()).hexdigest()[:32]
     with AzureCliCredential(subscription=binding["subscription_id"], process_timeout=150) as credential:
         with group_client(binding, credential) as group:
             disk = prepare_disk_image(
                 group, role="simulator", image=image["image"], source=image["source"],
                 acr_name=platform["acr_name"], subscription_id=binding["subscription_id"],
                 identity_client_id=binding["identity_client_id"],
+                vnet_connection_name=binding.get("vnet_connection_name", ""),
             )
             volumes = {volume.name: volume for volume in group.list_volumes()}
             if VOLUME not in volumes:
@@ -86,13 +97,15 @@ def deploy_host(config: dict, binding: dict, platform: dict, image: dict, state_
                 group.get_sandbox_client(current["id"]).begin_delete(polling_timeout=600).result()
                 current = None
             if current is None:
+                if binding.get("private_network_enabled") and not binding.get("vnet_connection_name"):
+                    raise ValueError("A private simulator requires its own native VNet connection.")
                 for _ in range(90):
                     if not group.get_volume(VOLUME).is_attached:
                         break
                     time.sleep(2)
                 else:
                     raise TimeoutError("Simulator Data Disk did not detach.")
-                current = group._dp_put(group._group_path + "/sandboxes", {
+                body = {
                     "sourcesRef": {"diskImage": {"id": disk}},
                     "resources": {"cpu": "1000m", "memory": "2048Mi", "disk": "10Gi"},
                     "lifecycle": {
@@ -107,12 +120,16 @@ def deploy_host(config: dict, binding: dict, platform: dict, image: dict, state_
                     "ports": [{"port": 8000, "protocol": "Http", "activationMode": "OnDemand",
                                "auth": {"anonymous": True}}],
                     "skipEgressProxy": False,
-                })
+                }
+                if binding.get("vnet_connection_name"):
+                    body["customerVnetConnectionName"] = binding["vnet_connection_name"]
+                current = group._dp_put(group._group_path + "/sandboxes", body)
             sandbox = group.get_sandbox_client(current["id"])
             sandbox.ensure_running(timeout=600)
             url = next((port.url for port in sandbox.get().ports if port.port == 8000), "")
             if not url.startswith("https://"):
                 raise RuntimeError("Simulator did not publish an HTTPS endpoint.")
+            require_private_endpoint(url, binding)
             result = {**binding, **image, "sandbox_id": current["id"], "disk_image_id": disk, "url": url.rstrip("/")}
             save(state_path, result)
             return result
@@ -132,7 +149,9 @@ def configure_host(config: dict, binding: dict, identities: dict, agents: list[d
             sandbox = group.get_sandbox_client(binding["sandbox_id"])
             sandbox.ensure_running(timeout=600)
             sandbox.write_file(CONFIG_PATH + ".next", json.dumps(payload), mode="0600")
-            require_exec_success(sandbox.exec("mv " + shlex.quote(CONFIG_PATH + ".next") + " " + shlex.quote(CONFIG_PATH)),
+            require_exec_success(sandbox.exec(
+                "chown 10001:10001 " + shlex.quote(CONFIG_PATH + ".next")
+                + " && mv " + shlex.quote(CONFIG_PATH + ".next") + " " + shlex.quote(CONFIG_PATH)),
                                  "Activating simulator settings")
     wait_health(binding["url"], "/api/health")
 

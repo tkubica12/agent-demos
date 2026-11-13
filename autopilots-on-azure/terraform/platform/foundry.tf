@@ -1,8 +1,8 @@
 resource "azapi_resource" "foundry" {
   type      = "Microsoft.CognitiveServices/accounts@2025-06-01"
   name      = "autopilots-${local.suffix}"
-  parent_id = azurerm_resource_group.main.id
-  location  = azurerm_resource_group.main.location
+  parent_id = local.resource_group_id
+  location  = var.location
   tags      = local.tags
   identity {
     type = "SystemAssigned"
@@ -15,7 +15,7 @@ resource "azapi_resource" "foundry" {
       customSubDomainName           = "autopilots-${local.suffix}"
       disableLocalAuth              = true
       dynamicThrottlingEnabled      = false
-      publicNetworkAccess           = "Enabled"
+      publicNetworkAccess           = var.private_network_enabled ? "Disabled" : "Enabled"
       restrictOutboundNetworkAccess = false
     }
   }
@@ -26,7 +26,7 @@ resource "azapi_resource" "foundry_project" {
   type       = "Microsoft.CognitiveServices/accounts/projects@2025-06-01"
   name       = "autopilots-project"
   parent_id  = azapi_resource.foundry.id
-  location   = azurerm_resource_group.main.location
+  location   = var.location
   tags       = local.tags
   identity {
     type = "SystemAssigned"

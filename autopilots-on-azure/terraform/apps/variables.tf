@@ -365,3 +365,31 @@ variable "simulator_demo_key" {
   default   = ""
   sensitive = true
 }
+variable "private_network_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "bridge_image" {
+  type    = string
+  default = ""
+}
+
+variable "bridge_disk_source_image" {
+  type    = string
+  default = ""
+}
+
+variable "hermes_role_bundle_sha256" {
+  type    = string
+  default = ""
+  validation {
+    condition     = var.hermes_role_bundle_sha256 == "" || can(regex("^[a-f0-9]{64}$", var.hermes_role_bundle_sha256))
+    error_message = "hermes_role_bundle_sha256 must be the full bundled role manifest SHA-256."
+  }
+}
+
+variable "required_tags" {
+  type    = map(string)
+  default = {}
+}

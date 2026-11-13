@@ -15,6 +15,7 @@ import copy
 import json
 import re
 import sys
+import time
 import tomllib
 import uuid
 from pathlib import Path
@@ -30,6 +31,7 @@ TOKEN_EXCHANGE = "api://AzureADTokenExchange"
 TAG = "autopilots-simulator"
 APP_SELECT = "id,appId,displayName,tags,signInAudience,api,appRoles,spa,identifierUris,requiredResourceAccess"
 SP_SELECT = "id,appId,tags,appOwnerOrganizationId,appRoleAssignmentRequired"
+READINESS_DELAYS = (1, 2, 4, 8, 16)
 
 
 class GraphPermissionsError(PermissionError):
@@ -231,7 +233,7 @@ class GraphClient:
     """Small v1.0 Graph client using only the selected Azure CLI identity."""
 
     def __init__(self, tenant_id: str, subscription_id: str):
-        self.credential = AzureCliCredential(tenant_id=tenant_id, subscription=subscription_id)
+        self.credential = AzureCliCredential(tenant_id=tenant_id)
         self.client = httpx.Client(timeout=60, headers={"ConsistencyLevel": "eventual"})
 
     def __enter__(self) -> GraphClient:
@@ -257,10 +259,29 @@ class _Reconciler:
         self.graph, self.config, self.bindings, self.path, self.state = graph, config, bindings, path, state
         self.context = _context(config)
         self.calls: list[dict] = []
+        self.pending_creations = {
+            ("applications", record["object_id"]) for _, record in _records(state)
+            if not record.get("service_principal_id")
+        }
 
     def call(self, method: str, path: str, body: dict | None = None) -> dict:
         self.calls.append({"method": method, "path": path, **({"body": copy.deepcopy(body)} if body is not None else {})})
         return self.graph.request(method, path, body=body)
+
+    def dependent_call(self, parent: tuple[str, str], method: str, path: str,
+                       body: dict | None = None) -> dict:
+        """Bound 404 readiness retries to new resources or incomplete app state."""
+        delays = iter(READINESS_DELAYS if parent in self.pending_creations else ())
+        while True:
+            try:
+                return self.call(method, path, body)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+                delay = next(delays, None)
+                if delay is None:
+                    raise
+                time.sleep(delay)
 
     def optional(self, path: str) -> dict | None:
         try:
@@ -270,10 +291,10 @@ class _Reconciler:
                 return None
             raise
 
-    def values(self, path: str) -> list[dict]:
+    def values(self, path: str, *, parent: tuple[str, str] | None = None) -> list[dict]:
         values = []
         while path:
-            payload = self.call("GET", path)
+            payload = self.dependent_call(parent, "GET", path) if parent else self.call("GET", path)
             values.extend(payload.get("value", []))
             path = payload.get("@odata.nextLink", "")
         return values
@@ -304,7 +325,10 @@ class _Reconciler:
         parent, key = _slot(self.state, kind)
         record = parent.get(key, {})
         if record:
-            app = self.optional(f"/applications/{record['object_id']}?$select={APP_SELECT}")
+            resource = ("applications", record["object_id"])
+            path = f"/applications/{record['object_id']}?$select={APP_SELECT}"
+            app = (self.dependent_call(resource, "GET", path) if resource in self.pending_creations
+                   else self.optional(path))
             if app:
                 self.owned(app, kind, client_id=record["client_id"])
                 matches.append(app)
@@ -317,11 +341,13 @@ class _Reconciler:
 
     def ensure_owner(self, collection: str, object_id: str) -> None:
         path = f"/{collection}/{object_id}/owners"
+        resource = (collection, object_id)
         owner = _uuid(self.config["owner_id"], "owner_id")
-        if not any(item["id"] == owner for item in self.values(path + "?$select=id")):
-            self.call("POST", path + "/$ref", {"@odata.id": f"{GRAPH}/directoryObjects/{owner}"})
+        if not any(item["id"] == owner for item in self.values(path + "?$select=id", parent=resource)):
+            self.dependent_call(resource, "POST", path + "/$ref", {"@odata.id": f"{GRAPH}/directoryObjects/{owner}"})
 
     def ensure_app(self, kind: str, display: str, app: dict | None, redirect_uri: str) -> dict:
+        created = app is None
         if app is None:
             body = _definition(self.context, kind, display, "", "")
             body = {key: body[key] for key in ("displayName", "signInAudience", "tags")}
@@ -333,11 +359,14 @@ class _Reconciler:
             record["service_principal_id"] = previous["service_principal_id"]
         parent[key] = record
         self.save()
+        resource = ("applications", record["object_id"])
+        if created:
+            self.pending_creations.add(resource)
         desired = _definition(self.context, kind, display, record["client_id"], redirect_uri, app)
         self_access = desired.pop("requiredResourceAccess", None)
         changed = {key: value for key, value in desired.items() if not _matches(app.get(key), value)}
         if changed:
-            self.call("PATCH", f"/applications/{record['object_id']}", changed)
+            self.dependent_call(resource, "PATCH", f"/applications/{record['object_id']}", changed)
         if kind == "spa":
             scope_id = str(uuid.uuid5(_namespace(self.context), "access_as_user"))
             authorized = copy.deepcopy((app.get("api") or {}).get("preAuthorizedApplications") or [])
@@ -350,8 +379,7 @@ class _Reconciler:
                          "api": {"preAuthorizedApplications": authorized}}
             consent_changes = {key: value for key, value in delegated.items() if not _matches(app.get(key), value)}
             if consent_changes:
-                self.call("PATCH", f"/applications/{record['object_id']}",
-                          consent_changes)
+                self.dependent_call(resource, "PATCH", f"/applications/{record['object_id']}", consent_changes)
         self.ensure_owner("applications", record["object_id"])
         principals = self.values(_filter("servicePrincipals", f"appId eq '{record['client_id']}'", SP_SELECT))
         if len(principals) > 1:
@@ -360,14 +388,18 @@ class _Reconciler:
             principal = principals[0]
             self.owned(principal, kind, client_id=record["client_id"], principal=True)
         else:
-            principal = self.call("POST", "/servicePrincipals", {
+            principal = self.dependent_call(resource, "POST", "/servicePrincipals", {
                 "appId": record["client_id"], "tags": _tags(self.context, kind),
                 "appRoleAssignmentRequired": kind == "spa",
             })
         record["service_principal_id"] = _uuid(principal["id"], "service principal id")
         self.save()
+        principal_resource = ("servicePrincipals", record["service_principal_id"])
+        if not principals:
+            self.pending_creations.add(principal_resource)
         if principal.get("appRoleAssignmentRequired") != (kind == "spa"):
-            self.call("PATCH", f"/servicePrincipals/{principal['id']}", {"appRoleAssignmentRequired": kind == "spa"})
+            self.dependent_call(principal_resource, "PATCH", f"/servicePrincipals/{principal['id']}",
+                                {"appRoleAssignmentRequired": kind == "spa"})
         self.ensure_owner("servicePrincipals", principal["id"])
         return record
 
@@ -388,8 +420,9 @@ class _Reconciler:
 
     def ensure_federation(self, kind: str, record: dict) -> None:
         path = f"/applications/{record['object_id']}/federatedIdentityCredentials"
+        resource = ("applications", record["object_id"])
         desired = _federation(self.context, kind, _binding(self.bindings, kind))
-        current = self.values(path)
+        current = self.values(path, parent=resource)
         canonical = {f"simulator-{kind.removeprefix('agents.')}-{part}" for part in ("gateway", "runtime")}
         for item in current:
             target = next((fic for fic in desired if fic["name"] == item["name"]), None)
@@ -400,10 +433,11 @@ class _Reconciler:
                     raise ValueError(f"Conflicting noncanonical federated credential for {kind}: {item['name']}")
         for fic in desired:
             if not any(all(item.get(k) == v for k, v in fic.items()) for item in current):
-                self.call("POST", path, fic)
+                self.dependent_call(resource, "POST", path, fic)
 
     def ensure_assignments(self, record: dict) -> None:
         path = f"/servicePrincipals/{record['service_principal_id']}/appRoleAssignedTo"
+        resource = ("servicePrincipals", record["service_principal_id"])
         roles = {role: str(uuid.uuid5(_namespace(self.context), f"role:{role}")) for role in ("User", "Admin")}
         desired = set()
         for assignment in _assignments(self.config):
@@ -411,15 +445,16 @@ class _Reconciler:
             collection = "users" if assignment["principal_type"] == "User" else "groups"
             self.call("GET", f"/{collection}/{principal}?$select=id")
             desired.add((principal, roles[assignment["role"]]))
-        current = self.values(path)
+        current = self.values(path, parent=resource)
         for item in current:
             if (item.get("appRoleId") in roles.values()
                     and (item["principalId"], item["appRoleId"]) not in desired):
                 self.call("DELETE", f"{path}/{item['id']}")
         for principal, role in sorted(desired):
             if not any(item["principalId"] == principal and item["appRoleId"] == role for item in current):
-                self.call("POST", path, {"principalId": principal, "resourceId": record["service_principal_id"],
-                                         "appRoleId": role})
+                self.dependent_call(resource, "POST", path, {
+                    "principalId": principal, "resourceId": record["service_principal_id"], "appRoleId": role,
+                })
 
     def reconcile(self, redirect_uri: str) -> dict:
         self.validate_tenant()
@@ -604,6 +639,8 @@ def reconcile_identities(config: dict, bindings: dict, state_path: Path, *, redi
     for User/Admin grants. The SPA preauthorizes its own delegated scope after
     publishing it. Worker removal is explicit via destroy_identities; state
     retains removed worker records so their resources remain cleanable.
+    State additionally stores environment, tenant_id and subscription_id and
+    may be partial; only a successful return indicates reconciliation completed.
     """
     return _execute(config, bindings, Path(state_path), redirect_uri, destroy=False)
 

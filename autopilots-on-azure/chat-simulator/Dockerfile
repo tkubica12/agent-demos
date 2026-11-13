@@ -24,7 +24,8 @@ WORKDIR /app
 COPY --from=python-dependencies /app/.venv ./.venv
 COPY backend/ ./backend/
 COPY --from=frontend /build/dist ./frontend/dist
-USER 10001:10001
+ARG SIMULATOR_CONTAINER_USER=10001:10001
+USER ${SIMULATOR_CONTAINER_USER}
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"

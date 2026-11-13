@@ -32,12 +32,13 @@ data "terraform_remote_state" "platform" {
 data "azurerm_client_config" "current" {}
 
 locals {
-  platform = data.terraform_remote_state.platform.outputs
-  tags = {
+  platform                = data.terraform_remote_state.platform.outputs
+  private_network_enabled = try(local.platform.private_network_enabled, false)
+  tags = merge(try(local.platform.required_tags, {}), {
     app         = "autopilots-on-azure"
     environment = var.environment_name
     layer       = "simulator"
-  }
+  })
 }
 
 resource "azurerm_user_assigned_identity" "channel" {
@@ -57,9 +58,37 @@ resource "azapi_resource" "channel" {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.channel.id]
   }
-  body                      = { properties = {} }
-  response_export_values    = ["properties.managementEndpoint"]
+  body = {
+    properties = local.private_network_enabled ? {
+      environmentId       = lower(local.platform.private_mcp_env_id)
+      publicNetworkAccess = "Disabled"
+    } : {}
+  }
+  response_export_values    = ["properties.managementEndpoint", "properties.publicNetworkAccess", "properties.environmentId", "properties.defaultDomain"]
   schema_validation_enabled = false
+  lifecycle {
+    postcondition {
+      condition     = !local.private_network_enabled || try(self.output.properties.publicNetworkAccess == "Disabled", false)
+      error_message = "The simulator Sandbox Group must report publicNetworkAccess Disabled in private mode."
+    }
+  }
+}
+
+resource "azapi_resource" "vnet_connection" {
+  count     = local.private_network_enabled ? 1 : 0
+  type      = "Microsoft.App/sandboxGroups/vnetConnections@2026-02-01-preview"
+  name      = "autopilots-vnet"
+  parent_id = azapi_resource.channel.id
+  location  = local.platform.sandbox_location
+  body = {
+    properties = { subnetId = lower(local.platform.sandbox_subnet_id) }
+  }
+  schema_validation_enabled = false
+  locks                     = [local.platform.sandbox_subnet_id]
+  retry = {
+    error_message_regex = ["ServiceAssociationLinkLease"]
+    interval_seconds    = 10
+  }
 }
 
 resource "azurerm_role_assignment" "deployer" {
@@ -77,15 +106,19 @@ resource "azurerm_role_assignment" "registry" {
 
 output "channel_binding" {
   value = {
-    name                  = azapi_resource.channel.name
-    id                    = azapi_resource.channel.id
-    identity_client_id    = azurerm_user_assigned_identity.channel.client_id
-    identity_principal_id = azurerm_user_assigned_identity.channel.principal_id
-    identity_resource_id  = azurerm_user_assigned_identity.channel.id
-    management_endpoint   = azapi_resource.channel.output.properties.managementEndpoint
-    subscription_id       = data.azurerm_client_config.current.subscription_id
-    resource_group_name   = local.platform.resource_group_name
-    location              = local.platform.sandbox_location
-    environment           = var.environment_name
+    name                    = azapi_resource.channel.name
+    id                      = azapi_resource.channel.id
+    identity_client_id      = azurerm_user_assigned_identity.channel.client_id
+    identity_principal_id   = azurerm_user_assigned_identity.channel.principal_id
+    identity_resource_id    = azurerm_user_assigned_identity.channel.id
+    management_endpoint     = azapi_resource.channel.output.properties.managementEndpoint
+    subscription_id         = data.azurerm_client_config.current.subscription_id
+    resource_group_name     = local.platform.resource_group_name
+    location                = local.platform.sandbox_location
+    environment             = var.environment_name
+    private_network_enabled = local.private_network_enabled
+    public_network_access   = try(azapi_resource.channel.output.properties.publicNetworkAccess, "")
+    private_domain          = local.private_network_enabled ? local.platform.private_mcp_default_domain : ""
+    vnet_connection_name    = try(azapi_resource.vnet_connection[0].name, "")
   }
 }
