@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import shutil
+import secrets
 import subprocess
 import time
 from pathlib import Path
@@ -21,6 +22,7 @@ async def check_widgets(
     media = Path(media_dir).resolve() if media_dir else None
     if media:
         media.mkdir(parents=True, exist_ok=True)
+    raw_dir = media / "raw" / secrets.token_hex(8) if media else None
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(channel="msedge", headless=True)
         options = {"viewport": {"width": 1280, "height": 800}, "ignore_https_errors": demo}
@@ -32,7 +34,7 @@ async def check_widgets(
 
         async def capture():
             while recording:
-                image = media / "raw" / f"frame-{len(captured):04d}.jpg"
+                image = raw_dir / f"frame-{len(captured):04d}.jpg"
                 await page.screenshot(path=str(image), type="jpeg", quality=80)
                 captured.append(image)
                 await asyncio.sleep(.15)
@@ -58,7 +60,7 @@ async def check_widgets(
                 return mid, locator, frame, activity
 
             if media:
-                (media / "raw").mkdir(exist_ok=True)
+                raw_dir.mkdir(parents=True)
                 recording = True
                 capture_task = asyncio.create_task(capture())
             mid, iframe, frame, activity = await fresh()
@@ -235,6 +237,7 @@ const form=document.createElement('form');form.action='/api/chats';form.method='
                     "browser": "Chromium (installed Microsoft Edge)", "checks": checks,
                     "real": "render_widget, handle_teams_invoke, decode_submission, tool_result, SDK HTTP adapter",
                     "fixtures": "Hermes response/native claim and explicit failed agent transports; no live Azure",
+                    "demoFrames": len(captured),
                 }, indent=2), encoding="utf-8")
             print(f"PASS Chromium widget browser checks ({len(checks)} assertions/groups)")
         finally:
@@ -248,10 +251,11 @@ const form=document.createElement('form');form.action='/api/chats';form.method='
             encoder = shutil.which("ffmpeg")
             if encoder:
                 subprocess.run([encoder, "-loglevel", "error", "-y", "-framerate", "5",
-                                "-i", str(media / "raw" / "frame-%04d.jpg"), "-an",
+                                "-i", str(raw_dir / "frame-%04d.jpg"), "-frames:v", str(len(captured)), "-an",
                                 "-c:v", "libx264", "-pix_fmt", "yuv420p", str(output)], check=True)
                 subprocess.run([encoder, "-loglevel", "error", "-y", "-i", str(output),
                                 "-vf", "fps=8,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
                                 str(media / "widget-demo.gif")], check=True)
                 for image in captured:
                     image.unlink()
+                raw_dir.rmdir()

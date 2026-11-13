@@ -118,8 +118,8 @@ Only that route has its own HTTP CSP/ancestry policy. The iframe has **only**
 `sandbox="allow-scripts"`: no same-origin access, top navigation, popups, forms or
 downloads. HTTP CSP allows inline scripts/styles and data images but denies
 fetch/resources/nested frames even if a payload requests broader `securityPolicy`
-domains; DNS prefetch is disabled. The parent CSP restricts frame navigation to
-its origin and the host closes a frame on subsequent navigation. Window messages
+domains; DNS prefetch is disabled. The parent CSP allowlists the simulator and
+Entra login frame origins; the host closes a widget on subsequent navigation. Window messages
 are accepted only from that widget's `contentWindow`.
 
 This is a narrow self-contained host, not a full MCP Apps client: external MCP
