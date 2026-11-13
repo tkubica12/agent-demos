@@ -118,7 +118,9 @@ existing Sandbox execution permission. The official SDK runs the pinned
 metadata-only helper, proves private query DNS/TLS, queries only the exact native
 trace, and verifies the observed Foundry host privately. No operator tokens,
 evidence keys, file contents or submission tokens go to this helper. Missing
-permission, runtime or query evidence fails explicitly. Without this option,
+permission, runtime or query evidence fails explicitly. Each invocation must
+return its own completion nonce; the SDK's default exit zero alone is not proof.
+Without this option,
 the original direct private managed-identity query path remains required.
 
 Requirements: a host using the customer's private DNS and routes; Python 3.11+

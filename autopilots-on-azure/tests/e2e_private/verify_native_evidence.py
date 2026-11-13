@@ -255,8 +255,10 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         name: Path(__file__).with_name(name + ".py").read_text(encoding="utf-8")
         for name in ("network_probe", "verify_native_evidence")
     }
+    completion_nonce = uuid.uuid4().hex
     payload = base64.b64encode(json.dumps({
         "sources": sources, "app_id": app_id, "trace_id": trace_id,
+        "completion_nonce": completion_nonce,
     }).encode()).decode()
     script = (
         "import base64,json,sys,types; "
@@ -270,7 +272,7 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         "\nnetwork=check('https://api.applicationinsights.io',transport_only=True)"
         "\nwith ManagedIdentityCredential(client_id=os.environ.get('AZURE_CLIENT_ID')) as credential:"
         "\n observed=query_trace(credential,p['app_id'],p['trace_id'])"
-        "\nprint(json.dumps({'queryNetwork':network,'observed':observed}))"
+        "\nprint(json.dumps({'queryNetwork':network,'observed':observed,'completionNonce':p['completion_nonce']}))"
     )
     python = configuration.get("python_path", "/app/.venv/bin/python")
     if not isinstance(python, str) or not re.fullmatch(r"/[A-Za-z0-9_./-]+", python) or ".." in python.split("/"):
@@ -281,15 +283,18 @@ def query_trace_in_sandbox(configuration, app_id, trace_id):
         resource_group=configuration["resource_group"], sandbox_group=configuration["group"],
     ) as group, group.get_sandbox_client(sandbox_id) as sandbox:
         result = sandbox.exec(f"{shlex.quote(python)} -c {shlex.quote(script)}")
-    if result.exit_code:
+    if type(result.exit_code) is not int or result.exit_code != 0:
         raise RuntimeError(f"In-VNet Sandbox query execution failed exit {result.exit_code}; no credentials or stderr exported.")
     result = json.loads(result.stdout)
+    if not isinstance(result, dict) or result.get("completionNonce") != completion_nonce:
+        raise ValueError("Sandbox query did not return this invocation's completed output.")
     if result.get("queryNetwork", {}).get("scope") != "private-dns-tls" or result["queryNetwork"].get("status") != "pass":
         raise ValueError("Sandbox query did not prove private App Insights DNS/TLS.")
     result["queryExecution"] = {
         "sandboxId": sandbox_id, "credential": "sandbox-managed-identity",
         "inlineSourceSha256": hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest(),
         "operatorCredentialsExported": False,
+        "completionVerified": True,
     }
     return result
 
