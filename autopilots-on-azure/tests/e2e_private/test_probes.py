@@ -552,6 +552,7 @@ class PrivateProbeTests(unittest.TestCase):
             [start, {**completion, "error": True}],
             [start, {**completion, "duration": True}],
             [start, {**completion, "duration": float("nan")}],
+            [start, {**completion, "duration": 3601}],
             [start, {**completion, "skillName": "another-skill"}],
             [start, {**completion, "skillContentReturned": False}],
             [start, {**completion, "skillContentReturned": 1}],

@@ -213,7 +213,7 @@ This validates the deployment's actual guest attestation, not local file copies.
 Availability/integrity alone cannot certify skill selection or use. The producing
 native run must additionally contain matching `skill_view` start/completion IDs
 with the start preceding completion,
-`error=false`, finite nonnegative duration, `skillName=teams-html-widget`,
+`error=false`, finite duration from 0 to 3600 seconds, `skillName=teams-html-widget`,
 `skillContentReturned=true`, and a lowercase SHA256 of the actual returned UTF-8
 content. These completion fields come from the authenticated native observer's
 successful main-file load, not from the prompt or installed-file hash.
