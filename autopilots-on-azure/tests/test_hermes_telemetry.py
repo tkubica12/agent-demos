@@ -205,7 +205,7 @@ class HermesTelemetryTests(unittest.TestCase):
             with native.gateway_trace_context("native-session"):
                 self.fail("No wrapper span")
 
-    def test_generated_file_wrapper_preserves_run_contract_and_releases_trace_on_refusal(self):
+    def test_generated_file_wrapper_preserves_run_contract_and_releases_terminal_traces(self):
         with patch.object(sys, "path", [str(_ROOT / "runtimes" / "hermes"), *sys.path]):
             start_hermes = importlib.import_module("start_hermes")
         original_client = httpx.AsyncClient
@@ -214,7 +214,7 @@ class HermesTelemetryTests(unittest.TestCase):
             "turnId": "a" * 32, "fileId": "b" * 32, "name": "report.txt", "contentType": "text/plain",
         }
         store = Mock()
-        store.admit.side_effect = [{"turnId": entry["turnId"]}, {"turnId": "d" * 32}]
+        store.admit.side_effect = [{"turnId": value * 32} for value in ("a", "d", "e", "f")]
         store.instructions.return_value = "\nScoped file instructions"
         store.seal.return_value = {"output": "Report created.", "files": [entry]}
         store.download.return_value = (entry, data)
@@ -227,10 +227,12 @@ class HermesTelemetryTests(unittest.TestCase):
                 self.assertEqual(body["instructions"], "Original instructions\nScoped file instructions")
                 self.assertEqual(int(request.headers["content-length"]), len(request.content))
                 return httpx.Response(202, json={
-                    "run_id": "refused-run" if request.headers["Idempotency-Key"] == "refused-admission" else "generated-run",
+                    "run_id": request.headers["Idempotency-Key"].replace("-admission", "-run"),
                 })
+            run_id = request.url.path.split("/")[-1]
             return httpx.Response(200, json={
-                "run_id": request.url.path.split("/")[-1], "status": "completed",
+                "run_id": run_id,
+                "status": run_id.split("-")[0] if run_id in {"cancelled-run", "interrupted-run"} else "completed",
                 "output": "Report created.\nMEDIA:/native/turn/report.txt", "usage": {"input_tokens": 7},
             })
 
@@ -284,6 +286,22 @@ class HermesTelemetryTests(unittest.TestCase):
                     refused = await client.get("/v1/runs/refused-run", headers=headers)
                     self.assertEqual(refused.status_code, 422)
                     self.assertEqual(list(self.context_directory.iterdir()), [])
+                    seals = store.seal.call_count
+                    for status in ("cancelled", "interrupted"):
+                        headers["Idempotency-Key"] = f"{status}-admission"
+                        admitted = await client.post(
+                            "/v1/runs", headers=headers,
+                            json={"input": "Generate report", "instructions": "Original instructions",
+                                  "session_id": "session-1"},
+                        )
+                        self.assertEqual(admitted.status_code, 202)
+                        self.assertEqual(len(list(self.context_directory.glob("*.lease"))), 1)
+                        stopped = await client.get(f"/v1/runs/{status}-run", headers=headers)
+                        self.assertEqual(stopped.status_code, 200)
+                        self.assertEqual(stopped.json()["status"], status)
+                        self.assertNotIn("generatedAttachments", stopped.json())
+                        self.assertEqual(list(self.context_directory.iterdir()), [])
+                    self.assertEqual(store.seal.call_count, seals)
 
         with (
             patch.object(start_hermes, "GeneratedFileStore", return_value=store),
@@ -298,6 +316,7 @@ class HermesTelemetryTests(unittest.TestCase):
             asyncio.run(exercise())
         self.assertEqual(store.bind_run.call_args_list, [
             call(entry["turnId"], "generated-run"), call("d" * 32, "refused-run"),
+            call("e" * 32, "cancelled-run"), call("f" * 32, "interrupted-run"),
         ])
 
     def test_native_run_evidence_is_read_only_authenticated_bounded_and_projected(self):

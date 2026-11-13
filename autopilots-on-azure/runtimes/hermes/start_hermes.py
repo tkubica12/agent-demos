@@ -882,7 +882,9 @@ def create_health_app(
                 native_trace_sessions.pop(admission, None)
                 if context is not None:
                     context.__exit__(None, None, None)
-            if request.method == "GET" and native_status and result.get("status") in {"completed", "failed"}:
+            if request.method == "GET" and native_status and result.get("status") in {
+                "completed", "failed", "cancelled", "interrupted",
+            }:
                 identity = native_trace_runs.pop(native_status.group(1), "")
                 context = native_trace_admissions.pop(identity, None)
                 native_trace_sessions.pop(identity, None)
