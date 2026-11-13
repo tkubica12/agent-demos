@@ -77,8 +77,11 @@ async function runStack(stack) {
       }
       return { page, api, me: await api("/me") };
     }
-    const first = await login(`Private visitor A ${randomUUID().slice(0, 6)}`);
+    const first = await login(stack.owner_display_name);
     const second = await login(`Private visitor B ${randomUUID().slice(0, 6)}`);
+    assert.equal(first.me.authSource, "demo");
+    assert.equal(first.me.upn.toLowerCase(), `${stack.worker_owner_id.toLowerCase()}@demo.invalid`,
+      "DEMO owner identity must match the deployed WORKER_OWNER_ID, not the simulator database user ID.");
     assert.notEqual(first.me.id, second.me.id, "Two independent human sessions are required.");
     report.checks.push({ name: "two-real-demo-browser-logins-and-websockets", status: "pass" });
     const agents = (await first.api("/users")).filter((user) => user.isAgent);
@@ -150,13 +153,19 @@ async function runStack(stack) {
     });
     await first.page.locator(`[data-conversation-id="${personal}"]`).click();
     await check("real-agent-adaptive-card-render", async () => {
-      const nonce = randomUUID().slice(0, 8);
-      const sent = await send(personal,
-        `Use your actual channel capabilities to send an Adaptive Card (not a code block) with a TextBlock saying Private card ${nonce}.`);
-      const received = await reply(personal, sent.id, (message) =>
-        message.activityAttachments?.some((attachment) => attachment.contentType === "application/vnd.microsoft.card.adaptive"));
+      const sent = await send(personal, "/learning");
+      const received = await reply(personal, sent.id, () => true);
+      const card = received.activityAttachments?.find(
+        (attachment) => attachment.contentType === "application/vnd.microsoft.card.adaptive");
+      assert.ok(card, `Native /learning returned no Adaptive Card: ${received.text}`);
+      assert.equal(card.content.type, "AdaptiveCard");
+      assert.equal(card.content.version, "1.4");
       await expect(first.page.locator(`[data-message-id="${received.id}"]`).getByTestId("adaptive-card"))
-        .toContainText(`Private card ${nonce}`);
+        .toContainText("What I learned");
+      report.learningCard = {
+        trigger: "/learning", requestMessage: sent.id, responseMessage: received.id,
+        nativeRuntimeIntegration: true, modelInferenceRequired: false,
+      };
     });
     const persistedFiles = [];
     for (const filename of ["acceptance.txt", "acceptance.docx"]) {
