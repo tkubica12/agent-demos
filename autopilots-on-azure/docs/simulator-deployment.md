@@ -324,6 +324,8 @@ discovery or copied state. Use `--state-root D:\AutopilotsState` or
 `AUTOPILOTS_STATE_ROOT` on every invocation to keep durable stack state outside
 side-by-side extracted source revisions. Platform state references are absolute
 paths inside that root.
+Committed provider locks contain signed Windows and Linux checksums; deployment
+keeps `terraform init -lockfile=readonly` and never relaxes checksum verification.
 
 Local Role Blueprints are included in the verified runtime source release.
 The package producer calls `scripts.role_bundle.build_role_bundle(role,

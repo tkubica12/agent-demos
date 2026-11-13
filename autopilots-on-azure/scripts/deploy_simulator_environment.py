@@ -182,11 +182,10 @@ def terraform(root: Path, workspace: str, values: dict, *, destroy: bool = False
     os.environ.setdefault("TF_PLUGIN_CACHE_DIR", str(cache))
     write_tfvars(root / "generated.simulator.auto.tfvars.json", values)
     run(["terraform", "init", "-input=false", "-lockfile=readonly"], cwd=root)
-    selected = run(["terraform", "workspace", "select", workspace], cwd=root, capture=True, check=False)
-    if selected.returncode:
-        if destroy:
-            raise ValueError("The exact teardown workspace does not exist.")
-        run(["terraform", "workspace", "new", workspace], cwd=root)
+    selection = ["terraform", "workspace", "select"]
+    if not destroy:
+        selection.append("-or-create")
+    run([*selection, workspace], cwd=root)
     if output(["terraform", "workspace", "show"], cwd=root) != workspace or workspace == "default":
         raise ValueError("Refusing to use Terraform's default workspace.")
     plan = root / "deployment.tfplan"

@@ -4,6 +4,7 @@ import base64
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from scripts.deploy_simulator_environment import (
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
     validate_config,
+    terraform,
 )
 from scripts.simulator_channel import simulator_environment, simulator_worker_environment
 
@@ -118,6 +120,19 @@ class SimulatorDeploymentTests(unittest.TestCase):
                 validate_config({**config, **changes}, validate_expiry=False)
         config.pop("demo_owner_display_name")
         self.assertEqual(validate_config(config, validate_expiry=False)["worker_owner_id"], config["owner_id"])
+
+    def test_workspace_plugin_error_is_not_reinterpreted_as_a_missing_workspace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "platform").mkdir()
+            failure = subprocess.CalledProcessError(1, ["terraform", "workspace", "select"])
+            with patch("scripts.deploy_simulator_environment.state_root", return_value=root), patch(
+                "scripts.deploy_simulator_environment.run", side_effect=[None, failure],
+            ) as command, self.assertRaises(subprocess.CalledProcessError):
+                terraform(root / "platform", "training-agent-1", {})
+            self.assertEqual(command.call_count, 2)
+            self.assertEqual(command.call_args_list[-1].args[0],
+                             ["terraform", "workspace", "select", "-or-create", "training-agent-1"])
 
     def test_demo_expiry_and_existing_worker_names_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
