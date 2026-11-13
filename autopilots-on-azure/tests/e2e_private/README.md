@@ -126,13 +126,21 @@ url = "https://<native-private-simulator-FQDN>"
 access_code_env = "PRIVATE_AGENT_1_CODE"
 owner_display_name = "<configured-DEMO-Worker-owner-display-name>"
 worker_owner_id = "<deployed-WORKER_OWNER_ID-UUID>"
+gateway_url = "https://<native-private-gateway-FQDN>"
+runtime_url = "https://<native-private-runtime-FQDN>"
+evidence_key_env = "PRIVATE_AGENT_1_INTERNAL_KEY"
+app_insights_resource_id = "/subscriptions/<UUID>/resourceGroups/<stack-RG>/providers/Microsoft.Insights/components/<component>"
 # Explicit operator-approved argv that really restarts the simulator.
 # Do not use page reload, a health check, or an arbitrary sleep here.
 restart_command = ["uv", "run", "python", "tests/e2e_private/restart_sandbox.py", "--subscription", "<UUID>", "--resource-group", "<stack-RG>", "--group", "<simulator-group>", "--sandbox-id", "<simulator-Sandbox-UUID>"]
 ```
 
-Supply each existing DEMO code through the named environment variable without
-printing it. Repeat `[[stacks]]` for every deployed stack. From the extracted
+Supply each existing DEMO code and matching internal `API_SERVER_KEY` through
+the named private environment variables without printing them. The evidence
+collector uses the private client's system managed identity to query the
+explicitly configured Application Insights resource; it needs scoped Reader
+query access, private AMPLS DNS/routes, and no exported operator credentials.
+Repeat `[[stacks]]` for every deployed stack. From the extracted
 `autopilots-on-azure` directory inside the VNet:
 
 ```powershell
@@ -226,7 +234,8 @@ This is the rendering criterion only. The full bridge checklist's action on a
 real available proposal is separate: an empty ledger leaves that action
 **NOT RUN**. Never seed a proposal to obtain a passing action. The automated
 report explicitly leaves real proposal actions and interactive Entra sign-in
-not run, and native Foundry/tool provenance requiring separate evidence.
+not run. Native Foundry/tool provenance is required for both generated-file
+turns, not inferred for other turns.
 Its `pass` means only `private-automated-browser-subset`, not blanket simulator,
 bridge, Entra, or customer certification.
 Real agent document download remains a separate mandatory criterion. Enable
@@ -240,15 +249,37 @@ Each is downloaded through its rendered chat attachment button, saved from
 the browser, validated against Word document text or strict UTF-8 text, and
 compared to the authenticated API bytes. ZIP comments/metadata containing the
 nonce cannot substitute for Word text. A successful learning card does not waive
-either file check. Retain the matching native run/tool execution evidence and
-`generatedFileSent` filename/size/SHA/activity diagnostics alongside the browser
-result: the file hashes alone do not prove the native model/tool provenance.
+either file check. `verify_native_evidence.py` immediately reads the authenticated
+gateway `/internal/generated-files/evidence?conversation_id=...` route, using
+only `X-Autopilot-Key`, and matches exact request/reply Activity IDs, filename,
+size and browser SHA. This simulator's `make_activity` and Connector
+ResourceResponse use message IDs as those Activity IDs; no guess based only
+on timestamps or filenames is permitted. It then reads the authenticated
+runtime `/internal/runs/<nativeRunId>/evidence` route: exact completed run,
+available served runtime metadata, and actual terminal start/completion events
+with matching tool-call ID and `error=false` are mandatory. Capture the
+64-delivery process-local ring before restart/eviction; missing, expired or
+mismatched records fail explicitly. `/diag/teams` is not used or enabled.
+
+Native `custom` or a configured `azure-foundry` label alone is **not** backend
+proof. The collector queries Application Insights by the exact trace ID and
+requires both a successful outgoing HTTP dependency to a first-party Foundry
+host and a successful `chat` dependency with served response model and positive
+input/output usage. That observed host must also pass private DNS/TLS checks.
+Gateway/runtime must actually export these dependencies with the required
+permissions and `OTEL_TRACES_SAMPLER_ARG=1.0`; missing instrumentation or query
+access fails rather than substituting configuration. The helper uses the
+[Microsoft Entra-authenticated Application Insights query API](https://learn.microsoft.com/azure/azure-monitor/app/azure-ad-authentication#query-application-insights-by-using-microsoft-entra-authentication).
+Metadata reads create/export nothing and store no outputs, reasoning, tool
+arguments, file claims, headers or keys. Each file check retains its safe
+native/Foundry JSON beside the actual browser download.
 The generated-file implementation is available but this flow is **not yet
 live-certified against the private deployment**.
 
 A random model challenge rejects canned static replies but **does not alone
-prove which inference backend was used**. Retain the matching Hermes/Foundry
-telemetry trace alongside browser results for a complete application claim.
+prove which inference backend was used**. The generated-file turns collect
+their own native/Foundry proof; complete application claims still require the
+remaining simulator/bridge checklists and independent checks.
 Entra/MSAL sign-in must additionally be checked interactively by an assigned
 user on the private Windows/Edge client; DEMO login does not certify Entra.
 

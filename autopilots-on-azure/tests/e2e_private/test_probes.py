@@ -15,6 +15,7 @@ from network_probe import check, private_address, public_control
 from restart_sandbox import restart
 from run_on_client import execution_result
 from verify_download import verify_download
+from verify_native_evidence import foundry_trace, select_delivery, validate_run
 
 
 class PrivateProbeTests(unittest.TestCase):
@@ -156,6 +157,65 @@ class PrivateProbeTests(unittest.TestCase):
                 archive.writestr("word/document.xml", xml)
             with self.assertRaisesRegex(ValueError, "Word package"):
                 verify_download(file, codes["acceptance.docx"])
+
+    def test_native_delivery_requires_exact_activity_pair_and_browser_bytes(self):
+        expected = {
+            "conversationId": "conversation", "requestActivityId": "request", "replyActivityId": "reply",
+            "filename": "result.txt", "sha256": "a" * 64, "size": 10, "requestedAt": 1000,
+        }
+        event = {
+            **expected, "name": "result.txt", "activityId": "reply", "ts": 1001,
+            "nativeRunId": "native-run", "traceId": "b" * 32,
+        }
+        self.assertEqual(select_delivery({"events": [event]}, expected, 1002)["nativeRunId"], "native-run")
+        with self.assertRaisesRegex(ValueError, "browser"):
+            select_delivery({"events": [{**event, "sha256": "c" * 64}]}, expected, 1002)
+        with self.assertRaisesRegex(ValueError, "exact request"):
+            select_delivery({"events": [{**event, "requestActivityId": "another-request"}]}, expected, 1002)
+        with self.assertRaisesRegex(ValueError, "expired"):
+            select_delivery({"events": [event]}, expected, 2000)
+
+    def test_native_terminal_proof_requires_completed_run_and_matching_successful_call(self):
+        payload = {
+            "runId": "native-run", "status": "completed", "runtimeMetadataAvailable": True,
+            "runtime": {"provider": "custom", "model": "actual-model", "route_source": "native"},
+            "usage": {"input_tokens": 100, "output_tokens": 20},
+            "tools": [
+                {"event": "tool.started", "tool": "terminal", "toolCallId": "call-1"},
+                {"event": "tool.completed", "tool": "terminal", "toolCallId": "call-1",
+                 "error": False, "duration": 0.1},
+            ],
+        }
+        result = validate_run(payload, "native-run")
+        self.assertEqual(result["runtime"]["provider"], "custom")
+        self.assertNotIn("foundry", result)
+        for invalid in (
+            {**payload, "runId": "different"},
+            {**payload, "runtimeMetadataAvailable": False},
+            {**payload, "tools": []},
+            {**payload, "tools": [payload["tools"][0], {**payload["tools"][1], "error": True}]},
+            {**payload, "tools": [payload["tools"][0], {**payload["tools"][1], "toolCallId": "different"}]},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    validate_run(invalid, "native-run")
+
+    def test_foundry_requires_observed_http_and_served_model_usage_not_declared_alias(self):
+        columns = [{"name": name} for name in (
+            "name", "success", "resultCode", "target", "responseModel", "inputTokens", "outputTokens",
+        )]
+        chat = ["chat", True, "", "azure-foundry", "served-model", 100, 20]
+        http = ["internal", True, "200", "account.openai.azure.com", "", None, None]
+        def response(rows):
+            return {"tables": [{"columns": columns, "rows": rows}]}
+        self.assertIsNone(foundry_trace(response([chat])))
+        self.assertIsNone(foundry_trace(response([http])))
+        self.assertIsNone(foundry_trace(response([
+            chat, ["internal", False, "403", "account.openai.azure.com", "", None, None],
+        ])))
+        proof = foundry_trace(response([chat, http]))
+        self.assertEqual(proof["observedFoundryHost"], "account.openai.azure.com")
+        self.assertEqual(proof["servedModel"], "served-model")
 
 
 if __name__ == "__main__":
