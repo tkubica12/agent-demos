@@ -142,7 +142,9 @@ uv run python tests\e2e_private\run.py --config .local\private-acceptance.toml
 On the prepared Linux host, set `PRIVATE_PLAYWRIGHT_MODULE` as above first.
 No Git access is used. The output is `private-network.json`, per-stack
 `result.json`, a final `summary.json`, test upload fixtures, and a screenshot
-after authentication. Access codes and bearer tokens are not recorded;
+after authentication. Actual agent-generated DOCX/TXT browser downloads are
+also retained, with their fresh nonces, message/file IDs, sizes and SHA256 hashes.
+Access codes and bearer tokens are not recorded;
 browser traces/HAR are deliberately disabled. Keep screenshots/chat evidence
 private even though this runner uses test data.
 
@@ -190,7 +192,7 @@ two separate real DEMO browser sessions and websocket readiness; exactly one
 registered agent; personal dynamic random-code/arithmetic reply and visible
 typing; a rendered reaction; two humans plus agent in group chat with an
 actual mention; a real agent Adaptive Card; DOCX and TXT uploads whose contents
-the agent reads; an agent-generated downloadable document; and a genuine
+the agent reads; actual agent-generated DOCX and UTF-8 TXT browser downloads; and a genuine
 restart retaining the original chat and file hashes. Independent feature
 failures accumulate, rather than silently skipping the rest.
 
@@ -220,9 +222,22 @@ button is required. This proves native runtime/channel/card integration, **not
 model inference**. The separate random challenge retains that inference check.
 Wrong owner, missing native tools, runtime/auth failure, or a text/error reply
 fails explicitly. No group-command/model-created-card guarantee is implied.
-Real agent document download remains a separate mandatory criterion: the
-currently unwired Hermes local-document channel capability does not get waived
-by a successful learning card.
+Real agent document download remains a separate mandatory criterion. Enable
+`GENERATED_CHAT_FILES_ENABLED=true` on both gateway and runtime, with matching
+`WORKER_ID` and `API_SERVER_KEY`, and deploy the native generated-file runtime
+bundle. The runtime supplies an exclusive per-turn output directory and the
+standard `MEDIA:"<absolute-file>"` contract; the runner never prescribes a fixed
+host path or substitutes fixtures/model links. It requests one real DOCX and
+one UTF-8 TXT using independent fresh nonces and actual terminal/file tools.
+Each is downloaded through its rendered chat attachment button, saved from
+the browser, validated against Word document text or strict UTF-8 text, and
+compared to the authenticated API bytes. ZIP comments/metadata containing the
+nonce cannot substitute for Word text. A successful learning card does not waive
+either file check. Retain the matching native run/tool execution evidence and
+`generatedFileSent` filename/size/SHA/activity diagnostics alongside the browser
+result: the file hashes alone do not prove the native model/tool provenance.
+The generated-file implementation is available but this flow is **not yet
+live-certified against the private deployment**.
 
 A random model challenge rejects canned static replies but **does not alone
 prove which inference backend was used**. Retain the matching Hermes/Foundry
