@@ -128,6 +128,8 @@ owner_display_name = "<configured-DEMO-Worker-owner-display-name>"
 worker_owner_id = "<deployed-WORKER_OWNER_ID-UUID>"
 gateway_url = "https://<native-private-gateway-FQDN>"
 runtime_url = "https://<native-private-runtime-FQDN>"
+source_commit = "<operator-approved-40-character-source-SHA>"
+widget_attestation_path = "/var/lib/<private-state>/widget-attestation.json"
 evidence_key_env = "PRIVATE_AGENT_1_INTERNAL_KEY"
 app_insights_resource_id = "/subscriptions/<UUID>/resourceGroups/<stack-RG>/providers/Microsoft.Insights/components/<component>"
 # Explicit operator-approved argv that really restarts the simulator.
@@ -155,6 +157,33 @@ also retained, with their fresh nonces, message/file IDs, sizes and SHA256 hashe
 Access codes and bearer tokens are not recorded;
 browser traces/HAR are deliberately disabled. Keep screenshots/chat evidence
 private even though this runner uses test data.
+
+The same source-pinned run separately reports live native widget acceptance.
+Before sending a widget prompt, it requires the deployment's guest-byte
+attestation: `source_commit`, `runtime_release`, `bundled_skills_path`, and
+`files` mapping `bridge/html_widgets.py` and
+`runtime_skills/teams-html-widget/SKILL.md` to `guest_path`, `sha256` and
+`git_blob_sha1`. The bridge must match blob
+`63582be6a82b4e0ff261cc1505305372e87c74df`; the unchanged skill must match
+`b899de1ab25ad95f4e6719b3b3b48b24689f8f40` in the selected bundled skill directory.
+This validates the deployment's actual guest attestation, not local file copies.
+
+A fresh personal chat requests a real Hermes widget, checks the `allow-scripts`
+iframe initialization/resize and local recompute, then clicks its actual action.
+The accepted invoke, disabled button, same-chat follow-up and same-token
+`already_submitted` replay are checked. Authenticated `/internal/turns/evidence`
+links both actual replies to their native runs; the follow-up must reference
+the exact opaque accepted invoke, and the replay must not have a native reply.
+Both completed runs require actual runtime metadata and the same strict
+Foundry dependency/served-model/positive usage proof used for files.
+File turns still require their real terminal start/completion; widgets do not
+need a dummy file or terminal call. Missing linkage fails explicitly.
+
+`widget-result.json`, separate producing/follow-up evidence, `live-widget.png`
+and `live-widget.gif` remain outside Git. GIF encoding additionally requires
+an approved `ffmpeg` on the private client; absence is an explicit failure.
+Only current browser screenshots are encoded. Widget tokens, submitted values,
+HTML bodies and HTTP traces are not persisted.
 
 For an operator outside the VNet, `run_on_client.py` submits a uniquely named
 **Managed Run Command** to the explicitly authorized private Linux VM. Write

@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { runWidgetAcceptance } from "./widget_acceptance.mjs";
 
 const require = createRequire(new URL("../../chat-simulator/frontend/package.json", import.meta.url));
 const { chromium, expect } = process.env.PRIVATE_PLAYWRIGHT_MODULE
@@ -40,6 +41,7 @@ async function runStack(stack) {
       realProposalAction: "not-run",
       interactiveEntra: "not-run",
       nativeFoundryToolProvenance: "not-proven",
+      liveWidget: "not-run",
       completeSimulatorAndBridgeChecklists: "not-certified",
     },
   };
@@ -255,6 +257,33 @@ async function runStack(stack) {
         report.generatedFiles.every((file) => file.nativeEvidenceStatus === "pass")) {
       report.additionalAcceptance.nativeFoundryToolProvenance = "pass-for-generated-file-turns";
     }
+    await check("real-native-widget-browser-and-trace-provenance", async () => {
+      assert.equal(stack.widget_attestation?.status, "pass", "Guest widget/skill source attestation is mandatory.");
+      report.widget = await runWidgetAcceptance({
+        first, agent, chat, send, reply, directory, expect, sanitize: sanitized,
+        prove: async (target) => {
+          const expectedPath = path.join(directory, `widget-target-${target.turn}.json`);
+          await writeFile(expectedPath, JSON.stringify(target));
+          const output = path.join(directory, `widget-evidence-${target.turn}.json`);
+          const result = await execute("uv", ["run", "python",
+            fileURLToPath(new URL("./verify_native_evidence.py", import.meta.url)),
+            "--gateway-url", stack.gateway_url, "--runtime-url", stack.runtime_url,
+            "--key-env", stack.evidence_key_env, "--app-insights-resource-id", stack.app_insights_resource_id,
+            "--expected", expectedPath, "--output", output, "--widget-turn", target.turn,
+            "--timeout-seconds", String(Math.min(config.timeout_ms / 1000, 600)),
+          ], { timeout: Math.min(config.timeout_ms, 600_000) + 120_000 });
+          return JSON.parse(result.stdout.trim());
+        },
+        media: async (frames, output) => {
+          const result = await execute("uv", ["run", "python",
+            fileURLToPath(new URL("./widget_media.py", import.meta.url)),
+            "--frames", frames, "--output", output]);
+          return JSON.parse(result.stdout.trim());
+        },
+      });
+      report.widget.attestation = stack.widget_attestation;
+      report.additionalAcceptance.liveWidget = "pass";
+    });
     await check("restart-chat-and-file-persistence", async () => {
       assert.ok(persistedFiles.length > 0, "File persistence requires an actual uploaded/downloaded file.");
       assert.ok(Array.isArray(stack.restart_command) && stack.restart_command.length,
