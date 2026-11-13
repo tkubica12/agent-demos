@@ -85,6 +85,7 @@ COPY runtimes/hermes/*.py ./
 COPY runtimes/hermes/plugins/ ./runtime_plugins/
 COPY runtimes/hermes/runtime_skills/ ./runtime_skills/
 COPY bridge/*.py ./bridge/
+COPY bridge/runtime/*.py ./bridge/runtime/
 COPY autopilots_identity/*.py ./autopilots_identity/
 RUN /app/.venv/bin/python -B -c "import start_hermes; assert callable(start_hermes.main)"
 

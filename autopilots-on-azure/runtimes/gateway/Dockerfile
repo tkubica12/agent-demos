@@ -6,6 +6,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY bridge/*.py ./bridge/
+COPY bridge/runtime/*.py ./bridge/runtime/
 COPY autopilots_identity/*.py ./autopilots_identity/
 RUN /app/.venv/bin/python -B -c "from bridge.app import app; assert app is not None"
 ENV PYTHONPATH=/app
