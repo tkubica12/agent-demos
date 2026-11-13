@@ -8,6 +8,8 @@ from functools import lru_cache
 import jwt
 from fastapi import HTTPException, Request
 
+from bridge.channel_auth import tenant_id_from_environment
+
 
 OPERATOR_SCOPE = "CollectiveLearning.Review"
 AZURE_CLI_CLIENT_ID = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
@@ -23,7 +25,7 @@ def _signing_keys(tenant_id: str) -> jwt.PyJWKClient:
 
 def _operator_principal(token: str) -> str:
     try:
-        tenant_id = str(uuid.UUID(os.environ["AGENT365_TENANT_ID"]))
+        tenant_id = str(uuid.UUID(tenant_id_from_environment()))
         audience = str(uuid.UUID(os.environ["COLLECTIVE_LEARNING_OPERATOR_CLIENT_ID"]))
         owner_id = str(uuid.UUID(os.environ["WORKER_OWNER_ID"]))
     except (KeyError, ValueError, TypeError) as exc:

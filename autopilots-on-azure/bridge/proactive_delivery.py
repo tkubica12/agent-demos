@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 from microsoft_agents.activity import Activity
-from microsoft_agents.hosting.core import TurnContext
+from microsoft_agents.hosting.core import ClaimsIdentity, TurnContext
 from microsoft_agents.hosting.core.app.proactive import Conversation
 
 
@@ -96,7 +96,15 @@ async def send_proactive_activity(
             else ""
         )
 
-    if conversation.claims:
+    if os.getenv("DEMO_CHANNEL_KEY"):
+        if continuation.service_url != os.getenv("DEMO_SERVICE_URL"):
+            raise RuntimeError("Proactive serviceUrl does not match DEMO_SERVICE_URL.")
+        await adapter.continue_conversation_with_claims(
+            ClaimsIdentity({}, False, authentication_type="Anonymous"),
+            continuation,
+            callback,
+        )
+    elif conversation.claims:
         await adapter.continue_conversation_with_claims(
             Conversation.identity_from_claims(conversation.claims),
             continuation,
@@ -112,7 +120,7 @@ async def send_proactive_activity(
         )
         if not app_id:
             raise RuntimeError(
-                "Agent 365 application ID is required for proactive delivery."
+                "A service-connection application ID is required for proactive delivery."
             )
         await adapter.continue_conversation(
             app_id,

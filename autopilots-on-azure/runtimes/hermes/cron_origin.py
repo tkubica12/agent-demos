@@ -42,6 +42,19 @@ def tool_execution(
 ) -> Any:
     if tool_name != "cronjob_manage":
         return next_call(args)
+    scheduling_enabled = os.getenv("USER_SCHEDULING_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    if not scheduling_enabled or not all(
+        os.getenv(name, "").strip()
+        for name in ("SCHEDULER_SERVICEBUS_NAMESPACE", "SCHEDULER_SERVICEBUS_QUEUE")
+    ):
+        return json.dumps({
+            "success": False,
+            "error": (
+                "Scheduling is unavailable in this deployment. It requires USER_SCHEDULING_ENABLED=true, "
+                "SCHEDULER_SERVICEBUS_NAMESPACE and SCHEDULER_SERVICEBUS_QUEUE. "
+                "Container-local scheduling is not supported."
+            ),
+        })
     home = Path(os.environ["HERMES_HOME"])
     origins = read_json_object(home / "local" / "cron-origins.json")
     reference = next((

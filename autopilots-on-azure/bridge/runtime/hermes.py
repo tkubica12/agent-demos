@@ -186,10 +186,13 @@ def bridge_instructions(request: AgentRequest) -> str:
         )
     microsoft_365 = ""
     microsoft_365_parts = []
-    collaboration_enabled = bool(
+    from bridge.channel_auth import simulator_channel_configured
+
+    agentic_tools = not simulator_channel_configured()
+    collaboration_enabled = agentic_tools and bool(
         _configured_env("M365_COLLABORATION_MCP_URL")
     )
-    teams_enabled = bool(_configured_env("WORKIQ_TEAMS_MCP_URL"))
+    teams_enabled = agentic_tools and bool(_configured_env("WORKIQ_TEAMS_MCP_URL"))
     if collaboration_enabled:
         operation_scope = hashlib.sha256(
             (

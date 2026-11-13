@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import json
+import os
 import socket
 import struct
 import zipfile
@@ -11,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
+from aiohttp import web
 from bridge.attachments import (
     AttachmentPolicy,
     AttachmentProcessingError,
@@ -19,8 +22,10 @@ from bridge.attachments import (
     _public_addresses,
     _request_headers,
     _validate_download_url,
+    attachment_download_origins,
     format_attachment_context,
     process_turn_attachments,
+    send_file_attachment,
 )
 from bridge.runtime.base import AgentRequest
 from bridge.runtime.hermes import (
@@ -74,6 +79,52 @@ def turn_context(*attachments):
 
 
 class AttachmentTests(unittest.TestCase):
+    def test_explicit_origin_keeps_public_dns_and_exact_origin_boundary(self):
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("20.30.40.50", 443))]
+        with (
+            patch.dict(os.environ, {"ATTACHMENT_DOWNLOAD_ORIGINS": "https://simulator.example:8443"}),
+            patch("bridge.attachments.socket.getaddrinfo", return_value=addresses),
+        ):
+            self.assertEqual(_public_addresses("https://simulator.example:8443/api/file")[0], "simulator.example")
+            for url in (
+                "https://simulator.example/api/file",
+                "https://simulator.example.evil:8443/api/file",
+                "https://user:password@simulator.example:8443/api/file",
+            ):
+                with self.assertRaises(AttachmentProcessingError):
+                    _public_addresses(url)
+        with (
+            patch.dict(os.environ, {"ATTACHMENT_DOWNLOAD_ORIGINS": "https://simulator.example"}),
+            patch("bridge.attachments.socket.getaddrinfo", return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("169.254.169.254", 443)),
+            ]),
+        ):
+            with self.assertRaisesRegex(AttachmentProcessingError, "private address"):
+                _public_addresses("https://simulator.example/api/file")
+
+    def test_attachment_origins_require_https_or_explicit_loopback_opt_in(self):
+        for value in (
+            "http://simulator.example", "https://simulator.example/path",
+            "https://simulator.example?query=1", "https://user@simulator.example",
+            "https://simulator.example:99999", "http://127.0.0.1:8000",
+        ):
+            with patch.dict(os.environ, {"ATTACHMENT_DOWNLOAD_ORIGINS": value}, clear=True):
+                with self.assertRaises(AttachmentProcessingError):
+                    attachment_download_origins()
+        with patch.dict(os.environ, {
+            "ATTACHMENT_DOWNLOAD_ORIGINS": "http://127.0.0.1:8123",
+            "ALLOW_LOOPBACK_ATTACHMENTS": "1",
+        }):
+            self.assertEqual(_public_addresses("http://127.0.0.1:8123/file")[0], "127.0.0.1")
+
+    def test_capability_downloads_never_receive_service_tokens(self):
+        with patch.dict(os.environ, {"ATTACHMENT_DOWNLOAD_ORIGINS": "https://simulator.example"}):
+            self.assertEqual(_request_headers(
+                "https://simulator.example/api/agent-files/file-1/content?capability=bounded",
+                "https://simulator.example/v3/attachments/file-1/views/original",
+                {"Authorization": "Bearer channel-token"},
+            ), {})
+
     def test_attachment_processing_acknowledges_before_work(self):
         context = turn_context(
             SimpleNamespace(
@@ -423,6 +474,78 @@ class AttachmentTests(unittest.TestCase):
             servers["workiq-excel"]["identityMode"],
             "agent_user",
         )
+
+
+class SimulatorAttachmentNetworkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_real_loopback_capability_and_connector_downloads_extract_docx_and_txt(self):
+        observed = []
+        application = web.Application()
+
+        async def download(incoming):
+            observed.append(incoming.headers.get("Authorization"))
+            if incoming.path.startswith("/api/"):
+                self.assertEqual(incoming.query["capability"], "single-file-test-capability")
+                return web.Response(body=docx_bytes(), content_type=DOCX_CONTENT_TYPE)
+            self.assertEqual(incoming.headers.get("Authorization"), "Bearer channel-token")
+            return web.Response(body=b"Connector text", content_type="text/plain")
+
+        application.router.add_get("/api/agent-files/file-1/content", download)
+        application.router.add_get("/v3/attachments/file-2/views/original", download)
+        runner = web.AppRunner(application)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        origin = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        try:
+            with patch.dict(os.environ, {
+                "ATTACHMENT_DOWNLOAD_ORIGINS": origin, "ALLOW_LOOPBACK_ATTACHMENTS": "1",
+            }):
+                context = turn_context(
+                    SimpleNamespace(content_type=DOCX_CONTENT_TYPE, name="status.docx", content=None,
+                                    content_url=f"{origin}/api/agent-files/file-1/content?capability=single-file-test-capability"),
+                    SimpleNamespace(content_type="text/plain", name="note.txt", content=None,
+                                    content_url=f"{origin}/v3/attachments/file-2/views/original"),
+                )
+                context.activity.service_url = origin
+                context.turn_state["connector"] = SimpleNamespace(client=SimpleNamespace(
+                    headers={"Authorization": "Bearer channel-token"},
+                ))
+                processed = await process_turn_attachments(context)
+                self.assertIn("Project Cedar status", processed[0].text)
+                self.assertEqual(processed[1].text, "Connector text")
+                self.assertEqual(observed, [None, "Bearer channel-token"])
+        finally:
+            await runner.cleanup()
+
+    async def test_real_connector_upload_base64_and_file_activity(self):
+        uploaded = []
+        application = web.Application()
+
+        async def upload(incoming):
+            uploaded.append(await incoming.json())
+            return web.json_response({"id": "uploaded-file"})
+
+        application.router.add_post("/v3/conversations/conversation-1/attachments", upload)
+        runner = web.AppRunner(application)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        origin = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        try:
+            async with aiohttp.ClientSession(base_url=origin + "/") as client:
+                document = docx_bytes()
+                context = turn_context()
+                context.activity.conversation = SimpleNamespace(id="conversation-1")
+                context.send_activity = AsyncMock(return_value={"id": "file-message"})
+                context.turn_state["connector"] = SimpleNamespace(client=client, base_uri=origin)
+                result = await send_file_attachment(context, name="result.docx", content_type=DOCX_CONTENT_TYPE, data=document)
+                self.assertEqual(result["id"], "file-message")
+                self.assertEqual(base64.b64decode(uploaded[0]["originalBase64"]), document)
+                attachment = context.send_activity.await_args.args[0].attachments[0]
+                self.assertEqual(attachment.content_url, f"{origin}/v3/attachments/uploaded-file/views/original")
+                self.assertEqual(attachment.content_type, DOCX_CONTENT_TYPE)
+        finally:
+            await runner.cleanup()
 
 
 if __name__ == "__main__":

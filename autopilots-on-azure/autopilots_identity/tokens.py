@@ -50,6 +50,8 @@ class AgentIdentityTokenConfig:
         )
 
     def validate(self, *, require_agent_user: bool = False) -> None:
+        if os.getenv("USE_AGENTIC_AUTH", "").strip().lower() in {"0", "false", "no", "off"}:
+            raise RuntimeError("Agent 365 tool token acquisition is disabled by USE_AGENTIC_AUTH.")
         missing = []
         if not self.tenant_id:
             missing.append("AGENT365_TENANT_ID")

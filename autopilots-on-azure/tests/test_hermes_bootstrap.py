@@ -12,9 +12,79 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtimes" / "herme
 
 import start_hermes
 import runtime_keepalive
+from runtime_identity import AGENT_IDENTITY_ENVIRONMENTS
 
 
 class HermesBootstrapTests(unittest.TestCase):
+    def test_channel_runtime_disables_identity_sidecars_and_removes_persisted_m365_servers(self):
+        inherited = {
+            "mcp_servers": {
+                **{name: {"url": "http://stale-m365/mcp"} for name in start_hermes.WORKIQ_MCP_ENVIRONMENTS},
+                "m365-collaboration": {"url": "http://stale-m365/mcp"},
+                "role-server": {"url": "https://role.example/mcp"},
+            },
+        }
+        stale_urls = {
+            name: "http://stale-m365/mcp"
+            for name in (*start_hermes.WORKIQ_MCP_ENVIRONMENTS.values(), "M365_COLLABORATION_MCP_URL")
+        }
+        for environment in (
+            {},
+            stale_urls,
+            {
+                **stale_urls,
+                **dict.fromkeys(AGENT_IDENTITY_ENVIRONMENTS, "old-agent365-id"),
+                "USE_AGENTIC_AUTH": "false",
+                "AGENT_MCP_SERVERS_JSON": '{"workiq-mail": {}}',
+            },
+        ):
+            with (
+                self.subTest(environment=environment),
+                tempfile.TemporaryDirectory() as directory,
+                patch.dict(os.environ, environment, clear=True),
+                patch.object(start_hermes.subprocess, "Popen") as process,
+            ):
+                home = Path(directory)
+                (home / ".env").write_text(
+                    "\n".join(f"{key}={value}" for key, value in stale_urls.items()) + "\n",
+                    encoding="utf-8",
+                )
+                config = start_hermes.hermes_config(home, inherited)
+                self.assertEqual(config["mcp_servers"], {"role-server": {"url": "https://role.example/mcp"}})
+                environment_file = start_hermes.write_env_file(home).read_text(encoding="utf-8")
+                self.assertNotIn("stale-m365", environment_file)
+                self.assertIn("USE_AGENTIC_AUTH=false", environment_file)
+                self.assertIsNone(start_hermes.start_agent_mcp_proxy())
+                self.assertIsNone(start_hermes.start_m365_collaboration_mcp())
+                process.assert_not_called()
+        self.assertIn("workiq-mail", inherited["mcp_servers"])
+
+    def test_agent365_identity_ids_preserve_m365_runtime_without_an_auth_switch(self):
+        environment = {
+            **dict.fromkeys(AGENT_IDENTITY_ENVIRONMENTS, "agent365-id"),
+            "WORKIQ_MAIL_MCP_URL": "http://127.0.0.1:18081/servers/workiq-mail",
+            "M365_COLLABORATION_MCP_URL": "http://127.0.0.1:18082/mcp",
+            "AGENT_MCP_SERVERS_JSON": '{"workiq-mail": {}}',
+        }
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(start_hermes.subprocess, "Popen") as process,
+        ):
+            home = Path(directory)
+            config = start_hermes.hermes_config(home)
+            self.assertEqual(config["mcp_servers"]["workiq-mail"]["url"], environment["WORKIQ_MAIL_MCP_URL"])
+            self.assertEqual(
+                config["mcp_servers"]["m365-collaboration"]["url"],
+                environment["M365_COLLABORATION_MCP_URL"],
+            )
+            environment_file = start_hermes.write_env_file(home).read_text(encoding="utf-8")
+            self.assertIn("USE_AGENTIC_AUTH=true", environment_file)
+            self.assertIn("WORKIQ_MAIL_MCP_URL=" + environment["WORKIQ_MAIL_MCP_URL"], environment_file)
+            self.assertIs(start_hermes.start_agent_mcp_proxy(), process.return_value)
+            self.assertIs(start_hermes.start_m365_collaboration_mcp(), process.return_value)
+            self.assertEqual(process.call_count, 2)
+
     def test_autopilots_plugin_cannot_be_silently_disabled(self):
         with self.assertRaisesRegex(ValueError, "autopilots plugin must not be disabled"):
             start_hermes.hermes_config(Path("unused-runtime-home"), {"plugins": {"disabled": ["autopilots"]}})
