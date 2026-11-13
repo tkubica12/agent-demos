@@ -7,6 +7,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parent
@@ -17,7 +18,12 @@ def run(command, **kwargs):
     executable = shutil.which(command[0])
     if not executable:
         raise FileNotFoundError(f"Required tool is not installed: {command[0]}")
-    return subprocess.run([executable, *command[1:]], check=True, **kwargs)
+    try:
+        return subprocess.run([executable, *command[1:]], check=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        if error.stderr:
+            print(error.stderr, file=sys.stderr)
+        raise
 
 
 def main():
@@ -57,9 +63,9 @@ def main():
     if args.action == "destroy":
         for suffix in [*[f"agent-{n}" for n in range(1, 7)], "experiments"]:
             result = run(["az", "resource", "list", "--subscription", args.subscription,
-                          "--resource-group", f"rg-{args.prefix}-{suffix}", "--query", "length(@)",
-                          "--output", "tsv"], capture_output=True, text=True)
-            if int(result.stdout.strip()) != 0:
+                          "--resource-group", f"rg-{args.prefix}-{suffix}", "--output", "json"],
+                         capture_output=True, text=True)
+            if json.loads(result.stdout):
                 raise RuntimeError(f"Refusing to delete nonempty {suffix} RG; destroy its owned root first.")
     terraform = ["terraform", f"-chdir={ROOT}"]
     run([*terraform, "init", "-input=false", "-reconfigure",

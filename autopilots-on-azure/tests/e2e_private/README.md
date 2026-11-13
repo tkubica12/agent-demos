@@ -77,6 +77,12 @@ pool defaults to zero; apply `build_pool_instances=1` explicitly for builds and
 return it to zero when idle. Destroy stack roots first,
 then experiment resources, and finally the landing zone. `manage.py destroy`
 refuses nonempty stack/experiment groups; do not bypass that guard.
+App Insights may auto-create an alert outside Terraform ownership. After the
+experiment root is destroyed, inventory its exact RG with `az resource list`.
+If present, delete only
+`<experiment-RG-ID>/providers/Microsoft.AlertsManagement/smartDetectorAlertRules/Failure Anomalies - ai-monitor-<prefix>`
+using `az resource delete --ids "<exact-ID>"`. The live cleanup required this
+one named orphan removal; do not recursively delete a populated landing-zone RG.
 
 ## Browser acceptance
 
