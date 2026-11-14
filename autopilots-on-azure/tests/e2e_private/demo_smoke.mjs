@@ -1,4 +1,4 @@
-// Bounded private DEMO acceptance: auth, preserved personal chat, widget, files, then a separate code probe.
+// Bounded private DEMO acceptance: auth, personal chat, widget, generated MEDIA, and uploaded-file transformation.
 // Env: DEMO_URL, DEMO_ACCESS_CODE, DEMO_OWNER_NAME, DEMO_PERSONAL_CHAT_ID, DEMO_OUT, optional PRIVATE_PLAYWRIGHT_MODULE, DEMO_CHROMIUM_PATH, DEMO_CHROMIUM_ARGS.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -12,7 +12,7 @@ const { chromium, expect } = process.env.PRIVATE_PLAYWRIGHT_MODULE
 const url = process.env.DEMO_URL.replace(/\/$/, "");
 const out = process.env.DEMO_OUT;
 const timeout = 180_000;
-const codeTimeout = 480_000;
+const fileProcessingTimeout = 480_000;
 await mkdir(out, { recursive: true });
 const report = { url, at: new Date().toISOString(), checks: [] };
 const FORBIDDEN_ARG = /^--(ignore-certificate-errors|disable-web-security|allow-running-insecure-content|disable-site-isolation-trials|single-process|no-zygote)/;
@@ -56,22 +56,22 @@ const fill = async (code) => {
   await page.getByLabel("Display name", { exact: true }).fill(process.env.DEMO_OWNER_NAME);
   await page.getByRole("button", { name: "Enter demo", exact: true }).click();
 };
-const steps = new Set((process.env.DEMO_STEPS ?? "anonymous,wrong-code,login,reply,widget,files,code").split(","));
+const steps = new Set((process.env.DEMO_STEPS ?? "anonymous,wrong-code,login,reply,widget,generated-file,files").split(","));
 const shot = (name) => page.screenshot({ path: path.join(out, `${name}.png`) });
 const navigation = await page.goto(url);
 const security = await navigation.securityDetails();
 report.tls = security ? { protocol: security.protocol, issuer: security.issuer } : null;
 report.steps = [...steps];
 let modelFailed = false;
-if (["reply", "widget", "files", "code"].some((step) => steps.has(step)) && !steps.has("login")) {
+if (["reply", "widget", "generated-file", "files"].some((step) => steps.has(step)) && !steps.has("login")) {
   prerequisitesFailed = true;
   report.checks.push({ name: "runner-configuration", status: "fail",
     failure: "Model-triggering steps require the login prerequisite." });
 }
-if (steps.has("code") && !["reply", "widget", "files"].every((step) => steps.has(step))) {
+if (steps.has("files") && !["reply", "widget", "generated-file"].every((step) => steps.has(step))) {
   prerequisitesFailed = true;
   report.checks.push({ name: "runner-configuration", status: "fail",
-    failure: "The code probe must follow the reply, widget, and file steps." });
+    failure: "Uploaded-file transformation must follow the personal-chat reply, widget, and generated-file steps." });
 }
 const prerequisiteCheck = async (name, action) => {
   await check(name, action);
@@ -98,26 +98,31 @@ const sendFromUi = async (text) => {
   await page.getByTestId("composer").locator("textarea").fill(text);
   const isSend = (r) => r.request().method() === "POST" &&
     new URL(r.url()).pathname === `/api/conversations/${personal}/messages`;
-  const requested = page.waitForRequest(isSend);
-  const posted = page.waitForResponse(isSend);
   const record = { clickedAt: new Date().toISOString(), conversationId: personal };
   report.sends = [...(report.sends ?? []), record];
-  await page.getByRole("button", { name: "Send message" }).click();
-  try {
-    const [request, response] = await Promise.all([requested, posted]);
+  const requested = page.waitForRequest(isSend).then((request) => {
     record.requestAt = new Date().toISOString();
     record.requestBody = request.postData();
     record.requestUrl = request.url();
+    return request;
+  });
+  const posted = page.waitForResponse(isSend).then((response) => {
+    record.responseAt = new Date().toISOString();
+    record.status = response.status();
+    return response;
+  });
+  await page.getByRole("button", { name: "Send message" }).click();
+  try {
+    const [, response] = await Promise.all([requested, posted]);
     const responseText = await response.text();
     let body;
     try { body = JSON.parse(responseText); } catch { body = null; }
-    record.responseAt = new Date().toISOString();
-    record.status = response.status();
     record.responseBody = responseText.replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
-    record.messageId = body?.id ?? null;
+    record.messageId = body?.id ?? body?.messageId ?? null;
     record.correlationHeaders = Object.fromEntries(Object.entries(await response.allHeaders())
       .filter(([name]) => /request-id|correlation|traceparent/i.test(name)));
-    assert.equal(response.status(), 201, `Send failed HTTP ${response.status()}; body=${record.responseBody}`);
+    assert.ok([201, 202].includes(response.status()),
+      `Send was not accepted (expected HTTP 201 or 202, got ${response.status()}); body=${record.responseBody}`);
     assert.ok(record.messageId, `Send succeeded without a message ID; body=${record.responseBody}`);
     return body;
   } catch (error) {
@@ -184,6 +189,31 @@ const reply = async (afterId, predicate, waitMs = timeout) => {
     throw enriched;
   }
 };
+const downloadAttachment = async (message, file, name, waitMs = fileProcessingTimeout) => {
+  const fileCard = page.locator(`[data-message-id="${message.id}"] [data-testid="file-card"]`)
+    .filter({ hasText: name });
+  await expect(fileCard).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: waitMs }),
+    fileCard.locator(".file-card-name").click(),
+  ]);
+  assert.equal(await download.failure(), null);
+  const destination = path.join(out, name);
+  await download.saveAs(destination);
+  const bytes = await readFile(destination);
+  const apiBytes = await api(`/files/${file.id}/content`, "GET", undefined, true);
+  assert.deepEqual(apiBytes, bytes, "The browser download differs from the authenticated file content.");
+  return { bytes, destination };
+};
+report.nativeEvidenceTargets = [];
+const saveNativeTarget = async (step, nonce, target) => {
+  const targetPath = path.join(out, `native-target-${step}-${nonce}.json`);
+  await writeFile(targetPath, JSON.stringify(target, null, 2));
+  report.nativeEvidenceTargets.push({ step, path: targetPath, target });
+  return targetPath;
+};
+const blockedPattern = /\b(?:tool|tools|terminal|python|local file|input file)\b.{0,100}\b(?:blocked|disabled|unavailable|not accessible|not available|not allowed|not permitted|denied|cannot|can't|couldn't|could not|unable|not able|requires? approval|approval (?:required|denied|not granted|expired|timed? out)|permission denied|timed? out|expired)\b|\b(?:blocked|disabled|unavailable|not accessible|not available|not allowed|not permitted|denied|cannot|can't|couldn't|could not|unable|not able|requires? approval|approval (?:required|denied|not granted|expired|timed? out)|permission denied|timed? out|expired)\b.{0,100}\b(?:tool|tools|terminal|python|local file|input file)\b/i;
+const routeRefusalPattern = /(?:no local (?:input )?(?:file )?path|no (?:supported )?attachment route|original bytes? (?:are )?not (?:available|accessible)|not (?:exposed|provided) to .*terminal|only (?:the )?(?:extracted )?text|cannot access|can't access|could not access|unable to access|not available to .*terminal|terminal .*unavailable|file tools? (?:are )?(?:blocked|disabled)|script (?:is )?(?:blocked|disabled)|requires? approval|approval (?:denied|expired|timed? out)|permission denied|timed? out|expired)/i;
 if (steps.has("reply")) await modelCheck("real-agent-reply", async () => {
   const nonce = randomUUID().replaceAll("-", ""), a = randomInt(10, 30), b = randomInt(10, 30);
   const sent = await sendFromUi(
@@ -240,101 +270,199 @@ if (steps.has("widget")) await modelCheck("widget-input-submit-followup", async 
   report.widget = { request: sent.id, widget: received.id, followup: followup.id };
   await page.screenshot({ path: path.join(out, "widget.png") });
 });
-if (steps.has("files")) await modelCheck("upload-and-download", async () => {
-  const code = randomUUID().replaceAll("-", "");
-  const bytes = Buffer.from(`Verification code: ${code}\n`);
-  const name = `demo-${code.slice(0, 8)}.txt`;
-  await page.getByLabel("Upload attachment").setInputFiles({ name, mimeType: "text/plain", buffer: bytes });
-  await expect(page.locator(".pending-attachments")).toContainText(name);
-  const sent = await sendFromUi("Read the attached document and tell me its verification code.");
-  const received = await reply(sent.id, (m) => m.text.includes(code));
-  const card = page.locator(`[data-message-id="${sent.id}"] [data-testid="file-card"]`).filter({ hasText: name });
-  await expect(card).toBeVisible();
-  const [download] = await Promise.all([page.waitForEvent("download"), card.locator(".file-card-name").click()]);
-  const hash = (b) => createHash("sha256").update(b).digest("hex");
-  const downloaded = await readFile(await download.path());
-  report.files = { name, uploadedSha256: hash(bytes), downloadedSha256: hash(downloaded), reply: received.id };
-  assert.equal(hash(downloaded), hash(bytes));
-  await shot("files");
-});
-if (steps.has("code")) {
-  if (prerequisitesFailed || modelFailed) {
-    report.codeExecution = { status: "not_run", reason: "An earlier prerequisite or UI step failed." };
-  } else {
-    const startedAt = new Date().toISOString();
-    const input = randomUUID().replaceAll("-", "");
-    const nonce = randomUUID().replaceAll("-", "");
-    const expectedHash = createHash("sha256").update(input, "utf8").digest("hex");
-    const blockedPattern = /\b(?:tool|tools|execute_code|terminal|python)\b.{0,100}\b(?:blocked|disabled|unavailable|not allowed|not permitted|denied|cannot|can't|couldn't|could not|unable|not able|requires? approval|approval (?:required|denied|not granted|expired|timed? out)|permission denied|timed? out|expired)\b|\b(?:blocked|disabled|unavailable|not allowed|not permitted|denied|cannot|can't|couldn't|could not|unable|not able|requires? approval|approval (?:required|denied|not granted|expired|timed? out)|permission denied|timed? out|expired)\b.{0,100}\b(?:tool|tools|execute_code|terminal|python)\b/i;
-    const hashPattern = /\b[0-9a-f]{64}\b/i;
-    let response;
-    const trace = {
-      status: "pending",
-      path: null,
-      approvalMode: "smart",
-      requiredPathValues: ["execute_code", "terminal", "approved_isolated_backend"],
+const nativeTrace = { status: "pending", path: null, requiredPath: "terminal", approvalMode: "smart" };
+report.generatedFile = { status: "not_run", reason: "Generated-file step not selected." };
+report.fileProcessing = { status: "not_run", reason: "Uploaded-file transformation step not selected." };
+report.codeExecution = { status: "not_run", nativeTrace };
+if (steps.has("generated-file")) await modelCheck("terminal-generated-file-media", async () => {
+  const nonce = randomUUID().replaceAll("-", "");
+  const outputName = `acceptance-generated-${nonce.slice(0, 8)}.txt`;
+  const expectedText = `Generated by Hermes terminal. Verification code: ${nonce}.`;
+  const expectedBytes = Buffer.from(expectedText, "utf8");
+  let sent;
+  let received;
+  let responseText = "";
+  let target;
+  let targetPath;
+  try {
+    const requestedAt = Date.now() / 1000;
+    sent = await sendFromUi(
+      `Use the real terminal tool to create a fresh UTF-8 TXT file named ${outputName} with exactly this content: ${expectedText} ` +
+      `Return that file as an attachment through the production MEDIA contract, MEDIA:"<absolute-file-path>". ` +
+      `Do not put the content only in your reply, use a link, or use a fixture or pre-existing file.`);
+    received = await reply(sent.id, (message) =>
+      (Array.isArray(message.attachments) && message.attachments.length > 0) ||
+      routeRefusalPattern.test(String(message.text)), fileProcessingTimeout);
+    responseText = String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+    const outputFile = received.attachments?.find((item) => item.name === outputName);
+    assert.ok(outputFile, `The reply did not contain the required MEDIA attachment ${outputName}.`);
+    const { bytes } = await downloadAttachment(received, outputFile, outputName);
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    target = {
+      conversationId: personal, requestActivityId: sent.id, replyActivityId: received.id,
+      filename: outputFile.name, size: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"), requestedAt,
     };
+    targetPath = await saveNativeTarget("generated", nonce, target);
+    assert.equal(decoded, expectedText, "The generated TXT does not exactly match the requested content.");
+    report.generatedFile = {
+      status: "pass", outputName, outputFileId: outputFile.id,
+      requestMessageId: sent.id, responseMessageId: received.id,
+      responseAt: received.createdAt, nonce, sha256: target.sha256,
+      nativeEvidenceStatus: "pending",
+      nativeEvidenceTarget: target, nativeEvidenceTargetPath: targetPath,
+    };
+    report.codeExecution = {
+      status: "not_proven", reason: "The downloaded content matches; successful correlated native terminal and Foundry evidence are still required.",
+      nativeTrace,
+    };
+    await shot("generated-file");
+  } catch (error) {
+    const failure = String(error.message).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+    report.generatedFile = {
+      status: "fail", reason: failure,
+      requestMessageId: sent?.id ?? null, responseMessageId: received?.id ?? null,
+      responseText, nativeEvidenceTarget: target ?? null, nativeEvidenceTargetPath: targetPath ?? null,
+      observedMessages: error.observedMessages ?? [],
+    };
+    report.codeExecution = {
+      status: blockedPattern.test(failure) || routeRefusalPattern.test(responseText) ||
+        failure.includes("Timed out waiting for condition.") ? "fail" : "not_proven",
+      reason: failure, nativeTrace,
+    };
+    throw error;
+  }
+});
+if (steps.has("files")) {
+  if (prerequisitesFailed || modelFailed) {
+    report.fileProcessing = { status: "not_run", reason: "An earlier prerequisite or model-triggering step failed." };
+  } else {
+    const nonce = randomUUID().replaceAll("-", "");
+    const verificationCode = `${nonce}-${randomUUID().replaceAll("-", "")}`;
+    const sourceName = `acceptance-source-${nonce.slice(0, 8)}.txt`;
+    const outputName = `acceptance-uppercase-${nonce.slice(0, 8)}.txt`;
+    const sourceText = `Private acceptance document. Verification code: ${verificationCode}.`;
+    const sourceBytes = Buffer.from(sourceText, "utf8");
+    const expectedBytes = Buffer.from(sourceText.toUpperCase(), "utf8");
+    let sent;
+    let received;
+    let uploadedFile;
+    let downloaded;
+    let responseText = "";
+    let sourceHashVerified = false;
+    let target;
+    let targetPath;
     try {
-      const sent = await sendFromUi(
-        `For this code-execution check, use a Python execution tool (not mental calculation) to compute SHA-256 of the UTF-8 string below. ` +
-        `Run: import hashlib; print(hashlib.sha256(b"${input}").hexdigest()) ` +
-        `Return the exact lowercase 64-character hash and nonce ${nonce}.`);
-      const remainingWait = Math.max(0, codeTimeout - (Date.now() - Date.parse(startedAt)));
-      response = await reply(sent.id, (message) => {
-        const text = String(message.text);
-        return blockedPattern.test(text) || hashPattern.test(text);
-      }, remainingWait);
-      const responseText = String(response.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
-      const blocked = blockedPattern.test(responseText);
-      const hashes = [...responseText.matchAll(/\b[0-9a-f]{64}\b/gi)].map(([value]) => value);
-      const hashMatched = responseText.includes(expectedHash);
-      report.codeExecution = {
-        status: blocked || !hashMatched ? "fail" : "not_proven",
-        reason: blocked ? "The agent reported blocked or expired tool execution."
-          : hashMatched ? "Hash matched; a correlated native execution trace is still required."
-            : "The returned hash did not match the locally computed SHA-256.",
-        requestMessageId: sent.id,
-        requestAt: report.sends.find((item) => item.messageId === sent.id)?.requestAt ?? null,
-        responseMessageId: response.id,
-        conversationId: personal,
-        startedAt,
-        responseAt: response.createdAt,
-        nonce,
-        input,
-        expectedHash,
-        returnedHashes: hashes,
-        hashMatched,
-        responseText,
-        nativeTrace: trace,
+      await page.getByLabel("Upload attachment").setInputFiles({
+        name: sourceName, mimeType: "text/plain", buffer: sourceBytes,
+      });
+      await expect(page.locator(".pending-attachments")).toContainText(sourceName);
+      const requestedAt = Date.now() / 1000;
+      sent = await sendFromUi(
+        `Use the actual uploaded file ${sourceName} as the input. Resolve its original bytes/path only through the real production attachment or file-tool route available to this Hermes turn; do not assume a path. Run a Python script with your real terminal tool to read the original local file, uppercase its complete UTF-8 text, and write a distinct UTF-8 TXT named ${outputName}. ` +
+        `Return the new file as a downloadable chat attachment through the supported MEDIA file-output contract. Do not reconstruct or copy the input from prompt text, return transformed text inline, reuse the source file, or return a link/code block. If the production route does not expose original bytes to the local script, say so plainly and do not fabricate a result. In your reply include exactly "Input SHA-256: <64 lowercase hex characters>" computed by Python reading the original file. The source contains a fresh verification code; preserve it exactly except for uppercasing.`);
+      uploadedFile = sent.attachments?.find((item) => item.name === sourceName);
+      assert.ok(uploadedFile, `The sent message did not contain the uploaded source file ${sourceName}.`);
+      const uploadedBytes = await api(`/files/${uploadedFile.id}/content`, "GET", undefined, true);
+      assert.deepEqual(uploadedBytes, sourceBytes, "The UI-uploaded source bytes differ from the fixture.");
+      received = await reply(sent.id, (message) =>
+        (Array.isArray(message.attachments) && message.attachments.length > 0) ||
+        routeRefusalPattern.test(String(message.text)), fileProcessingTimeout);
+      responseText = String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+      const outputFile = received.attachments?.find((item) => item.name === outputName);
+      if (!outputFile) {
+        const blocked = blockedPattern.test(responseText) || routeRefusalPattern.test(responseText);
+        report.fileProcessing = {
+          status: "fail",
+          reason: blocked ? "The agent reported that the uploaded file is unavailable to the local script."
+            : "The agent reply did not contain the required distinct transformed TXT attachment.",
+          requestMessageId: sent.id, responseMessageId: received.id, responseText,
+          sourceName, outputName, sourceSha256: createHash("sha256").update(sourceBytes).digest("hex"),
+        };
+        report.codeExecution = {
+          status: blocked ? "fail" : "not_proven",
+          reason: blocked ? "Local script execution was blocked or the uploaded file was not locally accessible."
+            : "Native execution evidence is required to prove the transformation path.",
+          nativeTrace,
+        };
+        throw new Error(report.fileProcessing.reason);
+      }
+      const sourceShaMatch = responseText.match(/\bInput SHA-256:\s*([0-9a-f]{64})\b/);
+      const sourceHash = createHash("sha256").update(sourceBytes).digest("hex");
+      sourceHashVerified = sourceShaMatch?.[1] === sourceHash;
+      assert.notEqual(outputFile.id, uploadedFile.id, "The transformed artifact must be distinct from the uploaded source.");
+      const { bytes } = await downloadAttachment(received, outputFile, outputName);
+      downloaded = bytes;
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(downloaded);
+      target = {
+        conversationId: personal, requestActivityId: sent.id, replyActivityId: received.id,
+        filename: outputFile.name, size: downloaded.length,
+        sha256: createHash("sha256").update(downloaded).digest("hex"), requestedAt,
       };
-      await shot("code-execution");
+      targetPath = await saveNativeTarget("transformed", nonce, target);
+      assert.ok(sourceHashVerified,
+        "The agent did not report the exact lowercase SHA-256 computed by Python from the original uploaded file.");
+      assert.equal(decoded, expectedBytes.toString("utf8"),
+        "The downloaded artifact does not exactly match the locally computed uppercase fixture.");
+      report.fileProcessing = {
+        status: "pass",
+        sourceName, sourceFileId: uploadedFile.id, sourceSha256: sourceHash,
+        outputName: outputFile.name, outputFileId: outputFile.id,
+        outputSha256: target.sha256,
+        requestMessageId: sent.id, responseMessageId: received.id,
+        responseAt: received.createdAt, nonce, sourceHashVerified,
+        nativeEvidenceStatus: "pending",
+        nativeEvidenceTarget: target, nativeEvidenceTargetPath: targetPath,
+      };
+      report.codeExecution = {
+        status: "not_proven",
+        reason: "Both file outputs match their byte contracts; exact correlated native terminal and Foundry evidence is still required.",
+        nativeTrace,
+      };
+      await shot("uploaded-transform");
     } catch (error) {
-      report.codeExecution = {
-        status: "fail",
-        reason: error.message.includes("Timed out waiting for condition.")
-          ? `No hash or blocked-tools response within ${codeTimeout / 1000} seconds.`
-          : String(error.message).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]"),
-        startedAt,
-        responseMessageId: response?.id ?? null,
+      const failure = String(error.message).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+      report.fileProcessing ??= {
+        status: "fail", reason: failure, sourceName, outputName,
+        requestMessageId: sent?.id ?? null, responseMessageId: received?.id ?? null,
+        responseText, sourceSha256: createHash("sha256").update(sourceBytes).digest("hex"),
+        sourceHashVerified, outputSha256: downloaded ? createHash("sha256").update(downloaded).digest("hex") : null,
+        nativeEvidenceTarget: target ?? null, nativeEvidenceTargetPath: targetPath ?? null,
         observedMessages: error.observedMessages ?? [],
-        conversationId: personal,
-        nonce,
-        input,
-        expectedHash,
-        nativeTrace: trace,
       };
-      await shot("failure-code-execution");
+      const codeFailed = blockedPattern.test(failure) || routeRefusalPattern.test(responseText) ||
+        failure.includes("Timed out waiting for condition.") ||
+        failure.includes("exact lowercase SHA-256 computed by Python") ||
+        failure.includes("does not exactly match the locally computed uppercase fixture");
+      report.codeExecution = {
+        status: codeFailed ? "fail" : "not_proven",
+        reason: failure, nativeTrace,
+      };
+      modelFailed = true;
+      await shot("failure-uploaded-transform");
     }
   }
 } else {
-  report.codeExecution = { status: "not_run", reason: "Code probe not selected." };
+  report.fileProcessing = { status: "not_run", reason: "Uploaded-file transformation step not selected." };
 }
-report.uiAcceptance = report.checks.every((item) => item.status === "pass") ? "pass" : "fail";
+if (!steps.has("generated-file")) report.generatedFile = { status: "not_run", reason: "Generated-file step not selected." };
+if (!steps.has("files")) report.fileProcessing = { status: "not_run", reason: "Uploaded-file transformation step not selected." };
+if (!steps.has("generated-file") && !steps.has("files")) report.codeExecution = { status: "not_run", nativeTrace: { status: "not_checked", path: null } };
+const uiChecks = report.checks.filter((item) => item.name !== "terminal-generated-file-media");
+report.uiAcceptance = uiChecks.length === 0 ? "not_run"
+  : uiChecks.every((item) => item.status === "pass") ? "pass" : "fail";
+report.overallStatus = [report.uiAcceptance, report.generatedFile.status, report.fileProcessing.status, report.codeExecution.status]
+  .includes("fail") ? "fail"
+  : [report.uiAcceptance, report.generatedFile.status, report.fileProcessing.status, report.codeExecution.status]
+    .every((status) => status === "pass") ? "pass" : "not_proven";
 await writeFile(path.join(out, "demo-smoke.json"), JSON.stringify(report, null, 2));
 await browser.close();
 console.log(JSON.stringify({
   uiAcceptance: report.uiAcceptance,
+  generatedFile: report.generatedFile.status,
+  fileProcessing: report.fileProcessing.status,
   codeExecution: report.codeExecution.status,
+  overallStatus: report.overallStatus,
   checks: report.checks,
 }));
-process.exit(report.uiAcceptance === "pass" ? 0 : 1);
+process.exit(report.overallStatus === "pass" ? 0 : 1);
