@@ -5,8 +5,12 @@ import io
 import inspect
 import json
 import os
+import tempfile
+import time
 import unittest
 import urllib.error
+from contextlib import contextmanager
+from pathlib import Path
 from urllib.parse import quote
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -16,6 +20,7 @@ import httpx
 import bridge.app as bridge_app
 import bridge.runtime.hermes as hermes_runtime
 import scripts.sandbox_runtime as sandbox_runtime
+from bridge.durable_transport import Journal
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
 from bridge.generated_files import GeneratedFileError, SCOPE_HEADER, RUN_HEADER, conversation_file_scope
 from bridge.runtime.hermes import (
@@ -420,6 +425,138 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(calls[1]["method"], "POST")
         self.assertEqual(calls[1]["url"], "https://hermes.example/api/sessions")
         self.assertEqual(calls[1]["json"]["id"], transcript_id)
+
+    def test_native_run_moves_past_deleted_session_ids_to_next_generation(self):
+        base_id = "teams_personal:abc:20261114T10"
+        adapter, requests = self.runtime_adapter(
+            self.deleted_session_handler({base_id, f"{base_id}:new:g1"}),
+        )
+        request = AgentRequest("hello", "conversation-1", "user-1", "teams_personal", True)
+        with patch.object(hermes_runtime, "_hermes_transcript_id", return_value=base_id):
+            result = asyncio.run(adapter._native_run("https://hermes.example", "api-key", request))
+
+        live_id = f"{base_id}:new:g2"
+        self.assertEqual(result["output"], "Answer.")
+        self.assertEqual(self.created_sessions(requests), [base_id, f"{base_id}:new:g1", live_id])
+        [admission] = self.admitted_runs(requests)
+        self.assertEqual(json.loads(admission.content)["session_id"], live_id)
+
+    def test_existing_session_conflict_keeps_the_derived_session_id(self):
+        base_id = "teams_personal:abc:20261114T10"
+
+        def handle(outgoing):
+            if outgoing.method == "POST" and outgoing.url.path == "/api/sessions":
+                return httpx.Response(409, json={"error": {"code": "session_exists", "message": "exists"}})
+            return self.native_session_handler(outgoing)
+
+        adapter, requests = self.runtime_adapter(handle)
+        request = AgentRequest("hello", "conversation-1", "user-1", "teams_personal", True)
+        live_id = asyncio.run(adapter._ensure_live_session("https://hermes.example", "api-key", request, base_id))
+
+        self.assertEqual(live_id, base_id)
+        self.assertEqual(self.created_sessions(requests), [base_id])
+
+    def test_durable_admission_records_new_generation_before_admitting(self):
+        base_id = "teams_personal:abc:20261114T10"
+        adapter, requests = self.runtime_adapter(self.deleted_session_handler({base_id}))
+        request = AgentRequest("hello", "conversation-1", "user-1", "teams_personal", True)
+        with self.durable_delivery(base_id) as (journal, checkpoints):
+            asyncio.run(adapter._native_run("https://hermes.example", "api-key", request))
+
+        live_id = f"{base_id}:new:g1"
+        self.assertEqual(checkpoints[0], (live_id, ""))
+        self.assertEqual(checkpoints[1], (live_id, hashlib.sha256(b"api-key").hexdigest()))
+        self.assertEqual(journal.get("worker", "delivery-1")["native_run_id"], "run-test")
+        [admission] = self.admitted_runs(requests)
+        self.assertEqual(json.loads(admission.content)["session_id"], live_id)
+        self.assertEqual(admission.headers["Idempotency-Key"], "autopilots-delivery-1")
+
+    def test_recorded_admission_never_moves_to_another_session_generation(self):
+        base_id = "teams_personal:abc:20261114T10"
+        request = AgentRequest("hello", "conversation-1", "user-1", "teams_personal", True)
+        scope = hashlib.sha256(b"api-key").hexdigest()
+        for deleted, run_id in (({base_id}, ""), ({base_id}, "run-test"), (set(), "")):
+            with self.subTest(deleted=bool(deleted), run_id=run_id):
+                adapter, requests = self.runtime_adapter(self.deleted_session_handler(deleted))
+                with self.durable_delivery(
+                    base_id, native_scope=scope, admission_at=time.time(), native_run_id=run_id,
+                ) as (journal, _checkpoints):
+                    if deleted and not run_id:
+                        with self.assertRaisesRegex(
+                            hermes_runtime.NativeRunInterventionError, "uncertain native admission",
+                        ):
+                            asyncio.run(adapter._native_run("https://hermes.example", "api-key", request))
+                    else:
+                        result = asyncio.run(adapter._native_run("https://hermes.example", "api-key", request))
+                        self.assertEqual(result["output"], "Answer.")
+                    self.assertEqual(journal.load_state("native-transcript:delivery-1"), base_id)
+                self.assertEqual(self.created_sessions(requests), [base_id])
+                admissions = self.admitted_runs(requests)
+                if deleted:
+                    self.assertEqual(admissions, [])
+                else:
+                    [admission] = admissions
+                    self.assertEqual(json.loads(admission.content)["session_id"], base_id)
+                    self.assertEqual(admission.headers["Idempotency-Key"], "autopilots-delivery-1")
+                    self.assertEqual(journal.get("worker", "delivery-1")["native_run_id"], "run-test")
+
+    def deleted_session_handler(self, deleted: set[str]):
+        def handle(outgoing):
+            if outgoing.method == "POST" and outgoing.url.path == "/api/sessions":
+                if json.loads(outgoing.content)["id"] in deleted:
+                    return httpx.Response(409, json={"error": {
+                        "code": "session_deleted", "message": "Session was deleted; its id cannot be reused",
+                    }})
+            return self.native_session_handler(outgoing)
+
+        return handle
+
+    @staticmethod
+    def created_sessions(requests: list[httpx.Request]) -> list[str]:
+        return [
+            json.loads(call.content)["id"]
+            for call in requests
+            if call.method == "POST" and call.url.path == "/api/sessions"
+        ]
+
+    @staticmethod
+    def admitted_runs(requests: list[httpx.Request]) -> list[httpx.Request]:
+        return [call for call in requests if call.method == "POST" and call.url.path == "/v1/runs"]
+
+    @contextmanager
+    def durable_delivery(self, transcript_id: str, **receipt):
+        from bridge import durable_transport, event_worker
+
+        directory = tempfile.TemporaryDirectory(dir=Path.cwd())
+        self.addCleanup(directory.cleanup)
+        journal = Journal(Path(directory.name) / "journal.db")
+        journal.admit(
+            "worker", {"MessageId": "delivery-1", "LockToken": "lease", "Properties": {"DeliveryCount": 1}},
+            {"type": "test"}, "connection",
+        )
+        journal.save_state("native-transcript:delivery-1", transcript_id)
+        if receipt:
+            journal.update("worker", "delivery-1", **receipt)
+        checkpoints: list[tuple[str, str]] = []
+
+        async def record_checkpoint():
+            checkpoints.append((
+                journal.load_state("native-transcript:delivery-1"),
+                journal.get("worker", "delivery-1")["native_scope"],
+            ))
+
+        identity = durable_transport.delivery_identity.set("delivery-1")
+        queue = durable_transport.delivery_queue.set("worker")
+        try:
+            with (
+                patch.object(durable_transport, "enabled", return_value=True),
+                patch.object(durable_transport, "journal", return_value=journal),
+                patch.object(event_worker, "checkpoint", record_checkpoint),
+            ):
+                yield journal, checkpoints
+        finally:
+            durable_transport.delivery_queue.reset(queue)
+            durable_transport.delivery_identity.reset(identity)
 
     def test_hermes_selects_latest_reset_generation(self):
         base_id = "teams_personal:abc:20260727T12"

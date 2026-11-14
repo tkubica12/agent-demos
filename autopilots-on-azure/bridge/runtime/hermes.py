@@ -56,6 +56,21 @@ class NativeRunInterventionError(RuntimeError):
     status = "uncertain"
 
 
+class SessionRetiredError(RuntimeError):
+    """Hermes refused to recreate a deleted session id; deleted ids stay retired for good."""
+
+
+SESSION_GENERATION_LIMIT = 32
+
+
+def _error_code(response: httpx.Response) -> str:
+    try:
+        error = response.json().get("error")
+    except (ValueError, AttributeError):
+        return ""
+    return str(error.get("code") or "") if isinstance(error, dict) else ""
+
+
 def _collective_approval_private_key() -> Ed25519PrivateKey:
     value = _env_required("COLLECTIVE_LEARNING_APPROVAL_PRIVATE_KEY")
     try:
@@ -1048,12 +1063,40 @@ class HermesRuntimeAdapter:
                 from bridge.event_worker import checkpoint
 
                 await checkpoint()
-        await self._ensure_session(
-            base_url,
-            api_key,
-            request,
-            transcript_id,
-        )
+        receipt = None
+        queue = ""
+        native_scope = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        if correlation and durable_transport.enabled():
+            from bridge.event_worker import checkpoint
+
+            queue = durable_transport.delivery_queue.get()
+            if not queue:
+                raise NativeRunInterventionError("Durable native admission has no owning work queue.")
+            receipt = durable_transport.journal().get(queue, correlation)
+            if receipt["native_scope"] and (
+                receipt["native_scope"] != native_scope
+                or (not receipt["native_run_id"] and time.time() - receipt["admission_at"] >= 86400)
+            ):
+                raise NativeRunInterventionError(
+                    "Native admission crossed credential rotation or idempotency expiry; inspect its outcome."
+                )
+        if receipt is not None and receipt["native_scope"]:
+            # A recorded admission may already have reached Hermes under this session id and
+            # idempotency key, so a retry keeps that identity instead of moving to a new generation.
+            try:
+                await self._ensure_session(base_url, api_key, request, transcript_id)
+            except SessionRetiredError as error:
+                if not receipt["native_run_id"]:
+                    raise NativeRunInterventionError(
+                        "The Hermes session of an uncertain native admission was deleted; inspect its outcome."
+                    ) from error
+        else:
+            live_id = await self._ensure_live_session(base_url, api_key, request, transcript_id)
+            if live_id != transcript_id:
+                transcript_id = live_id
+                if receipt is not None:
+                    durable_transport.journal().save_state(snapshot_key, transcript_id)
+                    await checkpoint()
         delivery_reference = request.metadata.get("deliveryReference")
         if (
             _configured_env("USER_SCHEDULING_ENABLED") == "true"
@@ -1069,27 +1112,11 @@ class HermesRuntimeAdapter:
             "instructions": bridge_instructions(request),
             "session_id": transcript_id,
         }
-        receipt = None
-        native_scope = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-        if correlation and durable_transport.enabled():
-            queue = durable_transport.delivery_queue.get()
-            if not queue:
-                raise NativeRunInterventionError("Durable native admission has no owning work queue.")
-            receipt = durable_transport.journal().get(queue, correlation)
-            if receipt["native_scope"] and (
-                receipt["native_scope"] != native_scope
-                or (not receipt["native_run_id"] and time.time() - receipt["admission_at"] >= 86400)
-            ):
-                raise NativeRunInterventionError(
-                    "Native admission crossed credential rotation or idempotency expiry; inspect its outcome."
-                )
-            if not receipt["native_scope"]:
-                durable_transport.journal().update(
-                    queue, correlation, native_scope=native_scope, admission_at=time.time(),
-                )
-                from bridge.event_worker import checkpoint
-
-                await checkpoint()
+        if receipt is not None and not receipt["native_scope"]:
+            durable_transport.journal().update(
+                queue, correlation, native_scope=native_scope, admission_at=time.time(),
+            )
+            await checkpoint()
         run_id = receipt["native_run_id"] if receipt else ""
         key = "autopilots-" + (correlation or uuid.uuid4().hex)
         async with AsyncExitStack() as resources:
@@ -1186,9 +1213,32 @@ class HermesRuntimeAdapter:
                     ),
                 },
             )
+            if response.status_code == 409 and _error_code(response) == "session_deleted":
+                raise SessionRetiredError(f"Hermes session {transcript_id} was deleted and cannot be reused.")
             if response.status_code not in {201, 409}:
                 response.raise_for_status()
             return 0
+
+    async def _ensure_live_session(
+        self,
+        base_url: str,
+        api_key: str,
+        request: AgentRequest,
+        transcript_id: str,
+    ) -> str:
+        """Return the first live generation of a derived session id, creating it when missing.
+
+        Mirrors Hermes ``first_generation`` for clients that name sessions explicitly: a deleted id
+        moves to ``<id>:new:g<n>``, which ``_resolve_transcript_id`` follows on later turns.
+        """
+        for generation in range(SESSION_GENERATION_LIMIT + 1):
+            candidate = f"{transcript_id}:new:g{generation}" if generation else transcript_id
+            try:
+                await self._ensure_session(base_url, api_key, request, candidate)
+                return candidate
+            except SessionRetiredError:
+                continue
+        raise NativeRunFailedError(f"Every derived Hermes session generation of {transcript_id} was deleted.")
 
     async def _resolve_transcript_id(
         self,
