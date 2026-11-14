@@ -1,5 +1,5 @@
-// Minimal DEMO smoke: wrong-code rejection, login, real agent reply, upload/download.
-// Env: DEMO_URL, DEMO_ACCESS_CODE, DEMO_OWNER_NAME, DEMO_OUT (dir), optional PRIVATE_PLAYWRIGHT_MODULE, DEMO_CHROMIUM_PATH, DEMO_CHROMIUM_ARGS (JSON array).
+// Bounded private DEMO acceptance: auth, preserved personal chat, widget, files, then a separate code probe.
+// Env: DEMO_URL, DEMO_ACCESS_CODE, DEMO_OWNER_NAME, DEMO_PERSONAL_CHAT_ID, DEMO_OUT, optional PRIVATE_PLAYWRIGHT_MODULE, DEMO_CHROMIUM_PATH, DEMO_CHROMIUM_ARGS.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash, randomUUID, randomInt } from "node:crypto";
@@ -12,6 +12,7 @@ const { chromium, expect } = process.env.PRIVATE_PLAYWRIGHT_MODULE
 const url = process.env.DEMO_URL.replace(/\/$/, "");
 const out = process.env.DEMO_OUT;
 const timeout = 180_000;
+const codeTimeout = 480_000;
 await mkdir(out, { recursive: true });
 const report = { url, at: new Date().toISOString(), checks: [] };
 const FORBIDDEN_ARG = /^--(ignore-certificate-errors|disable-web-security|allow-running-insecure-content|disable-site-isolation-trials|single-process|no-zygote)/;
@@ -37,8 +38,8 @@ const check = async (name, action) => {
     console.error(`${name}: ${text}`);
   }
 };
-async function eventually(action) {
-  const end = Date.now() + timeout;
+async function eventually(action, waitMs = timeout) {
+  const end = Date.now() + waitMs;
   while (Date.now() < end) { const v = await action(); if (v) return v; await new Promise((r) => setTimeout(r, 2000)); }
   throw new Error("Timed out waiting for condition.");
 }
@@ -55,17 +56,22 @@ const fill = async (code) => {
   await page.getByLabel("Display name", { exact: true }).fill(process.env.DEMO_OWNER_NAME);
   await page.getByRole("button", { name: "Enter demo", exact: true }).click();
 };
-const steps = new Set((process.env.DEMO_STEPS ?? "anonymous,wrong-code,login,reply,widget,files").split(","));
+const steps = new Set((process.env.DEMO_STEPS ?? "anonymous,wrong-code,login,reply,widget,files,code").split(","));
 const shot = (name) => page.screenshot({ path: path.join(out, `${name}.png`) });
 const navigation = await page.goto(url);
 const security = await navigation.securityDetails();
 report.tls = security ? { protocol: security.protocol, issuer: security.issuer } : null;
 report.steps = [...steps];
 let modelFailed = false;
-if (["reply", "widget", "files"].some((step) => steps.has(step)) && !steps.has("login")) {
+if (["reply", "widget", "files", "code"].some((step) => steps.has(step)) && !steps.has("login")) {
   prerequisitesFailed = true;
   report.checks.push({ name: "runner-configuration", status: "fail",
     failure: "Model-triggering steps require the login prerequisite." });
+}
+if (steps.has("code") && !["reply", "widget", "files"].every((step) => steps.has(step))) {
+  prerequisitesFailed = true;
+  report.checks.push({ name: "runner-configuration", status: "fail",
+    failure: "The code probe must follow the reply, widget, and file steps." });
 }
 const prerequisiteCheck = async (name, action) => {
   await check(name, action);
@@ -159,7 +165,7 @@ if (steps.has("login")) await prerequisiteCheck("demo-login", async () => {
   report.agent = { id: agent.id, displayName: agent.displayName };
   await shot("after-login");
 });
-const reply = async (afterId, predicate) => {
+const reply = async (afterId, predicate, waitMs = timeout) => {
   let last = [];
   try {
     return await eventually(async () => {
@@ -167,21 +173,25 @@ const reply = async (afterId, predicate) => {
       const index = messages.findIndex((message) => message.id === afterId);
       last = index >= 0 ? messages.slice(index + 1) : [];
       return index >= 0 && last.find((m) => m.author.id === agent.id && predicate(m));
-    });
+    }, waitMs);
   } catch (error) {
-    const seen = last.map((m) => `${m.author.id === agent.id ? "agent" : "user"}/${m.textFormat}: ${String(m.text).slice(0, 160)}`);
-    throw new Error(`${error.message} Messages after request: ${JSON.stringify(seen)}`);
+    const seen = last.map((m) => ({
+      id: m.id, authorId: m.author.id, createdAt: m.createdAt, textFormat: m.textFormat,
+      text: String(m.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]").slice(0, 500),
+    }));
+    const enriched = new Error(`${error.message} Messages after request: ${JSON.stringify(seen)}`);
+    enriched.observedMessages = seen;
+    throw enriched;
   }
 };
 if (steps.has("reply")) await modelCheck("real-agent-reply", async () => {
-  const nonce = randomUUID().replaceAll("-", ""), a = randomInt(100, 999), b = randomInt(100, 999);
-  const sent = await sendFromUi(`Reply with the code ${nonce} and the numeric sum of ${a} + ${b}.`);
+  const nonce = randomUUID().replaceAll("-", ""), a = randomInt(10, 30), b = randomInt(10, 30);
+  const sent = await sendFromUi(
+    `Reply with the code ${nonce} and the numeric sum of ${a} + ${b}. Compute the sum directly without using any tools.`);
   const received = await reply(sent.id, (m) => m.text.includes(nonce));
   await expect(page.locator(`[data-message-id="${received.id}"]`)).toContainText(nonce);
   const responseText = String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
   const sumVerified = new RegExp(`(?<!\\d)${a + b}(?!\\d)`).test(received.text);
-  const toolsBlocked = /\b(?:tool|tools|execute_code)\b.{0,80}\b(?:blocked|unavailable|not allowed|not permitted|denied|requires? approval|approval required)\b|\b(?:blocked|unavailable|not allowed|not permitted|denied)\b.{0,80}\b(?:tool|tools|execute_code)\b/i
-    .test(responseText);
   report.messaging = {
     status: sumVerified ? "pass" : "fail",
     requestMessageId: sent.id,
@@ -192,17 +202,12 @@ if (steps.has("reply")) await modelCheck("real-agent-reply", async () => {
     sumVerified,
     responseText,
   };
-  report.codeExecution = toolsBlocked
-    ? { status: "fail", reason: "The agent response states that tool/code execution was blocked." }
-    : { status: "not_proven", reason: "Requires a successful correlated native execute_code or approved isolated-backend trace." };
   report.reply = {
     request: sent.id, response: received.id, responseAt: received.createdAt,
     responseText,
     expectedSum: a + b, verified: sumVerified,
   };
   await page.screenshot({ path: path.join(out, "reply.png") });
-  assert.notEqual(report.codeExecution.status, "fail",
-    `Agent response reports blocked tool/code execution: ${responseText}`);
   assert.ok(sumVerified, `Agent replied with the nonce but not the expected sum: ${responseText}`);
 });
 if (steps.has("widget")) await modelCheck("widget-input-submit-followup", async () => {
@@ -252,8 +257,79 @@ if (steps.has("files")) await modelCheck("upload-and-download", async () => {
   assert.equal(hash(downloaded), hash(bytes));
   await shot("files");
 });
+if (steps.has("code")) {
+  if (prerequisitesFailed || modelFailed) {
+    report.codeExecution = { status: "not_run", reason: "An earlier prerequisite or UI step failed." };
+  } else {
+    const startedAt = new Date().toISOString();
+    const input = randomUUID().replaceAll("-", "");
+    const nonce = randomUUID().replaceAll("-", "");
+    const expectedHash = createHash("sha256").update(input, "utf8").digest("hex");
+    const blockedPattern = /\b(?:tool|tools|execute_code|terminal|python)\b.{0,100}\b(?:blocked|disabled|unavailable|not allowed|not permitted|denied|cannot|can't|couldn't|could not|unable|not able|requires? approval|approval (?:required|denied|not granted|expired|timed? out)|permission denied|timed? out|expired)\b|\b(?:blocked|disabled|unavailable|not allowed|not permitted|denied|cannot|can't|couldn't|could not|unable|not able|requires? approval|approval (?:required|denied|not granted|expired|timed? out)|permission denied|timed? out|expired)\b.{0,100}\b(?:tool|tools|execute_code|terminal|python)\b/i;
+    const hashPattern = /\b[0-9a-f]{64}\b/i;
+    let response;
+    const trace = {
+      status: "pending",
+      path: null,
+      approvalMode: "smart",
+      requiredPathValues: ["execute_code", "terminal", "approved_isolated_backend"],
+    };
+    try {
+      const sent = await sendFromUi(
+        `For this code-execution check, use a Python execution tool (not mental calculation) to compute SHA-256 of the UTF-8 string below. ` +
+        `Run: import hashlib; print(hashlib.sha256(b"${input}").hexdigest()) ` +
+        `Return the exact lowercase 64-character hash and nonce ${nonce}.`);
+      const remainingWait = Math.max(0, codeTimeout - (Date.now() - Date.parse(startedAt)));
+      response = await reply(sent.id, (message) => {
+        const text = String(message.text);
+        return blockedPattern.test(text) || hashPattern.test(text);
+      }, remainingWait);
+      const responseText = String(response.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+      const blocked = blockedPattern.test(responseText);
+      const hashes = [...responseText.matchAll(/\b[0-9a-f]{64}\b/gi)].map(([value]) => value);
+      const hashMatched = responseText.includes(expectedHash);
+      report.codeExecution = {
+        status: blocked || !hashMatched ? "fail" : "not_proven",
+        reason: blocked ? "The agent reported blocked or expired tool execution."
+          : hashMatched ? "Hash matched; a correlated native execution trace is still required."
+            : "The returned hash did not match the locally computed SHA-256.",
+        requestMessageId: sent.id,
+        requestAt: report.sends.find((item) => item.messageId === sent.id)?.requestAt ?? null,
+        responseMessageId: response.id,
+        conversationId: personal,
+        startedAt,
+        responseAt: response.createdAt,
+        nonce,
+        input,
+        expectedHash,
+        returnedHashes: hashes,
+        hashMatched,
+        responseText,
+        nativeTrace: trace,
+      };
+      await shot("code-execution");
+    } catch (error) {
+      report.codeExecution = {
+        status: "fail",
+        reason: error.message.includes("Timed out waiting for condition.")
+          ? `No hash or blocked-tools response within ${codeTimeout / 1000} seconds.`
+          : String(error.message).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]"),
+        startedAt,
+        responseMessageId: response?.id ?? null,
+        observedMessages: error.observedMessages ?? [],
+        conversationId: personal,
+        nonce,
+        input,
+        expectedHash,
+        nativeTrace: trace,
+      };
+      await shot("failure-code-execution");
+    }
+  }
+} else {
+  report.codeExecution = { status: "not_run", reason: "Code probe not selected." };
+}
 report.uiAcceptance = report.checks.every((item) => item.status === "pass") ? "pass" : "fail";
-report.codeExecution ??= { status: "not_run", reason: "No code-execution request was made in this run." };
 await writeFile(path.join(out, "demo-smoke.json"), JSON.stringify(report, null, 2));
 await browser.close();
 console.log(JSON.stringify({
