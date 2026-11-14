@@ -449,6 +449,46 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(sum(r.method == "POST" and r.url.path == "/v1/runs" for r in requests), 1)
         self.assertFalse(any(r.url.path.endswith("/messages") for r in requests))
 
+    def test_native_run_detects_completion_within_sub_second_polls(self):
+        statuses = iter(["running", "running", "completed"])
+
+        def handle(request):
+            if request.url.path == "/v1/runs" and request.method == "POST":
+                return httpx.Response(202, json={"run_id": "run-fast"})
+            if request.url.path == "/v1/runs/run-fast":
+                return httpx.Response(200, json={
+                    "run_id": "run-fast", "status": next(statuses), "output": "done",
+                })
+            if request.url.path == "/api/sessions":
+                return httpx.Response(200, json={"data": []})
+            return httpx.Response(200, json={"session": {"message_count": 2}})
+
+        request = AgentRequest(
+            prompt="hello",
+            conversation_id="teams:personal:conversation-1",
+            user_id="user-1",
+            source="teams_personal",
+            must_answer=True,
+        )
+        adapter = HermesRuntimeAdapter(
+            client_factory=lambda **kwargs: httpx.AsyncClient(
+                transport=httpx.MockTransport(handle), **kwargs,
+            ),
+        )
+        sleeps = []
+
+        async def record_sleep(seconds):
+            sleeps.append(seconds)
+
+        with patch.object(hermes_runtime.asyncio, "sleep", record_sleep):
+            result = asyncio.run(
+                adapter._native_run("https://hermes.example", "api-key", request)
+            )
+
+        self.assertEqual(result["output"], "done")
+        self.assertEqual(len(sleeps), 2)
+        self.assertLess(sum(sleeps), 2)
+
     def runtime_adapter(self, handler):
         requests: list[httpx.Request] = []
 

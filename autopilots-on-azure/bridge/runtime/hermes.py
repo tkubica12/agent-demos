@@ -36,6 +36,7 @@ LEARNING_TRANSPARENCY = (
 )
 PRIVATE_SESSION_PREFIX = "private:"
 OWNER_DIGEST_REFERENCE_KEY = "learning-owner-personal-chat"
+NATIVE_RUN_POLL_INTERVAL_SECONDS = 0.5
 logger = logging.getLogger(__name__)
 
 
@@ -1062,7 +1063,7 @@ class HermesRuntimeAdapter:
                     raise NativeRunInterventionError(
                         f"Native run {run_id} ended or requires intervention: {status}: {result.get('error', '')}"
                     )
-                await asyncio.sleep(2)
+                await asyncio.sleep(NATIVE_RUN_POLL_INTERVAL_SECONDS)
             if terminal_error is None:
                 from bridge.event_worker import InvocationPendingError
 
