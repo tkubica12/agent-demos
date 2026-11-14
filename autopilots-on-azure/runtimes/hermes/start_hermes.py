@@ -14,7 +14,7 @@ import threading
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from typing import Any
 
 import httpx
@@ -35,7 +35,7 @@ from bridge.telemetry import configure_telemetry, flush_telemetry, runtime_trace
 from bridge.telemetry_http import TelemetryMiddleware
 from bridge.generated_files import (
     GeneratedFileError, GeneratedFileStore, MAX_EVIDENCE_BYTES, RUN_HEADER, RUN_PATTERN,
-    SCOPE_HEADER, completed_run_evidence, generated_files_enabled,
+    INPUT_SCOPE_HEADER, SCOPE_HEADER, completed_run_evidence, generated_files_enabled,
 )
 from autopilots_identity.document_operations import (
     acknowledge_delivery as acknowledge_document_delivery,
@@ -780,6 +780,25 @@ def create_health_app(
             headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(entry['name'], safe='')}"},
         )
 
+    @app.put("/internal/turn-inputs/{admission_id}/{index}")
+    async def stage_original_input(admission_id: str, index: int, request: Request) -> JSONResponse:
+        require_internal_key(request)
+        if generated_files is None:
+            raise HTTPException(status_code=503, detail="Original chat inputs require the turn-file protocol.")
+        try:
+            entry = await generated_files.stage_input(
+                admission_id, session_id=request.headers.get("X-Hermes-Session-Id", ""),
+                scope=request.headers.get(SCOPE_HEADER, ""),
+                input_scope=request.headers.get(INPUT_SCOPE_HEADER, ""), index=index,
+                name=unquote(request.headers.get("X-Autopilot-Input-Name", "")),
+                content_type=request.headers.get("X-Autopilot-Input-Type", ""),
+                size=int(request.headers.get("X-Autopilot-Input-Size", "0")),
+                sha256=request.headers.get("X-Autopilot-Input-SHA256", ""), chunks=request.stream(),
+            )
+        except (GeneratedFileError, ValueError, OSError) as exc:
+            raise HTTPException(status_code=422, detail="Original input staging refused: " + str(exc)) from exc
+        return JSONResponse(entry, status_code=201)
+
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
@@ -834,10 +853,21 @@ def create_health_app(
                         admission, session_id=native_trace_sessions[admission],
                         scope=request.headers[SCOPE_HEADER],
                     )
+                    if "inputTurnId" in payload or "inputFileCount" in payload:
+                        file_turn = generated_files.require_inputs(
+                            admission, turn_id=payload.pop("inputTurnId", ""),
+                            count=payload.pop("inputFileCount", None),
+                            session_id=native_trace_sessions[admission], scope=request.headers[SCOPE_HEADER],
+                            input_scope=request.headers.get(INPUT_SCOPE_HEADER, ""),
+                        )
+                    elif file_turn.get("inputs"):
+                        raise GeneratedFileError("Staged originals require explicit input identity and count.")
                     payload["instructions"] = (
                         str(payload.get("instructions") or "") + generated_files.instructions(file_turn["turnId"])
                     )
                     body = json.dumps(payload).encode("utf-8")
+                elif "inputTurnId" in payload or "inputFileCount" in payload:
+                    raise GeneratedFileError("Original inputs require the authenticated turn-file scope.")
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
                     request.method,

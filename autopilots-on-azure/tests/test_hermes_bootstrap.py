@@ -1,12 +1,15 @@
+import json
 import os
 import socket
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
+import httpx
+from bridge.generated_files import GeneratedFileError, INPUT_SCOPE_HEADER, SCOPE_HEADER
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtimes" / "hermes"))
 
@@ -16,6 +19,90 @@ from runtime_identity import AGENT_IDENTITY_ENVIRONMENTS
 
 
 class HermesBootstrapTests(unittest.TestCase):
+    def test_original_input_upload_auth_feature_and_maintenance_deny_before_staging(self):
+        store = Mock(stage_input=AsyncMock())
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "operations-key", "GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1"}),
+            patch.object(start_hermes, "GeneratedFileStore", return_value=store),
+            patch.object(start_hermes, "hermes_account", return_value=(10000, 10000)),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            path = "/internal/turn-inputs/admission-1/1"
+            for headers in ({}, {"X-Autopilot-Key": "wrong-key"}):
+                self.assertEqual(client.put(path, headers=headers, content=b"original").status_code, 401)
+            store.stage_input.assert_not_called()
+            exists = Path.exists
+            with patch.object(Path, "exists", lambda path: (
+                True if str(path).replace("\\", "/").endswith("/app/.application-maintenance") else exists(path)
+            )):
+                response = client.put(path, headers={"X-Autopilot-Key": "operations-key"}, content=b"original")
+                self.assertEqual(response.status_code, 503)
+            store.stage_input.assert_not_called()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "operations-key", "GENERATED_CHAT_FILES_ENABLED": "false"}),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            self.assertEqual(client.put(
+                path, headers={"X-Autopilot-Key": "operations-key"}, content=b"original",
+            ).status_code, 503)
+
+    def test_original_input_proxy_binds_private_admission_and_strips_transport_fields(self):
+        store = Mock()
+        store.admit.return_value = {"turnId": "a" * 32}
+        store.require_inputs.return_value = {"turnId": "a" * 32}
+        store.instructions.return_value = "\nOriginal input path: /private/turns/inputs/01.docx"
+        calls = []
+        client_class = httpx.AsyncClient
+
+        def handle(request):
+            calls.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json={"session_id": "private:session-1"})
+            body = json.loads(request.content)
+            self.assertNotIn("inputTurnId", body)
+            self.assertNotIn("inputFileCount", body)
+            self.assertIn("/private/turns/inputs/01.docx", body["instructions"])
+            return httpx.Response(202, json={"run_id": "input-run"})
+
+        headers = {
+            "Authorization": "Bearer operations-key", "Idempotency-Key": "admission-1",
+            SCOPE_HEADER: "b" * 64, INPUT_SCOPE_HEADER: "c" * 64,
+        }
+        body = {"session_id": "private:session-1", "input": "Edit original", "inputTurnId": "a" * 32, "inputFileCount": 1}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "operations-key", "GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1"}),
+            patch.object(start_hermes, "GeneratedFileStore", return_value=store),
+            patch.object(start_hermes, "hermes_account", return_value=(10000, 10000)),
+            patch.object(start_hermes, "gateway_trace_context", return_value=Mock(__enter__=Mock(), __exit__=Mock())),
+            patch.object(start_hermes.httpx, "AsyncClient", side_effect=lambda **kwargs: client_class(
+                transport=httpx.MockTransport(handle), **kwargs,
+            )),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            response = client.post("/v1/runs", headers=headers, json=body)
+            self.assertEqual(response.status_code, 202)
+            store.require_inputs.assert_called_once_with(
+                "admission-1", turn_id="a" * 32, count=1, session_id="private:session-1",
+                scope="b" * 64, input_scope="c" * 64,
+            )
+            store.bind_run.assert_called_once_with("a" * 32, "input-run")
+            store.require_inputs.side_effect = GeneratedFileError("Wrong input scope")
+            denied = client.post("/v1/runs", headers={**headers, "Idempotency-Key": "other-admission"}, json=body)
+            self.assertEqual(denied.status_code, 422)
+            store.admit.return_value = {"turnId": "a" * 32, "inputs": [{}]}
+            denied = client.post(
+                "/v1/runs", headers={**headers, "Idempotency-Key": "without-descriptors"},
+                json={"session_id": "private:session-1", "input": "Edit original"},
+            )
+            self.assertEqual(denied.status_code, 422)
+        self.assertEqual(sum(request.method == "POST" for request in calls), 1)
+
     def test_channel_runtime_disables_identity_sidecars_and_removes_persisted_m365_servers(self):
         inherited = {
             "mcp_servers": {

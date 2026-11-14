@@ -1,3 +1,5 @@
+import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -13,6 +15,7 @@ import zipfile
 from bridge.generated_files import (
     GeneratedFileError, GeneratedFileStore, MAX_EVIDENCE_BYTES, MAX_FILE_BYTES,
     NativeSkillLoadEvidence, completed_run_evidence, conversation_file_scope,
+    DOCX_CONTENT_TYPE, input_file_scope,
 )
 
 
@@ -165,6 +168,196 @@ class GeneratedFileStoreTests(unittest.TestCase):
         self.turn = self.store.admit("admission-1", session_id="session-1", scope=self.scope)
         self.store.bind_run(self.turn["turnId"], "run-1")
         self.workspace = self.store._turn(self.turn["turnId"]) / "workspace"
+
+    def original_docx(self):
+        parts = {
+            "[Content_Types].xml": (
+                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="png" ContentType="image/png"/>'
+                '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+                '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+                '</Types>'
+            ).encode(),
+            "_rels/.rels": (
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+                '</Relationships>'
+            ).encode(),
+            "word/document.xml": (
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                '<w:body><w:p><w:r><w:t>Original document text</w:t></w:r></w:p></w:body></w:document>'
+            ).encode(),
+            "word/styles.xml": (
+                '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                '<w:style w:type="paragraph" w:styleId="OriginalStyle"><w:name w:val="Original Style"/></w:style></w:styles>'
+            ).encode(),
+            "word/media/image.png": base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII="
+            ),
+        }
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as package:
+            for name, data in parts.items():
+                package.writestr(name, data)
+        return output.getvalue(), parts
+
+    def stage_original(self, data, **overrides):
+        async def chunks():
+            yield data[:7]
+            yield data[7:]
+
+        settings = {
+            "session_id": "private:session-1", "scope": self.scope,
+            "input_scope": input_file_scope("worker-1", "teams_personal", "conversation-1", "user-1"),
+            "index": 1, "name": "original.docx", "content_type": DOCX_CONTENT_TYPE,
+            "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "chunks": chunks(),
+        }
+        settings.update(overrides)
+        return asyncio.run(self.store.stage_input("input-admission", **settings))
+
+    def test_original_docx_is_byte_exact_and_an_edited_copy_preserves_nontext_parts(self):
+        original, parts = self.original_docx()
+        receipt = self.stage_original(original)
+        metadata = self.store.require_inputs(
+            "input-admission", turn_id=receipt["turnId"], session_id="private:session-1",
+            scope=self.scope,
+            input_scope=input_file_scope("worker-1", "teams_personal", "conversation-1", "user-1"), count=1,
+        )
+        directory = self.store._turn(metadata["turnId"])
+        source = directory / "inputs" / "01.docx"
+        self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(source.stat().st_mode & 0o777, 0o444)
+        instructions = self.store.instructions(metadata["turnId"])
+        self.assertIn(str(source), instructions)
+        self.assertNotIn("Original document text", instructions)
+        self.store.bind_run(metadata["turnId"], "input-run")
+        edited = directory / "workspace" / "edited.docx"
+        with zipfile.ZipFile(source) as document, zipfile.ZipFile(edited, "w") as output:
+            for name in document.namelist():
+                data = document.read(name)
+                if name == "word/document.xml":
+                    data = data.replace(b"Original document text", b"Edited document text")
+                output.writestr(name, data)
+        sealed = self.store.seal("input-run", f'Edited.\nMEDIA:"{edited}"', scope=self.scope)
+        entry = sealed["files"][0]
+        _, delivered = self.store.download(
+            entry["turnId"], entry["fileId"], scope=self.scope, run_id="input-run",
+        )
+        with zipfile.ZipFile(io.BytesIO(delivered)) as document:
+            self.assertIn(b"Edited document text", document.read("word/document.xml"))
+            for name, data in parts.items():
+                if name != "word/document.xml":
+                    self.assertEqual(document.read(name), data)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_original_inputs_deny_user_session_scope_admission_count_and_run_rebinding(self):
+        original, _ = self.original_docx()
+        receipt = self.stage_original(original)
+        arguments = {
+            "turn_id": receipt["turnId"], "session_id": "private:session-1", "scope": self.scope,
+            "input_scope": input_file_scope("worker-1", "teams_personal", "conversation-1", "user-1"), "count": 1,
+        }
+        for changes in (
+            {"input_scope": input_file_scope("worker-1", "teams_personal", "conversation-1", "other-user")},
+            {"scope": input_file_scope("other-worker", "teams_personal", "conversation-1", "user-1")},
+            {"session_id": "different-session"}, {"turn_id": "b" * 32}, {"count": 2},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(GeneratedFileError):
+                self.store.require_inputs("input-admission", **{**arguments, **changes})
+        with self.assertRaises(GeneratedFileError):
+            self.store.require_inputs("other-admission", **arguments)
+        with self.assertRaises(GeneratedFileError):
+            self.stage_original(original)
+        self.store.bind_run(receipt["turnId"], "input-run")
+        with self.assertRaises(GeneratedFileError):
+            self.stage_original(original, index=2)
+
+    def test_original_input_names_hash_lengths_types_and_limits_fail_without_committing_bytes(self):
+        for changes in (
+            {"name": "../outside.docx"}, {"name": "folder\\outside.docx"},
+            {"name": ".hidden.docx"}, {"name": "line\nbreak.docx"},
+            {"content_type": "application/x-executable"}, {"sha256": "b" * 64},
+            {"size": 1}, {"size": 4}, {"index": 21},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(GeneratedFileError):
+                self.stage_original(b"abc", **changes)
+        for limits in (
+            {"ATTACHMENT_MAX_BYTES": "2"}, {"ATTACHMENT_MAX_TOTAL_BYTES": "2"},
+            {"ATTACHMENT_MAX_COUNT": "0"},
+        ):
+            with self.subTest(limits=limits), patch.dict(os.environ, limits), self.assertRaises(GeneratedFileError):
+                self.stage_original(b"abc")
+        receipt = self.stage_original(b"abc", name="input.txt", content_type="text/plain")
+        self.assertEqual(len(self.store._metadata(receipt["turnId"])["inputs"]), 1)
+        with patch.dict(os.environ, {"ATTACHMENT_MAX_TOTAL_BYTES": "5"}), self.assertRaises(GeneratedFileError):
+            self.stage_original(b"abc", index=2, name="second.txt", content_type="text/plain")
+
+    def test_original_input_symlinks_tampering_and_expiry_block_use_and_export(self):
+        receipt = self.stage_original(b"original", name="input.txt", content_type="text/plain")
+        self.store.bind_run(receipt["turnId"], "input-run")
+        directory = self.store._turn(receipt["turnId"])
+        source = directory / "inputs" / "01.txt"
+        outside = self.root / "outside.txt"
+        outside.write_bytes(b"outside")
+        source.unlink()
+        source.symlink_to(outside)
+        with self.assertRaises(GeneratedFileError):
+            self.store.instructions(receipt["turnId"])
+        with self.assertRaises(GeneratedFileError):
+            self.store.seal("input-run", "No files", scope=self.scope)
+        source.unlink()
+        source.write_bytes(b"modified")
+        with self.assertRaises(GeneratedFileError):
+            self.store.instructions(receipt["turnId"])
+        metadata = self.store._metadata(receipt["turnId"])
+        with patch("bridge.generated_files.time.time", return_value=metadata["expiresAt"] + 1):
+            with self.assertRaises(GeneratedFileError):
+                self.store.require_inputs(
+                    "input-admission", turn_id=receipt["turnId"], session_id="private:session-1",
+                    scope=self.scope, input_scope=metadata["inputScope"], count=1,
+                )
+
+    def test_original_input_metadata_paths_are_validated_before_open(self):
+        receipt = self.stage_original(b"original", name="input.txt", content_type="text/plain")
+        metadata = self.store._metadata(receipt["turnId"])
+        for name in ("../outside.txt", "02.txt", "01.docx"):
+            metadata["inputs"][0]["storageName"] = name
+            self.store._write_metadata(self.store._turn(receipt["turnId"]), metadata)
+            with (
+                patch.object(self.store, "_read_regular", wraps=self.store._read_regular) as reader,
+                self.assertRaises(GeneratedFileError),
+            ):
+                self.store.instructions(receipt["turnId"])
+            self.assertEqual([call.args[1] for call in reader.call_args_list], ["manifest.json"])
+
+    def test_concurrent_original_uploads_reserve_the_total_limit_until_completion(self):
+        async def exercise():
+            entered = asyncio.Event()
+            release = asyncio.Event()
+
+            async def held():
+                entered.set()
+                await release.wait()
+                yield b"abc"
+
+            arguments = {
+                "session_id": "private:session-1", "scope": self.scope, "input_scope": "a" * 64,
+                "index": 1, "name": "input.txt", "content_type": "text/plain",
+                "size": 3, "sha256": hashlib.sha256(b"abc").hexdigest(),
+            }
+            first = asyncio.create_task(self.store.stage_input("first-input", chunks=held(), **arguments))
+            await entered.wait()
+            try:
+                with self.assertRaises(GeneratedFileError):
+                    await self.store.stage_input("second-input", chunks=held(), **arguments)
+            finally:
+                release.set()
+                await first
+            self.assertEqual(self.store._input_bytes_reserved, 0)
+
+        with patch.dict(os.environ, {"ATTACHMENT_MAX_TOTAL_BYTES": "5"}):
+            asyncio.run(exercise())
 
     def test_txt_and_docx_are_sealed_as_actual_bytes_and_survive_source_change(self):
         package = io.BytesIO()

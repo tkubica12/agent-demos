@@ -291,6 +291,16 @@ gateway internal evidence endpoints require their API key and exact conversation
 or run IDs. Never export debug payloads/tokens as evidence. Frozen widget/skill
 contents must remain unchanged.
 
+Original DOCX/TXT uploads are downloaded and validated at the gateway, then streamed
+through the authenticated turn-file protocol into separate runtime-local inputs.
+The model receives only safe metadata and exact input paths, not document text,
+bytes/base64 or download credentials. Inputs bind the Worker, invoking user,
+conversation, private native session and the same admission/run; limits remain
+20 files, 50 MiB each and 300 MiB total, with one-hour retention. Original inputs
+are read-only by contract and hash-checked again before export. Scripts edit copies
+in the existing output workspace and return them through `MEDIA`; no shared mount
+or Microsoft 365 tool is needed. This is not an OS sandbox against arbitrary code.
+
 Read startup logs only through authenticated Sandbox access:
 `/tmp/simulator-service.log` or `/app/.sandbox-service.log`. Settings activation
 uses explicit POSIX chmod before atomic rename; do not rely on the SDK upload

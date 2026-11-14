@@ -110,7 +110,7 @@ from bridge.scheduled_learning import (
     ScheduledLearningSettings,
 )
 from bridge.telemetry import configure_telemetry, flush_telemetry, operation_span, runtime_trace_headers
-from bridge.generated_files import RUN_PATTERN, generated_files_enabled
+from bridge.generated_files import GeneratedAttachment, RUN_PATTERN, generated_files_enabled
 from bridge.telemetry_http import TelemetryMiddleware
 from bridge.work_activity import ActiveWorkMiddleware, start_active_work
 from bridge.transport_ingress import NativeTransportIngressMiddleware
@@ -2984,7 +2984,9 @@ async def handle_teams_message(ctx: TurnContext, _state: TurnState) -> None:
         response_contract=response_contract,
         reply_to_id=field_value(ctx.activity, "reply_to_id"),
     )
-    private_attachment_context = format_attachment_context(attachments)
+    private_attachment_context = format_attachment_context(
+        attachments, original_inputs=simulator_channel_configured(),
+    )
     if private_attachment_context:
         context = "\n\n".join(
             value for value in (context, private_attachment_context) if value
@@ -3266,6 +3268,10 @@ async def run_agent_runtime_for_teams(
             },
             auth_context=auth_context,
             on_delta=emit_delta if show_public_progress else None,
+            input_files=(
+                tuple(item.original_file() for item in (attachments or []) if item.data)
+                if simulator_channel_configured() else ()
+            ),
         )
         widget_response, widget_spec = extract_widget_request(result.text)
         generated_response, generated_app_request = (
@@ -3614,6 +3620,7 @@ async def invoke_agent_runtime(
     metadata: dict[str, Any] | None = None,
     auth_context: AgentAuthContext | None = None,
     on_delta=None,
+    input_files: tuple[GeneratedAttachment, ...] = (),
 ) -> AgentResponse:
     request = AgentRequest(
         prompt=message,
@@ -3629,6 +3636,7 @@ async def invoke_agent_runtime(
         },
         auth=auth_context,
         on_delta=on_delta,
+        input_files=input_files,
     )
     with operation_span(
         "invoke_agent",

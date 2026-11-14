@@ -22,7 +22,8 @@ from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, Dream
 from bridge.telemetry import runtime_trace_headers
 from bridge.generated_files import (
     GeneratedAttachment, GeneratedFileError, ID_PATTERN, MAX_FILES, MAX_FILE_BYTES,
-    RUN_HEADER, SCOPE_HEADER, conversation_file_scope, generated_files_enabled, validate_generated_bytes,
+    INPUT_SCOPE_HEADER, RUN_HEADER, SCOPE_HEADER, conversation_file_scope, generated_files_enabled,
+    input_file_scope, validate_generated_bytes,
 )
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
@@ -1129,6 +1130,37 @@ class HermesRuntimeAdapter:
                 transcript_id,
             )
             if not run_id:
+                if request.input_files:
+                    if not generated_files_enabled() or not request.metadata.get("attachmentsPrivate"):
+                        raise GeneratedFileError("Original inputs require the enabled private turn-file protocol.")
+                    input_scope = input_file_scope(
+                        _env_required("WORKER_ID"), request.source, request.conversation_id, request.user_id,
+                    )
+                    headers[INPUT_SCOPE_HEADER] = input_scope
+                    turn_id = ""
+                    for index, original in enumerate(request.input_files, 1):
+                        digest = hashlib.sha256(original.data).hexdigest()
+                        uploaded = await client.put(
+                            f"{base_url}/internal/turn-inputs/{quote(key, safe='')}/{index}",
+                            headers={
+                                **headers, "X-Autopilot-Key": api_key,
+                                "X-Autopilot-Input-Name": quote(original.name, safe=""),
+                                "X-Autopilot-Input-Type": original.content_type,
+                                "X-Autopilot-Input-Size": str(len(original.data)),
+                                "X-Autopilot-Input-SHA256": digest,
+                            }, content=original.data,
+                        )
+                        uploaded.raise_for_status()
+                        entry = uploaded.json()
+                        if (
+                            uploaded.status_code != 201 or not ID_PATTERN.fullmatch(str(entry.get("turnId", "")))
+                            or entry.get("index") != index or entry.get("sha256") != digest
+                            or entry.get("size") != len(original.data)
+                            or turn_id and entry["turnId"] != turn_id
+                        ):
+                            raise GeneratedFileError("Runtime did not verify the original input receipt.")
+                        turn_id = entry["turnId"]
+                    body.update(inputTurnId=turn_id, inputFileCount=len(request.input_files))
                 response = await client.post(
                     f"{base_url}/v1/runs", headers={**headers, "Idempotency-Key": key}, json=body,
                 )

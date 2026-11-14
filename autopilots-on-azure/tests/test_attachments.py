@@ -219,7 +219,10 @@ class AttachmentTests(unittest.TestCase):
         processed = asyncio.run(
             process_turn_attachments(turn_context(attachment))
         )
-        context = format_attachment_context(processed)
+        legacy_context = format_attachment_context(processed)
+        self.assertIn("<document_text>", legacy_context)
+        self.assertIn("<document_comments>", legacy_context)
+        context = format_attachment_context(processed, original_inputs=True)
 
         self.assertEqual(len(processed), 1)
         self.assertEqual(processed[0].size, len(data))
@@ -229,8 +232,15 @@ class AttachmentTests(unittest.TestCase):
             ("Verify the due date.",),
         )
         self.assertIn("UNTRUSTED DOCUMENT DATA", context)
-        self.assertIn("<document_text>", context)
-        self.assertIn("<document_comments>", context)
+        self.assertEqual(processed[0].data, data)
+        self.assertEqual(processed[0].original_file().data, data)
+        self.assertIn("runtime-provided original input path", context)
+        self.assertNotIn("Project Cedar status", context)
+        self.assertNotIn("Verify the due date.", context)
+        self.assertNotIn("<document_text>", context)
+        self.assertNotIn("<document_comments>", context)
+        self.assertNotIn("data", processed[0].metadata())
+        self.assertNotIn(repr(data), repr(processed[0]))
         self.assertNotIn(data.hex(), context)
 
     def test_html_cards_are_not_treated_as_files(self):

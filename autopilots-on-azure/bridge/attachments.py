@@ -9,7 +9,7 @@ import os
 import re
 import socket
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePath
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, urljoin, urlparse, urlunparse
@@ -18,6 +18,9 @@ from xml.etree import ElementTree
 import aiohttp
 from microsoft_agents.activity import Activity, Attachment
 from microsoft_agents.hosting.core import TurnContext
+from bridge.generated_files import (
+    GeneratedAttachment, MAX_INPUT_BYTES, MAX_INPUT_COUNT, MAX_INPUT_TOTAL_BYTES,
+)
 
 
 DOCX_CONTENT_TYPE = (
@@ -72,9 +75,9 @@ class AttachmentProcessingError(RuntimeError):
 
 @dataclass(frozen=True)
 class AttachmentPolicy:
-    max_count: int = 20
-    max_bytes: int = 50 * 1024 * 1024
-    max_total_bytes: int = 300 * 1024 * 1024
+    max_count: int = MAX_INPUT_COUNT
+    max_bytes: int = MAX_INPUT_BYTES
+    max_total_bytes: int = MAX_INPUT_TOTAL_BYTES
     max_text_chars: int = 1_000_000
     max_xml_bytes: int = 5 * 1024 * 1024
     timeout_seconds: int = 60
@@ -118,6 +121,14 @@ class ProcessedAttachment:
     sharing_url: str
     text: str
     comments: tuple[str, ...]
+    data: bytes = field(default=b"", repr=False)
+
+    def original_file(self) -> GeneratedAttachment:
+        content_type = (
+            DOCX_CONTENT_TYPE if self.name.lower().endswith(".docx") or self.content_type == DOCX_CONTENT_TYPE
+            else "text/plain"
+        )
+        return GeneratedAttachment(self.name, content_type, self.data)
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -809,7 +820,10 @@ async def process_turn_attachments(
         processed.append(
             ProcessedAttachment(
                 name=name,
-                content_type=effective_type or declared_type,
+                content_type=(
+                    DOCX_CONTENT_TYPE if extension == ".docx" or effective_type == DOCX_CONTENT_TYPE
+                    else "text/plain"
+                ) if data else effective_type or declared_type,
                 size=len(data),
                 sha256=digest,
                 content_url_host=(
@@ -825,6 +839,7 @@ async def process_turn_attachments(
                 sharing_url=sharing_url,
                 text=text,
                 comments=comments,
+                data=data,
             )
         )
     return processed
@@ -832,6 +847,8 @@ async def process_turn_attachments(
 
 def format_attachment_context(
     attachments: list[ProcessedAttachment],
+    *,
+    original_inputs: bool = False,
 ) -> str:
     if not attachments:
         return ""
@@ -851,6 +868,12 @@ def format_attachment_context(
             f"Downloaded size: {attachment.size}\n"
             f"SHA-256: {attachment.sha256 or 'not-downloaded'}"
         )
+        if original_inputs and attachment.data:
+            parts.append(
+                "Use the runtime-provided original input path to read/edit a copy of this document. "
+                "The extracted document text and download credentials are not included in the model prompt."
+            )
+            continue
         if attachment.sharing_url:
             parts.append(
                 "Microsoft 365 sharing URL: "

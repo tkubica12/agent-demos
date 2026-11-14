@@ -22,7 +22,10 @@ import bridge.runtime.hermes as hermes_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.durable_transport import Journal
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
-from bridge.generated_files import GeneratedFileError, SCOPE_HEADER, RUN_HEADER, conversation_file_scope
+from bridge.generated_files import (
+    GeneratedAttachment, GeneratedFileError, INPUT_SCOPE_HEADER, SCOPE_HEADER, RUN_HEADER,
+    conversation_file_scope, input_file_scope,
+)
 from bridge.runtime.hermes import (
     OWNER_DIGEST_REFERENCE_KEY,
     PRIVATE_SESSION_PREFIX,
@@ -44,6 +47,51 @@ from scripts.sandbox_runtime import (
 
 
 class RuntimeAdapterTests(unittest.TestCase):
+    def test_original_input_bytes_are_uploaded_privately_before_one_native_admission(self):
+        original = b"private original file bytes"
+        request = AgentRequest(
+            "Edit the attached file", "conversation-1", "user-1", "teams_personal", True,
+            metadata={"attachmentsPrivate": True},
+            input_files=(GeneratedAttachment("original.txt", "text/plain", original),),
+        )
+        calls = []
+
+        def handle(outgoing):
+            calls.append(outgoing)
+            if outgoing.method == "PUT":
+                self.assertEqual(outgoing.content, original)
+                self.assertEqual(outgoing.headers["X-Autopilot-Key"], "runtime-key")
+                self.assertEqual(outgoing.headers["X-Hermes-Session-Id"], "private:session-1")
+                self.assertEqual(
+                    outgoing.headers[INPUT_SCOPE_HEADER],
+                    input_file_scope("worker-1", "teams_personal", "conversation-1", "user-1"),
+                )
+                return httpx.Response(201, json={
+                    "turnId": "a" * 32, "index": 1, "size": len(original),
+                    "sha256": hashlib.sha256(original).hexdigest(),
+                })
+            if outgoing.method == "POST":
+                body = json.loads(outgoing.content)
+                self.assertEqual(body["inputTurnId"], "a" * 32)
+                self.assertEqual(body["inputFileCount"], 1)
+                self.assertEqual(outgoing.headers["Idempotency-Key"], calls[0].url.path.split("/")[-2])
+                self.assertNotIn(original.decode(), outgoing.content.decode())
+                return httpx.Response(202, json={"run_id": "input-run"})
+            return httpx.Response(200, json={"run_id": "input-run", "status": "completed", "output": "Edited"})
+
+        adapter = HermesRuntimeAdapter(client_factory=lambda **kwargs: httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), **kwargs,
+        ))
+        with (
+            patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1"}),
+            patch.object(adapter, "_resolve_transcript_id", AsyncMock(return_value="session-1")),
+            patch.object(adapter, "_ensure_live_session", AsyncMock(return_value="private:session-1")),
+        ):
+            result = asyncio.run(adapter._native_run("https://runtime.example", "runtime-key", request))
+        self.assertEqual(result["output"], "Edited")
+        self.assertEqual([call.method for call in calls], ["PUT", "POST", "GET"])
+        self.assertNotIn(original.decode(), repr(request))
+
     def test_generated_file_download_is_authenticated_scoped_and_preserves_bytes(self):
         content = "Native generated report\n".encode("utf-8")
         turn_id, file_id = "a" * 32, "b" * 32

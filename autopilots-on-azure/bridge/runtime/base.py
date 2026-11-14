@@ -47,6 +47,7 @@ class AgentRequest:
     metadata: dict[str, Any] = field(default_factory=dict)
     auth: AgentAuthContext | None = None
     on_delta: StreamDeltaHandler | None = field(default=None, compare=False, repr=False)
+    input_files: tuple[GeneratedAttachment, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
