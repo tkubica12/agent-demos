@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "source_commit": "<reviewed-workflow-source-commit>",
+  "images": {
+    "runtime": "ghcr.io/<owner>/<runtime>@sha256:<digest>",
+    "gateway": "ghcr.io/<owner>/<gateway>@sha256:<digest>",
+    "simulator": "ghcr.io/<owner>/<simulator>@sha256:<digest>"
+  }
+}

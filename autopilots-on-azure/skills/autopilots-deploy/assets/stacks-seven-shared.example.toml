@@ -1,0 +1,94 @@
+environment = "training"
+subscription_id = "11111111-1111-1111-1111-111111111111"
+tenant_id = "22222222-2222-2222-2222-222222222222"
+owner_id = "33333333-3333-3333-3333-333333333333"
+auth_mode = "entra"
+network_mode = "private"
+resource_group_mode = "existing"
+foundry_mode = "shared"
+private_dns_zone_ids_file = "dns-zones.json"
+
+[shared_foundry]
+mode = "create"
+existing_resource_group_name = "rg-training-foundry"
+location = "swedencentral"
+model_name = "gpt-6.1-sol"
+model_version = "2026-09-29"
+model_sku_name = "GlobalStandard"
+model_capacity = 15
+model_deployment_name = "gpt-6-1-sol"
+
+[[assignments]]
+principal_id = "33333333-3333-3333-3333-333333333333"
+principal_type = "User"
+role = "Admin"
+
+[role]
+blueprint = "junior-project-manager"
+source = "local"
+path = "blueprints/junior-project-manager"
+release = "4.0.0"
+commit = "1402d310cc04f3477b5f5f536727a6bae5227e59"
+bundle_sha256 = "8edd93377298de7780fb0a783e5bf6af62c6876655e0bdbc0577bf4c3a09df79"
+
+[images]
+manifest = "image-release.json"
+
+[platform]
+location = "swedencentral"
+sandbox_location = "swedencentral"
+model_name = "gpt-6.1-sol"
+model_version = "2026-09-29"
+model_sku_name = "GlobalStandard"
+existing_private_endpoint_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/endpoints"
+ampls_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Insights/privateLinkScopes/training-ampls"
+required_tags = { project = "training" }
+
+[[stacks]]
+name = "agent-dev"
+display_name = "IT canary"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-dev"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-dev"
+
+[[stacks]]
+name = "agent-1"
+display_name = "Training agent 1"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-1"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-1"
+
+[[stacks]]
+name = "agent-2"
+display_name = "Training agent 2"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-2"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-2"
+
+[[stacks]]
+name = "agent-3"
+display_name = "Training agent 3"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-3"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-3"
+
+[[stacks]]
+name = "agent-4"
+display_name = "Training agent 4"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-4"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-4"
+
+[[stacks]]
+name = "agent-5"
+display_name = "Training agent 5"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-5"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-5"
+
+[[stacks]]
+name = "agent-6"
+display_name = "Training agent 6"
+[stacks.platform]
+existing_resource_group_name = "rg-training-agent-6"
+existing_sandbox_subnet_id = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-connectivity/providers/Microsoft.Network/virtualNetworks/vnet-training/subnets/agent-6"

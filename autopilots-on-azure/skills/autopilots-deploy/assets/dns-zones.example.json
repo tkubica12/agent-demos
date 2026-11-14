@@ -1,0 +1,11 @@
+{
+  "privatelink.cognitiveservices.azure.com": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.cognitiveservices.azure.com",
+  "privatelink.openai.azure.com": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.openai.azure.com",
+  "privatelink.services.ai.azure.com": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.services.ai.azure.com",
+  "privatelink.swedencentral.azurecontainerapps.io": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.swedencentral.azurecontainerapps.io",
+  "privatelink.monitor.azure.com": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.monitor.azure.com",
+  "privatelink.oms.opinsights.azure.com": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.oms.opinsights.azure.com",
+  "privatelink.ods.opinsights.azure.com": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.ods.opinsights.azure.com",
+  "privatelink.agentsvc.azure-automation.net": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.agentsvc.azure-automation.net",
+  "privatelink.blob.core.windows.net": "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+}

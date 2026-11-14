@@ -234,13 +234,13 @@ Další konzultované, nepoužité, prázdné a blokované zdroje zachovávají 
 
 ### Původní posudky s úplnými manifesty
 
-Artefakty zůstávají v persistentních session files; cesty nejsou součástí Git checkoutu:
+Původní posudky a úplné manifesty jsou nepublikované lokální podklady mimo Git checkout. Následující přehled popisuje jejich původ; neobsahuje veřejné odkazy:
 
 | Expert | Kolo 1 | Kolo 2, které má přednost |
 |---|---|---|
-| Astra | `C:\Users\tokubica\.copilot\session-state\580ac608-b076-4890-85a9-90717f3456ea\files\astra-round1-review.md` | `C:\Users\tokubica\.copilot\session-state\580ac608-b076-4890-85a9-90717f3456ea\files\astra-round2-review.md` |
-| Opus | `C:\Users\tokubica\.copilot\session-state\5c193b69-5bbf-41f1-b04b-34f02801d152\files\expert2-kolo1-autopilots-review.md` | `C:\Users\tokubica\.copilot\session-state\5c193b69-5bbf-41f1-b04b-34f02801d152\files\expert2-kolo2-autopilots-review.md` |
-| Gemini | `C:\Users\tokubica\.copilot\session-state\704337ba-1958-4c51-be0b-edf3c253cb01\files\round1-gemini-expert-review.md` | `C:\Users\tokubica\.copilot\session-state\704337ba-1958-4c51-be0b-edf3c253cb01\files\round2-gemini-cross-examination.md`, včetně §6 opravného addenda |
+| Astra | Lokální posudek prvního kola | Lokální posudek druhého kola |
+| Opus | Lokální posudek prvního kola | Lokální posudek druhého kola |
+| Gemini | Lokální posudek prvního kola | Lokální křížové posouzení druhého kola, včetně §6 opravného addenda |
 
 **Výsledná míra jistoty:** silná u konkrétních lokálních nesouladů R1–R5; podmíněná u skutečného odstranění platformních vrstev E1–E6. Přesné Agent User timeouty, Sandbox idle sémantika otevřeného HTTP, delegované settlement a skutečné nákladové přínosy zůstávají cíli následného ověření. Implementace ani Azure prostředky se tímto review nezměnily.
 
