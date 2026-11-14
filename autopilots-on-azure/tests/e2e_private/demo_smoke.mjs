@@ -1,5 +1,5 @@
 // Minimal DEMO smoke: wrong-code rejection, login, real agent reply, upload/download.
-// Env: DEMO_URL, DEMO_ACCESS_CODE, DEMO_OWNER_NAME, DEMO_OUT (dir), optional PRIVATE_PLAYWRIGHT_MODULE.
+// Env: DEMO_URL, DEMO_ACCESS_CODE, DEMO_OWNER_NAME, DEMO_OUT (dir), optional PRIVATE_PLAYWRIGHT_MODULE, DEMO_CHROMIUM_PATH, DEMO_CHROMIUM_ARGS (JSON array).
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash, randomUUID, randomInt } from "node:crypto";
@@ -14,7 +14,10 @@ const out = process.env.DEMO_OUT;
 const timeout = 180_000;
 await mkdir(out, { recursive: true });
 const report = { url, at: new Date().toISOString(), checks: [] };
-const browser = await chromium.launch();
+const browser = await chromium.launch({
+  ...(process.env.DEMO_CHROMIUM_PATH ? { executablePath: process.env.DEMO_CHROMIUM_PATH } : {}),
+  ...(process.env.DEMO_CHROMIUM_ARGS ? { args: JSON.parse(process.env.DEMO_CHROMIUM_ARGS) } : {}),
+});
 const check = async (name, action) => {
   try { await action(); report.checks.push({ name, status: "pass" }); }
   catch (error) {
