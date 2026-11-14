@@ -11,6 +11,7 @@ updates:
       - /autopilots-on-azure/runtimes/hermes
       - /autopilots-on-azure/private-incidents-mcp
       - /autopilots-on-azure/public-shipments-mcp
+      - /autopilots-on-azure/chat-simulator
     registries:
       - protected-pypi
     schedule:
@@ -23,10 +24,9 @@ updates:
     open-pull-requests-limit: 3
   - package-ecosystem: docker
     directories:
-      - /autopilots-on-azure/bridge
+      - /autopilots-on-azure/runtimes/gateway
       - /autopilots-on-azure/runtimes/hermes
-      - /autopilots-on-azure/private-incidents-mcp
-      - /autopilots-on-azure/public-shipments-mcp
+      - /autopilots-on-azure/chat-simulator
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
