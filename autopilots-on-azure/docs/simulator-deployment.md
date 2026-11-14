@@ -51,7 +51,10 @@ the conversation journal and generated documents do not require those services.
 ## Pinned release and inputs
 
 Use the source snapshot and its **matching** `deployment-images` artifact from
-`.github/workflows/autopilots-images.yml`. The artifact is:
+`.github/workflows/autopilots-images.yml`. The workflow builds changes on `main`
+or an explicitly selected ref through `workflow_dispatch`; it does not deploy
+them. A source-only commit marked `[skip ci]` has no automatically rebuilt image
+release. The artifact is:
 
 ```json
 {
@@ -220,12 +223,18 @@ artifact. Later repository commits are not those deployed images.
 | DEMO login with the correct and a wrong access code (API) | Passed |
 | Real model reply with a fresh nonce through simulator, gateway and Hermes | Passed |
 | File upload and download with an exact SHA-256 match | Passed |
-| Model-generated HTML widget | Failed: the native run stayed `waiting_for_approval` and the gateway returned an error reply; the approval was not bypassed |
+| Model-generated HTML widget | Failed delivery: the gateway returned an error at a transient `waiting_for_approval` state. The original run later completed with a genuine widget, without an approval bypass, but that completion was not delivered |
 | Widget submit and same-chat follow-up | Not run |
-| Browser acceptance (`tests/e2e_private/demo_smoke.mjs`) | Not run |
+| Browser acceptance (`tests/e2e_private/demo_smoke.mjs`) | Attempted privately, not accepted: reply/widget failed with native HTTP 409; its exact cause remains unestablished |
+| Normal-TLS browser login | Not validated: the observed login used a certificate-error exception |
+| Browser file upload/download | Inconclusive; the separate API check above passed |
 
-The remaining full-acceptance checks above and Entra browser evidence are still
-open.
+The source-only repair from `9e1e9d6` is integrated into `main`: approval and
+clarification waits continue polling the same admitted run at 0.5 s, preserve
+native controls, and retain the existing deadline without admitting another run.
+It has not been rebuilt or deployed and does not fix or explain the separate
+browser HTTP 409 by assertion. The remaining full-acceptance checks above and
+Entra browser evidence are still open. This is not a customer-release approval.
 
 ## Cost and teardown
 

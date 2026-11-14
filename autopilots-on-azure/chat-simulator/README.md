@@ -14,6 +14,10 @@ The repository contains no deployed configuration, tenant identity or credential
 Upstream sample licenses and notices remain in `agents\reference-echo` and
 `frontend\THIRD-PARTY-NOTICES.txt`.
 
+For Azure deployment with a real Hermes Worker, see the
+[deployment guide and current validation gaps](../docs/simulator-deployment.md#current-validation-status).
+Local protocol/widget tests do not establish deployed model or browser acceptance.
+
 ## Run and build
 
 [SETUP.md](SETUP.md) covers the default single-tenant **Entra** sign-in, application

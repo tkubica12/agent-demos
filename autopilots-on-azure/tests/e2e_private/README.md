@@ -356,6 +356,11 @@ upload/download. It writes `demo-smoke.json` and screenshots to `DEMO_OUT` and
 exits nonzero when any check fails. It does not replace the full acceptance
 runner above.
 
+The [recorded deployment results](../../docs/simulator-deployment.md#current-validation-status)
+separate API checks from browser checks. A browser session using a certificate
+exception is not normal-TLS acceptance. Reply-timeout diagnostics include short
+message excerpts, so keep the output private and use test data only.
+
 ```powershell
 $env:DEMO_URL = "https://<simulator-origin>"
 $env:DEMO_ACCESS_CODE = "<code from the private secrets.json>"

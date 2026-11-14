@@ -2,7 +2,7 @@ name: Autopilots public images
 
 on:
   push:
-    branches: [tkubica12-autopilots-simulator-deployment]
+    branches: [main]
     paths:
       - autopilots-on-azure/**
       - .github/workflows/autopilots-images.yml
