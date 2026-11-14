@@ -225,6 +225,24 @@ class SimulatorIdentityTests(unittest.TestCase):
         self.reconcile(redirect_uri="https://simulator.example/new")
         self.assertEqual(self.graph.apps[app["id"]]["spa"]["redirectUris"], ["https://simulator.example/new"])
 
+    def test_channel_and_agent_resources_request_v2_tokens_and_repair_existing_registrations(self) -> None:
+        result = self.reconcile()
+        resources = [result["channel"], result["agents"]["worker-one"]]
+        for record in resources:
+            app = self.graph.apps[record["object_id"]]
+            self.assertEqual(app["api"]["requestedAccessTokenVersion"], 2)
+            app["api"]["requestedAccessTokenVersion"] = None
+        self.reconcile()
+        for record in resources:
+            self.assertEqual(self.graph.apps[record["object_id"]]["api"]["requestedAccessTokenVersion"], 2)
+        context = identity._context(self.config)
+        state = {**context, **result}
+        calls = identity._proposed_calls(self.config, self.bindings, state, "", False)
+        patches = [call for call in calls if call["method"] == "PATCH"
+                   and any(record["object_id"] in call.get("path", "") for record in resources)]
+        self.assertEqual(len(patches), 2)
+        self.assertTrue(all(call["body"]["api"]["requestedAccessTokenVersion"] == 2 for call in patches))
+
     def test_graph_readonly_fields_and_collection_order_do_not_cause_updates(self) -> None:
         result = self.reconcile()
         app = self.graph.apps[result["spa"]["object_id"]]

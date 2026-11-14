@@ -139,6 +139,7 @@ def _definition(context: dict, kind: str, display: str, client_id: str, redirect
                 current: dict | None = None) -> dict:
     body = {"displayName": display, "signInAudience": "AzureADMyOrg", "tags": _tags(context, kind)}
     if kind != "spa":
+        body["api"] = {"requestedAccessTokenVersion": 2}
         return body
     scope_id = str(uuid.uuid5(_namespace(context), "access_as_user"))
     body.update({
