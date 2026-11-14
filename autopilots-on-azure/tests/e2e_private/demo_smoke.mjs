@@ -379,14 +379,16 @@ if (steps.has("files")) {
       await shot("uploaded-transform");
     } catch (error) {
       const failure = String(error.message).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
-      report.fileProcessing ??= {
-        status: "fail", reason: failure, sourceName, outputName,
-        requestMessageId: sent?.id ?? null, responseMessageId: received?.id ?? null,
-        responseText, sourceSha256: createHash("sha256").update(sourceBytes).digest("hex"),
-        sourceHashVerified, outputSha256: downloaded ? createHash("sha256").update(downloaded).digest("hex") : null,
-        nativeEvidenceTarget: target ?? null, nativeEvidenceTargetPath: targetPath ?? null,
-        observedMessages: error.observedMessages ?? [],
-      };
+      if (report.fileProcessing.status !== "fail") {
+        report.fileProcessing = {
+          status: "fail", reason: failure, sourceName, outputName,
+          requestMessageId: sent?.id ?? null, responseMessageId: received?.id ?? null,
+          responseText, sourceSha256: createHash("sha256").update(sourceBytes).digest("hex"),
+          sourceHashVerified, outputSha256: downloaded ? createHash("sha256").update(downloaded).digest("hex") : null,
+          nativeEvidenceTarget: target ?? null, nativeEvidenceTargetPath: targetPath ?? null,
+          observedMessages: error.observedMessages ?? [],
+        };
+      }
       const codeFailed = blockedPattern.test(failure) || routeRefusalPattern.test(responseText) ||
         failure.includes("Timed out waiting for condition.") ||
         failure.includes("exact lowercase SHA-256 computed by Python") ||
