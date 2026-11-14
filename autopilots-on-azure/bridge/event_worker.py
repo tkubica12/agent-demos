@@ -24,6 +24,9 @@ from bridge.operator_auth import require_collective_learning_operator
 
 
 logger = logging.getLogger(__name__)
+KEEPALIVE_INTERVAL_SECONDS = 60
+KEEPALIVE_RETRY_SECONDS = 5
+KEEPALIVE_FAILURE_LIMIT = 5
 _active: dict[tuple[str, str], asyncio.Task[None]] = {}
 _admitting: set[tuple[str, str]] = set()
 _admission_lock = asyncio.Lock()
@@ -165,11 +168,24 @@ async def _keep_active() -> None:
         health_url = ""
     if not health_url.startswith("https://"):
         raise ValueError("Active transport work requires its native HTTPS self-ingress URL.")
+    failures = 0
     async with httpx.AsyncClient(timeout=20) as client:
         while True:
-            response = await client.get(health_url)
-            response.raise_for_status()
-            await asyncio.sleep(60)
+            try:
+                response = await client.get(health_url)
+                response.raise_for_status()
+            except httpx.HTTPError as error:
+                failures += 1
+                if failures >= KEEPALIVE_FAILURE_LIMIT:
+                    raise
+                logger.warning(
+                    "Gateway self-ingress keepalive failed (%s); consecutive failure %d of %d.",
+                    type(error).__name__, failures, KEEPALIVE_FAILURE_LIMIT,
+                )
+                await asyncio.sleep(KEEPALIVE_RETRY_SECONDS)
+                continue
+            failures = 0
+            await asyncio.sleep(KEEPALIVE_INTERVAL_SECONDS)
 
 
 async def _guarded(work: Awaitable[dict[str, Any]], queue: str, message_id: str) -> dict[str, Any]:

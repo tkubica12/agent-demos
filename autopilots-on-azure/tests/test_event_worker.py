@@ -414,6 +414,50 @@ class EventWorkerTests(unittest.IsolatedAsyncioTestCase):
                 await event_worker._keep_active()
         client.get.assert_awaited_once_with("https://gateway.example/health")
 
+    def keepalive_client(self, *results):
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.get = AsyncMock(side_effect=list(results))
+        return client
+
+    async def test_gateway_keepalive_survives_isolated_failures_after_a_resume_stall(self):
+        healthy = MagicMock()
+        client = self.keepalive_client(
+            httpx.ConnectTimeout(""), healthy, httpx.ConnectTimeout(""), healthy,
+        )
+        sleep = AsyncMock(side_effect=[None, None, None, asyncio.CancelledError])
+        with (
+            patch.dict("os.environ", {"TRANSPORT_SELF_URL": "https://gateway.example"}),
+            patch.object(event_worker.httpx, "AsyncClient", return_value=client),
+            patch.object(event_worker.asyncio, "sleep", sleep),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await event_worker._keep_active()
+        self.assertEqual(client.get.await_count, 4)
+        self.assertEqual(
+            [call.args[0] for call in sleep.await_args_list],
+            [event_worker.KEEPALIVE_RETRY_SECONDS, event_worker.KEEPALIVE_INTERVAL_SECONDS] * 2,
+        )
+
+    async def test_gateway_keepalive_stops_work_after_consecutive_failures(self):
+        unavailable = MagicMock()
+        unavailable.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "unavailable", request=MagicMock(), response=MagicMock(status_code=503),
+        )
+        limit = event_worker.KEEPALIVE_FAILURE_LIMIT
+        client = self.keepalive_client(*[unavailable] * limit)
+        sleep = AsyncMock()
+        with (
+            patch.dict("os.environ", {"TRANSPORT_SELF_URL": "https://gateway.example"}),
+            patch.object(event_worker.httpx, "AsyncClient", return_value=client),
+            patch.object(event_worker.asyncio, "sleep", sleep),
+        ):
+            with self.assertRaises(httpx.HTTPStatusError):
+                await event_worker._keep_active()
+        self.assertEqual(client.get.await_count, limit)
+        self.assertEqual(sleep.await_count, limit - 1)
+
     async def test_native_ingress_admits_raw_envelope_without_settling_at_callback_receipt(self):
         from bridge.transport_ingress import NativeTransportIngressMiddleware
 
