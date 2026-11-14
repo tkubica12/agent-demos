@@ -75,11 +75,20 @@ await check("demo-login", async () => {
   personal = (await api("/chats", "POST", { memberIds: [agent.id] })).conversationId;
   await page.locator(`[data-conversation-id="${personal}"]`).click();
 });
-const reply = (afterId, predicate) => eventually(async () => {
-  const messages = await api(`/conversations/${personal}/messages`);
-  const index = messages.findIndex((message) => message.id === afterId);
-  return index >= 0 && messages.slice(index + 1).find((m) => m.author.id === agent.id && predicate(m));
-});
+const reply = async (afterId, predicate) => {
+  let last = [];
+  try {
+    return await eventually(async () => {
+      const messages = await api(`/conversations/${personal}/messages`);
+      const index = messages.findIndex((message) => message.id === afterId);
+      last = index >= 0 ? messages.slice(index + 1) : [];
+      return index >= 0 && last.find((m) => m.author.id === agent.id && predicate(m));
+    });
+  } catch (error) {
+    const seen = last.map((m) => `${m.author.id === agent.id ? "agent" : "user"}/${m.textFormat}: ${String(m.text).slice(0, 160)}`);
+    throw new Error(`${error.message} Messages after request: ${JSON.stringify(seen)}`);
+  }
+};
 await check("real-agent-reply", async () => {
   const nonce = randomUUID().replaceAll("-", ""), a = randomInt(100, 999), b = randomInt(100, 999);
   const sent = await api(`/conversations/${personal}/messages`, "POST", {
