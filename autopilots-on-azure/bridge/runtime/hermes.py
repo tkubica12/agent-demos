@@ -1136,7 +1136,7 @@ class HermesRuntimeAdapter:
                         f"Native run {run_id} ended: {status}: {result.get('error', '')}"
                     )
                     break
-                if status in {"unknown", "waiting_for_approval", "waiting_for_clarification"}:
+                if status == "unknown":
                     raise NativeRunInterventionError(
                         f"Native run {run_id} ended or requires intervention: {status}: {result.get('error', '')}"
                     )

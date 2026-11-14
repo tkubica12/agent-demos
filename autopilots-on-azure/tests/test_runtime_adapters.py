@@ -556,6 +556,64 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(len(sleeps), 2)
         self.assertLess(sum(sleeps), 2)
 
+    def test_native_control_wait_returns_same_runs_completed_widget(self):
+        widget = "<HTML_WIDGET_REQUEST>" + json.dumps({
+            "title": "Note", "html": '<input id="note">',
+            "actions": [{"id": "send", "label": "Send"}],
+        }) + "</HTML_WIDGET_REQUEST>"
+        request = AgentRequest("Create a widget", "conversation-1", "user-1", "teams_personal", True)
+        for waiting in ("waiting_for_approval", "waiting_for_clarification"):
+            with self.subTest(waiting=waiting):
+                statuses = iter((waiting, "completed"))
+
+                def handle(outgoing):
+                    if outgoing.method == "GET" and outgoing.url.path == "/v1/runs/run-test":
+                        return httpx.Response(200, json={
+                            "run_id": "run-test", "status": next(statuses), "output": widget,
+                        })
+                    return self.native_session_handler(outgoing)
+
+                adapter, requests = self.runtime_adapter(handle)
+                with patch.object(hermes_runtime.asyncio, "sleep", AsyncMock()):
+                    result = asyncio.run(adapter._native_run("https://hermes.example", "api-key", request))
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["output"], widget)
+                admissions = [call for call in requests if call.method == "POST" and call.url.path == "/v1/runs"]
+                self.assertEqual(len(admissions), 1)
+                self.assertEqual(
+                    [call.url.path for call in requests if call.url.path.startswith("/v1/runs/")],
+                    ["/v1/runs/run-test", "/v1/runs/run-test"],
+                )
+
+    def test_native_control_wait_deadline_does_not_admit_another_run(self):
+        from bridge.event_worker import InvocationPendingError
+
+        request = AgentRequest("Create a widget", "conversation-1", "user-1", "teams_personal", True)
+        for waiting in ("waiting_for_approval", "waiting_for_clarification"):
+            with self.subTest(waiting=waiting):
+                ticks = iter((0.0, 0.0, 0.5, 1.0))
+
+                def handle(outgoing):
+                    if outgoing.method == "GET" and outgoing.url.path == "/v1/runs/run-test":
+                        return httpx.Response(200, json={"run_id": "run-test", "status": waiting})
+                    return self.native_session_handler(outgoing)
+
+                adapter, requests = self.runtime_adapter(handle)
+                with (
+                    patch.dict(os.environ, {"HERMES_BRIDGE_TIMEOUT_SECONDS": "1"}),
+                    patch.object(hermes_runtime, "time", SimpleNamespace(monotonic=lambda: next(ticks))),
+                    patch.object(hermes_runtime.asyncio, "sleep", AsyncMock()),
+                    self.assertRaisesRegex(InvocationPendingError, "run-test remains unfinished"),
+                ):
+                    asyncio.run(adapter._native_run("https://hermes.example", "api-key", request))
+                self.assertEqual(
+                    sum(call.method == "POST" and call.url.path == "/v1/runs" for call in requests), 1,
+                )
+                self.assertEqual(
+                    [call.url.path for call in requests if call.url.path.startswith("/v1/runs/")],
+                    ["/v1/runs/run-test", "/v1/runs/run-test"],
+                )
+
     def runtime_adapter(self, handler):
         requests: list[httpx.Request] = []
 
