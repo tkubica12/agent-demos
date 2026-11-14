@@ -233,6 +233,10 @@ and `<environment>-shared` workspace. Its ownership inventory retains previously
 known stacks. A deployment-wide lock serializes stack operations against central
 teardown; stacks also keep their own lock. Changing account/RG/network ownership
 or switching `per_stack`/`shared` requires teardown, not state adoption.
+Use the original inputs/state to destroy the old deployment, then choose a new
+`environment` prefix for the new ownership mode. The same durable state root may
+hold both disjoint environments; preserve old ownership records rather than
+editing/deleting them to bypass the mode guard.
 
 Retain the complete durable directory with restricted access and backups. It
 contains authoritative Terraform state, identities, DEMO/API/signing keys and
