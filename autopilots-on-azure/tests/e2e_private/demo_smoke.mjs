@@ -111,17 +111,19 @@ report.banner = (await page.getByTestId("demo-warning").innerText()).trim();
 await shot("login-page");
 const sendFromUi = async (text) => {
   await page.getByTestId("composer").locator("textarea").fill(text);
-  const isSend = (r) => r.request().method() === "POST" &&
-    new URL(r.url()).pathname === `/api/conversations/${personal}/messages`;
+  const isSendRequest = (request) => request.method() === "POST" &&
+    new URL(request.url()).pathname === `/api/conversations/${personal}/messages`;
+  const isSendResponse = (response) => response.request().method() === "POST" &&
+    new URL(response.url()).pathname === `/api/conversations/${personal}/messages`;
   const record = { clickedAt: new Date().toISOString(), conversationId: personal };
   report.sends = [...(report.sends ?? []), record];
-  const requested = page.waitForRequest(isSend).then((request) => {
+  const requested = page.waitForRequest(isSendRequest).then((request) => {
     record.requestAt = new Date().toISOString();
     record.requestBody = request.postData();
     record.requestUrl = request.url();
     return request;
   });
-  const posted = page.waitForResponse(isSend).then((response) => {
+  const posted = page.waitForResponse(isSendResponse).then((response) => {
     record.responseAt = new Date().toISOString();
     record.status = response.status();
     return response;
