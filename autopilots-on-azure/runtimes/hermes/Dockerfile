@@ -1,5 +1,5 @@
 ARG HERMES_BASE_IMAGE
-FROM alpine/git:2.49.1 AS minimax-skills
+FROM alpine/git:v2.54.0 AS minimax-skills
 
 ARG MINIMAX_SKILLS_COMMIT=60aaae52bb2af8162732751a4332f62a5fef518b
 RUN git clone https://github.com/MiniMax-AI/skills.git /source \
