@@ -4,8 +4,9 @@ import asyncio
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
-from agent_framework import FileSkillsSource, MCPSkillsSource, SkillsProvider
+from agent_framework import FileSkillsSource, SkillsProvider, SkillsSourceContext
 
 
 SKILLS_ROOT = Path(__file__).parent / "skills" / "base"
@@ -54,13 +55,20 @@ def validate_skill_files() -> None:
 async def validate_agent_framework_skills() -> None:
     provider = SkillsProvider.from_paths(
         skill_paths=SKILLS_ROOT,
-        resource_directories=("references", "assets"),
+        resource_filter=lambda _skill_name, path: path.startswith(("references/", "assets/")),
+        disable_load_skill_approval=True,
+        disable_read_skill_resource_approval=True,
     )
     if provider is None:
         raise AssertionError("SkillsProvider.from_paths returned None.")
 
-    source = FileSkillsSource(SKILLS_ROOT, resource_directories=("references", "assets"))
-    skills = await source.get_skills()
+    source = FileSkillsSource(
+        SKILLS_ROOT,
+        resource_filter=lambda _skill_name, path: path.startswith(("references/", "assets/")),
+    )
+    skills = await source.get_skills(
+        SkillsSourceContext(agent=SimpleNamespace(name="step-08-skill-smoke"))
+    )
     discovered = {skill.frontmatter.name: skill for skill in skills}
     missing = EXPECTED_SKILLS.keys() - discovered.keys()
     if missing:
@@ -77,9 +85,6 @@ async def validate_agent_framework_skills() -> None:
     content = await escalation.get_content()
     if "references/escalation-matrix.md" not in content:
         raise AssertionError("Escalation skill content should reference its resource.")
-
-    if MCPSkillsSource is None:
-        raise AssertionError("MCPSkillsSource is unavailable; toolbox skill spike cannot run.")
 
 
 def main() -> int:

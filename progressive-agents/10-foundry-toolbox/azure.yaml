@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+requiredVersions:
+    extensions:
+        azure.ai.agents: '>=1.0.0-beta.4'
+name: step-10-foundry-toolbox
+services:
+    step-10-foundry-toolbox:
+        project: .
+        host: azure.ai.agent
+        language: docker
+        docker:
+            remoteBuild: true
+        config:
+            container:
+                resources:
+                    cpu: "0.5"
+                    memory: 1Gi
+            deployments:
+                - model:
+                    format: OpenAI
+                    name: gpt-5.4-mini
+                    version: "2026-03-17"
+                  name: gpt-5.4-mini
+                  sku:
+                    capacity: 603
+                    name: GlobalStandard
+                - model:
+                    format: OpenAI
+                    name: text-embedding-3-large
+                    version: "1"
+                  name: text-embedding-3-large
+                  sku:
+                    capacity: 470
+                    name: GlobalStandard
+                - model:
+                    format: OpenAI
+                    name: gpt-5.4
+                    version: "2026-03-05"
+                  name: gpt-5.4
+                  sku:
+                    capacity: 900
+                    name: GlobalStandard
+                - model:
+                    format: OpenAI
+                    name: gpt-5.4-nano
+                    version: "2026-03-17"
+                  name: gpt-5.4-nano
+                  sku:
+                    capacity: 5392
+                    name: GlobalStandard
+                - model:
+                    format: OpenAI
+                    name: gpt-4.1
+                    version: "2025-04-14"
+                  name: gpt-4.1
+                  sku:
+                    capacity: 877
+                    name: GlobalStandard
+            startupCommand: python main.py

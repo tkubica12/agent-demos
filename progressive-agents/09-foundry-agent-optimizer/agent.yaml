@@ -1,0 +1,37 @@
+name: step-09-foundry-agent-optimizer
+kind: hosted
+description: Microsoft Agent Framework hosted agent prepared for evaluation-driven optimization of instructions, skills, tools, and models.
+metadata:
+  tags:
+    - Microsoft Agent Framework
+    - Foundry Hosted Agent
+    - Responses Protocol
+    - Authenticated AG-UI Gateway
+    - Observability
+    - Evaluations
+    - Memory
+    - User Profile
+    - Agent Skills
+protocols:
+  - protocol: responses
+    version: 2.0.0
+resources:
+  cpu: "0.5"
+  memory: 1Gi
+environment_variables:
+  - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+    value: gpt-5.4-mini
+  - name: MEMORY_STORE_NAME
+    value: step-09-foundry-agent-optimizer
+  - name: MEMORY_UPDATE_DELAY_SECONDS
+    value: "1"
+  - name: MEMORY_DEFAULT_USER_ID
+    value: playground-user
+  - name: MEMORY_STORE_PATH
+    value: /files/step-09-memory-store.json
+  - name: OPTIMIZATION_LOCAL_DIR
+    value: /app/.agent_configs
+  - name: OPTIMIZATION_MEMORY_USER_ID
+    value: step09-optimizer-isolated
+  - name: SUPPORT_POLICY_PATH
+    value: /app/policies/support-policies.json

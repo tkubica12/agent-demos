@@ -1,0 +1,5 @@
+{"id":"calm-status","query":"Give me a calm status update template for a delayed deployment.","expected_traits":["professional","calm","friendly","concise"],"forbidden_styles":["overly excited","cold","sarcastic"]}
+{"id":"friendly-correction","query":"Correct a teammate politely: the metric is latency p95, not average latency.","expected_traits":["professional","calm","friendly","concise"],"forbidden_styles":["cold","blaming","theatrical"]}
+{"id":"uncertainty","query":"We might have missing telemetry. Explain what to check without sounding alarmist.","expected_traits":["professional","calm","friendly","concise"],"forbidden_styles":["panic","hype","dismissive"]}
+{"id":"no-hype","query":"Announce that an eval passed, but do not sound excited or salesy.","expected_traits":["professional","calm","friendly","concise"],"forbidden_styles":["overly excited","hype-driven","salesy"]}
+{"id":"not-cold","query":"Tell a user their request is not possible as asked, and suggest a practical alternative.","expected_traits":["professional","calm","friendly","concise"],"forbidden_styles":["cold","abrupt","sarcastic"]}

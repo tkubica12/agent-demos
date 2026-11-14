@@ -1,0 +1,15 @@
+[publication]
+publish_scope = "Tenant"
+version_prefix = "1.0"
+short_description = "Support-policy agent with Foundry Toolbox, memory, and skills."
+full_description = "A Microsoft Foundry Hosted Agent published natively through Agent 365 for Teams."
+developer_name = "Progressive Agents"
+developer_website_url = "https://github.com/tkubica12/agent-demos"
+privacy_url = "https://privacy.microsoft.com/privacystatement"
+terms_of_use_url = "https://www.microsoft.com/servicesagreement"
+
+[agentic_user_template]
+id = "step11Agent365Template"
+file = "agenticUserTemplateManifest.json"
+schema_version = "0.1.0-preview"
+communication_protocol = "activityProtocol"

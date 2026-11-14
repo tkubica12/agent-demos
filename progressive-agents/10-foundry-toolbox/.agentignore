@@ -1,0 +1,33 @@
+# Files excluded from Foundry Hosted Agent code-deploy ZIP packaging.
+# Uses .gitignore syntax.
+
+# azd tooling files
+agent.yaml
+agent.manifest.yaml
+azure.yaml
+.agentignore
+
+# Security / secrets
+.env
+.env.*
+.data/
+memory_store.json
+.azure/
+.git/
+
+# Generated eval artifacts
+evals/generated_conversations.jsonl
+evals/eval_results.json
+eval.yaml
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+
+# Docker
+.dockerignore

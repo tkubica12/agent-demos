@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: step-11-contoso-support-agent
+description: Microsoft Agent Framework hosted agent published to Agent 365 and Teams.
+metadata:
+    tags:
+        - Microsoft Agent Framework
+        - Foundry Hosted Agent
+        - Responses Protocol
+        - Authenticated AG-UI Gateway
+        - Observability
+        - Evaluations
+        - Memory
+        - User Profile
+        - Agent Skills
+        - Foundry Toolbox
+        - MCP
+        - Agent 365
+        - Teams
+        - Activity Protocol
+protocols:
+    - protocol: responses
+      version: 2.0.0
+    - protocol: invocations
+      version: 2.0.0
+    - protocol: activity_protocol
+      version: v1
+resources:
+    cpu: "0.5"
+    memory: 1Gi
+environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+    - name: MEMORY_STORE_NAME
+      value: step-11-agent365-teams
+    - name: MEMORY_UPDATE_DELAY_SECONDS
+      value: "1"
+    - name: MEMORY_DEFAULT_USER_ID
+      value: playground-user
+    - name: MEMORY_STORE_PATH
+      value: /files/step-11-memory-store.json
+    - name: OPTIMIZATION_LOCAL_DIR
+      value: /app/.agent_configs
+    - name: TOOLBOX_ENDPOINT
+      value: ${TOOLBOX_STEP_11_CONTOSO_SUPPORT_MCP_ENDPOINT}
+    - name: MCP_API_AUDIENCE
+      value: ${MCP_API_AUDIENCE}
+    - name: TOOLBOX_EXPECTED_SKILL_CANARY
+      value: ${TOOLBOX_EXPECTED_SKILL_CANARY}
+    - name: AZURE_TENANT_ID
+      value: ${AZURE_TENANT_ID}
+    - name: ENABLE_A365_OBSERVABILITY
+      value: "true"
+    - name: ENABLE_A365_OBSERVABILITY_EXPORTER
+      value: "true"

@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/microsoft/AgentSchema/refs/heads/main/schemas/v1.0/ContainerAgent.yaml
+
+kind: hosted
+name: step-10-foundry-toolbox
+description: Microsoft Agent Framework hosted agent consuming a versioned Foundry Toolbox over MCP.
+metadata:
+    tags:
+        - Microsoft Agent Framework
+        - Foundry Hosted Agent
+        - Responses Protocol
+        - Authenticated AG-UI Gateway
+        - Observability
+        - Evaluations
+        - Memory
+        - User Profile
+        - Agent Skills
+        - Foundry Toolbox
+        - MCP
+protocols:
+    - protocol: responses
+      version: 2.0.0
+resources:
+    cpu: "0.5"
+    memory: 1Gi
+environment_variables:
+    - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+      value: gpt-5.4-mini
+    - name: MEMORY_STORE_NAME
+      value: step-10-foundry-toolbox
+    - name: MEMORY_UPDATE_DELAY_SECONDS
+      value: "1"
+    - name: MEMORY_DEFAULT_USER_ID
+      value: playground-user
+    - name: MEMORY_STORE_PATH
+      value: /files/step-10-memory-store.json
+    - name: OPTIMIZATION_LOCAL_DIR
+      value: /app/.agent_configs
+    - name: TOOLBOX_ENDPOINT
+      value: ${TOOLBOX_STEP_10_CONTOSO_SUPPORT_MCP_ENDPOINT}
+    - name: MCP_API_AUDIENCE
+      value: ${MCP_API_AUDIENCE}
+    - name: TOOLBOX_EXPECTED_SKILL_CANARY
+      value: ${TOOLBOX_EXPECTED_SKILL_CANARY}
