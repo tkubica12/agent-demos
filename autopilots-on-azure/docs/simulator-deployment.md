@@ -28,6 +28,8 @@ and files (`/mnt/tsim`, 5 GiB), runtime home/role data (`/data`, 10 GiB) and gat
 journal backups (`/backup`, 5 GiB). Runtime native backup archives are written at
 the actual `/data` mount root alongside its home/role directories; `/data/backups`
 is not a separate mount and fails the unchanged native backup mount guard.
+Runtime reconciliation identifies the `hermes-data` mount for reuse or owned
+compute replacement, and retains the same Data Disk while waiting for detachment.
 No suspend mode alone proves never-suspend.
 
 The packaged launcher starts the actual application directly with environment

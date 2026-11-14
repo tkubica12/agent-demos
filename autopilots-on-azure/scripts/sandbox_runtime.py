@@ -177,8 +177,9 @@ def runtime_labels(config: AgentSandboxConfig) -> dict[str, str]:
     return labels
 
 
-def mounts_backup_volume(sandbox: Mapping[str, Any]) -> bool:
-    return any(volume.get("volumeName") == RUNTIME_BACKUP_VOLUME for volume in sandbox.get("volumes") or [])
+def mounts_backup_volume(sandbox: Mapping[str, Any], *, persistent_home: bool = False) -> bool:
+    volume_name = "hermes-data" if persistent_home else RUNTIME_BACKUP_VOLUME
+    return any(volume.get("volumeName") == volume_name for volume in sandbox.get("volumes") or [])
 
 
 def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfig) -> dict | None:
@@ -189,7 +190,7 @@ def existing_agent_sandbox(client: SandboxGroupClient, config: AgentSandboxConfi
             continue
         if "runtime" in labels or "autopilot" in labels:
             continue
-        if mounts_backup_volume(sandbox):
+        if mounts_backup_volume(sandbox, persistent_home=config.persistent_home):
             return sandbox
     return None
 
@@ -203,7 +204,9 @@ def stale_agent_sandboxes(client: SandboxGroupClient, config: AgentSandboxConfig
             continue
         if labels.get("kind") != config.runtime_kind:
             continue
-        if not mounts_backup_volume(sandbox):
+        if config.worker_id and labels.get("worker") != config.worker_id:
+            continue
+        if not mounts_backup_volume(sandbox, persistent_home=config.persistent_home):
             continue
         if any(labels.get(key) != value for key, value in expected_labels.items()):
             stale.append(sandbox)
