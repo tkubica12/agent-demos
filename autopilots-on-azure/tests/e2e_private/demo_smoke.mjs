@@ -14,9 +14,20 @@ const out = process.env.DEMO_OUT;
 const timeout = 180_000;
 await mkdir(out, { recursive: true });
 const report = { url, at: new Date().toISOString(), checks: [] };
+const FORBIDDEN_ARG = /^--(ignore-certificate-errors|disable-web-security|allow-running-insecure-content|disable-site-isolation-trials|single-process|no-zygote)/;
+const DROPPED_FEATURES = new Set(["IsolateOrigins", "site-per-process"]);
+function sanitizeArgs(args) {
+  return args.filter((arg) => !FORBIDDEN_ARG.test(arg)).flatMap((arg) => {
+    if (!arg.startsWith("--disable-features=")) return [arg];
+    const kept = arg.slice("--disable-features=".length).split(",").filter((f) => f && !DROPPED_FEATURES.has(f));
+    return kept.length ? [`--disable-features=${kept.join(",")}`] : [];
+  });
+}
+const launchArgs = process.env.DEMO_CHROMIUM_ARGS ? sanitizeArgs(JSON.parse(process.env.DEMO_CHROMIUM_ARGS)) : undefined;
+report.browserArgs = launchArgs ?? "playwright-default";
 const browser = await chromium.launch({
   ...(process.env.DEMO_CHROMIUM_PATH ? { executablePath: process.env.DEMO_CHROMIUM_PATH } : {}),
-  ...(process.env.DEMO_CHROMIUM_ARGS ? { args: JSON.parse(process.env.DEMO_CHROMIUM_ARGS) } : {}),
+  ...(launchArgs ? { args: launchArgs } : {}),
 });
 const check = async (name, action) => {
   try { await action(); report.checks.push({ name, status: "pass" }); }
