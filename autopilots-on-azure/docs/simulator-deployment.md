@@ -130,6 +130,20 @@ preserving separate telemetry connections, agent registration and stack teardown
 Shared and stack resource groups must be distinct. Per-stack auth overrides are
 supported by the existing stack merge; DEMO expiry/acknowledgement remain mandatory.
 
+The `shared` action applies the central `terraform/shared-foundry` root once,
+before stack infrastructure. Default `all` does this automatically, even when
+`--stack agent-dev` selects only the canary. Each stack platform consumes the
+central state's outputs, creates its own project and monitoring connection, and
+does not own an account, model deployment or Foundry PE. Runtime inference uses
+`Cognitive Services OpenAI User` at the shared account; the agent/telemetry name
+includes the stack name. Pooling shares quota and contention, not stack data or
+runtime state; it does not guarantee per-stack fairness.
+
+All workload subnets and operators must reach the central endpoint subnet through
+customer routing/peering and resolve its three private DNS zones. Existing mode
+also requires the administrator to provision that private endpoint and DNS; the
+deployer does not change the external account's auth/network policy.
+
 `network_mode = "private"` and `resource_group_mode = "existing"` are defaults.
 Global `[platform]` is merged with `[stacks.platform]`: AI `location`,
 `sandbox_location`, model name/version/deployment/SKU, existing RG and dedicated
@@ -138,6 +152,10 @@ delegated Sandbox subnet, shared nondelegated PE subnet, central
 `ampls_id`. `private_dns_zone_ids_file` optionally loads the map from a JSON file
 relative to the TOML. Existing-mode RGs, VNets, subnets, routes, NSGs, central DNS
 zones/links and existing monitoring resources are not owned by these stacks.
+Resource groups and dedicated Sandbox subnet IDs cannot be duplicated across
+the inventory, even when selecting one stack. Normal `plan` validates subnet
+delegation/size but does not inspect existing Sandbox Group allocations or leases;
+the operator must supply seven free dedicated subnets for a new seven-stack rollout.
 
 Required service DNS zones are `privatelink.cognitiveservices.azure.com`,
 `privatelink.openai.azure.com`, `privatelink.services.ai.azure.com`, and
@@ -166,18 +184,20 @@ The first deployment principal remains pinned in `environment.json`.
 
 Register Microsoft.App, Microsoft.CognitiveServices, Microsoft.ManagedIdentity,
 Microsoft.Network, Microsoft.OperationalInsights and Microsoft.Insights.
-Model catalog availability and quota are separate prerequisites. The template uses
-Sweden Central `gpt-6.1-sol`, version `2026-09-29`, `GlobalStandard`, deployment
-`gpt-6-1-sol`, capacity 15 per stack. Six deployments require total capacity 90;
-this is not a concurrency or token-rate guarantee.
+Model catalog availability and quota are separate prerequisites. The template uses Sweden Central `gpt-6.1-sol`, version `2026-09-29`,
+`GlobalStandard`, deployment `gpt-6-1-sol`, pooled capacity 15 in shared mode.
+Seven per-stack deployments at capacity 15 would require total capacity 105;
+one shared deployment requires 15. Neither is a concurrency/token-rate guarantee.
 
 From `autopilots-on-azure`:
 
 ```powershell
 az login --use-device-code --tenant <tenant UUID>
-az account set --subscription <subscription UUID>
 uv sync --frozen
+uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState --offline plan
 uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState plan
+uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState shared
+uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState --stack agent-dev
 uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState
 ```
 
@@ -186,8 +206,20 @@ selection, simulator creation, actual-URL redirect reconciliation, Workers,
 registrations and management-channel readiness checks. It does **not** certify
 full browser/chat acceptance. Individual actions are `prepare`, `infrastructure`,
 `identities`, `images`, `deploy`, `verify`, `all` and `destroy`; `plan` is read-only.
-There is no `build` action. Select a subset with repeated `--stack agent-N`.
-Prove two stacks before deploying the remaining four.
+There is no `build` action. Select a subset with repeated `--stack agent-N` or
+`--stack agent-dev`. Prove the dev canary and a second stack before the remainder.
+`--offline plan` only expands/validates inputs, without Azure or ownership reads;
+every prerequisite remains explicitly unverified. Normal `plan` performs read-only
+Azure checks and counts the shared capacity once. Existing pools request no quota
+change or ownership credit. Commands explicitly select the configured subscription;
+do not change a shared Azure CLI default.
+
+For shared infrastructure, permissions on the stack RG are insufficient:
+the operator needs project creation plus role-assignment write/delete at the shared
+account. Missing/unreadable permissions produce `azure-admin-request.json` under
+the central state root with the exact account scope, principal and actions; no
+identity or role is fabricated. Grant Contributor plus Role Based Access Control
+Administrator (or equivalent custom roles) on that scope, then retry.
 
 Every stack selects a non-default Terraform workspace inside its own durable
 `simulator-<environment>-agent-N` directory. Only tracked Terraform files and
@@ -195,6 +227,12 @@ locks are copied; platform-state paths are absolute. Existing default-workspace
 state, `.local\hermes`, `.local\hermes2` and unrelated Agent 365 objects are never
 used. Extracted snapshots need a verified `deployment-manifest.json` containing
 their full `source_commit` and file hashes; Git is not needed.
+
+The central state has its own `simulator-shared-<environment>\foundry` directory
+and `<environment>-shared` workspace. Its ownership inventory retains previously
+known stacks. A deployment-wide lock serializes stack operations against central
+teardown; stacks also keep their own lock. Changing account/RG/network ownership
+or switching `per_stack`/`shared` requires teardown, not state adoption.
 
 Retain the complete durable directory with restricted access and backups. It
 contains authoritative Terraform state, identities, DEMO/API/signing keys and
@@ -280,7 +318,7 @@ All three services stay allocated continuously. Default resources per stack are:
 
 The native disk budget includes both root and attached Data Disks. The gateway
 needs at least 750m CPU for its combined 15 GiB; 500m is rejected by the service.
-Six complete stacks allocate 22.5 vCPU/30 GiB before generated apps.
+Seven complete stacks allocate 26.25 vCPU/35 GiB before generated apps.
 Foundry tokens, disks, monitoring and
 network/PE charges are additional; there are no per-stack registries/build pools.
 Model capacity is quota, not an included token allowance. Establish a budget
@@ -299,3 +337,15 @@ Captured outputs retain boundaries after partial Terraform teardown. Directory
 cleanup needs Entra permissions too. On failure retain state and resolve the exact
 error; never delete existing unrelated stacks, registries, pools or VM/disks as
 part of this new deployment flow.
+
+Destroying selected stacks never destroys shared Foundry. After **all** stacks
+are destroyed, run `shared-destroy` without `--stack`. It checks the captured
+inventory and any matching orphan stack states for live managed resources,
+and checks identity teardown, before touching central Terraform state.
+Create mode destroys its account/deployment/PE, never the supplied RG/DNS;
+existing mode never deletes the external account or deployment.
+
+```powershell
+uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState destroy
+uv run python -m scripts.deploy_simulator_environment --config D:\Deployment\inputs.toml --state-root D:\AutopilotsState shared-destroy
+```

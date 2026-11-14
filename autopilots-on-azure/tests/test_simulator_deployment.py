@@ -25,6 +25,8 @@ from scripts.deploy_simulator_environment import (
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
     validate_config,
     validate_shared_foundry,
+    prepare_shared, shared_environment_root, shared_workspace, destroy_shared,
+    require_shared_account_permissions, require_shared_ready, platform_values,
     terraform,
     destroy,
 )
@@ -291,10 +293,150 @@ class SimulatorDeploymentTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_shared_foundry({**base, **changes})
 
+    def shared_configs(self, path: Path):
+        path.write_text(self.input_text().replace('[role]', (
+            'foundry_mode = "shared"\n[shared_foundry]\nmode = "create"\n'
+            'existing_resource_group_name = "central"\nmodel_capacity = 30\n[role]'
+        )) + '[[stacks]]\nname = "agent-1"\n[[stacks]]\nname = "agent-dev"\n')
+        return load_stack_configs(path, [])
+
+    def test_shared_destroy_refuses_live_or_orphan_stack_state_and_never_touches_stack_roots(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            "os.environ", {"AUTOPILOTS_STATE_ROOT": temporary},
+        ):
+            configs = self.shared_configs(Path(temporary) / "inputs.toml")
+            root = prepare_shared(configs)
+            self.assertEqual(root, shared_environment_root(configs[0]))
+            central = state_path(root, "foundry", shared_workspace(configs[0]))
+            central.parent.mkdir(parents=True)
+            account_id = f"/subscriptions/{configs[0]['subscription_id']}/resourceGroups/central/providers/Microsoft.CognitiveServices/accounts/ap-training-shared-abcd"
+            central.write_text(json.dumps({"version": 4, "resources": [
+                {"mode": "managed", "type": "azapi_resource", "name": "foundry", "instances": [{
+                    "attributes": {"id": account_id, "type": "Microsoft.CognitiveServices/accounts@2025-06-01",
+                                   "tags": {"app": "autopilots-on-azure", "layer": "shared-foundry", "environment": "training"}},
+                }]},
+                {"mode": "managed", "type": "azapi_resource", "name": "foundry_deployment", "instances": [{
+                    "attributes": {"id": account_id + "/deployments/pooled",
+                                   "type": "Microsoft.CognitiveServices/accounts/deployments@2025-06-01"},
+                }]},
+            ], "outputs": {
+                "foundry_id": {"value": account_id},
+            }}))
+            values_path = root / "foundry" / "generated.simulator.auto.tfvars.json"
+            values_path.write_text('{"mode": "create"}')
+            require_shared_ready(configs[0])
+            self.assertEqual(platform_values(configs[0])["shared_foundry_state_path"], str(central))
+            orphan = Path(temporary) / "simulator-training-agent-qa"
+            stack_state = state_path(orphan, "platform", "training-agent-qa")
+            stack_state.parent.mkdir(parents=True)
+            stack_state.write_text(json.dumps({"version": 4, "resources": [{
+                "mode": "managed", "type": "azapi_resource", "instances": [{"attributes": {"id": "/project"}}],
+            }]}))
+            with patch("scripts.deploy_simulator_environment.terraform") as command:
+                with self.assertRaisesRegex(ValueError, "Destroy every stack"):
+                    destroy_shared(configs[0])
+                command.assert_not_called()
+                stack_state.write_text('{"version": 4, "resources": []}')
+                destroy_shared(configs[0])
+                command.assert_called_once_with(root / "foundry", "training-shared", {"mode": "create"}, destroy=True)
+                central.write_text(json.dumps({"version": 4, "resources": [{
+                    "mode": "managed", "type": "azapi_resource", "name": "foundry", "instances": [{
+                        "attributes": {"id": account_id.replace("/central/", "/unrelated/"),
+                                       "type": "Microsoft.CognitiveServices/accounts@2025-06-01"},
+                    }],
+                }]}))
+                command.reset_mock()
+                with self.assertRaisesRegex(ValueError, "resource group boundary"):
+                    destroy_shared(configs[0])
+                command.assert_not_called()
+            self.assertEqual(json.loads(stack_state.read_text()), {"version": 4, "resources": []})
+            with self.assertRaisesRegex(ValueError, "ownership"):
+                prepare_shared([{**configs[0], "deployment_owner_id": "different"}])
+
+    def test_shared_rbac_failure_emits_exact_account_admin_request(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            "os.environ", {"AUTOPILOTS_STATE_ROOT": temporary},
+        ):
+            configs = self.shared_configs(Path(temporary) / "inputs.toml")
+            root = prepare_shared(configs)
+            account_id = f"/subscriptions/{configs[0]['subscription_id']}/resourceGroups/central/providers/Microsoft.CognitiveServices/accounts/shared"
+            (root / "outputs.json").write_text(json.dumps({"foundry_id": account_id}))
+            response = subprocess.CompletedProcess([], 0, '{"value": [{"actions": ["*/read"], "notActions": []}]}', "")
+            with patch("scripts.deploy_simulator_environment.run", return_value=response) as command:
+                with self.assertRaisesRegex(PermissionError, "exact admin request"):
+                    require_shared_account_permissions(configs[0], {"deployer_principal_id": "operator"})
+            request = json.loads((root / "azure-admin-request.json").read_text())
+            self.assertEqual(request["scope"], account_id)
+            self.assertEqual(request["status"], "missing_permissions")
+            self.assertIn("Microsoft.Authorization/roleAssignments/write", request["required_actions"])
+            self.assertIn(account_id, " ".join(command.call_args.args[0]))
+            response.stdout = '{"value": [{"actions": ["*"], "notActions": []}]}'
+            with patch("scripts.deploy_simulator_environment.run", return_value=response):
+                require_shared_account_permissions(configs[0], {"deployer_principal_id": "operator"})
+
+    def test_shared_all_runs_pool_before_only_selected_stack_and_destroy_does_not_touch_pool(self):
+        from scripts.deploy_simulator_environment import main
+
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            "os.environ", {"AUTOPILOTS_STATE_ROOT": temporary},
+        ):
+            path = Path(temporary) / "inputs.toml"
+            configs = self.shared_configs(path)
+            events = []
+            with patch("sys.argv", ["deployer", "--config", str(path), "--stack", "agent-dev", "all"]), patch(
+                "scripts.deploy_simulator_environment.source_revision", return_value="a" * 40,
+            ), patch("scripts.deploy_simulator_environment.assert_account"), patch(
+                "scripts.deploy_simulator_environment.shared", side_effect=lambda inventory: events.append(("pool", len(inventory))),
+            ), patch("scripts.deploy_simulator_environment.run_stack_action",
+                     side_effect=lambda config, action: events.append((config["stack_name"], action))):
+                main()
+            self.assertEqual(events, [("pool", 2), ("agent-dev", "all")])
+            with patch("sys.argv", ["deployer", "--config", str(path), "--stack", "agent-dev", "destroy"]), patch(
+                "scripts.deploy_simulator_environment.shared", side_effect=AssertionError("Pool may not change"),
+            ), patch("scripts.deploy_simulator_environment.run_stack_action") as command:
+                main()
+            command.assert_called_once_with(configs[-1], "destroy")
+
+    def test_stack_auth_override_keeps_dev_demo_separate_from_entra_stacks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inputs.toml"
+            expiry = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+            path.write_text(self.input_text() + (
+                '[[stacks]]\nname = "agent-1"\n'
+                '[[stacks]]\nname = "agent-dev"\nauth_mode = "demo"\n'
+                f'demo_expires_at = "{expiry}"\ndemo_acknowledge = "test-data-only"\n'
+            ))
+            normal, dev = load_stack_configs(path, [])
+            self.assertEqual((normal["auth_mode"], dev["auth_mode"]), ("entra", "demo"))
+            path.write_text(path.read_text().replace('demo_acknowledge = "test-data-only"', 'demo_acknowledge = "unsafe"'))
+            with self.assertRaisesRegex(ValueError, "test-data-only"):
+                load_stack_configs(path, [])
+
+    def test_documented_seven_stack_example_plans_offline_without_resource_or_state_reads(self):
+        from scripts.simulator_preflight import plan
+
+        example = Path(__file__).resolve().parents[1] / "docs" / "simulator-private.example.toml"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inputs.toml"
+            path.write_text(example.read_text().replace('manifest = "deployment-images.json"',
+                                                       f"manifest = '{self.images_path}'"))
+            configs = load_stack_configs(path, [])
+            with patch("scripts.simulator_preflight.run", side_effect=AssertionError("Offline means no Azure calls")):
+                reports = plan(configs, offline=True)
+            self.assertEqual(len(reports), 7)
+            self.assertEqual(reports[-1]["stack_name"], "agent-dev")
+            self.assertEqual(len({report["resource_group"]["name"] for report in reports}), 7)
+            self.assertTrue(all(report["model"]["capacity"] == 15 for report in reports))
+            path.write_text(path.read_text().replace("/subnets/agent-dev", "/subnets/agent-6"))
+            with self.assertRaisesRegex(ValueError, "dedicated Sandbox subnet"):
+                load_stack_configs(path, ["agent-dev"])
+
     def test_private_defaults_require_explicit_customer_boundaries(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "inputs.toml"
-            path.write_text(self.input_text().replace('network_mode = "public"\nresource_group_mode = "create"\n', ""))
+            path.write_text(self.input_text().replace(
+                'network_mode = "public"\nresource_group_mode = "create"\n', 'stack_count = 1\n',
+            ))
             with self.assertRaisesRegex(ValueError, "existing_resource_group_name"):
                 load_stack_configs(path, [])
             path.write_text(path.read_text() + (

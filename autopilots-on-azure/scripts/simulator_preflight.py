@@ -121,6 +121,10 @@ def _image_scope(config: dict) -> dict:
 
 
 def _scope(config: dict) -> dict:
+    from scripts.deploy_simulator_environment import validate_shared_foundry
+
+    normalized = dict(config)
+    shared = validate_shared_foundry(normalized)
     platform = config.get("platform", {})
     if not isinstance(platform, dict):
         raise ValueError("platform must be a mapping.")
@@ -189,7 +193,15 @@ def _scope(config: dict) -> dict:
         "required_tag_names": sorted(tags),
         "images": _image_scope(config),
         "providers": {}, "warnings": [IDENTITY_LIMITATION],
+        "foundry_mode": normalized["foundry_mode"],
     })
+    if shared is not None:
+        scope["shared_foundry"] = dict(shared)
+        scope["warnings"].append(
+            "Shared Foundry uses one pooled deployment and one project per stack. All stack subnets and operators "
+            "must reach the central endpoint subnet and resolve its three private DNS zones. Projects and OpenAI "
+            "User role assignments require write/RBAC permission on the shared account, not only the stack RG."
+        )
     return scope
 
 
@@ -439,11 +451,13 @@ def _managed_attributes(state: dict, resource_type: str, name: str) -> dict | No
 
 
 def _owned_capacity(reads: _Reads, config: dict, scope: dict) -> None:
-    from scripts.deploy_simulator_environment import environment_root, state_path
+    from scripts.deploy_simulator_environment import environment_root, shared_environment_root, shared_workspace, state_path
 
-    root = environment_root(config)
+    central = config.get("_shared_capacity", False)
+    root = shared_environment_root(config) if central else environment_root(config)
     ownership_path = root / "environment.json"
-    platform_path = state_path(root, "platform", config["environment"])
+    platform_path = state_path(root, "foundry" if central else "platform",
+                               shared_workspace(config) if central else config["environment"])
     evidence = {
         "status": "missing_state", "owned_capacity": 0,
         "requested_capacity": scope["model"]["capacity"], "incremental_capacity": scope["model"]["capacity"],
@@ -458,6 +472,12 @@ def _owned_capacity(reads: _Reads, config: dict, scope: dict) -> None:
             expected = scope[field]
             if not isinstance(value, str) or (value != expected if field == "environment" else value.casefold() != expected.casefold()):
                 raise ValueError(f"Environment ownership {field} does not match the exact configured stack.")
+        if central:
+            from scripts.deploy_simulator_environment import shared_ownership
+
+            for key, expected in shared_ownership(config).items():
+                if ownership.get(key) != expected:
+                    raise ValueError(f"Shared Foundry ownership {key} differs from its configured boundary.")
     state = _state_json(platform_path, "Exact platform Terraform state")
     if state is None:
         return
@@ -592,7 +612,70 @@ def _quota(reads: _Reads, scopes: list[dict]) -> None:
                 member["warnings"].append(warning)
 
 
-def plan(configs: list[dict]) -> list[dict]:
+def _shared_model_scope(reads: _Reads, config: dict) -> tuple[dict, dict]:
+    from scripts.deploy_simulator_environment import validate_shared_foundry
+
+    settings = validate_shared_foundry(dict(config))
+    platform = dict(config.get("deployment_platform", config.get("platform", {})))
+    central_config = {
+        **config, "environment": config["deployment_environment"],
+        "owner_id": config.get("deployment_owner_id", config["owner_id"]),
+        "_shared_capacity": True,
+    }
+    if settings["mode"] == "create":
+        platform.update({key: settings[key] for key in (
+            "location", "model_name", "model_version", "model_sku_name", "model_deployment_name",
+            "existing_resource_group_name",
+        )})
+        central_config.update(platform=platform, model_capacity=settings["model_capacity"], resource_group_mode="existing")
+        scope = _scope(central_config)
+        _group(reads, scope)
+        if scope["network_mode"] == "private":
+            _subnet(reads, settings["existing_private_endpoint_subnet_id"], sandbox=False, scope=scope,
+                    label="Shared Foundry private endpoint subnet")
+        _model_availability(reads, scope)
+        _owned_capacity(reads, central_config, scope)
+        _quota(reads, [scope])
+        return central_config, scope
+    account_id = settings["account_resource_id"]
+    account = _resource(
+        reads, account_id, "Microsoft.CognitiveServices/accounts", "2025-06-01", "Existing shared Foundry",
+        "{id:id,type:type,location:location,properties:{customSubDomainName:properties.customSubDomainName,"
+        "allowProjectManagement:properties.allowProjectManagement,disableLocalAuth:properties.disableLocalAuth,"
+        "publicNetworkAccess:properties.publicNetworkAccess}}",
+    )
+    properties = account.get("properties") or {}
+    if (properties.get("allowProjectManagement") is not True or properties.get("disableLocalAuth") is not True
+            or not properties.get("customSubDomainName")):
+        raise ValueError("Existing shared Foundry requires projects, disabled local auth and a custom subdomain.")
+    if config.get("network_mode", "private") == "private" and properties.get("publicNetworkAccess") != "Disabled":
+        raise ValueError("Existing shared Foundry must be private-only.")
+    deployment = _resource(
+        reads, account_id + "/deployments/" + settings["model_deployment_name"],
+        "Microsoft.CognitiveServices/accounts/deployments", "2025-06-01", "Existing pooled deployment",
+        "{id:id,type:type,name:name,sku:sku,properties:{model:properties.model,provisioningState:properties.provisioningState}}",
+    )
+    model = (deployment.get("properties") or {}).get("model") or {}
+    sku = deployment.get("sku") or {}
+    if (deployment.get("properties", {}).get("provisioningState") != "Succeeded"
+            or model.get("format") != "OpenAI"):
+        raise ValueError("Existing pooled deployment must be a successfully provisioned OpenAI model.")
+    platform.update(location=account["location"], model_name=model.get("name"), model_version=model.get("version"),
+                    model_sku_name=sku.get("name"), model_deployment_name=settings["model_deployment_name"])
+    central_config.update(platform=platform, model_capacity=sku.get("capacity"))
+    scope = _scope(central_config)
+    scope["model_capacity_credit"] = {
+        "status": "externally_owned", "requested_capacity": 0, "owned_capacity": 0, "incremental_capacity": 0,
+        "account_id": account_id, "deployment_id": deployment["id"],
+    }
+    scope["model_quota"] = {
+        "status": "externally_owned", "requested_capacity": 0, "owned_capacity": 0, "incremental_capacity": 0,
+    }
+    scope["warnings"].append("Existing shared model capacity is administrator-owned; no capacity change is planned.")
+    return central_config, scope
+
+
+def plan(configs: list[dict], *, offline: bool = False) -> list[dict]:
     """Read Azure prerequisites for expanded stacks, raising ValueError/RuntimeError on blockers.
 
     Returns JSON-safe allowlisted reports, not a deployment authorization or a state file.
@@ -601,16 +684,50 @@ def plan(configs: list[dict]) -> list[dict]:
     if not isinstance(configs, list) or not configs or not all(isinstance(config, dict) for config in configs):
         raise ValueError("plan requires a nonempty list of expanded stack configuration dictionaries.")
     scopes = [_scope(config) for config in configs]
+    if offline:
+        for config, scope in zip(configs, scopes):
+            from scripts.deploy_simulator_environment import environment_root, shared_environment_root
+
+            scope["state_root"] = str(environment_root(config))
+            scope["azure_prerequisites"] = "UNVERIFIED: offline configuration plan; no Azure or state ownership reads."
+            if scope["foundry_mode"] == "shared":
+                scope["shared_state_root"] = str(shared_environment_root(config))
+                scope["model_capacity_scope"] = "one deployment-wide pool, not multiplied by the stack count"
+                settings = scope["shared_foundry"]
+                if settings["mode"] == "create":
+                    scope["model"] = {
+                        "name": settings["model_name"], "version": settings["model_version"],
+                        "sku": settings["model_sku_name"], "capacity": settings["model_capacity"],
+                        "deployment_name": settings["model_deployment_name"],
+                    }
+                    scope["regions"]["ai"] = settings["location"]
+                else:
+                    scope["model"] = {"deployment_name": settings["model_deployment_name"],
+                                      "status": "UNVERIFIED: existing deployment metadata requires Azure reads"}
+            scope["warnings"].append(NETWORK_LIMITATION)
+        return scopes
     scheduler_required = any(scope["scheduler_enabled"] for scope in scopes)
     reads = _Reads()
     credited_ids = set()
+    central_scope = None
     for config, scope in zip(configs, scopes):
         _account_and_providers(reads, scope, scheduler_required=scheduler_required)
-        _model_availability(reads, scope)
+        if scope["foundry_mode"] == "shared":
+            if central_scope is None:
+                _, central_scope = _shared_model_scope(reads, config)
+            scope["model"] = dict(central_scope["model"])
+            scope["regions"]["ai"] = central_scope["regions"]["ai"]
+            scope["model_quota"] = dict(central_scope["model_quota"])
+            scope["model_capacity_credit"] = dict(central_scope["model_capacity_credit"])
+            scope["warnings"].extend(central_scope["warnings"])
+        else:
+            _model_availability(reads, scope)
         _group(reads, scope)
         _network(reads, scope)
         _monitoring(reads, scope)
         _images(scope)
+        if scope["foundry_mode"] == "shared":
+            continue
         _owned_capacity(reads, config, scope)
         credit = scope["model_capacity_credit"]
         if credit["owned_capacity"]:
@@ -618,5 +735,5 @@ def plan(configs: list[dict]) -> list[dict]:
             if deployment_id in credited_ids:
                 raise ValueError("The same state-owned deployment cannot receive capacity credit in multiple planned stacks.")
             credited_ids.add(deployment_id)
-    _quota(reads, scopes)
+    _quota(reads, [scope for scope in scopes if scope["foundry_mode"] != "shared"])
     return scopes

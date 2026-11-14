@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
+from fnmatch import fnmatchcase
 import json
 import os
 from pathlib import Path
@@ -153,11 +154,16 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
             raise ValueError("stack_count must be an integer between 1 and 20.")
         stacks = [{"name": f"agent-{index}"} for index in range(1, count + 1)]
     names = [stack["name"] for stack in stacks]
-    if not names or len(set(names)) != len(names):
-        raise ValueError("Stack names must be nonempty and unique.")
+    if not names or len(names) > 20 or len(set(names)) != len(names):
+        raise ValueError("Configure 1-20 stacks with unique names.")
     missing = set(selected) - set(names)
     if missing:
         raise ValueError(f"Unknown selected stacks: {sorted(missing)}")
+    deployment_platform = dict(inputs.get("platform", {}))
+    if inputs.get("private_dns_zone_ids_file"):
+        deployment_platform["private_dns_zone_ids"] = load_private_dns_zone_ids(
+            (path.parent / inputs["private_dns_zone_ids_file"]).resolve(),
+        )
     result = []
     for stack in stacks:
         name = stack["name"]
@@ -165,10 +171,13 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
             raise ValueError("Stack names must be agent-<1-3 lowercase alphanumeric characters>, e.g. agent-dev.")
         if any(key in stack for key in ("foundry_mode", "shared_foundry")):
             raise ValueError("Foundry ownership is deployment-wide, not a per-stack override.")
+        if inputs["foundry_mode"] == "shared" and stack.get("network_mode", inputs.get("network_mode", "private")) != inputs.get("network_mode", "private"):
+            raise ValueError("Shared Foundry network_mode is deployment-wide.")
         if selected and name not in selected:
             continue
         config = {**inputs, **stack}
         config["platform"] = {**inputs.get("platform", {}), **stack.get("platform", {})}
+        config["deployment_platform"] = deployment_platform
         if "build" in inputs or "build" in stack:
             raise ValueError("Simulator deployments use [images] manifest, not legacy [build]/ACR settings.")
         image_settings = {**inputs.get("images", {}), **stack.get("images", {})}
@@ -186,11 +195,7 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
         config["platform"]["registry_enabled"] = False
         zones_file = config.get("private_dns_zone_ids_file")
         if zones_file:
-            zones_path = (path.parent / zones_file).resolve()
-            zones = load(zones_path)
-            if not isinstance(zones, dict) or any(not isinstance(value, str) for value in zones.values()):
-                raise ValueError("private_dns_zone_ids_file must contain a JSON object mapping zone names to ARM IDs.")
-            config["platform"]["private_dns_zone_ids"] = zones
+            config["platform"]["private_dns_zone_ids"] = load_private_dns_zone_ids((path.parent / zones_file).resolve())
         if config["resource_group_mode"] == "existing" and not config["platform"].get("existing_resource_group_name"):
             raise ValueError(f"{name}: existing RG mode requires platform.existing_resource_group_name.")
         if config["resource_group_mode"] == "create" and config["platform"].get("existing_resource_group_name"):
@@ -201,14 +206,22 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
                     raise ValueError(f"{name}: existing private mode requires platform.{field}.")
         config["environment"] = base + "-" + name
         config["deployment_environment"] = base
+        config["deployment_owner_id"] = str(uuid.UUID(inputs["owner_id"]))
         config["stack_name"] = name
         config["agents"] = [{"name": name, "display_name": stack.get("display_name", name),
                              "assignment": stack.get("assignment", "")}]
         config["model_capacity"] = stack.get("model_capacity", inputs.get("model_capacity", 15))
         result.append(validate_config(config, validate_expiry=validate_expiry))
-    groups = [config["platform"].get("existing_resource_group_name", "").casefold() for config in result]
+    groups = [{**inputs.get("platform", {}), **stack.get("platform", {})}.get(
+        "existing_resource_group_name", "",
+    ).casefold() for stack in stacks]
     if len([group for group in groups if group]) != len(set(group for group in groups if group)):
         raise ValueError("Every stack requires its own resource group.")
+    subnets = [{**inputs.get("platform", {}), **stack.get("platform", {})}.get(
+        "existing_sandbox_subnet_id", "",
+    ).casefold() for stack in stacks]
+    if len([subnet for subnet in subnets if subnet]) != len(set(subnet for subnet in subnets if subnet)):
+        raise ValueError("Every stack requires its own dedicated Sandbox subnet; duplicate subnet IDs are prohibited.")
     if inputs["foundry_mode"] == "shared":
         shared = inputs["shared_foundry"]
         shared_group = (shared["account_resource_id"].split("/")[4] if shared["mode"] == "existing"
@@ -218,12 +231,228 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
     return result
 
 
+def load_private_dns_zone_ids(path: Path) -> dict:
+    zones = load(path)
+    if not isinstance(zones, dict) or any(not isinstance(value, str) for value in zones.values()):
+        raise ValueError("private_dns_zone_ids_file must contain a JSON object mapping zone names to ARM IDs.")
+    return zones
+
+
 def state_root() -> Path:
     return Path(os.environ.get("AUTOPILOTS_STATE_ROOT", str(REPO_ROOT / ".local"))).expanduser().resolve()
 
 
 def environment_root(config: dict) -> Path:
     return state_root() / ("simulator-" + config["environment"])
+
+
+def shared_environment_root(config: dict) -> Path:
+    return state_root() / ("simulator-shared-" + config["deployment_environment"])
+
+
+def shared_workspace(config: dict) -> str:
+    return config["deployment_environment"] + "-shared"
+
+
+def shared_values(config: dict) -> dict:
+    platform = config.get("deployment_platform", config["platform"])
+    return {
+        **config["shared_foundry"],
+        "environment_name": config["deployment_environment"],
+        "private_network_enabled": config["network_mode"] == "private",
+        "sandbox_location": platform.get("sandbox_location", "swedencentral"),
+        "private_dns_zone_ids": platform.get("private_dns_zone_ids", {}),
+        "required_tags": platform.get("required_tags", {}),
+    }
+
+
+def shared_ownership(config: dict) -> dict:
+    settings = config["shared_foundry"]
+    return {
+        "environment": config["deployment_environment"],
+        **{key: config[key] for key in ("subscription_id", "tenant_id", "network_mode")},
+        "owner_id": config.get("deployment_owner_id", config["owner_id"]),
+        "mode": settings["mode"],
+        "account_resource_id": settings.get("account_resource_id", ""),
+        "existing_resource_group_name": settings.get("existing_resource_group_name", ""),
+        "account_name": settings.get("account_name", ""),
+        "existing_private_endpoint_subnet_id": settings.get("existing_private_endpoint_subnet_id", ""),
+    }
+
+
+def require_shared_ownership(config: dict, root: Path) -> dict:
+    captured = load(root / "environment.json")
+    for key, value in shared_ownership(config).items():
+        if captured.get(key) != value:
+            raise ValueError(f"Shared Foundry ownership {key} differs; refusing a different state boundary.")
+    return captured
+
+
+def prepare_shared(configs: list[dict]) -> Path:
+    config = configs[0]
+    root = shared_environment_root(config)
+    root.mkdir(parents=True, exist_ok=True)
+    captured = (require_shared_ownership(config, root) if (root / "environment.json").exists()
+                else shared_ownership(config))
+    captured["stack_environments"] = sorted(set(captured.get("stack_environments", []))
+                                           | {item["environment"] for item in configs})
+    save(root / "environment.json", captured)
+    prepare_root(root, "foundry", "shared-foundry")
+    return root
+
+
+def require_shared_ready(config: dict) -> None:
+    root = shared_environment_root(config)
+    require_shared_ownership(config, root)
+    path = state_path(root, "foundry", shared_workspace(config))
+    if not path.exists():
+        raise ValueError("Run the shared stage before stack infrastructure; central Foundry state is missing.")
+    state = load(path)
+    account_id = state.get("outputs", {}).get("foundry_id", {}).get("value")
+    if not isinstance(account_id, str) or not account_id:
+        raise ValueError("Shared Foundry state has no provisioned account output; run the shared stage first.")
+    require_shared_state_ownership(config, root)
+    if config["shared_foundry"]["mode"] == "existing" and account_id != config["shared_foundry"]["account_resource_id"]:
+        raise ValueError("Shared Foundry state output differs from the configured existing account.")
+    if config["shared_foundry"]["mode"] == "create":
+        boundary = (f"/subscriptions/{config['subscription_id']}/resourceGroups/"
+                    + config["shared_foundry"]["existing_resource_group_name"]
+                    + "/providers/Microsoft.CognitiveServices/accounts/")
+        if not account_id.casefold().startswith(boundary.casefold()):
+            raise ValueError("Shared Foundry output is outside the captured central account boundary.")
+
+
+def require_shared_state_ownership(config: dict, root: Path) -> None:
+    path = state_path(root, "foundry", shared_workspace(config))
+    if not path.exists():
+        return
+    state = load(path)
+    if state.get("version") != 4 or not isinstance(state.get("resources"), list):
+        raise ValueError("Shared Foundry state has an invalid resource schema.")
+    settings = config["shared_foundry"]
+    boundary = (f"/subscriptions/{config['subscription_id']}/resourceGroups/"
+                + settings.get("existing_resource_group_name", "") + "/providers/")
+    allowed = {
+        "foundry": "Microsoft.CognitiveServices/accounts",
+        "foundry_deployment": "Microsoft.CognitiveServices/accounts/deployments",
+        "foundry_private_endpoint": "Microsoft.Network/privateEndpoints",
+        "foundry_private_dns_zone_group": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+    }
+    for resource in state["resources"]:
+        if resource.get("mode") != "managed":
+            continue
+        if resource.get("type") == "random_string" and resource.get("name") == "suffix":
+            continue
+        if (settings["mode"] != "create" or resource.get("module")
+                or resource.get("type") != "azapi_resource" or resource.get("name") not in allowed):
+            raise ValueError("Shared Foundry state owns unexpected managed resources.")
+        for instance in resource.get("instances", []):
+            from scripts.simulator_preflight import _arm_id
+
+            attributes = instance.get("attributes", {})
+            resource_id = attributes.get("id", "")
+            expected_type = allowed[resource["name"]]
+            _arm_id(resource_id, expected_type, "Shared state resource ID")
+            if attributes.get("type", "").split("@")[0].casefold() != expected_type.casefold():
+                raise ValueError("Shared Foundry state resource type differs from its owned Terraform address.")
+            if not isinstance(resource_id, str) or not resource_id.casefold().startswith(boundary.casefold()):
+                raise ValueError("Shared Foundry state resource is outside its captured resource group boundary.")
+            tags = attributes.get("tags") or {}
+            if resource["name"] in {"foundry", "foundry_private_endpoint"} and any(tags.get(key) != value for key, value in {
+                "app": "autopilots-on-azure", "layer": "shared-foundry",
+                "environment": config["deployment_environment"],
+            }.items()):
+                raise ValueError("Shared Foundry state resource has different ownership tags.")
+            parts = resource_id.split("/")
+            if resource["name"] in {"foundry", "foundry_deployment"}:
+                account_name = parts[8]
+            else:
+                endpoint_name = parts[8]
+                if not endpoint_name.startswith("pe-"):
+                    raise ValueError("Shared Foundry state endpoint name differs from configured ownership.")
+                account_name = endpoint_name.removeprefix("pe-")
+            expected_name = settings.get("account_name")
+            if ((expected_name and account_name != expected_name) or
+                    (not expected_name and not re.fullmatch(
+                        "ap-" + re.escape(config["deployment_environment"]) + r"-shared-[a-z]{4}", account_name,
+                    ))):
+                raise ValueError("Shared Foundry state account name differs from the configured ownership.")
+
+
+def shared(configs: list[dict]) -> None:
+    config = configs[0]
+    if config.get("foundry_mode") != "shared":
+        raise ValueError("The shared stage requires foundry_mode = shared.")
+    root = shared_environment_root(config)
+    with deployment_lock(root):
+        prepare_shared(configs)
+        require_shared_state_ownership(config, root)
+        values = terraform(root / "foundry", shared_workspace(config), shared_values(config))
+        save(root / "outputs.json", values)
+
+
+def require_shared_account_permissions(config: dict, ownership: dict) -> None:
+    root = shared_environment_root(config)
+    account_id = load(root / "outputs.json")["foundry_id"]
+    actions = (
+        "Microsoft.CognitiveServices/accounts/projects/write",
+        "Microsoft.Authorization/roleAssignments/write",
+        "Microsoft.Authorization/roleAssignments/delete",
+    )
+    response = run([
+        "az", "rest", "--method", "get", "--subscription", config["subscription_id"],
+        "--url", "https://management.azure.com" + account_id
+        + "/providers/Microsoft.Authorization/permissions?api-version=2022-04-01",
+        "--only-show-errors", "-o", "json",
+    ], capture=True, check=False)
+    permissions = json.loads(response.stdout).get("value", []) if response.returncode == 0 else []
+    missing = [action for action in actions if not any(
+        any(fnmatchcase(action.casefold(), pattern.casefold()) for pattern in permission.get("actions", []))
+        and not any(fnmatchcase(action.casefold(), pattern.casefold()) for pattern in permission.get("notActions", []))
+        for permission in permissions
+    )]
+    if missing:
+        request = root / "azure-admin-request.json"
+        save(request, {
+            "scope": account_id, "deployment_principal_id": ownership["deployer_principal_id"],
+            "required_actions": list(actions), "missing_or_unverified_actions": missing,
+            "status": "permissions_read_failed" if response.returncode else "missing_permissions",
+            "request": "Grant the deployment operator Contributor and Role Based Access Control Administrator "
+                       "at this account (or equivalent custom roles). Stack RG roles do not authorize shared "
+                       "project creation or runtime OpenAI User role assignment. Re-run infrastructure afterwards.",
+        })
+        raise PermissionError(f"Shared Foundry account permissions are missing or unreadable; exact admin request: {request}")
+
+
+def require_empty_stack_states(config: dict, root: Path) -> None:
+    captured = require_shared_ownership(config, root)
+    environments = set(captured.get("stack_environments", []))
+    environments.update(path.name.removeprefix("simulator-") for path in state_root().glob(
+        "simulator-" + config["deployment_environment"] + "-agent-*",
+    ) if path.is_dir())
+    for environment in sorted(environments):
+        stack_root = state_root() / ("simulator-" + environment)
+        for path in stack_root.glob("*/terraform.tfstate.d/*/terraform.tfstate"):
+            state = load(path)
+            if state.get("version") != 4 or not isinstance(state.get("resources"), list):
+                raise ValueError(f"Cannot establish empty stack state: {path}")
+            if any(resource.get("mode") == "managed" and resource.get("instances") for resource in state["resources"]):
+                raise ValueError(f"Destroy every stack before shared Foundry; managed resources remain in {path}")
+        if (stack_root / "identities.json").exists() and not (stack_root / "teardown.json").exists():
+            raise ValueError(f"Complete stack identity teardown before shared Foundry: {environment}")
+
+
+def destroy_shared(config: dict) -> None:
+    if config.get("foundry_mode") != "shared":
+        raise ValueError("The shared-destroy stage requires foundry_mode = shared.")
+    root = shared_environment_root(config)
+    with deployment_lock(root):
+        require_empty_stack_states(config, root)
+        require_shared_state_ownership(config, root)
+        if state_path(root, "foundry", shared_workspace(config)).exists():
+            terraform(root / "foundry", shared_workspace(config),
+                      load(root / "foundry" / "generated.simulator.auto.tfvars.json"), destroy=True)
+        save(root / "teardown.json", {"completed_at": datetime.now(timezone.utc).isoformat()})
 
 
 def source_revision() -> str:
@@ -308,6 +537,8 @@ def prepare(config: dict, root: Path) -> dict:
         removed = set(existing.get("agent_names", [])) - {agent["name"] for agent in config["agents"]}
         if removed:
             raise ValueError(f"Removing Workers requires teardown with the original inventory first: {sorted(removed)}")
+        if existing.get("foundry_mode", "per_stack") != config.get("foundry_mode", "per_stack"):
+            raise ValueError("Existing Foundry ownership mode differs; teardown before changing ownership.")
     else:
         token = output(["az", "account", "get-access-token", "--resource", "https://management.azure.com/",
                         "--query", "accessToken", "-o", "tsv"])
@@ -317,6 +548,13 @@ def prepare(config: dict, root: Path) -> dict:
         existing = {key: config[key] for key in ("environment", "subscription_id", "tenant_id", "owner_id")}
         existing["deployer_principal_id"] = str(uuid.UUID(claims["oid"]))
     existing["agent_names"] = [agent["name"] for agent in config["agents"]]
+    existing["foundry_mode"] = config.get("foundry_mode", "per_stack")
+    if config.get("foundry_mode") == "shared":
+        require_shared_ready(config)
+        shared_state = str(state_path(shared_environment_root(config), "foundry", shared_workspace(config)))
+        if existing.get("shared_foundry_state_path", shared_state) != shared_state:
+            raise ValueError("Existing shared Foundry state boundary differs.")
+        existing["shared_foundry_state_path"] = shared_state
     save(ownership, existing)
     private = root / "secrets.json"
     values = load(private) if private.exists() else {
@@ -340,6 +578,10 @@ def platform_values(config: dict) -> dict:
         "model_capacity": config.get("model_capacity", 100),
         **config.get("platform", {}),
         "scheduler_enabled": False,
+        "shared_foundry_state_path": (
+            str(state_path(shared_environment_root(config), "foundry", shared_workspace(config)))
+            if config.get("foundry_mode") == "shared" else ""
+        ),
     }
 
 
@@ -383,6 +625,9 @@ def worker_values(config: dict, root: Path, agent: dict, ownership: dict, identi
 
 
 def infrastructure(config: dict, root: Path, ownership: dict) -> None:
+    if config.get("foundry_mode") == "shared":
+        require_shared_ready(config)
+        require_shared_account_permissions(config, ownership)
     terraform(root / "platform", config["environment"], platform_values(config))
     save(root / "platform-outputs.json", terraform_output(root / "platform"))
     shared = {
@@ -585,6 +830,8 @@ def destroy(config: dict, root: Path) -> None:
     for key in ("environment", "tenant_id", "subscription_id"):
         if ownership[key] != config[key]:
             raise ValueError("Teardown inputs differ from the captured ownership.")
+    if ownership.get("foundry_mode", "per_stack") != config.get("foundry_mode", "per_stack"):
+        raise ValueError("Teardown Foundry ownership mode differs from captured ownership.")
     for agent in reversed(config["agents"]):
         layer = root / agent["name"]
         if state_path(root, agent["name"], config["environment"]).exists():
@@ -612,7 +859,8 @@ def destroy(config: dict, root: Path) -> None:
     if state_path(root, "platform", config["environment"]).exists():
         captured = root / "platform-outputs.json"
         remove_owned_smart_alert(config, load(captured) if captured.exists() else terraform_output(root / "platform"))
-        terraform(root / "platform", config["environment"], platform_values(config), destroy=True)
+        terraform(root / "platform", config["environment"],
+                  load(root / "platform" / "generated.simulator.auto.tfvars.json"), destroy=True)
     save(root / "teardown.json", {"completed_at": datetime.now(timezone.utc).isoformat()})
 
 
@@ -628,46 +876,72 @@ def deployment_lock(root: Path):
         path.unlink()
 
 
+def run_stack_action(config: dict, action: str) -> None:
+    print(f"Stack {config['stack_name']}: {action}", flush=True)
+    assert_account(config)
+    root = environment_root(config)
+    with deployment_lock(root):
+        ownership = load(root / "environment.json") if action == "destroy" else prepare(config, root)
+        if action == "prepare":
+            print(f"Prepared isolated deployment: {root}")
+        if action in {"infrastructure", "all"}:
+            infrastructure(config, root, ownership)
+        if action == "identities" or (action == "all" and config["auth_mode"] == "entra"):
+            identities(config, root)
+        if action in {"images", "all"}:
+            select_images(config, root)
+        if action in {"deploy", "all"}:
+            deploy(config, root, ownership)
+        if action == "all":
+            verify_readiness(config, root)
+        if action == "verify":
+            verify(config, root)
+        if action == "destroy":
+            destroy(config, root)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Deploy fully isolated Agent Chat Simulator/Hermes stacks, one resource group each.")
     parser.add_argument("--config", type=Path, required=True, help="Local TOML inputs; never commit customer identifiers or secrets.")
-    parser.add_argument("--stack", action="append", default=[], help="Select agent-1, agent-2, ...; repeat for a subset. Defaults to all.")
+    parser.add_argument("--stack", action="append", default=[], help="Select agent-1 or agent-dev; repeat for a subset. Defaults to all.")
     parser.add_argument("--state-root", type=Path, help="Durable state directory outside the extracted source tree; also AUTOPILOTS_STATE_ROOT.")
-    parser.add_argument("action", choices=["plan", "prepare", "infrastructure", "identities", "images", "deploy", "verify", "all", "destroy"],
+    parser.add_argument("--offline", action="store_true", help="With plan only: expand configuration without Azure reads; prerequisites remain unverified.")
+    parser.add_argument("action", choices=["plan", "shared", "shared-destroy", "prepare", "infrastructure", "identities", "images", "deploy", "verify", "all", "destroy"],
                         nargs="?", default="all")
     args = parser.parse_args()
+    if args.offline and args.action != "plan":
+        raise ValueError("--offline is only valid with plan.")
     if args.state_root is not None:
         os.environ["AUTOPILOTS_STATE_ROOT"] = str(args.state_root.expanduser().resolve())
-    configs = load_stack_configs(args.config, args.stack, validate_expiry=args.action != "destroy")
+    teardown = args.action in {"destroy", "shared-destroy"}
+    inventory = load_stack_configs(args.config, [], validate_expiry=not teardown)
+    unknown = set(args.stack) - {config["stack_name"] for config in inventory}
+    if unknown:
+        raise ValueError(f"Unknown selected stacks: {sorted(unknown)}")
+    configs = [config for config in inventory if not args.stack or config["stack_name"] in args.stack]
     if args.action == "plan":
         from scripts.simulator_preflight import plan
 
-        print(json.dumps(plan(configs), indent=2))
+        print(json.dumps(plan(configs, offline=True) if args.offline else plan(configs), indent=2))
         return
-    if args.action != "destroy" and any(config["images"]["source_commit"] != source_revision() for config in configs):
+    if not teardown and any(config["images"]["source_commit"] != source_revision() for config in configs):
         raise ValueError("Pinned image source_commit differs from the deployment source/package; no deployment was started.")
-    for config in configs:
-        print(f"Stack {config['stack_name']}: {args.action}", flush=True)
-        assert_account(config)
-        root = environment_root(config)
-        with deployment_lock(root):
-            ownership = prepare(config, root)
-            if args.action == "prepare":
-                print(f"Prepared isolated deployment: {root}")
-            if args.action in {"infrastructure", "all"}:
-                infrastructure(config, root, ownership)
-            if args.action == "identities" or (args.action == "all" and config["auth_mode"] == "entra"):
-                identities(config, root)
-            if args.action in {"images", "all"}:
-                select_images(config, root)
-            if args.action in {"deploy", "all"}:
-                deploy(config, root, ownership)
-            if args.action == "all":
-                verify_readiness(config, root)
-            if args.action == "verify":
-                verify(config, root)
-            if args.action == "destroy":
-                destroy(config, root)
+    if args.action in {"shared", "shared-destroy"} and args.stack:
+        raise ValueError("Shared lifecycle is deployment-wide; --stack is not valid for shared/shared-destroy.")
+    if args.action == "shared" or (args.action == "all" and inventory[0].get("foundry_mode") == "shared"):
+        assert_account(inventory[0])
+        shared(inventory)
+        if args.action == "shared":
+            return
+    if args.action == "shared-destroy":
+        assert_account(inventory[0])
+        destroy_shared(inventory[0])
+        return
+    lock = (deployment_lock(shared_environment_root(configs[0]))
+            if configs[0].get("foundry_mode") == "shared" else nullcontext())
+    with lock:
+        for config in configs:
+            run_stack_action(config, args.action)
 
 
 if __name__ == "__main__":

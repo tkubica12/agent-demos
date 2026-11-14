@@ -68,7 +68,7 @@ output "private_ingress_ready" {
 }
 
 output "foundry_id" {
-  value = azapi_resource.foundry.id
+  value = local.foundry_id
 }
 
 output "foundry_project_id" {
@@ -76,15 +76,15 @@ output "foundry_project_id" {
 }
 
 output "foundry_name" {
-  value = azapi_resource.foundry.name
+  value = local.foundry_name
 }
 
 output "foundry_openai_base_url" {
-  value = "https://${azapi_resource.foundry.name}.services.ai.azure.com/openai/v1"
+  value = local.foundry_openai_base_url
 }
 
 output "model_deployment_name" {
-  value = var.model_deployment_name
+  value = local.model_deployment_name
 }
 
 output "private_network_enabled" {
@@ -111,7 +111,7 @@ output "acr_network_rule_bypass_option" {
 }
 
 output "ai_location" {
-  value = var.location
+  value = local.foundry_location
 }
 
 output "private_endpoint_subnet_id" {

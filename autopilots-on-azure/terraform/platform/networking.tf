@@ -272,7 +272,7 @@ resource "azurerm_private_endpoint" "services" {
 }
 
 resource "azapi_resource" "foundry_private_endpoint" {
-  count     = var.private_network_enabled ? 1 : 0
+  count     = var.private_network_enabled && !local.shared_foundry ? 1 : 0
   type      = "Microsoft.Network/privateEndpoints@2024-05-01"
   name      = "pe-foundry-${local.suffix}"
   parent_id = local.resource_group_id
@@ -284,7 +284,7 @@ resource "azapi_resource" "foundry_private_endpoint" {
       privateLinkServiceConnections = [{
         name = "foundry"
         properties = {
-          privateLinkServiceId = azapi_resource.foundry.id
+          privateLinkServiceId = local.foundry_id
           groupIds             = ["account"]
         }
       }]
@@ -303,7 +303,7 @@ resource "azapi_resource" "foundry_private_endpoint" {
 }
 
 resource "azapi_resource" "foundry_private_dns_zone_group" {
-  count     = var.private_network_enabled ? 1 : 0
+  count     = length(azapi_resource.foundry_private_endpoint)
   type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01"
   name      = "foundry"
   parent_id = azapi_resource.foundry_private_endpoint[0].id

@@ -181,5 +181,5 @@ output "log_analytics_workspace_id" {
 }
 
 output "foundry_project_endpoint" {
-  value = "https://${azapi_resource.foundry.name}.services.ai.azure.com/api/projects/${azapi_resource.foundry_project.name}"
+  value = "https://${local.foundry_subdomain}.services.ai.azure.com/api/projects/${azapi_resource.foundry_project.name}"
 }

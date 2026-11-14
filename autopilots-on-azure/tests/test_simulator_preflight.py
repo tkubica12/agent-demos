@@ -166,6 +166,85 @@ class SimulatorPreflightTests(unittest.TestCase):
         preflight.plan([self.config])
         self.assertGreater(len(self.commands), count)
 
+    def shared_stacks(self):
+        configs = []
+        for name in [f"agent-{index}" for index in range(1, 7)] + ["agent-dev"]:
+            config = deepcopy(self.config)
+            config.update(
+                environment="training-" + name, stack_name=name, deployment_environment="training",
+                foundry_mode="shared", network_mode="private",
+                shared_foundry={"mode": "create", "existing_resource_group_name": "central",
+                                "existing_private_endpoint_subnet_id": ENDPOINTS, "model_capacity": 30},
+            )
+            configs.append(config)
+        central_id = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/central"
+        self.resources[central_id] = resource(central_id, "Microsoft.Resources/resourceGroups")
+        return configs
+
+    def test_seven_shared_stacks_request_one_pool_and_offline_plan_makes_no_azure_calls(self):
+        configs = self.shared_stacks()
+        reports = preflight.plan(configs, offline=True)
+        self.assertEqual(self.commands, [])
+        self.assertEqual([report["stack_name"] for report in reports][-1], "agent-dev")
+        self.assertEqual(len({report["state_root"] for report in reports}), 7)
+        self.assertEqual(len({report["shared_state_root"] for report in reports}), 1)
+        self.usage["value"][0].update(limit=1000, currentValue=955)
+        reports = preflight.plan(configs)
+        self.assertTrue(all(report["model_quota"]["requested_capacity"] == 30 for report in reports))
+        self.assertTrue(all(report["model"]["capacity"] == 30 for report in reports))
+        self.assertEqual(sum("/usages?" in " ".join(command) for command in self.commands), 1)
+        self.assertEqual(sum(command[1:4] == ["cognitiveservices", "model", "list"] for command in self.commands), 1)
+
+    def test_existing_shared_account_does_not_request_or_credit_model_quota(self):
+        configs = self.shared_stacks()
+        account_id = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/central/providers/Microsoft.CognitiveServices/accounts/shared"
+        deployment_id = account_id + "/deployments/pooled"
+        self.resources[account_id] = resource(account_id, "Microsoft.CognitiveServices/accounts", properties={
+            "allowProjectManagement": True, "disableLocalAuth": True,
+            "publicNetworkAccess": "Disabled", "customSubDomainName": "shared",
+        })
+        self.resources[deployment_id] = resource(
+            deployment_id, "Microsoft.CognitiveServices/accounts/deployments",
+            sku={"name": "GlobalStandard", "capacity": 30},
+            properties={"provisioningState": "Succeeded", "model": {
+                "format": "OpenAI", "name": "gpt-6.1-sol", "version": "2026-09-29",
+            }},
+        )
+        for config in configs:
+            config["shared_foundry"] = {
+                "mode": "existing", "account_resource_id": account_id, "model_deployment_name": "pooled",
+            }
+        reports = preflight.plan(configs)
+        self.assertTrue(all(report["model_quota"]["status"] == "externally_owned" for report in reports))
+        self.assertTrue(all(report["model_capacity_credit"]["owned_capacity"] == 0 for report in reports))
+        self.assertFalse(any("/usages?" in " ".join(command) for command in self.commands))
+        self.resources[account_id]["properties"]["publicNetworkAccess"] = "Enabled"
+        with self.assertRaisesRegex(ValueError, "private-only"):
+            preflight.plan(configs)
+
+    def test_shared_capacity_credit_requires_exact_central_state_and_never_stack_state(self):
+        from scripts.deploy_simulator_environment import shared_environment_root, shared_workspace, shared_ownership, state_path
+
+        configs = self.shared_stacks()
+        central = deepcopy(configs[0])
+        central["environment"] = "training"
+        central["platform"]["existing_resource_group_name"] = "central"
+        central["platform"]["location"] = "swedencentral"
+        ownership_path, platform_path, _, _ = self.own_stack(central, capacity=25)
+        central_root = shared_environment_root(central)
+        self.local_files[str(central_root / "environment.json")] = json.dumps(shared_ownership(central))
+        self.local_files[str(state_path(central_root, "foundry", shared_workspace(central)))] = self.local_files.pop(platform_path)
+        self.local_files.pop(ownership_path)
+        self.usage["value"][0].update(limit=1000, currentValue=995)
+        reports = preflight.plan(configs)
+        self.assertTrue(all(report["model_quota"]["owned_capacity"] == 25 for report in reports))
+        self.assertTrue(all(report["model_quota"]["incremental_capacity"] == 5 for report in reports))
+        ownership = json.loads(self.local_files[str(central_root / "environment.json")])
+        ownership["existing_resource_group_name"] = "wrong"
+        self.local_files[str(central_root / "environment.json")] = json.dumps(ownership)
+        with self.assertRaisesRegex(ValueError, "Shared Foundry ownership"):
+            preflight.plan(configs)
+
     def test_wrong_sandbox_delegation_blocks(self):
         self.resources[SANDBOX]["properties"]["delegations"][0]["properties"]["serviceName"] = "Microsoft.Web/serverFarms"
         with self.assertRaisesRegex(ValueError, "delegated only to Microsoft.App/environments"):

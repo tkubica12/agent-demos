@@ -1,3 +1,9 @@
+variable "shared_foundry_state_path" {
+  description = "Absolute state path of the deployment-owned central Foundry root. Empty preserves per-stack accounts."
+  type        = string
+  default     = ""
+}
+
 variable "registry_enabled" {
   description = "Provision ACR for source-built demos; prebuilt simulator deployments disable it."
   type        = bool

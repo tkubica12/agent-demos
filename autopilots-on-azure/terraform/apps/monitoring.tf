@@ -95,7 +95,7 @@ output "foundry_project_endpoint" {
 }
 
 output "foundry_agent_name" {
-  value = "autopilots-${var.agent_runtime}"
+  value = var.channel == "simulator" ? "autopilots-${var.agent_runtime}-${var.autopilot_name}" : "autopilots-${var.agent_runtime}"
 }
 
 output "application_insights_id" {
