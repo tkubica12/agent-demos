@@ -36,7 +36,7 @@ class ApplicationRelease:
 
 
 def build_release(
-    role: str, *, root: Path = REPO_ROOT, base_image: str = PYTHON_BASE_IMAGE,
+    role: str, *, root: Path = REPO_ROOT, base_image: str = PYTHON_BASE_IMAGE, role_bundle: dict | None = None,
 ) -> ApplicationRelease:
     if role not in SERVICE_PACKAGES and role != "runtime":
         raise ValueError(f"No thin application package exists for {role!r}.")
@@ -44,13 +44,18 @@ def build_release(
     if role == "runtime":
         runtime = root / "runtimes" / "hermes"
         files.update({path.name: path.read_bytes() for path in sorted(runtime.glob("*.py"))})
-        files["dependency-lock.toml"] = (runtime / "uv.lock").read_bytes()
+        files["dependency-lock.toml"] = (runtime / "uv.lock").read_bytes().replace(b"\r\n", b"\n")
         packages = [
             (root / "bridge", "bridge"),
             (root / "autopilots_identity", "autopilots_identity"),
             (runtime / "plugins", "runtime_plugins"),
             (runtime / "runtime_skills", "runtime_skills"),
         ]
+        if role_bundle and role_bundle.get("source") == "local":
+            from scripts.role_bundle import build_role_bundle
+
+            bundled, _ = build_role_bundle(role_bundle, root=root)
+            files.update(bundled)
     else:
         project, package = SERVICE_PACKAGES[role]
         directory = root / project
@@ -129,7 +134,7 @@ if reused:
     raise SystemExit(0)
 venv=target/'.venv'
 if role=='runtime':
-    if pathlib.Path('/app/uv.lock').read_bytes()!=(target/'dependency-lock.toml').read_bytes():
+    if pathlib.Path('/app/uv.lock').read_bytes().replace(b'\r\n',b'\n')!=(target/'dependency-lock.toml').read_bytes().replace(b'\r\n',b'\n'):
         raise RuntimeError('Runtime dependency lock changed; build and select its dependency image first')
     if not venv.exists():
         venv.symlink_to('/app/.venv',target_is_directory=True)

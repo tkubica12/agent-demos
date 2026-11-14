@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
 import ipaddress
 import os
+import re
 import socket
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Callable
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse, urlunparse
 from xml.etree import ElementTree
 
 import aiohttp
+from microsoft_agents.activity import Activity, Attachment
 from microsoft_agents.hosting.core import TurnContext
 
 
@@ -54,6 +57,13 @@ DOWNLOAD_HOSTS = {
 }
 WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+PRIVATE_ADDRESS_SPACES = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+    SHARED_ADDRESS_SPACE,
+)
 
 
 class AttachmentProcessingError(RuntimeError):
@@ -199,13 +209,33 @@ def _sharing_url(value: str) -> str:
 
 
 def _public_addresses(value: str) -> tuple[str, int, tuple[str, ...]]:
-    parsed = urlparse(value or "")
-    if parsed.scheme.lower() != "https" or not parsed.hostname:
+    try:
+        parsed = urlparse(value or "")
+        port = parsed.port if parsed.port is not None else (80 if parsed.scheme.lower() == "http" else 443)
+    except ValueError as exc:
+        raise AttachmentProcessingError("Invalid attachment download URL.") from exc
+    configured = _origin(value) in attachment_download_origins()
+    allow_private_dns = (
+        configured and parsed.scheme.lower() == "https"
+        and os.getenv("PRIVATE_NETWORK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    host = (parsed.hostname or "").lower()
+    loopback = _loopback_host(host)
+    allow_loopback = configured and loopback and os.getenv("ALLOW_LOOPBACK_ATTACHMENTS") == "1"
+    if (
+        not host
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or "\\" in value
+        or any(ord(c) <= 32 for c in value)
+    ):
+        raise AttachmentProcessingError("Invalid attachment download URL.")
+    if parsed.scheme.lower() != "https" and not (parsed.scheme.lower() == "http" and allow_loopback):
         raise AttachmentProcessingError(
             "Attachment download URL must use HTTPS."
         )
-    host = parsed.hostname.lower()
-    if host == "localhost":
+    if host == "localhost" and not allow_loopback:
         raise AttachmentProcessingError(
             "Attachment download URL cannot target localhost."
         )
@@ -213,26 +243,28 @@ def _public_addresses(value: str) -> tuple[str, int, tuple[str, ...]]:
         literal = ipaddress.ip_address(host)
     except ValueError:
         literal = None
-    if literal and (
+    if literal and not allow_loopback and (
         literal.is_private
         or literal.is_loopback
         or literal.is_link_local
         or literal.is_reserved
+        or literal.is_multicast
+        or literal.is_unspecified
         or literal in SHARED_ADDRESS_SPACE
     ):
         raise AttachmentProcessingError(
             "Attachment download URL resolved to a private address."
         )
-    if host not in DOWNLOAD_HOSTS and not any(
+    if not configured and host not in DOWNLOAD_HOSTS and not any(
         host.endswith(suffix) for suffix in DOWNLOAD_HOST_SUFFIXES
     ):
         raise AttachmentProcessingError(
-            "Attachment download host is not a supported Microsoft 365 host."
+            "Attachment download host is not a supported Microsoft 365 host or configured origin."
         )
     try:
         addresses = {
             result[4][0]
-            for result in socket.getaddrinfo(host, parsed.port or 443)
+            for result in socket.getaddrinfo(host, port)
         }
     except socket.gaierror as exc:
         raise AttachmentProcessingError(
@@ -240,17 +272,71 @@ def _public_addresses(value: str) -> tuple[str, int, tuple[str, ...]]:
         ) from exc
     for address in addresses:
         ip = ipaddress.ip_address(address)
+        if allow_loopback and ip.is_loopback:
+            continue
+        if allow_private_dns and literal is None and any(ip in network for network in PRIVATE_ADDRESS_SPACES):
+            continue
         if (
             ip.is_private
             or ip.is_loopback
             or ip.is_link_local
             or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
             or ip in SHARED_ADDRESS_SPACE
         ):
             raise AttachmentProcessingError(
                 "Attachment download URL resolved to a private address."
             )
-    return host, parsed.port or 443, tuple(sorted(addresses))
+    if not addresses:
+        raise AttachmentProcessingError("Attachment download host resolved to no addresses.")
+    return host, port, tuple(sorted(addresses))
+
+
+def _loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def attachment_download_origins() -> frozenset[tuple[str, str, int]]:
+    origins = set()
+    for value in os.getenv("ATTACHMENT_DOWNLOAD_ORIGINS", "").split(","):
+        value = value.strip()
+        if not value:
+            continue
+        try:
+            parsed = urlparse(value)
+            origin = _origin(value)
+        except ValueError as exc:
+            raise AttachmentProcessingError("ATTACHMENT_DOWNLOAD_ORIGINS contains an invalid origin.") from exc
+        if (
+            not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or "\\" in value
+            or any(ord(c) <= 32 for c in value)
+            or not 1 <= origin[2] <= 65535
+            or (
+                parsed.scheme != "https"
+                and not (
+                    parsed.scheme == "http"
+                    and _loopback_host(parsed.hostname.lower())
+                    and os.getenv("ALLOW_LOOPBACK_ATTACHMENTS") == "1"
+                )
+            )
+        ):
+            raise AttachmentProcessingError(
+                "ATTACHMENT_DOWNLOAD_ORIGINS requires exact HTTPS origins; HTTP loopback requires ALLOW_LOOPBACK_ATTACHMENTS=1."
+            )
+        origins.add(origin)
+    return frozenset(origins)
 
 
 def _origin(value: str) -> tuple[str, str, int]:
@@ -258,7 +344,16 @@ def _origin(value: str) -> tuple[str, str, int]:
     return (
         parsed.scheme.lower(),
         (parsed.hostname or "").lower(),
-        parsed.port or 443,
+        parsed.port if parsed.port is not None else (80 if parsed.scheme.lower() == "http" else 443),
+    )
+
+
+def _channel_capability_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return (
+        _origin(value) in attachment_download_origins()
+        and bool(re.fullmatch(r"(?:/demo/[^/]+)?/api/agent-files/[^/]+/content", parsed.path))
+        and bool(parse_qs(parsed.query).get("capability", [""])[0])
     )
 
 
@@ -267,7 +362,7 @@ def _request_headers(
     authorization_url: str,
     headers: dict[str, str],
 ) -> dict[str, str]:
-    return headers if _origin(current_url) == _origin(authorization_url) else {}
+    return headers if _origin(current_url) == _origin(authorization_url) and not _channel_capability_url(current_url) else {}
 
 
 def _validate_download_url(value: str) -> str:
@@ -319,6 +414,50 @@ def _connector_headers(context: TurnContext) -> dict[str, str]:
     headers = getattr(client, "headers", None)
     authorization = headers.get("Authorization") if headers else None
     return {"Authorization": str(authorization)} if authorization else {}
+
+
+async def send_file_attachment(
+    context: TurnContext,
+    *,
+    name: str,
+    content_type: str,
+    data: bytes,
+    text: str = "",
+) -> Any:
+    """Upload a DOCX/TXT to channel storage, then send its authenticated original view."""
+    policy = AttachmentPolicy.from_environment()
+    safe_name = _safe_name(name, 1)
+    if _content_type(content_type) not in SUPPORTED_CONTENT_TYPES or PurePath(safe_name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+        raise AttachmentProcessingError("Only Word DOCX and UTF-8 text attachments are supported.")
+    if len(data) > policy.max_bytes:
+        raise AttachmentProcessingError("Attachment exceeds the per-file size limit.")
+    key = getattr(context.adapter, "_AGENT_CONNECTOR_CLIENT_KEY", "ConnectorClient")
+    connector = context.turn_state.get(key)
+    if connector is None:
+        raise AttachmentProcessingError("Channel connector is unavailable for file upload.")
+    conversation_id = str(context.activity.conversation.id)
+    async with connector.client.post(
+        f"v3/conversations/{quote(conversation_id, safe='')}/attachments",
+        json={
+            "name": safe_name,
+            "type": content_type,
+            "originalBase64": base64.b64encode(data).decode("ascii"),
+        },
+    ) as response:
+        response.raise_for_status()
+        uploaded = await response.json()
+    attachment_id = uploaded.get("id")
+    if not isinstance(attachment_id, str) or not attachment_id.strip():
+        raise AttachmentProcessingError("Channel attachment upload returned no attachment ID.")
+    return await context.send_activity(Activity(
+        type="message",
+        text=text,
+        attachments=[Attachment(
+            name=safe_name,
+            content_type=content_type,
+            content_url=f"{connector.base_uri.rstrip('/')}/v3/attachments/{quote(attachment_id, safe='')}/views/original",
+        )],
+    ))
 
 
 async def _download(
@@ -597,15 +736,27 @@ async def process_turn_attachments(
         ):
             data = content.encode("utf-8")
         elif download_url:
-            if not connector_headers and not _sharing_url(download_url):
+            configured_origin = _origin(download_url) in attachment_download_origins()
+            capability = _channel_capability_url(download_url)
+            demo_url = os.getenv("DEMO_SERVICE_URL", "")
+            demo_download = bool(
+                os.getenv("DEMO_CHANNEL_KEY")
+                and demo_url
+                and download_url.startswith(demo_url + "/v3/attachments/")
+            )
+            if not connector_headers and not _sharing_url(download_url) and not capability and not demo_download:
                 raise AttachmentProcessingError(
                     "Attachment download authorization is unavailable."
                 )
             try:
                 data, response_type = await _download(
                     download_url,
-                    authorization_url=content_url,
-                    headers=connector_headers,
+                    authorization_url=(
+                        str(_field(context.activity, "service_url", "") or "")
+                        if configured_origin
+                        else content_url
+                    ),
+                    headers={} if capability else connector_headers,
                     policy=resolved_policy,
                     client_factory=client_factory,
                 )

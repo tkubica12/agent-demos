@@ -20,6 +20,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest, DreamResponse
 from bridge.telemetry import runtime_trace_headers
+from bridge.generated_files import (
+    GeneratedAttachment, GeneratedFileError, ID_PATTERN, MAX_FILES, MAX_FILE_BYTES,
+    RUN_HEADER, SCOPE_HEADER, conversation_file_scope, generated_files_enabled, validate_generated_bytes,
+)
 
 BRIDGE_INSTRUCTIONS = "You are Hermes behind the Autopilots on Azure bridge. Follow bridge instructions exactly."
 ROLE_POLICY_REFERENCE = (
@@ -187,10 +191,13 @@ def bridge_instructions(request: AgentRequest) -> str:
         )
     microsoft_365 = ""
     microsoft_365_parts = []
-    collaboration_enabled = bool(
+    from bridge.channel_auth import simulator_channel_configured
+
+    agentic_tools = not simulator_channel_configured()
+    collaboration_enabled = agentic_tools and bool(
         _configured_env("M365_COLLABORATION_MCP_URL")
     )
-    teams_enabled = bool(_configured_env("WORKIQ_TEAMS_MCP_URL"))
+    teams_enabled = agentic_tools and bool(_configured_env("WORKIQ_TEAMS_MCP_URL"))
     if collaboration_enabled:
         operation_scope = hashlib.sha256(
             (
@@ -243,6 +250,16 @@ def bridge_instructions(request: AgentRequest) -> str:
             "runtime blocks memory and skill writes for this turn."
         )
     interactions = ""
+    widgets = ""
+    if request.source == "teams_personal" and not _private_context_enabled(request):
+        widgets = (
+            "\n\nInline generated HTML widgets are supported in this personal Teams chat. "
+            "For an interactive page, calculator, explorer, dashboard or form inside a message, "
+            "load the teams-html-widget skill and return its HTML_WIDGET_REQUEST contract. "
+            "You generate real HTML, CSS and JavaScript; the gateway supplies the host protocol "
+            "and narrowly scoped selection callbacks. Do not invent the wire fence, capabilities "
+            "or invoke payloads. External sites remain the generated-web-app capability."
+        )
     if (
         request.source.startswith("teams_")
         and not request.metadata.get("attachmentsPrivate")
@@ -259,8 +276,8 @@ def bridge_instructions(request: AgentRequest) -> str:
     if _configured_env("AUTOPILOT_BRIDGE_URL"):
         generated_apps = (
             "\n\nWhen the user requests a rich web application, dashboard, "
-            "presentation, visualization, or multi-step experience beyond an "
-            "Adaptive Card, or asks to list or manage generated sites, load "
+            "presentation, visualization, or multi-step experience that needs an externally hosted site "
+            "rather than an inline Teams widget, or asks to list or manage generated sites, load "
             "the generated-web-app skill. Generate and test inspectable source "
             "in the governed generated-apps workspace, then use the fixed "
             "deployment tools. Never serve user apps from the Hermes process "
@@ -278,6 +295,7 @@ def bridge_instructions(request: AgentRequest) -> str:
         f"{microsoft_365}"
         f"{attachments}"
         f"{interactions}"
+        f"{widgets}"
         f"{generated_apps}"
     )
 
@@ -360,9 +378,11 @@ class HermesRuntimeAdapter:
 
         base_url, api_key = await self._ready_runtime()
         endpoint, payload = await self._invoke_hermes(base_url, api_key, request)
-        visible_text = self._response_text(payload)
+        files = await self._generated_attachments(base_url, api_key, request, payload)
+        visible_text = "" if files and payload.get("output") == "" else self._response_text(payload)
         return AgentResponse(
             text=visible_text,
+            files=files,
             raw={
                 "runtimeUrl": base_url,
                 "hermesEndpoint": endpoint,
@@ -371,6 +391,56 @@ class HermesRuntimeAdapter:
                 "privateSession": _private_context_enabled(request),
             },
         )
+
+    async def _generated_attachments(
+        self, base_url: str, api_key: str, request: AgentRequest, payload: dict[str, Any],
+    ) -> tuple[GeneratedAttachment, ...]:
+        if not generated_files_enabled() or not request.source.startswith("teams_"):
+            return ()
+        manifest = payload.get("generatedAttachments")
+        if not isinstance(manifest, dict) or manifest.get("protocolVersion") != 1:
+            raise GeneratedFileError("The native runtime must enable the generated-file protocol before chat file delivery.")
+        entries = manifest.get("files")
+        if not isinstance(entries, list) or len(entries) > MAX_FILES:
+            raise GeneratedFileError("Native generated-file manifest exceeds the 3-file limit or is invalid.")
+        headers = {
+            "X-Autopilot-Key": api_key, RUN_HEADER: str(payload["run_id"]),
+            SCOPE_HEADER: conversation_file_scope(_env_required("WORKER_ID"), request.source, request.conversation_id),
+        }
+        files = []
+        identities = set()
+        async with self._client_factory(timeout=60, follow_redirects=False) as client:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise GeneratedFileError("Native generated-file entry is invalid.")
+                turn_id, file_id = entry.get("turnId"), entry.get("fileId")
+                size, digest, name = entry.get("size"), entry.get("sha256"), entry.get("name")
+                if (
+                    not isinstance(turn_id, str) or not ID_PATTERN.fullmatch(turn_id)
+                    or not isinstance(file_id, str) or not ID_PATTERN.fullmatch(file_id)
+                    or type(size) is not int or not 0 < size <= MAX_FILE_BYTES
+                    or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                    or not isinstance(name, str) or (turn_id, file_id) in identities
+                ):
+                    raise GeneratedFileError("Native generated-file metadata is unsafe or exceeds the size limit.")
+                identities.add((turn_id, file_id))
+                data = bytearray()
+                async with client.stream(
+                    "GET", f"{base_url}/internal/generated-files/{turn_id}/{file_id}", headers=headers,
+                ) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                        data.extend(chunk)
+                        if len(data) > size:
+                            raise GeneratedFileError("Native generated-file download exceeded its declared size.")
+                content = bytes(data)
+                if len(content) != size or hashlib.sha256(content).hexdigest() != digest:
+                    raise GeneratedFileError("Native generated-file download failed integrity verification.")
+                content_type = validate_generated_bytes(name, content)
+                if entry.get("contentType") != content_type:
+                    raise GeneratedFileError("Native generated-file content type is inconsistent.")
+                files.append(GeneratedAttachment(name=name, content_type=content_type, data=content))
+        return tuple(files)
 
     async def dream(
         self, request: DreamRequest, *, operation: dict[str, Any] | None = None
@@ -940,7 +1010,7 @@ class HermesRuntimeAdapter:
         request: AgentRequest,
         transcript_id: str | None = None,
     ) -> dict[str, str]:
-        return {
+        headers = {
             "Authorization": f"Bearer {api_key}",
             "X-Hermes-Session-Id": (
                 transcript_id or _hermes_transcript_id(request)
@@ -948,6 +1018,11 @@ class HermesRuntimeAdapter:
             "X-Hermes-Session-Key": _hermes_session_key(request),
             **runtime_trace_headers(),
         }
+        if generated_files_enabled() and request.source.startswith("teams_"):
+            headers[SCOPE_HEADER] = conversation_file_scope(
+                _env_required("WORKER_ID"), request.source, request.conversation_id,
+            )
+        return headers
 
     async def _invoke_hermes(self, base_url: str, api_key: str, request: AgentRequest) -> tuple[str, dict[str, Any]]:
         _endpoint_mode()
@@ -1050,7 +1125,9 @@ class HermesRuntimeAdapter:
                     raise ValueError("Native status returned a different run identity.")
                 status = result.get("status")
                 if status == "completed":
-                    if not isinstance(result.get("output"), str) or not result["output"].strip():
+                    generated = result.get("generatedAttachments")
+                    has_files = isinstance(generated, dict) and bool(generated.get("files"))
+                    if not isinstance(result.get("output"), str) or (not result["output"].strip() and not has_files):
                         terminal_error = NativeRunFailedError("Native completed run has no final response.")
                         break
                     return result

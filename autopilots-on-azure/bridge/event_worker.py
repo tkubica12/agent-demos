@@ -327,6 +327,23 @@ def attach(
     known_result_handler: Callable[[dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     if not enabled():
+        @app.get("/internal/transport/status")
+        async def local_transport_status(request: Request) -> dict[str, Any]:
+            expected = os.getenv("API_SERVER_KEY", "")
+            supplied = request.headers.get("x-autopilot-key", "")
+            if not expected or not secrets.compare_digest(expected, supplied):
+                raise HTTPException(status_code=401, detail="A valid operator key is required.")
+            from bridge.work_activity import active_work_count
+
+            active = active_work_count()
+            return {
+                "enabled": False,
+                "active": active, "gatewayActive": active, "schedulingActive": 0,
+                "unfinished": 0, "recoverable": 0, "unsettled": 0, "quarantined": 0,
+                "dlqInspectionRequired": False, "lastAttemptsAwaitingSettlement": 0,
+                "receiptRetention": "not-applicable",
+                "worker": os.getenv("WORKER_ID", ""), "role": "gateway",
+            }
         return
     initialize_journal()
 

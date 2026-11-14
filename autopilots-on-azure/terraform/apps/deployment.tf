@@ -1,11 +1,21 @@
 output "deployment_config" {
   sensitive = true
-  value = {
+  value = merge({
+    channel                                  = var.channel
+    private_network_enabled                  = var.private_network_enabled
+    demo_mcp_enabled                         = local.demo_mcp_enabled
+    simulator_auth_mode                      = var.simulator_auth_mode
+    simulator_url                            = var.simulator_url
+    simulator_channel_client_id              = var.simulator_channel_client_id
+    simulator_agent_client_id                = var.simulator_agent_client_id
+    simulator_demo_key                       = var.simulator_demo_key
     agent_runtime                            = var.agent_runtime
     autopilot_name                           = var.autopilot_name
     runtime_image                            = var.runtime_image
     runtime_disk_source_image                = var.runtime_disk_source_image
     runtime_disk_image_name                  = local.runtime_disk_image_name
+    bridge_image                             = var.bridge_image
+    bridge_disk_source_image                 = var.bridge_disk_source_image
     private_mcp_api_audience                 = var.private_mcp_api_audience
     public_shipments_mcp_api_audience        = var.public_shipments_mcp_api_audience
     api_server_key                           = var.api_server_key
@@ -21,6 +31,7 @@ output "deployment_config" {
     hermes_role_blueprint_path               = var.hermes_role_blueprint_path
     hermes_role_release                      = var.hermes_role_release
     hermes_role_release_commit               = var.hermes_role_release_commit
+    hermes_role_bundle_sha256                = var.hermes_role_bundle_sha256
     worker_assignment_scope                  = var.worker_assignment_scope
     worker_owner_id                          = var.worker_owner_id
     collective_learning_operator_client_id   = var.collective_learning_operator_client_id
@@ -53,5 +64,5 @@ output "deployment_config" {
     workiq_excel_mcp_scope                   = var.workiq_excel_mcp_scope
     workiq_copilot_mcp_url                   = var.workiq_copilot_mcp_url
     workiq_copilot_mcp_scope                 = var.workiq_copilot_mcp_scope
-  }
+  }, var.generated_chat_files_enabled ? { generated_chat_files_enabled = true } : {})
 }

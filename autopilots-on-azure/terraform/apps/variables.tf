@@ -316,3 +316,89 @@ variable "workiq_copilot_mcp_scope" {
   type    = string
   default = "ab7c82de-7946-4454-ac28-70249d17c95e/Tools.ListInvoke.All"
 }
+
+variable "channel" {
+  type    = string
+  default = "agent365"
+  validation {
+    condition     = contains(["agent365", "simulator"], var.channel)
+    error_message = "channel must be agent365 or simulator."
+  }
+}
+
+variable "platform_state_path" {
+  type    = string
+  default = "../platform/terraform.tfstate"
+}
+
+variable "demo_mcp_enabled" {
+  type    = bool
+  default = null
+}
+
+variable "simulator_auth_mode" {
+  type    = string
+  default = "entra"
+  validation {
+    condition     = contains(["entra", "demo"], var.simulator_auth_mode)
+    error_message = "simulator_auth_mode must be entra or demo."
+  }
+}
+
+variable "generated_chat_files_enabled" {
+  type    = bool
+  default = false
+  validation {
+    condition     = !var.generated_chat_files_enabled || var.channel == "simulator"
+    error_message = "Generated chat files are enabled only for simulator Workers."
+  }
+}
+
+variable "simulator_url" {
+  type    = string
+  default = ""
+}
+
+variable "simulator_channel_client_id" {
+  type    = string
+  default = ""
+}
+
+variable "simulator_agent_client_id" {
+  type    = string
+  default = ""
+}
+
+variable "simulator_demo_key" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+variable "private_network_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "bridge_image" {
+  type    = string
+  default = ""
+}
+
+variable "bridge_disk_source_image" {
+  type    = string
+  default = ""
+}
+
+variable "hermes_role_bundle_sha256" {
+  type    = string
+  default = ""
+  validation {
+    condition     = var.hermes_role_bundle_sha256 == "" || can(regex("^[a-f0-9]{64}$", var.hermes_role_bundle_sha256))
+    error_message = "hermes_role_bundle_sha256 must be the full bundled role manifest SHA-256."
+  }
+}
+
+variable "required_tags" {
+  type    = map(string)
+  default = {}
+}

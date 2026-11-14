@@ -1,0 +1,444 @@
+.workspace.activity-workspace {
+  grid-template-columns: 68px 320px minmax(0, 1fr);
+}
+
+.workspace .management-activity-sidebar .sidebar-heading {
+  padding: 0 24px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace .management-activity-feed {
+  min-height: 0;
+  padding: 16px 5px;
+}
+
+.workspace .management-activity-filters {
+  display: flex;
+  gap: 8px;
+  margin: 0 11px 9px;
+  align-items: center;
+}
+
+.workspace.activity-workspace .management-activity-filters button {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.workspace .management-activity-filters button[aria-pressed="true"] {
+  background: var(--active);
+  border-color: var(--purple);
+  color: var(--purple);
+}
+
+.workspace .management-activity-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 19px;
+  min-height: 92px;
+  margin: 2px 0;
+  width: 100%;
+  padding: 10px 15px !important;
+  border: 0 !important;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.workspace .management-activity-card.is-selected,
+.workspace .management-activity-card.is-selected:hover:not(:disabled) {
+  background: var(--surface);
+}
+
+.workspace .management-notice-avatar {
+  position: relative;
+  flex: 0 0 32px;
+}
+
+.workspace .management-notice-badge {
+  position: absolute;
+  right: -7px;
+  bottom: -5px;
+  height: 22px;
+  width: 22px;
+  border-radius: 50%;
+  background: var(--own);
+  color: var(--purple);
+  border: 2px solid var(--subtle);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+}
+
+.workspace .is-selected .management-notice-badge {
+  border-color: var(--surface);
+}
+
+.workspace .management-notice-badge svg {
+  height: 16px;
+  width: 16px;
+}
+
+.workspace .management-notice-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace .management-notice-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.workspace .management-notice-heading strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
+
+.workspace .management-notice-heading time {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+.workspace .management-notice-preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.workspace .management-notice-location {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.workspace .management-notice-location svg {
+  height: 12px;
+  width: 12px;
+}
+
+.workspace .management-notice-unread {
+  position: absolute;
+  left: 5px;
+  top: 24px;
+  width: 5px;
+  height: 5px;
+  background: var(--purple);
+  border-radius: 50%;
+}
+
+.workspace .management-activity-conversation {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.workspace .management-activity-conversation-header {
+  height: 62px;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace .management-activity-conversation-header > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace .management-activity-conversation-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace .management-activity-conversation-header > div > span {
+  display: block;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace .management-activity-conversation-header > button {
+  height: 32px;
+  min-width: 28px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.workspace.activity-workspace .management-activity-conversation-header > .management-go-to-channel {
+  font-size: 14px;
+  padding: 0 10px;
+  margin-right: 8px;
+}
+
+.workspace .management-activity-conversation .message-list {
+  padding: 16px 32px 28px;
+}
+
+.workspace .management-activity-conversation .replies-divider {
+  margin: 16px 0;
+}
+
+.workspace .management-activity-conversation .composer {
+  margin: 0 32px 24px;
+}
+
+.workspace.activity-workspace .management-activity-conversation .composer:not(.expanded) textarea {
+  flex-basis: 160px;
+}
+
+.management-team-menu.team-menu {
+  min-width: 155px !important;
+  width: 155px;
+  padding: 3px;
+}
+
+.management-team-menu.team-menu [role="menu"] {
+  min-width: 0;
+}
+
+.management-team-menu.team-menu [role="menuitem"] {
+  min-width: 0;
+  min-height: 33px;
+  padding: 6px 8px;
+  column-gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.management-team-menu.team-menu .fui-MenuItem__icon {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+
+.management-team-menu.team-menu .fui-MenuItem__content {
+  white-space: nowrap;
+}
+
+.workspace .management-directory-page {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.workspace .management-directory-heading {
+  height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace .management-directory-heading h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.workspace .management-directory-heading > button {
+  height: 100%;
+  flex-shrink: 0;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.workspace .management-directory-heading .management-directory-tab {
+  position: relative;
+  font-weight: 600;
+}
+
+.workspace .management-directory-tab::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  height: 3px;
+  left: 0;
+  right: 0;
+  background: var(--purple);
+  border-radius: 3px;
+}
+
+.workspace .management-directory-heading > button:last-child {
+  height: 32px;
+  margin-left: auto;
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.workspace .management-directory-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 16px;
+  margin: 24px 48px 26px;
+}
+
+.workspace .management-directory-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.workspace .management-directory-page .management-directory-filters button {
+  border: 1px solid transparent;
+  border-radius: 20px;
+  background: var(--subtle);
+  padding: 7px 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.workspace .management-directory-filters button:first-child {
+  min-width: 96px;
+}
+
+.workspace .management-directory-filters button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--purple);
+}
+
+.workspace .management-directory-sort {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  margin-left: auto;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.workspace .management-directory-search {
+  flex: 0 0 min(280px, 100%);
+  margin: 0 0 0 auto;
+}
+
+.workspace .management-directory-search input {
+  width: 100%;
+  height: 33px;
+  border: 1px solid var(--border);
+  border-bottom-color: var(--muted);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 6px 12px;
+}
+
+.workspace .management-directory-search input::placeholder {
+  color: var(--muted);
+}
+
+.workspace .management-directory-list {
+  margin: 0 40px;
+}
+
+.workspace .management-directory-team {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 70px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace .management-directory-team > button:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  min-height: 60px;
+  text-align: left;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.workspace .management-directory-team-info {
+  min-width: 0;
+}
+
+.workspace .management-directory-team-info > strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.workspace .management-directory-team-meta {
+  display: flex;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.workspace .management-directory-team-meta > span + span {
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+  margin-left: 8px;
+}
+
+.workspace .management-directory-role {
+  flex-shrink: 0;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.workspace .management-directory-team > .row-more {
+  flex-shrink: 0;
+}
+
+@media (max-width: 1150px) {
+  .workspace .management-directory-heading {
+    gap: 14px;
+  }
+  .workspace .management-directory-heading h2 {
+    font-size: 18px;
+  }
+  .workspace .management-directory-filters {
+    gap: 8px;
+  }
+  .workspace .management-directory-filters button {
+    padding: 5px 12px;
+  }
+}

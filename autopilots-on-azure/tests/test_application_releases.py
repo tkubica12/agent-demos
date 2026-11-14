@@ -14,6 +14,21 @@ from scripts.application_releases import PYTHON_BASE_IMAGE, build_release
 
 
 class ApplicationReleaseTests(unittest.TestCase):
+    def test_windows_lock_line_endings_do_not_require_a_new_runtime_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / "runtimes" / "hermes"
+            runtime.mkdir(parents=True)
+            (runtime / "start_hermes.py").write_bytes(b"pass\n")
+            lock = runtime / "uv.lock"
+            lock.write_bytes(b"version = 1\r\n")
+            windows = build_release("runtime", root=root)
+            lock.write_bytes(b"version = 1\n")
+            linux = build_release("runtime", root=root)
+            self.assertEqual(windows.digest, linux.digest)
+            lock.write_bytes(b"version = 2\n")
+            self.assertNotEqual(build_release("runtime", root=root).digest, linux.digest)
+
     def test_identical_source_and_lock_export_produce_identical_release(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -12,9 +12,79 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "runtimes" / "herme
 
 import start_hermes
 import runtime_keepalive
+from runtime_identity import AGENT_IDENTITY_ENVIRONMENTS
 
 
 class HermesBootstrapTests(unittest.TestCase):
+    def test_channel_runtime_disables_identity_sidecars_and_removes_persisted_m365_servers(self):
+        inherited = {
+            "mcp_servers": {
+                **{name: {"url": "http://stale-m365/mcp"} for name in start_hermes.WORKIQ_MCP_ENVIRONMENTS},
+                "m365-collaboration": {"url": "http://stale-m365/mcp"},
+                "role-server": {"url": "https://role.example/mcp"},
+            },
+        }
+        stale_urls = {
+            name: "http://stale-m365/mcp"
+            for name in (*start_hermes.WORKIQ_MCP_ENVIRONMENTS.values(), "M365_COLLABORATION_MCP_URL")
+        }
+        for environment in (
+            {},
+            stale_urls,
+            {
+                **stale_urls,
+                **dict.fromkeys(AGENT_IDENTITY_ENVIRONMENTS, "old-agent365-id"),
+                "USE_AGENTIC_AUTH": "false",
+                "AGENT_MCP_SERVERS_JSON": '{"workiq-mail": {}}',
+            },
+        ):
+            with (
+                self.subTest(environment=environment),
+                tempfile.TemporaryDirectory() as directory,
+                patch.dict(os.environ, environment, clear=True),
+                patch.object(start_hermes.subprocess, "Popen") as process,
+            ):
+                home = Path(directory)
+                (home / ".env").write_text(
+                    "\n".join(f"{key}={value}" for key, value in stale_urls.items()) + "\n",
+                    encoding="utf-8",
+                )
+                config = start_hermes.hermes_config(home, inherited)
+                self.assertEqual(config["mcp_servers"], {"role-server": {"url": "https://role.example/mcp"}})
+                environment_file = start_hermes.write_env_file(home).read_text(encoding="utf-8")
+                self.assertNotIn("stale-m365", environment_file)
+                self.assertIn("USE_AGENTIC_AUTH=false", environment_file)
+                self.assertIsNone(start_hermes.start_agent_mcp_proxy())
+                self.assertIsNone(start_hermes.start_m365_collaboration_mcp())
+                process.assert_not_called()
+        self.assertIn("workiq-mail", inherited["mcp_servers"])
+
+    def test_agent365_identity_ids_preserve_m365_runtime_without_an_auth_switch(self):
+        environment = {
+            **dict.fromkeys(AGENT_IDENTITY_ENVIRONMENTS, "agent365-id"),
+            "WORKIQ_MAIL_MCP_URL": "http://127.0.0.1:18081/servers/workiq-mail",
+            "M365_COLLABORATION_MCP_URL": "http://127.0.0.1:18082/mcp",
+            "AGENT_MCP_SERVERS_JSON": '{"workiq-mail": {}}',
+        }
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(start_hermes.subprocess, "Popen") as process,
+        ):
+            home = Path(directory)
+            config = start_hermes.hermes_config(home)
+            self.assertEqual(config["mcp_servers"]["workiq-mail"]["url"], environment["WORKIQ_MAIL_MCP_URL"])
+            self.assertEqual(
+                config["mcp_servers"]["m365-collaboration"]["url"],
+                environment["M365_COLLABORATION_MCP_URL"],
+            )
+            environment_file = start_hermes.write_env_file(home).read_text(encoding="utf-8")
+            self.assertIn("USE_AGENTIC_AUTH=true", environment_file)
+            self.assertIn("WORKIQ_MAIL_MCP_URL=" + environment["WORKIQ_MAIL_MCP_URL"], environment_file)
+            self.assertIs(start_hermes.start_agent_mcp_proxy(), process.return_value)
+            self.assertIs(start_hermes.start_m365_collaboration_mcp(), process.return_value)
+            self.assertEqual(process.call_count, 2)
+
     def test_autopilots_plugin_cannot_be_silently_disabled(self):
         with self.assertRaisesRegex(ValueError, "autopilots plugin must not be disabled"):
             start_hermes.hermes_config(Path("unused-runtime-home"), {"plugins": {"disabled": ["autopilots"]}})
@@ -106,6 +176,20 @@ class HermesBootstrapTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 503)
                     self.assertEqual(response.json()["status"], "gateway-unavailable")
 
+    def test_generated_file_endpoint_requires_runtime_key_and_explicit_feature(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"API_SERVER_KEY": "operations-key", "GENERATED_CHAT_FILES_ENABLED": "false"}),
+        ):
+            home = Path(directory)
+            client = TestClient(start_hermes.create_health_app(home, home, None, None))
+            path = "/internal/generated-files/" + "a" * 32 + "/" + "b" * 32
+            self.assertEqual(client.get(path).status_code, 401)
+            self.assertEqual(client.get(path, headers={"X-Autopilot-Key": "wrong-key"}).status_code, 401)
+            disabled = client.get(path, headers={"X-Autopilot-Key": "operations-key"})
+            self.assertEqual(disabled.status_code, 503)
+            self.assertIn("disabled", disabled.json()["detail"])
+
     def test_public_runtime_health_is_minimal_and_detailed_health_requires_operations_key(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"API_SERVER_KEY": "operations-key"}):
             home = Path(directory)
@@ -196,6 +280,42 @@ class HermesBootstrapTests(unittest.TestCase):
             self.assertEqual(config["memory"]["nudge_interval"], 10)
             self.assertEqual(config["skills"]["creation_nudge_interval"], 10)
             self.assertFalse(config["curator"]["enabled"])
+
+    def test_customer_model_configuration_is_selected_at_runtime(self):
+        deployments = (
+            ("alpha", {"HERMES_MODEL": "alpha-deployment"}, "https://ai.azure.com/.default"),
+            ("beta", {"AZURE_AI_MODEL_DEPLOYMENT_NAME": "beta-deployment"}, "https://cognitiveservices.azure.com/.default"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            inherited_config = {}
+            for name, model_environment, scope in deployments:
+                environment = {
+                    "USE_AGENTIC_AUTH": "false",
+                    "FOUNDRY_OPENAI_BASE_URL": f"https://{name}.example/openai/v1/",
+                    "FOUNDRY_TOKEN_SCOPE": scope,
+                    "API_SERVER_KEY": f"{name}-test-key",
+                    "OPENAI_API_KEY": "obsolete-placeholder",
+                    "AZURE_FOUNDRY_API_KEY": "obsolete-placeholder",
+                    **model_environment,
+                }
+                with self.subTest(deployment=name), patch.dict(os.environ, environment, clear=True):
+                    config = start_hermes.hermes_config(home, inherited_config)
+                    env_path = start_hermes.write_env_file(home)
+                    model = config["model"]
+                    self.assertEqual(model["default"], f"{name}-deployment")
+                    self.assertEqual(model["provider"], "azure-foundry")
+                    self.assertEqual(model["base_url"], f"https://{name}.example/openai/v1")
+                    self.assertEqual(model["entra"]["scope"], scope)
+                    self.assertEqual(model["auth_mode"], "entra_id")
+                    self.assertEqual(config["gateway"]["platforms"]["api_server"]["api_key"], f"{name}-test-key")
+                    generated_environment = env_path.read_text(encoding="utf-8")
+                    self.assertIn(f"HERMES_INFERENCE_MODEL={name}-deployment", generated_environment)
+                    self.assertIn(f"API_SERVER_KEY={name}-test-key", generated_environment)
+                    self.assertNotIn("obsolete-placeholder", generated_environment)
+                    if name == "beta":
+                        self.assertNotIn("alpha", generated_environment)
+                    inherited_config = config
 
 
 if __name__ == "__main__":

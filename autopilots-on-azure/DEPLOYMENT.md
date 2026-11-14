@@ -1,5 +1,10 @@
 # Deployment and operations
 
+For an isolated **Agent Chat Simulator** environment with standard Entra
+applications (no Agent 365 or real Teams), use
+[Simulator deployment](docs/simulator-deployment.md). The procedures below
+remain the Agent 365 channel's existing operator flow.
+
 Most commands below update **existing Workers**, preserving their Agent 365 blueprint, Agent Identity, Agent User, grants, and Worker home with its backups. Create new Workers only with [Fresh Worker bootstrap](#fresh-worker-bootstrap); do not substitute placeholder endpoints or copied identities. Other current limitations are in [SPEC.md](SPEC.md).
 
 ## Prerequisites
@@ -280,7 +285,54 @@ Previously recorded 2026-11-05 live checks validated Memory stop/wake, private/p
 
 A separate human-assisted channel check verified a real structured Agent User mention, a completed/settled native run, and the reply in Teams search and its thread under the demo tenant. The corporate operator WorkIQ connector was not used. Rich-editor text insertion required human assistance; the actual post contained only the unique marker, so the resulting clarification proves channel routing/delivery, not compliance with an exact-echo instruction. The marker was absent from all checked memory/skill Markdown files. Personal-chat success alone must never be treated as proof of group routing.
 
+### Teams HTML widget proof
+
+The bounded proof sends one fixed message to the existing Worker's owner personal chat. It does not install a runtime skill, modify the deployed gateway, call a model, create an MCP server, or change tenant/manifest settings. No arguments prints the outgoing Activity locally; `--send` performs the real send. Coordinate with other sessions before waking the same Worker.
+
+```powershell
+uv run --frozen python -m scripts.teams_html_widget_smoke
+uv run --frozen python -m scripts.teams_html_widget_smoke --send `
+  --subscription-id $subscription --resource-group $resourceGroup --location $location `
+  --sandbox-group $gatewayGroup --sandbox-id $gatewayId `
+  --runtime-group $runtimeGroup --runtime-id $runtimeId
+```
+
+Add `--interactive` to test a local counter, without server callbacks. The script selects the deployed gateway's actual Python environment, reads only the stored owner reference from the existing runtime, and validates its owner identity and personal-chat boundary before sending. The reference stays transient; no credentials or copied deployment state are required in this checkout. Management execution wakes existing compute.
+
+Observed on 2026-11-13 in the Hermes 2 owner chat, Teams web in Chrome: the fixed panel rendered and displayed `Teams MCP Apps handshake completed.`; the interactive variant rendered and a real button click changed `Clicks: 0` to `Clicks: 1`. Static probe `fa6ba8173545` had activity `1794563212131`; interactive probe `f449e6f63b19` had activity `1794563558506`. These are client observations, not merely accepted sends. Desktop/mobile, group chats, callbacks to agent tools, and model-generated widgets remain unverified.
+
+The wire contract is a normal Activity with `textFormat: extendedmarkdown` and fenced `html-widget` JSON of type `widget/mcp-ui`. Static *content* still includes fixed JavaScript for MCP Apps initialization and size reporting. A completely script-free HTML fragment is not the successful proof. No specific tenant enablement was changed for these tests; this does not establish availability in every tenant/client. HTML Widgets are preview, with public preview planned for 2026-11-16 in the documentation consulted on 2026-11-13.
+
+Primary references: [widget lifecycle and payload](https://microsoft.github.io/teams-sdk/csharp/in-depth-guides/html-widgets/), [message construction](https://microsoft.github.io/teams-sdk/csharp/in-depth-guides/html-widgets/sending-widgets/), [client-side rendering failures](https://microsoft.github.io/teams-sdk/csharp/in-depth-guides/html-widgets/error-handling/), and [resource/network policy](https://microsoft.github.io/teams-sdk/csharp/in-depth-guides/html-widgets/security-policy/). Render failures are not reported back to the bot; retain actual client verification as an acceptance gate.
+
+### Generated HTML widgets and Hermes selections
+
+The bundled `teams-html-widget` runtime skill defines a bounded `HTML_WIDGET_REQUEST` containing real model-authored HTML, CSS and JavaScript. The gateway validates the fragment and message limits, inserts the fixed host handshake/resize protocol, and sends `extendedmarkdown`. No extra MCP server, SDK dependency, tenant permission, manifest update or hosted web application is required for this path.
+
+Generated code executes in Teams' sandboxed iframe with a restrictive CSP and empty external-origin allowlists. This is not a general JavaScript sanitizer: keep secrets and credentials out of widget content. Network requests, nested frames and form navigation are not supported. Use ordinary generated apps when external resources or a separate site are required.
+
+The only gateway widget tool is `autopilot.widget.submit`. It accepts a generated choice and at most ten bounded text fields. Capabilities are issued by the gateway, expire after 30 minutes and bind the original personal chat, Worker and session; neither `domain`, `__msteams__` metadata nor `activity.from` grants extra authority. The native interaction receipt claims the widget once before scheduling the continuation. Duplicate clicks return an acknowledgement without invoking Hermes again. The continuation uses the original session and can reply with text, a governed card, or a fresh generated widget. Consequential actions still need their existing authorization flow.
+
+Deploy using the normal source-only update path for gateway and runtime. `HERMES_BUNDLED_SKILLS` must point at the new runtime source release. The native Hermes frontmatter parser in this pin reads inline YAML lists such as `[linux]` as a literal string; the new skill uses the accepted scalar `platforms: linux`. Runtime lock packaging normalizes only CRLF/LF, not dependency versions; an actual dependency change still requires a matching image.
+
+For the real acceptance check, ask Hermes in the owner personal chat to use `teams-html-widget` for an interactive planner with local filters/calculations and a choice to discuss. Verify actual model output renders, local input changes update the page, the submit tool is acknowledged, and Hermes replies in that same chat with the submitted values. Test an unknown tool, expired/wrong-conversation capability and duplicate claim locally. Desktop/mobile clients, group chats, attachment turns, scheduled/background widget creation and arbitrary backend tool execution are outside this first implementation.
+
+The 2026-11-13 end-to-end check used a real Teams message and native skill discovery, not a prebuilt widget send: Hermes generated an illustrative trip planner, activity `1794569812753`. In Teams web/Chrome, changing people to 4, budget to 5,000 CZK and the category to Culture selected the cultural trip and recalculated 3,100 CZK. Its real tool invoke claimed one native interaction; Hermes replied in the same chat with all those values, 775 CZK/person and 1,900 CZK remaining, activity `1794570269003`. The initial server acknowledgement exposed a copied legacy invoke-state-key/type error. The widget handler now uses public `send_activity` with `invokeResponse`; regression tests exercise the real Agents SDK collector, not only a stub turn-state dictionary. A later real click after the 30-minute lifetime displayed the explicit expired-capability error through that corrected response path, without another continuation. Duplicate-claim success is covered locally; that late live click was an expiry check, not a successful live duplicate-ack proof.
+
 ## Scheduling and release changes
+
+For Agent Chat Simulator HTML widgets, use the matching-source pinned runtime,
+gateway and simulator images described in [Simulator deployment](docs/simulator-deployment.md).
+The images package `bridge/html_widgets.py` and
+`runtime_skills/teams-html-widget/SKILL.md` in the runtime release
+(`runtimes/hermes/runtime_skills/teams-html-widget/SKILL.md` in the repository).
+Preserve `HERMES_BUNDLED_SKILLS=/app/runtime_skills`. No new environment variable, port,
+Azure resource or blueprint RoleCommit is needed. The simulator's frame grants
+are process-local: retain one backend process/replica. See
+[widget limits, isolation and local checks](chat-simulator/README.md#html-widgets).
+After image/source replacement, acceptance must exercise a fresh personal chat:
+widget initialization, input recompute, selection acknowledgment and same-chat
+follow-up. A gateway-only update cannot add the simulator browser host.
 
 To configure Service Bus Dreaming on an existing Worker:
 

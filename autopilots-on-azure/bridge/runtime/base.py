@@ -4,6 +4,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from bridge.generated_files import GeneratedAttachment
+
 
 StreamDeltaHandler = Callable[[str], Awaitable[None]]
 
@@ -52,6 +54,7 @@ class AgentResponse:
     text: str
     reaction: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+    files: tuple[GeneratedAttachment, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)

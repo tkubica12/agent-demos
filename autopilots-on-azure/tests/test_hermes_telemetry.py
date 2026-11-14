@@ -12,7 +12,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 import httpx
 from opentelemetry.sdk.trace import TracerProvider
@@ -22,9 +22,15 @@ from opentelemetry.trace import StatusCode
 
 from bridge import hermes_telemetry as native
 from bridge import telemetry
+from bridge.generated_files import GeneratedFileError, RUN_HEADER, SCOPE_HEADER, native_skill_load_evidence
 
 
 _ROOT = Path(__file__).resolve().parents[1]
+_SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "native_telemetry_smoke", _ROOT / "runtimes" / "hermes" / "native_telemetry_smoke.py",
+)
+native_smoke = importlib.util.module_from_spec(_SMOKE_SPEC)
+_SMOKE_SPEC.loader.exec_module(native_smoke)
 _RUNTIME_PYTHON = _ROOT / "runtimes" / "hermes" / ".venv" / (
     "Scripts/python.exe" if os.name == "nt" else "bin/python"
 )
@@ -61,6 +67,31 @@ class HermesTelemetryTests(unittest.TestCase):
         settings_patch.start()
         self.addCleanup(tracer_patch.stop)
         self.addCleanup(settings_patch.stop)
+
+    def test_native_build_guard_accepts_only_added_packages(self):
+        before = {
+            "opentelemetry-api": "1.45.1", "opentelemetry-sdk": "1.45.1",
+            "opentelemetry-semantic-conventions": "0.66b1", "packaging": "26.3",
+        }
+        after = {**before, "opentelemetry-instrumentation-httpx": "0.66b1", "wrapt": "2.5.2"}
+        native_smoke.verify_base_versions(before, after)
+
+    def test_native_build_guard_refuses_replaced_or_removed_base_packages(self):
+        before = {
+            "opentelemetry-api": "1.45.1", "opentelemetry-sdk": "1.45.1",
+            "opentelemetry-semantic-conventions": "0.66b1", "packaging": "26.3",
+        }
+        for name in before:
+            with self.subTest(package=name, change="downgrade"):
+                with self.assertRaisesRegex(RuntimeError, name):
+                    native_smoke.verify_base_versions(before, {**before, name: "0.1"})
+            with self.subTest(package=name, change="removal"):
+                with self.assertRaisesRegex(RuntimeError, name):
+                    native_smoke.verify_base_versions(before, {key: value for key, value in before.items() if key != name})
+
+    def test_native_build_guard_refuses_incomplete_base_snapshot(self):
+        with self.assertRaisesRegex(RuntimeError, "missing required"):
+            native_smoke.verify_base_versions({}, {})
 
     def test_each_wrapper_start_replaces_dead_generations(self):
         stale = self.context_directory
@@ -203,6 +234,218 @@ class HermesTelemetryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "active wrapper span"):
             with native.gateway_trace_context("native-session"):
                 self.fail("No wrapper span")
+
+    def test_generated_file_wrapper_preserves_run_contract_and_releases_terminal_traces(self):
+        with patch.object(sys, "path", [str(_ROOT / "runtimes" / "hermes"), *sys.path]):
+            start_hermes = importlib.import_module("start_hermes")
+        original_client = httpx.AsyncClient
+        data = b"Generated unit report"
+        entry = {
+            "turnId": "a" * 32, "fileId": "b" * 32, "name": "report.txt", "contentType": "text/plain",
+        }
+        store = Mock()
+        store.admit.side_effect = [{"turnId": value * 32} for value in ("a", "d", "e", "f")]
+        store.instructions.return_value = "\nScoped file instructions"
+        store.seal.return_value = {"output": "Report created.", "files": [entry]}
+        store.download.return_value = (entry, data)
+
+        async def gateway(request):
+            if request.url.path.endswith("/messages"):
+                return httpx.Response(200, json={"session_id": "native-session"})
+            if request.method == "POST":
+                body = json.loads(request.content)
+                self.assertEqual(body["instructions"], "Original instructions\nScoped file instructions")
+                self.assertEqual(int(request.headers["content-length"]), len(request.content))
+                return httpx.Response(202, json={
+                    "run_id": request.headers["Idempotency-Key"].replace("-admission", "-run"),
+                })
+            run_id = request.url.path.split("/")[-1]
+            return httpx.Response(200, json={
+                "run_id": run_id,
+                "status": run_id.split("-")[0] if run_id in {"cancelled-run", "interrupted-run"} else "completed",
+                "output": "Report created.\nMEDIA:/native/turn/report.txt", "usage": {"input_tokens": 7},
+            })
+
+        async def exercise():
+            runtime = start_hermes.create_health_app(self.home, self.home, None, None)
+            async with original_client(transport=httpx.ASGITransport(app=runtime), base_url="http://runtime") as client:
+                with telemetry.operation_span("invoke_agent", session_id="private-session"):
+                    headers = {
+                        **telemetry.runtime_trace_headers(), "Authorization": "Bearer native-test",
+                        "Idempotency-Key": "generated-admission", SCOPE_HEADER: "c" * 64,
+                    }
+                    admitted = await client.post(
+                        "/v1/runs", headers=headers,
+                        json={"input": "Generate report", "instructions": "Original instructions", "session_id": "session-1"},
+                    )
+                    self.assertEqual(admitted.status_code, 202)
+                    self.assertEqual(len(list(self.context_directory.glob("*.lease"))), 1)
+                    finished = await client.get("/v1/runs/generated-run", headers=headers)
+                    self.assertEqual(finished.status_code, 200)
+                    self.assertEqual(finished.json()["usage"], {"input_tokens": 7})
+                    self.assertEqual(finished.json()["output"], "Report created.")
+                    self.assertEqual(finished.json()["generatedAttachments"], {"protocolVersion": 1, "files": [entry]})
+                    self.assertNotIn("/native/turn", finished.text)
+                    self.assertEqual(list(self.context_directory.iterdir()), [])
+                    file_headers = {
+                        "X-Autopilot-Key": "native-test", SCOPE_HEADER: "c" * 64, RUN_HEADER: "generated-run",
+                    }
+                    url = f"/internal/generated-files/{entry['turnId']}/{entry['fileId']}"
+                    self.assertEqual((await client.get(url)).status_code, 401)
+                    store.download.assert_not_called()
+                    downloaded = await client.get(url, headers=file_headers)
+                    self.assertEqual(downloaded.status_code, 200)
+                    self.assertEqual(downloaded.content, data)
+                    store.download.assert_called_once_with(
+                        entry["turnId"], entry["fileId"], scope="c" * 64, run_id="generated-run",
+                    )
+                    store.download.side_effect = GeneratedFileError("Another conversation")
+                    self.assertEqual((await client.get(url, headers=file_headers)).status_code, 403)
+                    store.seal.side_effect = GeneratedFileError("Outside the current turn")
+                    refused = await client.get("/v1/runs/generated-run", headers=headers)
+                    self.assertEqual(refused.status_code, 422)
+                    self.assertIn("Outside the current turn", refused.json()["detail"])
+                    self.assertEqual(list(self.context_directory.iterdir()), [])
+                    headers["Idempotency-Key"] = "refused-admission"
+                    admitted = await client.post(
+                        "/v1/runs", headers=headers,
+                        json={"input": "Generate report", "instructions": "Original instructions", "session_id": "session-1"},
+                    )
+                    self.assertEqual(admitted.status_code, 202)
+                    self.assertEqual(len(list(self.context_directory.glob("*.lease"))), 1)
+                    refused = await client.get("/v1/runs/refused-run", headers=headers)
+                    self.assertEqual(refused.status_code, 422)
+                    self.assertEqual(list(self.context_directory.iterdir()), [])
+                    seals = store.seal.call_count
+                    for status in ("cancelled", "interrupted"):
+                        headers["Idempotency-Key"] = f"{status}-admission"
+                        admitted = await client.post(
+                            "/v1/runs", headers=headers,
+                            json={"input": "Generate report", "instructions": "Original instructions",
+                                  "session_id": "session-1"},
+                        )
+                        self.assertEqual(admitted.status_code, 202)
+                        self.assertEqual(len(list(self.context_directory.glob("*.lease"))), 1)
+                        stopped = await client.get(f"/v1/runs/{status}-run", headers=headers)
+                        self.assertEqual(stopped.status_code, 200)
+                        self.assertEqual(stopped.json()["status"], status)
+                        self.assertNotIn("generatedAttachments", stopped.json())
+                        self.assertEqual(list(self.context_directory.iterdir()), [])
+                    self.assertEqual(store.seal.call_count, seals)
+
+        with (
+            patch.object(start_hermes, "GeneratedFileStore", return_value=store),
+            patch.object(start_hermes, "hermes_account", return_value=(1000, 1000)),
+            patch.object(start_hermes.httpx, "AsyncClient", side_effect=lambda **kwargs: original_client(
+                transport=httpx.MockTransport(gateway), **kwargs,
+            )),
+            patch.dict(os.environ, {
+                "API_SERVER_KEY": "native-test", "GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1",
+            }),
+        ):
+            asyncio.run(exercise())
+        self.assertEqual(store.bind_run.call_args_list, [
+            call(entry["turnId"], "generated-run"), call("d" * 32, "refused-run"),
+            call("e" * 32, "cancelled-run"), call("f" * 32, "interrupted-run"),
+        ])
+
+    def test_native_run_evidence_is_read_only_authenticated_bounded_and_projected(self):
+        with patch.object(sys, "path", [str(_ROOT / "runtimes" / "hermes"), *sys.path]):
+            start_hermes = importlib.import_module("start_hermes")
+        original_client = httpx.AsyncClient
+        calls = []
+        mode = "ok"
+
+        async def gateway(request):
+            calls.append(request)
+            self.assertEqual(request.method, "GET")
+            self.assertEqual(request.url.host, "127.0.0.1")
+            self.assertEqual(request.headers["Authorization"], "Bearer native-test")
+            self.assertNotIn(SCOPE_HEADER, request.headers)
+            if mode == "redirect":
+                return httpx.Response(302, headers={"Location": "https://outside.invalid/secret"})
+            if request.url.path.startswith("/internal/skills/evidence/"):
+                self.assertEqual(request.headers["X-Autopilot-Key"], "native-test")
+                if mode == "missing-skill-route":
+                    return httpx.Response(404)
+                return httpx.Response(200, json={
+                    "runId": "native-run", "loads": [{
+                        "toolCallId": "call-1", "skillName": "teams-html-widget",
+                        "skillContentReturned": True, "skillContentSha256": "a" * 64,
+                    }],
+                })
+            if request.url.path.endswith("/events"):
+                event = "replay.truncated" if mode == "truncated" else "run.completed"
+                prefix = b"".join(
+                    ("data: " + json.dumps({"run_id": "native-run", **row}) + "\n\n").encode()
+                    for row in (
+                        {"event": "tool.started", "tool": "skill_view", "tool_call_id": "call-1"},
+                        {"event": "tool.completed", "tool": "skill_view", "tool_call_id": "call-1",
+                         "duration": 0.123, "error": False},
+                    )
+                )
+                return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=(
+                    b"x" * (1024 * 1024 + 1) if mode == "oversized" else
+                    prefix + ("data: " + json.dumps({"run_id": "native-run", "event": event, "output": "secret"}) + "\n\n").encode()
+                ))
+            return httpx.Response(200, json={
+                "run_id": "native-run", "status": "running" if mode == "running" else "completed",
+                "output": "secret", "generatedAttachments": {"claim": "secret"},
+                "runtime": {"provider": "azure-foundry", "model": "gpt-5", "route_source": "global"},
+                "usage": {"input_tokens": 7},
+            })
+
+        async def exercise():
+            nonlocal mode
+            runtime = start_hermes.create_health_app(self.home, self.home, None, None)
+            async with original_client(transport=httpx.ASGITransport(app=runtime), base_url="http://runtime") as client:
+                url = "/internal/runs/native-run/evidence"
+                self.assertEqual((await client.get(url)).status_code, 401)
+                self.assertEqual(calls, [])
+                headers = {"X-Autopilot-Key": "native-test"}
+                response = await client.get(url, headers=headers)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["runId"], "native-run")
+                self.assertTrue(response.json()["runtimeMetadataAvailable"])
+                self.assertEqual(response.json()["tools"][-1]["skillName"], "teams-html-widget")
+                self.assertNotIn("secret", response.text)
+                self.assertEqual(len(calls), 3)
+                for failure, expected in (
+                    ("running", 409), ("truncated", 502), ("oversized", 502), ("redirect", 502),
+                    ("missing-skill-route", 502),
+                ):
+                    mode = failure
+                    response = await client.get(url, headers=headers)
+                    self.assertEqual(response.status_code, expected, response.text)
+                    self.assertNotIn("secret", response.text)
+                self.assertEqual((await client.get(
+                    "/internal/runs/invalid%3Aid/evidence", headers=headers,
+                )).status_code, 400)
+            self.assertEqual({request.url.host for request in calls}, {"127.0.0.1"})
+
+        with (
+            patch.object(start_hermes, "GeneratedFileStore", return_value=Mock()),
+            patch.object(start_hermes, "hermes_account", return_value=(1000, 1000)),
+            patch.object(start_hermes.httpx, "AsyncClient", side_effect=lambda **kwargs: original_client(
+                transport=httpx.MockTransport(gateway), **kwargs,
+            )),
+            patch.dict(os.environ, {
+                "API_SERVER_KEY": "native-test", "GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1",
+            }),
+        ):
+            asyncio.run(exercise())
+
+    def test_allowlisted_skill_observer_registration_is_feature_gated(self):
+        context = Mock()
+        with patch.object(native, "configure_telemetry"), patch.object(native.atexit, "register"):
+            with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "false"}):
+                native.register(context)
+            context.register_hook.assert_not_called()
+            with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true"}):
+                native.register(context)
+        context.register_hook.assert_called_once_with(
+            "post_tool_call", native_skill_load_evidence.observe,
+        )
 
     def test_real_wrapper_context_handoff_and_ambiguous_http_failure(self):
         runtime_directory = _ROOT / "runtimes" / "hermes"

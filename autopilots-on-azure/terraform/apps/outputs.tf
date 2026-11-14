@@ -22,18 +22,21 @@ output "sandbox_location" {
 output "sandbox_groups" {
   value = {
     for role in local.roles : role => {
-      name                  = azapi_resource.sandbox_group[role].name
-      id                    = azapi_resource.sandbox_group[role].id
-      identity_resource_id  = azurerm_user_assigned_identity.workload[role].id
-      identity_client_id    = azurerm_user_assigned_identity.workload[role].client_id
-      identity_principal_id = azurerm_user_assigned_identity.workload[role].principal_id
-      vnet_connection_name  = contains(["runtime", "gateway"], role) ? azapi_resource.vnet_connection[role].name : ""
+      name                    = azapi_resource.sandbox_group[role].name
+      id                      = azapi_resource.sandbox_group[role].id
+      identity_resource_id    = azurerm_user_assigned_identity.workload[role].id
+      identity_client_id      = azurerm_user_assigned_identity.workload[role].client_id
+      identity_principal_id   = azurerm_user_assigned_identity.workload[role].principal_id
+      vnet_connection_name    = var.private_network_enabled || contains(["runtime", "gateway"], role) ? azapi_resource.vnet_connection[role].name : ""
+      private_network_enabled = var.private_network_enabled
+      public_network_access   = try(azapi_resource.sandbox_group[role].output.properties.publicNetworkAccess, "")
+      private_domain          = var.private_network_enabled ? local.platform.private_mcp_default_domain : ""
     }
   }
   depends_on = [azapi_update_resource.private_ingress]
 }
 output "private_ingress" {
-  value = azapi_update_resource.private_ingress.output.properties
+  value = try(azapi_update_resource.private_ingress[0].output.properties, {})
 }
 output "sandbox_group_name" {
   value = azapi_resource.sandbox_group["runtime"].name
@@ -54,10 +57,10 @@ output "bridge_identity_principal_id" {
   value = azurerm_user_assigned_identity.workload["gateway"].principal_id
 }
 output "private_mcp_identity_client_id" {
-  value = azurerm_user_assigned_identity.workload["private-mcp"].client_id
+  value = try(azurerm_user_assigned_identity.workload["private-mcp"].client_id, "")
 }
 output "private_mcp_identity_principal_id" {
-  value = azurerm_user_assigned_identity.workload["private-mcp"].principal_id
+  value = try(azurerm_user_assigned_identity.workload["private-mcp"].principal_id, "")
 }
 output "runtime_disk_image_name" {
   value = local.runtime_disk_image_name

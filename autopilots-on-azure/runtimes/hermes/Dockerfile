@@ -11,7 +11,9 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS minimax-docx
 
 WORKDIR /src
 COPY --from=minimax-skills /source/skills/minimax-docx/scripts/dotnet/ .
-RUN dotnet publish MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj \
+RUN dotnet restore MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj -r linux-x64 \
+    --source https://packagefeedproxy.microsoft.io/nuget/v3/index.json \
+    && dotnet publish MiniMaxAIDocx.Cli/MiniMaxAIDocx.Cli.csproj --no-restore \
     -c Release -r linux-x64 --self-contained true \
     -p:PublishSingleFile=true -p:PublishTrimmed=false -o /out
 
@@ -19,16 +21,16 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS office-helper
 
 WORKDIR /src
 COPY runtimes/hermes/office_helper/OfficeCollaboration.csproj .
-RUN dotnet restore
+RUN dotnet restore -r linux-x64 --source https://packagefeedproxy.microsoft.io/nuget/v3/index.json
 COPY runtimes/hermes/office_helper/Program.cs .
-RUN dotnet publish -c Release -r linux-x64 --self-contained true \
+RUN dotnet publish --no-restore -c Release -r linux-x64 --self-contained true \
     -p:PublishSingleFile=true -p:PublishTrimmed=false -o /out
 
 FROM mcr.microsoft.com/devcontainers/javascript-node:22-bookworm AS office-node
 
 WORKDIR /app
 COPY runtimes/hermes/package.json runtimes/hermes/package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci --ignore-scripts --registry=https://packagefeedproxy.microsoft.io/npm/
 
 FROM ${HERMES_BASE_IMAGE}
 USER root
@@ -47,9 +49,30 @@ COPY --from=office-node /app/node_modules ./node_modules
 COPY runtimes/hermes/pyproject.toml runtimes/hermes/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --python /usr/bin/python3.13 --no-managed-python
 
+COPY runtimes/hermes/hermes-native.txt /opt/autopilots/hermes-native.txt
+RUN /opt/hermes/.venv/bin/python -B -c "from importlib.metadata import requires; from packaging.requirements import Requirement; dependencies=[Requirement(value) for value in requires('browser-harness')]; assert any(item.name.lower() == 'pillow' and str(item.specifier) == '==12.3.0' for item in dependencies), 'Review the native browser-harness Pillow constraint'" \
+    && uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes --only-binary :all: \
+        --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ -r /opt/autopilots/hermes-native.txt \
+    && /opt/hermes/.venv/bin/python -B -c "from importlib.metadata import version; from PIL import Image; from io import BytesIO; assert version('pillow') == '12.3.0'; image=Image.new('RGB', (2, 2), (1, 2, 3)); output=BytesIO(); image.save(output, format='PNG'); output.seek(0); restored=Image.open(output); restored.load(); assert restored.size == (2, 2) and restored.getpixel((0, 0)) == (1, 2, 3)"
+
+COPY runtimes/hermes/hermes-telemetry.txt /opt/autopilots/hermes-telemetry.txt
+COPY bridge/telemetry.py /tmp/autopilots-telemetry-smoke/telemetry.py
+COPY runtimes/hermes/native_telemetry_smoke.py /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py
+RUN /opt/hermes/.venv/bin/python -B /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py \
+        capture /tmp/autopilots-telemetry-smoke/base.json \
+    && uv pip install --python /opt/hermes/.venv/bin/python --no-deps --require-hashes \
+        -r /opt/autopilots/hermes-telemetry.txt \
+    && uv pip check --python /opt/hermes/.venv/bin/python \
+    && /opt/hermes/.venv/bin/python -B /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py \
+        verify /tmp/autopilots-telemetry-smoke/base.json \
+    && rm /tmp/autopilots-telemetry-smoke/telemetry.py \
+        /tmp/autopilots-telemetry-smoke/native_telemetry_smoke.py /tmp/autopilots-telemetry-smoke/base.json \
+    && rmdir /tmp/autopilots-telemetry-smoke
+
 COPY runtimes/hermes/hermes-site.txt /opt/autopilots/hermes-site.txt
 RUN uv pip install --python /opt/hermes/.venv/bin/python --target /opt/autopilots/hermes-site \
-        --no-deps --require-hashes -r /opt/autopilots/hermes-site.txt \
+        --no-deps --require-hashes --index-url https://packagefeedproxy.microsoft.io/pypi/simple/ \
+        -r /opt/autopilots/hermes-site.txt \
     && /opt/hermes/.venv/bin/python -c "import sys; sys.path.append('/opt/autopilots/hermes-site'); import azure.servicebus, azure.monitor.opentelemetry.exporter, yaml"
 
 COPY --from=minimax-skills /source/skills/minimax-docx ./runtime_skills/minimax-docx
@@ -58,8 +81,17 @@ COPY --from=minimax-skills /source/skills/pptx-generator ./runtime_skills/pptx-g
 COPY --from=minimax-skills /source/skills/minimax-pdf ./runtime_skills/minimax-pdf
 COPY --from=office-helper /out/office-collaboration /usr/local/bin/office-collaboration
 COPY --from=minimax-docx /out/MiniMaxAIDocx.Cli /usr/local/bin/minimax-docx
+COPY runtimes/hermes/*.py ./
+COPY runtimes/hermes/plugins/ ./runtime_plugins/
+COPY runtimes/hermes/runtime_skills/ ./runtime_skills/
+COPY bridge/*.py ./bridge/
+COPY bridge/runtime/*.py ./bridge/runtime/
+COPY autopilots_identity/*.py ./autopilots_identity/
+COPY chat-simulator/backend/container_start.py ./container_start.py
+RUN /app/.venv/bin/python -B -c "import start_hermes, container_start; assert callable(start_hermes.main) and callable(container_start.main)"
 
 ENV HERMES_HOME=/data/hermes
+ENV AUTOPILOTS_APPLICATION_ROOT=/app
 ENV HERMES_BUNDLED_SKILLS=/app/runtime_skills
 ENV AUTOPILOTS_PLUGIN_PATH=/app:/opt/autopilots/hermes-site
 ENV PYTHONPATH=/app
@@ -70,4 +102,4 @@ ENV PORT=8642
 
 EXPOSE 8642
 
-ENTRYPOINT ["/bin/sleep", "infinity"]
+ENTRYPOINT ["/app/.venv/bin/python", "/app/container_start.py", "runtime"]

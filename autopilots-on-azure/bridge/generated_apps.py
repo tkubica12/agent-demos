@@ -55,6 +55,12 @@ class GeneratedAppsSettings:
     sandbox_group: str
     region: str
     worker_id: str
+    private_network_enabled: bool = False
+    vnet_connection_name: str = ""
+
+    def __post_init__(self) -> None:
+        if self.private_network_enabled and not self.vnet_connection_name.strip():
+            raise RuntimeError("Private generated apps require GENERATED_APPS_VNET_CONNECTION_NAME.")
 
     @classmethod
     def from_environment(cls) -> "GeneratedAppsSettings":
@@ -82,7 +88,11 @@ class GeneratedAppsSettings:
                 "Generated app settings are missing: "
                 + ", ".join(missing)
             )
-        return cls(**values)
+        return cls(
+            **values,
+            private_network_enabled=os.getenv("PRIVATE_NETWORK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
+            vnet_connection_name=os.getenv("GENERATED_APPS_VNET_CONNECTION_NAME", "").strip(),
+        )
 
 
 def _validate_command(value: object, field: str) -> list[str]:
@@ -520,6 +530,11 @@ class GeneratedAppsManager:
                 egress_policy=egress_policy,
                 entrypoint=["sleep"],
                 cmd=["infinity"],
+                **(
+                    {"customer_vnet_connection_name": self.settings.vnet_connection_name}
+                    if self.settings.private_network_enabled
+                    else {}
+                ),
                 polling_timeout=600,
             ).result()
             for file in spec["files"]:

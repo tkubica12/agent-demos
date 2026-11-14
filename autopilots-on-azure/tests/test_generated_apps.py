@@ -2,6 +2,7 @@ import base64
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -206,6 +207,43 @@ class GeneratedAppsTests(unittest.TestCase):
             result["retentionSeconds"],
             DEFAULT_TTL_SECONDS,
         )
+        self.assertNotIn("customer_vnet_connection_name", group.created)
+
+    def test_private_deploy_binds_native_vnet_and_preserves_email_ingress(self):
+        group = FakeGroup()
+        manager = self.manager(group)
+        environment = {
+            "AZURE_SUBSCRIPTION_ID": "sub", "AZURE_RESOURCE_GROUP": "rg",
+            "GENERATED_APPS_SANDBOX_GROUP": "generated",
+            "GENERATED_APPS_REGION": "swedencentral", "WORKER_ID": "hermes2",
+            "PRIVATE_NETWORK_ENABLED": "true",
+            "GENERATED_APPS_VNET_CONNECTION_NAME": "autopilots-vnet",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            manager.settings = GeneratedAppsSettings.from_environment()
+        result = manager.deploy_app(payload())
+        self.assertEqual(result["url"], "https://generated.example")
+        self.assertEqual(group.created["customer_vnet_connection_name"], "autopilots-vnet")
+        self.assertEqual(group.created["egress_policy"].default_action, "Deny")
+        self.assertEqual(group.child.ports["auth"]["entraId"]["emails"], ["user@example.com"])
+        self.assertEqual(group.child.ports["activationMode"], "OnDemand")
+
+    def test_private_mode_refuses_missing_vnet_without_platform_call(self):
+        group = FakeGroup()
+        with self.assertRaisesRegex(RuntimeError, "GENERATED_APPS_VNET_CONNECTION_NAME"):
+            replace(self.manager(group).settings, private_network_enabled=True)
+        self.assertIsNone(group.created)
+
+    def test_private_creation_failure_has_no_public_retry_or_artifact_upload(self):
+        group = FakeGroup()
+        manager = self.manager(group)
+        manager.settings = replace(manager.settings, private_network_enabled=True, vnet_connection_name="autopilots-vnet")
+        with patch.object(group, "begin_create_sandbox", side_effect=RuntimeError("Private disk unavailable")) as create:
+            with self.assertRaisesRegex(RuntimeError, "Private disk unavailable"):
+                manager.deploy_app(payload())
+        create.assert_called_once()
+        self.assertEqual(create.call_args.kwargs["customer_vnet_connection_name"], "autopilots-vnet")
+        self.assertEqual(group.child.files, {})
 
     def test_generated_app_files_stay_in_governed_workspace(self):
         with tempfile.TemporaryDirectory() as temp_dir:

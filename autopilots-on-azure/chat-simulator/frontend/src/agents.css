@@ -1,0 +1,22 @@
+.agent-badge { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--border); border-radius: 4px; padding: 0 2px; font-size: 11px; line-height: 14px; font-weight: 600; color: var(--muted); }
+.agent-badge svg { width: 12px; height: 12px; }
+.typing-indicator { display: flex; align-items: center; gap: 6px; padding: 6px 16px; color: var(--muted); font-size: 12px; line-height: 18px; }
+.typing-indicator::after { content: "•••"; letter-spacing: 2px; color: var(--purple); animation: agent-typing 1.2s ease-in-out infinite; }
+@keyframes agent-typing { 50% { opacity: 0.35; } }
+.agent-dialog { width: min(620px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); overflow-y: auto; }
+.registered-agents { display: grid; gap: 12px; margin: 16px 0 24px; }
+.registered-agent { padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+.agent-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.agent-summary > span { display: grid; flex: 1; min-width: 140px; gap: 3px; }
+.agent-deliveries { display: grid; gap: 8px; margin-top: 12px; }
+.agent-deliveries > div { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.agent-deliveries > div > span { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.suggested-replies { display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.workspace .suggested-replies button:not([class*="fui-"]), .suggested-replies a { border: 1px solid var(--purple); color: var(--purple); border-radius: 6px; padding: 5px 10px; background: var(--surface); text-decoration: none; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.suggested-replies > svg { color: var(--muted); width: 20px; height: 20px; }
+.suggested-replies button:disabled { opacity: 0.55; cursor: wait; }
+.registered-agents small { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; }
+.agent-dialog h3 { font-size: 16px; margin: 16px 0 10px; }
+.agent-channel-settings { display: grid; gap: 6px; margin: 14px 0; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
+.agent-channel-settings code { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .typing-indicator::after { animation: none; } }

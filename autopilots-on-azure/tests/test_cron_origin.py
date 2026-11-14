@@ -20,6 +20,41 @@ import cron_origin
 
 
 class CronOriginTests(unittest.TestCase):
+    def test_unavailable_scheduling_cannot_fall_back_to_native_local_success(self):
+        configured = {
+            "USER_SCHEDULING_ENABLED": "true",
+            "SCHEDULER_SERVICEBUS_NAMESPACE": "demo.servicebus.windows.net",
+            "SCHEDULER_SERVICEBUS_QUEUE": "schedules",
+        }
+        for environment in (
+            {},
+            configured | {"USER_SCHEDULING_ENABLED": "false"},
+            configured | {"SCHEDULER_SERVICEBUS_NAMESPACE": ""},
+            configured | {"SCHEDULER_SERVICEBUS_QUEUE": "  "},
+            {"USER_SCHEDULING_ENABLED": "true"},
+        ):
+            for action in ("create", "list", "update", "remove"):
+                with (
+                    self.subTest(environment=environment, action=action),
+                    patch.dict(os.environ, {"USE_AGENTIC_AUTH": "false", **environment}, clear=True),
+                ):
+                    result = json.loads(cron_origin.tool_execution(
+                        tool_name="cronjob_manage", args={"action": action},
+                        next_call=lambda args: self.fail("Unavailable scheduling reached the native local scheduler"),
+                    ))
+                    self.assertFalse(result["success"])
+                    self.assertIn("Scheduling is unavailable", result["error"])
+                    self.assertIn("SCHEDULER_SERVICEBUS_QUEUE", result["error"])
+                    self.assertIn("Container-local scheduling is not supported", result["error"])
+
+    def test_unavailable_scheduling_does_not_block_other_tools(self):
+        with patch.dict(os.environ, {"USE_AGENTIC_AUTH": "false"}, clear=True):
+            result = cron_origin.tool_execution(
+                tool_name="terminal", args={"command": "pwd"},
+                next_call=lambda args: {"output": args["command"]},
+            )
+        self.assertEqual(result, {"output": "pwd"})
+
     def test_gateway_registers_exact_transcript_before_admission_without_inventory_diff(self):
         requests = []
 
@@ -59,7 +94,13 @@ class CronOriginTests(unittest.TestCase):
         native = SimpleNamespace(set_session_vars=lambda **kwargs: bound.set(kwargs))
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch.dict(os.environ, {"HERMES_HOME": directory}),
+            patch.dict(os.environ, {
+                "HERMES_HOME": directory,
+                "USE_AGENTIC_AUTH": "false",
+                "USER_SCHEDULING_ENABLED": "true",
+                "SCHEDULER_SERVICEBUS_NAMESPACE": "demo.servicebus.windows.net",
+                "SCHEDULER_SERVICEBUS_QUEUE": "schedules",
+            }),
             patch.dict(sys.modules, {"gateway.session_context": native}),
         ):
             home = Path(directory)
@@ -87,9 +128,15 @@ class CronOriginTests(unittest.TestCase):
                 })
 
     def test_unbound_turn_cannot_create_a_job_with_model_supplied_origin(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HERMES_HOME": directory}):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            "HERMES_HOME": directory,
+            "USER_SCHEDULING_ENABLED": "true",
+            "SCHEDULER_SERVICEBUS_NAMESPACE": "demo.servicebus.windows.net",
+            "SCHEDULER_SERVICEBUS_QUEUE": "schedules",
+        }):
             result = cron_origin.tool_execution(
                 tool_name="cronjob_manage", args={"action": "create", "origin": "ref-a"},
                 session_id="unregistered", next_call=lambda args: self.fail("Untrusted origin admitted"),
             )
         self.assertFalse(json.loads(result)["success"])
+        self.assertIn("no trusted proactive delivery origin", json.loads(result)["error"])

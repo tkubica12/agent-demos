@@ -5,8 +5,9 @@ import os
 from typing import Any
 
 from microsoft_agents.activity import Activity
-from microsoft_agents.hosting.core import TurnContext
+from microsoft_agents.hosting.core import ClaimsIdentity, TurnContext
 from microsoft_agents.hosting.core.app.proactive import Conversation
+from bridge.generated_files import GeneratedAttachment
 
 
 SUPPORTED_BOUNDARIES = {"one_to_one", "shared_group", "public_channel"}
@@ -63,8 +64,11 @@ async def send_proactive_activity(
     *,
     activity: Activity | None = None,
     require_activity_id: bool = True,
+    file: GeneratedAttachment | None = None,
 ) -> dict[str, str]:
-    if activity is None and not text.strip():
+    if activity is not None and file is not None:
+        raise ValueError("A proactive file and an Adaptive Card must be delivered as separate activities.")
+    if activity is None and file is None and not text.strip():
         return
     boundary = str(stored.get("boundary") or "")
     if boundary not in SUPPORTED_BOUNDARIES:
@@ -82,9 +86,16 @@ async def send_proactive_activity(
 
     async def callback(turn_context: TurnContext) -> None:
         nonlocal activity_id
-        response = await turn_context.send_activity(
-            activity or Activity(type="message", text=text)
-        )
+        if file is None:
+            response = await turn_context.send_activity(
+                activity or Activity(type="message", text=text)
+            )
+        else:
+            from bridge.attachments import send_file_attachment
+
+            response = await send_file_attachment(
+                turn_context, name=file.name, content_type=file.content_type, data=file.data, text=text,
+            )
         raw_activity_id = (
             response.get("id")
             if isinstance(response, dict)
@@ -96,7 +107,15 @@ async def send_proactive_activity(
             else ""
         )
 
-    if conversation.claims:
+    if os.getenv("DEMO_CHANNEL_KEY"):
+        if continuation.service_url != os.getenv("DEMO_SERVICE_URL"):
+            raise RuntimeError("Proactive serviceUrl does not match DEMO_SERVICE_URL.")
+        await adapter.continue_conversation_with_claims(
+            ClaimsIdentity({}, False, authentication_type="Anonymous"),
+            continuation,
+            callback,
+        )
+    elif conversation.claims:
         await adapter.continue_conversation_with_claims(
             Conversation.identity_from_claims(conversation.claims),
             continuation,
@@ -112,7 +131,7 @@ async def send_proactive_activity(
         )
         if not app_id:
             raise RuntimeError(
-                "Agent 365 application ID is required for proactive delivery."
+                "A service-connection application ID is required for proactive delivery."
             )
         await adapter.continue_conversation(
             app_id,

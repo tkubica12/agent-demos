@@ -60,6 +60,8 @@ RESERVED_WORKER_SKILL_NAMESPACES = frozenset({"private", "candidates", "runtime"
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 RELEASE_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+LOCAL_ROLE_MANIFEST = "role-release.json"
 
 
 @dataclass(frozen=True)
@@ -71,6 +73,7 @@ class RoleReleaseSettings:
     commit: str
     worker_id: str
     assignment_scope: str
+    bundle_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,7 @@ def role_release_settings_from_environment() -> RoleReleaseSettings | None:
                 "HERMES_ROLE_BLUEPRINT_PATH",
                 "HERMES_ROLE_RELEASE",
                 "HERMES_ROLE_RELEASE_COMMIT",
+                "HERMES_ROLE_BUNDLE_SHA256",
             )
             if os.getenv(name, "").strip()
         ]
@@ -110,6 +114,9 @@ def role_release_settings_from_environment() -> RoleReleaseSettings | None:
         raise ValueError("HERMES_ROLE_RELEASE must use semantic version MAJOR.MINOR.PATCH.")
     if not COMMIT_PATTERN.fullmatch(commit):
         raise ValueError("HERMES_ROLE_RELEASE_COMMIT must be a full 40-character Git commit SHA.")
+    bundle_sha256 = os.getenv("HERMES_ROLE_BUNDLE_SHA256", "").strip()
+    if source == "local" and not SHA256_PATTERN.fullmatch(bundle_sha256):
+        raise ValueError("Local roles require HERMES_ROLE_BUNDLE_SHA256: the SHA-256 of role-release.json.")
     worker_id = (
         os.getenv("WORKER_ID", "").strip()
         or os.getenv("AUTOPILOT_NAME", "").strip()
@@ -120,11 +127,16 @@ def role_release_settings_from_environment() -> RoleReleaseSettings | None:
     return RoleReleaseSettings(
         role_blueprint=role_blueprint,
         source=source,
-        repository_path=os.getenv("HERMES_ROLE_BLUEPRINT_PATH", "").strip().strip("/\\"),
+        repository_path=(
+            os.getenv("HERMES_ROLE_BLUEPRINT_PATH", "").strip()
+            if source == "local"
+            else os.getenv("HERMES_ROLE_BLUEPRINT_PATH", "").strip().strip("/\\")
+        ),
         role_release=role_release,
         commit=commit.lower(),
         worker_id=worker_id,
         assignment_scope=os.getenv("WORKER_ASSIGNMENT_SCOPE", "unassigned").strip() or "unassigned",
+        bundle_sha256=bundle_sha256,
     )
 
 
@@ -157,7 +169,65 @@ def _matches_installed(settings: RoleReleaseSettings, manifest: dict[str, Any]) 
         and manifest.get("roleReleaseCommit") == settings.commit
         and manifest.get("workerId") == settings.worker_id
         and manifest.get("assignmentScope") == settings.assignment_scope
+        and (settings.source != "local" or manifest.get("roleBundleSha256") == settings.bundle_sha256)
     )
+
+
+def _local_distribution_root(settings: RoleReleaseSettings) -> Path:
+    application_root = (
+        os.getenv("HERMES_ROLE_BUNDLE_ROOT", "").strip()
+        or os.getenv("AUTOPILOTS_APPLICATION_ROOT", "").strip()
+    )
+    if not application_root:
+        raise ValueError("Local roles require HERMES_ROLE_BUNDLE_ROOT or AUTOPILOTS_APPLICATION_ROOT.")
+    if not SHA256_PATTERN.fullmatch(settings.bundle_sha256):
+        raise ValueError("Local roles require the SHA-256 of role-release.json.")
+    root = Path(application_root).resolve(strict=True)
+    relative = PurePosixPath(settings.repository_path.replace("\\", "/"))
+    if (
+        not relative.parts
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or ":" in settings.repository_path
+    ):
+        raise ValueError("Local HERMES_ROLE_BLUEPRINT_PATH must be relative to AUTOPILOTS_APPLICATION_ROOT.")
+    distribution_root = root.joinpath(*relative.parts)
+    if not distribution_root.resolve(strict=True).is_relative_to(root):
+        raise ValueError("Local Role Blueprint path escapes the application bundle.")
+    for candidate in (distribution_root, *distribution_root.parents):
+        if candidate == root:
+            break
+        if candidate.is_symlink() or candidate.is_junction():
+            raise ValueError("Local Role Blueprint path must not contain links.")
+    manifest_path = root / LOCAL_ROLE_MANIFEST
+    if manifest_path.is_symlink() or manifest_path.is_junction():
+        raise ValueError("Local Role Release manifest must not be a link.")
+    raw_manifest = manifest_path.read_bytes()
+    if hashlib.sha256(raw_manifest).hexdigest() != settings.bundle_sha256:
+        raise ValueError("Local Role Release manifest SHA-256 does not match HERMES_ROLE_BUNDLE_SHA256.")
+    payload = json.loads(raw_manifest)
+    expected = {
+        "schemaVersion": 1,
+        "roleBlueprint": settings.role_blueprint,
+        "roleBlueprintPath": relative.as_posix(),
+        "roleRelease": settings.role_release,
+        "roleReleaseCommit": settings.commit,
+    }
+    if not isinstance(payload, dict) or any(payload.get(name) != value for name, value in expected.items()):
+        raise ValueError("Local Role Release manifest does not match the configured role, path, release and commit.")
+    files = payload.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("Local Role Release manifest requires a non-empty files inventory.")
+    actual = {}
+    for candidate in distribution_root.rglob("*"):
+        if candidate.is_symlink() or candidate.is_junction():
+            raise ValueError("Local Role Release bundle must not contain links.")
+        if candidate.is_file():
+            actual[candidate.relative_to(distribution_root).as_posix()] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    if actual != files:
+        raise ValueError("Local Role Release file inventory or SHA-256 content does not match the bundle manifest.")
+    _distribution_manifest(distribution_root, settings)
+    return distribution_root
 
 
 def _run_git(args: list[str], *, cwd: Path | None = None) -> str:
@@ -538,6 +608,7 @@ def install_or_refresh_role_release(
     hermes_home: Path,
     settings: RoleReleaseSettings,
 ) -> RoleReleaseInstall:
+    local_distribution = _local_distribution_root(settings) if settings.source == "local" else None
     adopt_worker_home_layout(hermes_home, settings.role_blueprint)
     profile_home = hermes_home
     _recover_refresh_transaction(profile_home)
@@ -559,7 +630,7 @@ def install_or_refresh_role_release(
         _require_export_receipt(profile_home, installed)
 
     with tempfile.TemporaryDirectory(prefix="hermes-role-release-") as temp_dir:
-        distribution_root = _clone_at_commit(settings, Path(temp_dir) / "repository")
+        distribution_root = local_distribution or _clone_at_commit(settings, Path(temp_dir) / "repository")
         distribution, owned_paths = _distribution_manifest(distribution_root, settings)
         _reject_symlinks(distribution_root, owned_paths)
         previous_owned = installed.get("distributionOwned") or []
@@ -604,6 +675,8 @@ def install_or_refresh_role_release(
         "roleSkillBaseline": role_skill_hashes(profile_home),
         "refreshedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    if settings.source == "local":
+        worker_manifest["roleBundleSha256"] = settings.bundle_sha256
     try:
         _write_json_atomic(manifest_path, worker_manifest)
     except Exception:

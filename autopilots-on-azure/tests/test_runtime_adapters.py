@@ -17,6 +17,7 @@ import bridge.app as bridge_app
 import bridge.runtime.hermes as hermes_runtime
 import scripts.sandbox_runtime as sandbox_runtime
 from bridge.runtime.base import AgentRequest, AgentResponse, DreamRequest
+from bridge.generated_files import GeneratedFileError, SCOPE_HEADER, RUN_HEADER, conversation_file_scope
 from bridge.runtime.hermes import (
     OWNER_DIGEST_REFERENCE_KEY,
     PRIVATE_SESSION_PREFIX,
@@ -38,6 +39,72 @@ from scripts.sandbox_runtime import (
 
 
 class RuntimeAdapterTests(unittest.TestCase):
+    def test_generated_file_download_is_authenticated_scoped_and_preserves_bytes(self):
+        content = "Native generated report\n".encode("utf-8")
+        turn_id, file_id = "a" * 32, "b" * 32
+        request = AgentRequest("Generate a report", "conversation-1", "user-1", "teams_personal", True)
+        payload = {
+            "run_id": "native-run-1", "output": "",
+            "generatedAttachments": {"protocolVersion": 1, "files": [{
+                "turnId": turn_id, "fileId": file_id, "name": "report.txt", "contentType": "text/plain",
+                "size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+            }]},
+        }
+        calls = []
+
+        def handle(outgoing):
+            calls.append(outgoing)
+            self.assertEqual(outgoing.url.path, f"/internal/generated-files/{turn_id}/{file_id}")
+            self.assertEqual(outgoing.headers["X-Autopilot-Key"], "runtime-key")
+            self.assertEqual(outgoing.headers[RUN_HEADER], "native-run-1")
+            self.assertEqual(
+                outgoing.headers[SCOPE_HEADER], conversation_file_scope("worker-1", "teams_personal", "conversation-1"),
+            )
+            return httpx.Response(200, content=content)
+
+        adapter = HermesRuntimeAdapter(client_factory=lambda **kwargs: httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), **kwargs,
+        ))
+        with (
+            patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1"}),
+            patch.object(adapter, "_ready_runtime", AsyncMock(return_value=("https://runtime.example", "runtime-key"))),
+            patch.object(adapter, "_invoke_hermes", AsyncMock(return_value=("runs", payload))),
+        ):
+            response = asyncio.run(adapter._invoke_turn(request))
+            self.assertEqual(adapter._headers("runtime-key", request)[SCOPE_HEADER], calls[0].headers[SCOPE_HEADER])
+        self.assertEqual(response.text, "")
+        self.assertEqual(response.files[0].name, "report.txt")
+        self.assertEqual(response.files[0].data, content)
+        self.assertNotIn("Native generated report", repr(response))
+
+    def test_generated_file_corruption_and_runtime_refusal_are_explicit_errors(self):
+        request = AgentRequest("Generate a report", "conversation-1", "user-1", "teams_personal", True)
+        payload = {
+            "run_id": "native-run-1", "generatedAttachments": {"protocolVersion": 1, "files": [{
+                "turnId": "a" * 32, "fileId": "b" * 32, "name": "report.txt", "contentType": "text/plain",
+                "size": 5, "sha256": hashlib.sha256(b"hello").hexdigest(),
+            }]},
+        }
+        with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "true", "WORKER_ID": "worker-1"}):
+            for status, content, expected in (
+                (200, b"other", GeneratedFileError),
+                (200, b"oversized", GeneratedFileError),
+                (403, b"Another conversation", httpx.HTTPStatusError),
+                (302, b"", httpx.HTTPStatusError),
+            ):
+                adapter = HermesRuntimeAdapter(client_factory=lambda **kwargs: httpx.AsyncClient(
+                    transport=httpx.MockTransport(lambda outgoing: httpx.Response(status, content=content)), **kwargs,
+                ))
+                with self.subTest(status=status, content=content), self.assertRaises(expected):
+                    asyncio.run(adapter._generated_attachments("https://runtime.example", "runtime-key", request, payload))
+            adapter = HermesRuntimeAdapter()
+            with self.assertRaisesRegex(GeneratedFileError, "enable"):
+                asyncio.run(adapter._generated_attachments("https://runtime.example", "runtime-key", request, {}))
+        with patch.dict(os.environ, {"GENERATED_CHAT_FILES_ENABLED": "false"}):
+            self.assertEqual(
+                asyncio.run(adapter._generated_attachments("https://runtime.example", "runtime-key", request, payload)), (),
+            )
+
     def test_hermes_runtime_requests_propagate_trace_and_opaque_correlations(self):
         requests = []
         trace_headers = {

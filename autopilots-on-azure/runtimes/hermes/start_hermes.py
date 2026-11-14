@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import subprocess
 import shutil
 import sys
 import threading
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -19,9 +21,10 @@ import httpx
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from runtime_backup import BackupLoop, restore_latest
+from runtime_identity import agentic_auth_enabled
 from runtime_keepalive import get_keepalive
 from bridge.hermes_telemetry import (
     GatewayTraceConflictError,
@@ -30,6 +33,10 @@ from bridge.hermes_telemetry import (
 )
 from bridge.telemetry import configure_telemetry, flush_telemetry, runtime_trace_headers
 from bridge.telemetry_http import TelemetryMiddleware
+from bridge.generated_files import (
+    GeneratedFileError, GeneratedFileStore, MAX_EVIDENCE_BYTES, RUN_HEADER, RUN_PATTERN,
+    SCOPE_HEADER, completed_run_evidence, generated_files_enabled,
+)
 from autopilots_identity.document_operations import (
     acknowledge_delivery as acknowledge_document_delivery,
     claim_delivery as claim_document_delivery,
@@ -99,6 +106,7 @@ def gateway_port() -> int:
 
 def write_env_file(home: Path) -> Path:
     configure_model_environment()
+    agentic_auth = agentic_auth_enabled()
     env_path = home / ".env"
     values = {
         "API_SERVER_ENABLED": os.getenv("API_SERVER_ENABLED", "true"),
@@ -106,6 +114,7 @@ def write_env_file(home: Path) -> Path:
         "API_SERVER_PORT": str(gateway_port()),
         "API_SERVER_KEY": os.getenv("API_SERVER_KEY", ""),
         "HERMES_HOME": str(home),
+        "USE_AGENTIC_AUTH": "true" if agentic_auth else "false",
         "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL", ""),
         "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
         "AZURE_FOUNDRY_BASE_URL": os.getenv("AZURE_FOUNDRY_BASE_URL", ""),
@@ -115,16 +124,14 @@ def write_env_file(home: Path) -> Path:
         "HERMES_MODEL": os.getenv("HERMES_MODEL", ""),
         "PRIVATE_INCIDENTS_MCP_URL": os.getenv("PRIVATE_INCIDENTS_MCP_URL", ""),
         "PUBLIC_SHIPMENTS_MCP_URL": os.getenv("PUBLIC_SHIPMENTS_MCP_URL", ""),
-        "WORKIQ_MAIL_MCP_URL": os.getenv("WORKIQ_MAIL_MCP_URL", ""),
-        "WORKIQ_WORD_MCP_URL": os.getenv("WORKIQ_WORD_MCP_URL", ""),
         **{
-            environment_name: os.getenv(environment_name, "")
+            environment_name: os.getenv(environment_name, "") if agentic_auth else ""
             for environment_name in WORKIQ_MCP_ENVIRONMENTS.values()
         },
         "M365_COLLABORATION_MCP_URL": os.getenv(
             "M365_COLLABORATION_MCP_URL",
             "",
-        ),
+        ) if agentic_auth else "",
     }
     managed = {key: value for key, value in values.items() if value}
     existing_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
@@ -213,22 +220,22 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         mcp_servers["private-incidents"] = {"url": private_mcp_url}
     if public_shipments_mcp_url:
         mcp_servers["public-shipments"] = {"url": public_shipments_mcp_url}
-    for name, environment_name in WORKIQ_MCP_ENVIRONMENTS.items():
-        url = os.getenv(environment_name, "").strip()
-        if url:
-            mcp_servers[name] = {"url": url}
-    collaboration_url = os.getenv(
-        "M365_COLLABORATION_MCP_URL",
-        "",
-    ).strip()
+    if agentic_auth_enabled():
+        for name, environment_name in WORKIQ_MCP_ENVIRONMENTS.items():
+            url = os.getenv(environment_name, "").strip()
+            if url:
+                mcp_servers[name] = {"url": url}
+    collaboration_url = (
+        os.getenv("M365_COLLABORATION_MCP_URL", "").strip()
+        if agentic_auth_enabled() else ""
+    )
     if collaboration_url:
         mcp_servers["m365-collaboration"] = {
             "url": collaboration_url,
             "connect_timeout": 30,
             "timeout": 900,
         }
-    if mcp_servers:
-        runtime_config["mcp_servers"] = mcp_servers
+    runtime_config["mcp_servers"] = mcp_servers
     if bool_env("USER_SCHEDULING_ENABLED", False):
         runtime_config["cron"].update({"provider": "azure", "mirror_delivery": False})
     config = _deep_merge(base or {}, runtime_config)
@@ -327,6 +334,9 @@ def configure_model_environment() -> None:
 
 
 def start_agent_mcp_proxy(**account: Any) -> subprocess.Popen | None:
+    if not agentic_auth_enabled():
+        print("Agent 365 authentication is disabled; Agent Identity MCP adapter is disabled.", flush=True)
+        return None
     if not os.getenv("AGENT_MCP_SERVERS_JSON"):
         print("AGENT_MCP_SERVERS_JSON is not set; Agent Identity MCP adapter is disabled.", flush=True)
         return None
@@ -349,7 +359,7 @@ def start_agent_mcp_proxy(**account: Any) -> subprocess.Popen | None:
 
 
 def start_m365_collaboration_mcp(**account: Any) -> subprocess.Popen | None:
-    if not os.getenv("M365_COLLABORATION_MCP_URL", "").strip():
+    if not agentic_auth_enabled() or not os.getenv("M365_COLLABORATION_MCP_URL", "").strip():
         return None
     port = os.getenv(
         "M365_COLLABORATION_MCP_PORT",
@@ -423,6 +433,14 @@ def create_health_app(
     app.router.add_event_handler("shutdown", flush_telemetry)
     keepalive = get_keepalive()
     process_nonce = secrets.token_hex(16)
+    generated_files = None
+    if generated_files_enabled():
+        worker_id = os.getenv("WORKER_ID", "").strip()
+        generated_files = GeneratedFileStore(
+            Path(tempfile.gettempdir()) / "autopilots-generated-files"
+            / hashlib.sha256(worker_id.encode("utf-8")).hexdigest()[:32],
+            worker_id=worker_id, workspace_owner=hermes_account(),
+        )
 
     @app.middleware("http")
     async def keep_runtime_request_active(request: Request, call_next):
@@ -479,7 +497,7 @@ def create_health_app(
     def require_internal_key(request: Request) -> None:
         expected = os.getenv("API_SERVER_KEY", "")
         supplied = request.headers.get("x-autopilot-key", "")
-        if not expected or not secrets.compare_digest(supplied, expected):
+        if not expected or expected == "not-configured" or not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="A valid X-Autopilot-Key header is required.")
 
     @app.get("/internal/runtime/status")
@@ -698,6 +716,70 @@ def create_health_app(
     native_trace_runs: dict[str, str] = {}
     native_trace_sessions: dict[str, str] = {}
 
+    @app.get("/internal/runs/{run_id}/evidence")
+    async def native_run_evidence(run_id: str, request: Request) -> dict[str, Any]:
+        require_internal_key(request)
+        if generated_files is None:
+            raise HTTPException(status_code=503, detail="Generated chat files are disabled in this runtime.")
+        if not RUN_PATTERN.fullmatch(run_id):
+            raise HTTPException(status_code=400, detail="Invalid native run ID.")
+        headers = {
+            "Authorization": "Bearer " + os.environ["API_SERVER_KEY"],
+            "X-Autopilot-Key": os.environ["API_SERVER_KEY"],
+        }
+        target = f"http://127.0.0.1:{gateway_port()}/v1/runs/{run_id}"
+        try:
+            async with asyncio.timeout(20), httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                async def read_native(url: str, content_type: str) -> bytes:
+                    async with client.stream("GET", url, headers=headers) as response:
+                        if response.status_code != 200:
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"Native evidence is unavailable (HTTP {response.status_code}).",
+                            )
+                        if response.headers.get("content-type", "").split(";")[0] != content_type:
+                            raise GeneratedFileError("Native evidence has an unexpected content type.")
+                        data = bytearray()
+                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                            data.extend(chunk)
+                            if len(data) > MAX_EVIDENCE_BYTES:
+                                raise GeneratedFileError("Native evidence exceeds the 1 MiB limit.")
+                        return bytes(data)
+
+                status = json.loads(await read_native(target, "application/json"))
+                if not isinstance(status, dict) or status.get("status") != "completed":
+                    raise HTTPException(status_code=409, detail="Native evidence requires a completed run.")
+                events = await read_native(target + "/events", "text/event-stream")
+                skill_loads = json.loads(await read_native(
+                    f"http://127.0.0.1:{gateway_port()}/internal/skills/evidence/{run_id}",
+                    "application/json",
+                ))
+                return completed_run_evidence(run_id, status, events, skill_loads)
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            raise HTTPException(status_code=504, detail="Native evidence timed out.") from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail="Native evidence is unreachable.") from exc
+        except (GeneratedFileError, ValueError) as exc:
+            detail = str(exc) if isinstance(exc, GeneratedFileError) else "Native evidence is not valid JSON."
+            raise HTTPException(status_code=502, detail=detail) from exc
+
+    @app.get("/internal/generated-files/{turn_id}/{file_id}")
+    async def download_generated_file(turn_id: str, file_id: str, request: Request) -> Response:
+        require_internal_key(request)
+        if generated_files is None:
+            raise HTTPException(status_code=503, detail="Generated chat files are disabled in this runtime.")
+        try:
+            entry, data = generated_files.download(
+                turn_id, file_id, scope=request.headers.get(SCOPE_HEADER, ""),
+                run_id=request.headers.get(RUN_HEADER, ""),
+            )
+        except GeneratedFileError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return Response(
+            content=data, media_type=entry["contentType"],
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(entry['name'], safe='')}"},
+        )
+
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     async def proxy(path: str, request: Request):
         target = f"http://127.0.0.1:{gateway_port()}/{path}"
@@ -710,6 +792,7 @@ def create_health_app(
         body = await request.body()
         admission = ""
         new_admission = False
+        file_turn = None
         try:
             if native_turn:
                 expected = os.getenv("API_SERVER_KEY", "")
@@ -746,6 +829,15 @@ def create_health_app(
                     native_trace_admissions[admission] = context
                     native_trace_sessions[admission] = session_id
                     new_admission = True
+                if generated_files is not None and request.headers.get(SCOPE_HEADER):
+                    file_turn = generated_files.admit(
+                        admission, session_id=native_trace_sessions[admission],
+                        scope=request.headers[SCOPE_HEADER],
+                    )
+                    payload["instructions"] = (
+                        str(payload.get("instructions") or "") + generated_files.instructions(file_turn["turnId"])
+                    )
+                    body = json.dumps(payload).encode("utf-8")
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
                     request.method,
@@ -762,6 +854,7 @@ def create_health_app(
                                 "baggage",
                                 "x-autopilot-otel-session",
                                 "x-autopilot-otel-operation",
+                                "content-length",
                             }
                         },
                         **runtime_trace_headers(),
@@ -771,6 +864,13 @@ def create_health_app(
                     response.raise_for_status()
         except GatewayTraceConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except GeneratedFileError as exc:
+            if new_admission:
+                context = native_trace_admissions.pop(admission, None)
+                native_trace_sessions.pop(admission, None)
+                if context is not None:
+                    context.__exit__(None, None, None)
+            raise HTTPException(status_code=422, detail=f"Generated-file handoff refused: {exc}") from exc
         except httpx.HTTPStatusError as exc:
             response = exc.response
         except httpx.ConnectError as exc:
@@ -779,17 +879,35 @@ def create_health_app(
             result = response.json()
             if native_turn and response.status_code == 202:
                 native_trace_runs[str(result["run_id"])] = admission
+                if file_turn is not None:
+                    try:
+                        generated_files.bind_run(file_turn["turnId"], str(result["run_id"]))
+                    except GeneratedFileError as exc:
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
             elif native_turn and new_admission and 400 <= response.status_code < 500:
                 context = native_trace_admissions.pop(admission, None)
                 native_trace_sessions.pop(admission, None)
                 if context is not None:
                     context.__exit__(None, None, None)
-            if request.method == "GET" and native_status and result.get("status") in {"completed", "failed"}:
+            if request.method == "GET" and native_status and result.get("status") in {
+                "completed", "failed", "cancelled", "interrupted",
+            }:
                 identity = native_trace_runs.pop(native_status.group(1), "")
                 context = native_trace_admissions.pop(identity, None)
                 native_trace_sessions.pop(identity, None)
                 if context is not None:
                     context.__exit__(None, None, None)
+                if generated_files is not None and result.get("status") == "completed":
+                    try:
+                        sealed = generated_files.seal(
+                            native_status.group(1), str(result.get("output") or ""),
+                            scope=request.headers.get(SCOPE_HEADER, ""),
+                        )
+                    except GeneratedFileError as exc:
+                        raise HTTPException(status_code=422, detail=f"Generated-file handoff refused: {exc}") from exc
+                    if sealed is not None:
+                        result["output"] = sealed["output"]
+                        result["generatedAttachments"] = {"protocolVersion": 1, "files": sealed["files"]}
             return JSONResponse(content=result, status_code=response.status_code)
         raise HTTPException(status_code=response.status_code, detail=response.text)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,30 @@ from scripts.native_transport import connection_body, expected_trigger, trigger_
 
 
 class EventWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_disabled_transport_still_reports_authenticated_gateway_quiescence(self):
+        app = FastAPI()
+        with (
+            patch.object(event_worker, "enabled", return_value=False),
+            patch.object(event_worker, "initialize_journal") as initialize,
+            patch.dict(os.environ, {"API_SERVER_KEY": "test-key"}),
+        ):
+            event_worker.attach(app)
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+                denied = await client.get("/internal/transport/status")
+                self.assertEqual(denied.status_code, 401)
+                with patch("bridge.work_activity.active_work_count", return_value=2):
+                    busy = await client.get("/internal/transport/status", headers={"X-Autopilot-Key": "test-key"})
+                self.assertEqual(busy.status_code, 200)
+                self.assertEqual(busy.json()["active"], 2)
+                self.assertEqual(busy.json()["gatewayActive"], 2)
+                self.assertEqual(busy.json()["schedulingActive"], 0)
+                self.assertFalse(busy.json()["enabled"])
+                with patch("bridge.work_activity.active_work_count", return_value=0):
+                    idle = await client.get("/internal/transport/status", headers={"X-Autopilot-Key": "test-key"})
+                self.assertEqual(idle.json()["active"], 0)
+                self.assertEqual((await client.post("/internal/transport/callback")).status_code, 404)
+            initialize.assert_not_called()
+
     async def asyncSetUp(self):
         self.temporary = tempfile.TemporaryDirectory(dir=Path.cwd())
         self.addCleanup(self.temporary.cleanup)

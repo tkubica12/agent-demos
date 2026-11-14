@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from aiohttp import web
+from bridge.generated_files import GeneratedFileError, generated_files_enabled, native_skill_load_evidence
 
 from collective_learning import (
     CollectiveLearningError,
@@ -144,6 +145,11 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
         executor.shutdown(wait=False, cancel_futures=True)
 
     app.on_cleanup.append(close_executor)
+
+    async def skill_loads(request: web.Request) -> Any:
+        if not generated_files_enabled():
+            raise RouteError(503, "Native skill evidence is disabled.")
+        return native_skill_load_evidence.snapshot(request.match_info["run_id"])
 
     async def threaded(function: Callable[..., Any], **kwargs: Any) -> Any:
         from runtime_keepalive import get_keepalive
@@ -370,6 +376,7 @@ def register_routes(app: web.Application, profile_home: Path, *, adapter: Any = 
     learning_errors = {LearningDecisionError: 400, LearningConflictError: 409}
     routes: list[tuple[str, str, Handler, dict[type[Exception], int] | None]] = [
         ("GET", "/internal/runtime/activity", activity, None),
+        ("GET", "/internal/skills/evidence/{run_id}", skill_loads, {GeneratedFileError: 400}),
         ("GET", "/internal/cron/jobs", jobs, None),
         ("POST", "/internal/cron/reconcile", lambda request: threaded(reconcile_cron_provider), None),
         ("POST", "/internal/cron/rearm-preclaim", rearm, {RuntimeError: 409}),

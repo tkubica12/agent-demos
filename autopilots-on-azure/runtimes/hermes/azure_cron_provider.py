@@ -20,6 +20,7 @@ from opentelemetry.trace import SpanKind
 
 from bridge.telemetry import operation_span, trace_headers
 from cron.scheduler_provider import CronScheduler
+from runtime_identity import AGENT_IDENTITY_ENVIRONMENTS, agentic_auth_enabled
 
 
 TOKEN_EXCHANGE_SCOPE = "api://AzureADTokenExchange/.default"
@@ -163,10 +164,12 @@ class AzureCronScheduler(CronScheduler):
         self,
         *,
         client_factory: Callable[..., ServiceBusClient] = ServiceBusClient,
-        credential_factory: Callable[[], TokenCredential] = AgentIdentityCredential,
+        credential_factory: Callable[[], TokenCredential] | None = None,
     ) -> None:
         self._client_factory = client_factory
-        self._credential_factory = credential_factory
+        self._credential_factory = credential_factory or (
+            AgentIdentityCredential if agentic_auth_enabled() else DefaultAzureCredential
+        )
         self._client: ServiceBusClient | None = None
         self._lock = threading.Lock()
 
@@ -184,9 +187,10 @@ class AzureCronScheduler(CronScheduler):
         return bool(
             os.getenv("SCHEDULER_SERVICEBUS_NAMESPACE", "").strip()
             and os.getenv("SCHEDULER_SERVICEBUS_QUEUE", "").strip()
-            and os.getenv("AGENT365_TENANT_ID", "").strip()
-            and os.getenv("AGENT365_BLUEPRINT_CLIENT_ID", "").strip()
-            and os.getenv("AGENT365_AGENT_IDENTITY_CLIENT_ID", "").strip()
+            and (
+                not agentic_auth_enabled()
+                or all(os.getenv(name, "").strip() for name in AGENT_IDENTITY_ENVIRONMENTS)
+            )
         )
 
     def start(self, stop_event, *, adapters=None, loop=None, interval=60):
