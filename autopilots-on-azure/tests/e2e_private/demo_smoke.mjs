@@ -45,6 +45,7 @@ async function eventually(action) {
 const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 720 } });
 const page = await context.newPage();
 page.setDefaultTimeout(30_000);
+let prerequisitesFailed = false;
 let token;
 page.on("response", async (response) => {
   if (new URL(response.url()).pathname === "/api/demo/login" && response.ok()) token = (await response.json()).accessToken;
@@ -61,32 +62,68 @@ const security = await navigation.securityDetails();
 report.tls = security ? { protocol: security.protocol, issuer: security.issuer } : null;
 report.steps = [...steps];
 let modelFailed = false;
+if (["reply", "widget", "files"].some((step) => steps.has(step)) && !steps.has("login")) {
+  prerequisitesFailed = true;
+  report.checks.push({ name: "runner-configuration", status: "fail",
+    failure: "Model-triggering steps require the login prerequisite." });
+}
+const prerequisiteCheck = async (name, action) => {
+  await check(name, action);
+  if (report.checks.at(-1).status !== "pass") prerequisitesFailed = true;
+};
 const modelCheck = async (name, action) => {
-  if (modelFailed) { report.checks.push({ name, status: "skipped", failure: "an earlier model-triggering step failed" }); return; }
+  if (prerequisitesFailed || modelFailed) {
+    report.checks.push({ name, status: "skipped", failure: prerequisitesFailed
+      ? "a prerequisite check failed" : "an earlier model-triggering step failed" });
+    return;
+  }
   const started = Date.now();
   await check(name, action);
   report.checks.at(-1).seconds = Math.round((Date.now() - started) / 1000);
-  if (report.checks.at(-1).status !== "pass") modelFailed = true;
+  if (report.checks.at(-1).status !== "pass") {
+    modelFailed = true;
+    await shot(`failure-${name}`);
+  }
 };
 await page.getByTestId("demo-warning").waitFor();
 report.banner = (await page.getByTestId("demo-warning").innerText()).trim();
 await shot("login-page");
 const sendFromUi = async (text) => {
   await page.getByTestId("composer").locator("textarea").fill(text);
-  const posted = page.waitForResponse((r) => r.request().method() === "POST" &&
-    new URL(r.url()).pathname === `/api/conversations/${personal}/messages`);
+  const isSend = (r) => r.request().method() === "POST" &&
+    new URL(r.url()).pathname === `/api/conversations/${personal}/messages`;
+  const requested = page.waitForRequest(isSend);
+  const posted = page.waitForResponse(isSend);
+  const record = { clickedAt: new Date().toISOString(), conversationId: personal };
+  report.sends = [...(report.sends ?? []), record];
   await page.getByRole("button", { name: "Send message" }).click();
-  const response = await posted;
-  const body = await response.json().catch(() => ({}));
-  report.sends = [...(report.sends ?? []), { at: new Date().toISOString(), status: response.status(), id: body.id }];
-  assert.equal(response.status(), 201, `Send failed HTTP ${response.status()}`);
-  return body;
+  try {
+    const [request, response] = await Promise.all([requested, posted]);
+    record.requestAt = new Date().toISOString();
+    record.requestBody = request.postData();
+    record.requestUrl = request.url();
+    const responseText = await response.text();
+    let body;
+    try { body = JSON.parse(responseText); } catch { body = null; }
+    record.responseAt = new Date().toISOString();
+    record.status = response.status();
+    record.responseBody = responseText.replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+    record.messageId = body?.id ?? null;
+    record.correlationHeaders = Object.fromEntries(Object.entries(await response.allHeaders())
+      .filter(([name]) => /request-id|correlation|traceparent/i.test(name)));
+    assert.equal(response.status(), 201, `Send failed HTTP ${response.status()}; body=${record.responseBody}`);
+    assert.ok(record.messageId, `Send succeeded without a message ID; body=${record.responseBody}`);
+    return body;
+  } catch (error) {
+    record.failure = String(error.message).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+    throw error;
+  }
 };
-if (steps.has("anonymous")) await check("anonymous-api-rejected", async () => {
+if (steps.has("anonymous")) await prerequisiteCheck("anonymous-api-rejected", async () => {
   const response = await fetch(`${url}/api/users`, { redirect: "error" });
   assert.ok([401, 403].includes(response.status));
 });
-if (steps.has("wrong-code")) await check("wrong-code-rejected", async () => {
+if (steps.has("wrong-code")) await prerequisiteCheck("wrong-code-rejected", async () => {
   await expect(page.getByTestId("demo-warning")).toBeVisible();
   await fill(`wrong-${randomUUID()}`);
   await page.waitForTimeout(3000);
@@ -104,15 +141,22 @@ const api = async (resource, method = "GET", data, bytes = false) => {
   return bytes ? Buffer.from(await response.arrayBuffer()) : response.json();
 };
 let personal, agent;
-await check("demo-login", async () => {
+if (steps.has("login")) await prerequisiteCheck("demo-login", async () => {
   await fill(process.env.DEMO_ACCESS_CODE);
   await expect(page.getByTestId("authenticated")).toHaveAttribute("data-connection", "ready");
   await eventually(() => token);
-  agent = (await api("/users")).find((user) => user.isAgent);
-  assert.ok(agent, "A registered agent is required.");
-  personal = (await api("/chats", "POST", { memberIds: [agent.id] })).conversationId;
+  personal = process.env.DEMO_PERSONAL_CHAT_ID;
+  assert.ok(personal, "DEMO_PERSONAL_CHAT_ID must identify the preserved personal chat.");
+  const chat = (await api("/chats")).find((item) =>
+    item.conversationId === personal && item.conversationType === "personal");
+  assert.ok(chat, `The preserved personal chat ${personal} is not available to the logged-in owner.`);
+  const members = await api(`/chats/${chat.id}/members`);
+  agent = members.find((member) => member.isAgent);
+  assert.ok(agent, "The preserved personal chat must contain its registered agent.");
   await page.locator(`[data-conversation-id="${personal}"]`).click();
   report.conversationId = personal;
+  report.chatId = chat.id;
+  report.agent = { id: agent.id, displayName: agent.displayName };
   await shot("after-login");
 });
 const reply = async (afterId, predicate) => {
@@ -132,10 +176,15 @@ const reply = async (afterId, predicate) => {
 if (steps.has("reply")) await modelCheck("real-agent-reply", async () => {
   const nonce = randomUUID().replaceAll("-", ""), a = randomInt(100, 999), b = randomInt(100, 999);
   const sent = await sendFromUi(`Reply with the code ${nonce} and the numeric sum of ${a} + ${b}.`);
-  const received = await reply(sent.id, (m) => m.text.includes(nonce) && m.text.includes(String(a + b)));
+  const received = await reply(sent.id, (m) => m.text.includes(nonce));
   await expect(page.locator(`[data-message-id="${received.id}"]`)).toContainText(nonce);
-  report.reply = { request: sent.id, response: received.id };
+  report.reply = {
+    request: sent.id, response: received.id, responseAt: received.createdAt,
+    responseText: String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]"),
+    expectedSum: a + b, verified: new RegExp(`(?<!\\d)${a + b}(?!\\d)`).test(received.text),
+  };
   await page.screenshot({ path: path.join(out, "reply.png") });
+  assert.ok(report.reply.verified, `Agent replied with the nonce but not the expected sum: ${report.reply.responseText}`);
 });
 if (steps.has("widget")) await modelCheck("widget-input-submit-followup", async () => {
   const nonce = randomUUID().replaceAll("-", "");
