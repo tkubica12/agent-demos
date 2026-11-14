@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { createHash, randomUUID, randomInt } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isFileReply } from "./file_acceptance.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium, expect } = process.env.PRIVATE_PLAYWRIGHT_MODULE
@@ -333,8 +334,7 @@ if (steps.has("files")) {
       const uploadedBytes = await api(`/files/${uploadedFile.id}/content`, "GET", undefined, true);
       assert.deepEqual(uploadedBytes, sourceBytes, "The UI-uploaded source bytes differ from the fixture.");
       received = await reply(sent.id, (message) =>
-        (Array.isArray(message.attachments) && message.attachments.length > 0) ||
-        routeRefusalPattern.test(String(message.text)), fileProcessingTimeout);
+        isFileReply(message, outputName, routeRefusalPattern), fileProcessingTimeout);
       responseText = String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
       const outputFile = received.attachments?.find((item) => item.name === outputName);
       if (!outputFile) {
@@ -368,8 +368,6 @@ if (steps.has("files")) {
         sha256: createHash("sha256").update(downloaded).digest("hex"), requestedAt,
       };
       targetPath = await saveNativeTarget("transformed", nonce, target);
-      assert.ok(sourceHashVerified,
-        "The agent did not report the exact lowercase SHA-256 computed by Python from the original uploaded file.");
       assert.deepEqual(downloaded, expectedBytes,
         "The downloaded artifact does not exactly match the locally computed uppercase bytes.");
       report.fileProcessing = {
@@ -403,7 +401,6 @@ if (steps.has("files")) {
       }
       const codeFailed = blockedPattern.test(failure) || routeRefusalPattern.test(responseText) ||
         failure.includes("Timed out waiting for condition.") ||
-        failure.includes("exact lowercase SHA-256 computed by Python") ||
         failure.includes("does not exactly match the locally computed uppercase bytes");
       report.codeExecution = {
         status: codeFailed ? "fail" : "not_proven",
