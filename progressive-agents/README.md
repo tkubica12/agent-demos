@@ -6,4 +6,6 @@ Each numbered directory copies the previous working stage and adds one clearly i
 
 See [PLAN.md](PLAN.md) for the roadmap and boundaries. The latest implemented
 stage is
-[10 - Foundry Toolbox](10-foundry-toolbox/README.md).
+[11 - Agent 365 and Teams](11-agent365-teams/README.md); its Teams acceptance
+is not yet complete (see its
+[current deployed boundary](11-agent365-teams/README.md#current-deployed-boundary)).

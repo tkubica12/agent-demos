@@ -209,6 +209,24 @@ uses explicit POSIX chmod before atomic rename; do not rely on the SDK upload
 string-mode interpretation. Unexpected ownership, missing completion or failed
 native/backend startup remains an error.
 
+### Current validation status
+
+Recorded on 2026-11-14 for one clean-install DEMO stack built from source
+`9e08464e68c39c3b71ca0644cc50c83138d9a66b` and its matching `deployment-images`
+artifact. Later repository commits are not those deployed images.
+
+| Check | Result |
+| --- | --- |
+| DEMO login with the correct and a wrong access code (API) | Passed |
+| Real model reply with a fresh nonce through simulator, gateway and Hermes | Passed |
+| File upload and download with an exact SHA-256 match | Passed |
+| Model-generated HTML widget | Failed: the native run stayed `waiting_for_approval` and the gateway returned an error reply; the approval was not bypassed |
+| Widget submit and same-chat follow-up | Not run |
+| Browser acceptance (`tests/e2e_private/demo_smoke.mjs`) | Not run |
+
+The remaining full-acceptance checks above and Entra browser evidence are still
+open.
+
 ## Cost and teardown
 
 All three services stay allocated continuously. Default resources per stack are:

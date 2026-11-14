@@ -347,6 +347,26 @@ remaining simulator/bridge checklists and independent checks.
 Entra/MSAL sign-in must additionally be checked interactively by an assigned
 user on the private Windows/Edge client; DEMO login does not certify Entra.
 
+## Minimal DEMO smoke
+
+`demo_smoke.mjs` is a bounded Playwright check for a DEMO-mode simulator:
+anonymous API rejection, wrong-code rejection, login, a real agent reply with a
+fresh nonce, a model-generated widget with input, submit and follow-up, and file
+upload/download. It writes `demo-smoke.json` and screenshots to `DEMO_OUT` and
+exits nonzero when any check fails. It does not replace the full acceptance
+runner above.
+
+```powershell
+$env:DEMO_URL = "https://<simulator-origin>"
+$env:DEMO_ACCESS_CODE = "<code from the private secrets.json>"
+$env:DEMO_OWNER_NAME = "<DEMO owner display name>"
+$env:DEMO_OUT = ".local\demo-smoke"
+node tests\e2e_private\demo_smoke.mjs
+```
+
+Optional `PRIVATE_PLAYWRIGHT_MODULE`, `DEMO_CHROMIUM_PATH` and
+`DEMO_CHROMIUM_ARGS` (JSON array) select a specific Playwright module and browser.
+
 ## Focused empirical probes
 
 `probe_disk.py` runs on an authenticated operator host with the project's

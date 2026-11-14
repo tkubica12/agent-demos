@@ -4,6 +4,8 @@ A Junior Project Manager digital Worker: Hermes 0.22.6 in Memory-suspended Azure
 
 Each Worker owns its identity, persistent state, memory, and skills. Hermes learns natively; the Worker owner reviews each change, and local learning becomes shared behavior only through signed Learning Packets, human-reviewed Git Promotion, and Worker Refresh.
 
+Workers can answer with [model-generated interactive HTML widgets](DEPLOYMENT.md#generated-html-widgets-and-hermes-selections). The [Agent Chat Simulator](chat-simulator/README.md) emulates the Teams channel so Workers can be [deployed and tested](docs/simulator-deployment.md) without Agent 365 or real Teams.
+
 ![Architecture: Agent 365 reaches a thin gateway, which handles the Teams turn and uses native Runs over OnDemand HTTPS. Service Bus is reserved for scheduling; the runtime calls Foundry and MCP directly.](docs/assets/architecture.svg)
 
 ## Start
@@ -52,7 +54,7 @@ node assets\export-pdf.js architecture.standalone.html
 
 ## Boundaries
 
-Gateway, runtime, and both MCP services have a five-minute Memory-suspend threshold. Actual idle transitions are observed, not assumed. Teams activities are handled directly by the gateway, which calls native Runs over OnDemand HTTPS. The per-Worker Service Bus queue is only for Hermes cron, Dreaming, and deterministic document retries; no interactive activity-recovery queue exists.
+Gateway, runtime, and both MCP services have a five-minute Memory-suspend threshold. Actual idle transitions are observed, not assumed. Teams activities are handled directly by the gateway, which calls native Runs over OnDemand HTTPS and polls native-run completion every 0.5 s. The per-Worker Service Bus queue is only for Hermes cron, Dreaming, and deterministic document retries; no interactive activity-recovery queue exists.
 
 Routine source updates preserve compute IDs, URLs, and Agent 365 identities. Only the heavy runtime dependency base needs ACR; thin services use a pinned public Python image. Long model work enters through Agent 365/Teams rather than a separate operator API. Native backups recover the Worker home; a separate gateway journal preserves scheduling receipts and bounded conversation state. Stopped CPU/RAM is not a zero bill for storage, Service Bus, ACR, or monitoring.
 
@@ -61,3 +63,5 @@ Managed source polling can take tens of seconds, so it is deliberately outside t
 On 2026-11-05, a real `hermes2` Teams warm check returned both MCP tool results in **26.7 s** and an exact model reply in **11.8 s**. These are observed end-to-end timings, not a model or platform SLA.
 
 Foundry registers an external agent, not Hosted Agent compute. `scripts.worker_lifecycle` manages whole Workers; fresh Teams package upload stays manual. Shared group conversations are not private storage. [SPEC.md](SPEC.md#current-limitations) lists the remaining boundaries.
+
+The simulator deployment is not fully accepted: on 2026-11-14 basic DEMO login, a real model reply and file upload/download passed, but a model-generated widget stopped in native approval and browser acceptance did not run. See [current validation status](docs/simulator-deployment.md#current-validation-status).
