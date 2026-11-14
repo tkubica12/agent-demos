@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, FluentProvider, webDarkTheme, webLightTheme } from "@fluentui/react-components";
+import { Button, FluentProvider, teamsDarkTheme, teamsLightTheme } from "@fluentui/react-components";
 import { ApiError, type AuthConfig } from "./api";
 import { assertDemoActive, DEMO_EXPIRED, expiryTime } from "./auth/demo";
 import { initializeAuth, type AuthController, type Session } from "./auth/session";
@@ -58,7 +58,7 @@ export function App() {
     setDark((current) => { localStorage.setItem("tsim.theme", current ? "light" : "dark"); return !current; });
   }
   const demoMode = config?.authMode === "demo";
-  return <FluentProvider theme={dark ? webDarkTheme : webLightTheme}
+  return <FluentProvider theme={dark ? teamsDarkTheme : teamsLightTheme}
     className={`app-provider ${dark ? "dark" : ""} ${demoMode ? "demo-mode" : ""}`}>
     {demoMode && <div className="demo-warning" role="alert" data-testid="demo-warning">
       {demo?.banner || "DEMO MODE – no real authentication – test data only"}
@@ -68,7 +68,7 @@ export function App() {
         onSwitchAccount={() => {
           sessionStorage.removeItem("tsim.testPersona"); setSession(null); setError(""); setAccessCode("");
         }} />
-        : <div className="login-page"><section><div className="simulator-wordmark">AGENT LAB</div>
+        : <div className="login-page"><section><div className="simulator-wordmark">simulátor</div>
           <h1>Agent Chat Simulator</h1><p>A separate collaboration space for exploring agents with test data.</p>
           {demoMode ? <form className="demo-login" onSubmit={(event) => {
             event.preventDefault();
@@ -99,7 +99,7 @@ export function App() {
               void auth.signIn().catch((reason: unknown) => {
                 setError(reason instanceof Error ? reason.message : "Entra sign-in failed."); setBusy(false);
               });
-            }}>Sign in with Microsoft Entra</Button>}
+            }}>Přihlásit přes Microsoft</Button>}
           <p role="status" id="auth-status" data-testid="auth-status">{!auth && !error ? "Initializing sign-in…"
             : demoMode ? demoExpired ? "Demo expired. Access is closed." : "Use the shared demo access code. Test data only."
               : "Sign in with an assigned simulator account."}</p>

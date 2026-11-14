@@ -47,7 +47,7 @@ function serializationContext() {
 function hostConfig(dark: boolean) {
   const text = dark ? "#f5f5f5" : "#242424";
   const subtle = dark ? "#c4c4c4" : "#616161";
-  const accent = dark ? "#6cb8f6" : "#0f6cbd";
+  const accent = dark ? "#aaaefa" : "#5b5fc7";
   const colors = {
     default: { default: text, subtle }, accent: { default: accent, subtle: accent },
     good: { default: "#107c10", subtle: "#107c10" },

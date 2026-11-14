@@ -11,7 +11,7 @@ async function expectWarning(page) {
   await expect(warning(page)).toContainText("test data only");
   await expect(warning(page)).toContainText("expires");
   await expect(warning(page)).toHaveCSS("background-color", "rgb(177, 14, 30)");
-  await expect(page.getByRole("button", { name: /Sign in with Microsoft Entra/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Přihlásit přes Microsoft", exact: true })).toHaveCount(0);
   await expect(page.locator('[data-testid^="test-login-"]')).toHaveCount(0);
 }
 

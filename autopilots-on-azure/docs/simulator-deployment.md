@@ -274,6 +274,17 @@ run/model/usage/trace and exact skill-load evidence. Installed skill hashes or a
 prompt asking to load it are not proof it was used. Unit fixtures, uploaded files,
 health or a transport-only card do not establish these outcomes.
 
+In simulator Entra/DEMO modes, ordinary message turns return HTTP 202 after
+authentication, service-URL validation and tracked gateway admission. The SDK
+continues the original authenticated conversation and sends the reply separately;
+202 means accepted, not completed. Invokes, card/widget value submissions and
+`expectReplies` remain synchronous and retain their response bodies. Background
+errors are logged, active-work accounting remains held until completion and
+graceful shutdown drains accepted turns. This continuation is in-process, not a
+crash-durable queue: a forced restart can lose accepted work. Do not automatically
+replay it. A simulator delivery error can also follow a committed user message;
+inspect stored delivery/messages and native runs before considering a retry.
+
 Generated files default on for both services; disabling
 `generated_chat_files_enabled` is an explicitly reduced deployment. Runtime and
 gateway internal evidence endpoints require their API key and exact conversation

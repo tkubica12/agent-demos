@@ -244,6 +244,10 @@ async def main():
         async def call(method, path, *, headers=None, status=200, **kwargs):
             result = await client.request(method, path, headers=headers or owner_headers, **kwargs)
             assert result.status_code == status, (method, path, result.status_code, result.text)
+            if method == "POST" and path.startswith("/api/conversations/") and path.endswith("/messages"):
+                await asyncio.wait_for(
+                    asyncio.gather(*list(bridge.background_turns)), timeout=10,
+                )
             return result.json() if result.content else None
 
         async def login(name):

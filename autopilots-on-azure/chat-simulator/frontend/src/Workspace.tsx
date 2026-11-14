@@ -5,7 +5,7 @@ import {
 import {
   Add20Regular, Alert20Regular, Apps20Regular, Archive20Regular, Calendar20Regular, ChannelAdd20Regular,
   Call20Regular, Chat20Regular, ChatMultiple20Regular, ChevronDown16Regular, ChevronRight16Regular, ChevronUp16Regular,
-  Cloud20Regular, Compose20Regular, Info20Filled, PanelLeft20Regular, PanelRight20Regular,
+  Cloud20Regular, Compose20Regular, Info20Filled, PanelLeft20Regular, PanelRight20Regular, Sparkle20Regular,
   Delete20Regular, Dismiss20Regular, Eye20Regular, EyeOff20Regular, Link20Regular,
   MoreHorizontal20Regular, People20Regular, PeopleAdd20Regular, PersonAdd20Regular, PersonArrowLeft20Regular, Search20Regular,
   Settings20Regular, Tag20Regular,
@@ -449,6 +449,7 @@ export function Workspace({ session, onSwitchAccount, dark, onTheme }: {
       <button disabled aria-label="Calendar"><Calendar20Regular /><span>Calendar</span></button>
       <button disabled aria-label="Calls"><Call20Regular /></button>
       <button disabled aria-label="Files app"><Cloud20Regular /><span>Files</span></button>
+      <button disabled aria-label="Copilot app"><Sparkle20Regular /></button>
       <button disabled aria-label="Apps"><Apps20Regular /><span>Apps</span></button>
       <button disabled aria-label="More apps"><MoreHorizontal20Regular /></button>
     </nav>
@@ -472,6 +473,7 @@ export function Workspace({ session, onSwitchAccount, dark, onTheme }: {
         </div>
         <div className="sidebar-scroll">
           <div className="quick-views">
+            <button disabled><Sparkle20Regular />Copilot</button>
             <div className="quick-section-title"><ChevronDown16Regular />Quick views</div>
             <button onClick={openActivity}><ChatMultiple20Regular />Followed threads</button>
             <button disabled><Compose20Regular />Drafts</button>

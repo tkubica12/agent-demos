@@ -28,6 +28,7 @@ from microsoft_agents.activity import (
 )
 from microsoft_agents.authentication.msal import MsalConnectionManager
 from microsoft_agents.hosting.core import AgentApplication, Authorization, MemoryStorage, TurnContext, TurnState
+from microsoft_agents.hosting.core.app.proactive import Conversation
 from microsoft_agents.hosting.fastapi import CloudAdapter, start_agent_process
 from microsoft_agents_a365.notifications import (
     AgentNotification,
@@ -222,6 +223,8 @@ async def configure_bridge_telemetry() -> None:
 
 @app.on_event("shutdown")
 async def flush_bridge_telemetry() -> None:
+    if background_turns:
+        await asyncio.gather(*list(background_turns), return_exceptions=True)
     await asyncio.to_thread(flush_telemetry)
 
 
@@ -853,6 +856,37 @@ async def agent365_messages(request: Request):
     body, normalized_product_info = (
         normalize_agent365_activity_body(body)
     )
+    if channel_authentication.mode in {"standard", "demo"}:
+        activity = Activity.model_validate_json(body)
+        if (
+            activity.type == "message"
+            and activity.value is None
+            and activity.delivery_mode in {None, "normal"}
+        ):
+            identity = request.state.claims_identity
+            try:
+                Conversation(identity, activity.get_conversation_reference()).validate()
+                if (
+                    not activity.id
+                    or not activity.from_property
+                    or not activity.from_property.id
+                    or not activity.recipient
+                    or not activity.recipient.id
+                ):
+                    raise ValueError("Message, sender and recipient IDs are required.")
+            except ValueError as exc:
+                raise HTTPException(400, "A complete message conversation reference is required.") from exc
+            start_background_turn(
+                agent365_adapter.continue_conversation_with_claims(
+                    identity, activity, agent365_app.on_turn,
+                )
+            )
+            record_teams_diag({
+                "event": "messageAccepted",
+                "activityId": activity.id,
+                "conversationId": activity.conversation.id,
+            })
+            return JSONResponse({}, status_code=202)
 
     async def receive():
         return {
