@@ -178,13 +178,32 @@ if (steps.has("reply")) await modelCheck("real-agent-reply", async () => {
   const sent = await sendFromUi(`Reply with the code ${nonce} and the numeric sum of ${a} + ${b}.`);
   const received = await reply(sent.id, (m) => m.text.includes(nonce));
   await expect(page.locator(`[data-message-id="${received.id}"]`)).toContainText(nonce);
+  const responseText = String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]");
+  const sumVerified = new RegExp(`(?<!\\d)${a + b}(?!\\d)`).test(received.text);
+  const toolsBlocked = /\b(?:tool|tools|execute_code)\b.{0,80}\b(?:blocked|unavailable|not allowed|not permitted|denied|requires? approval|approval required)\b|\b(?:blocked|unavailable|not allowed|not permitted|denied)\b.{0,80}\b(?:tool|tools|execute_code)\b/i
+    .test(responseText);
+  report.messaging = {
+    status: sumVerified ? "pass" : "fail",
+    requestMessageId: sent.id,
+    responseMessageId: received.id,
+    responseAt: received.createdAt,
+    nonce,
+    expectedSum: a + b,
+    sumVerified,
+    responseText,
+  };
+  report.codeExecution = toolsBlocked
+    ? { status: "fail", reason: "The agent response states that tool/code execution was blocked." }
+    : { status: "not_proven", reason: "Requires a successful correlated native execute_code or approved isolated-backend trace." };
   report.reply = {
     request: sent.id, response: received.id, responseAt: received.createdAt,
-    responseText: String(received.text).replaceAll(process.env.DEMO_ACCESS_CODE, "[REDACTED]"),
-    expectedSum: a + b, verified: new RegExp(`(?<!\\d)${a + b}(?!\\d)`).test(received.text),
+    responseText,
+    expectedSum: a + b, verified: sumVerified,
   };
   await page.screenshot({ path: path.join(out, "reply.png") });
-  assert.ok(report.reply.verified, `Agent replied with the nonce but not the expected sum: ${report.reply.responseText}`);
+  assert.notEqual(report.codeExecution.status, "fail",
+    `Agent response reports blocked tool/code execution: ${responseText}`);
+  assert.ok(sumVerified, `Agent replied with the nonce but not the expected sum: ${responseText}`);
 });
 if (steps.has("widget")) await modelCheck("widget-input-submit-followup", async () => {
   const nonce = randomUUID().replaceAll("-", "");
@@ -233,7 +252,13 @@ if (steps.has("files")) await modelCheck("upload-and-download", async () => {
   assert.equal(hash(downloaded), hash(bytes));
   await shot("files");
 });
+report.uiAcceptance = report.checks.every((item) => item.status === "pass") ? "pass" : "fail";
+report.codeExecution ??= { status: "not_run", reason: "No code-execution request was made in this run." };
 await writeFile(path.join(out, "demo-smoke.json"), JSON.stringify(report, null, 2));
 await browser.close();
-console.log(JSON.stringify(report.checks));
-process.exit(report.checks.every((c) => c.status === "pass") ? 0 : 1);
+console.log(JSON.stringify({
+  uiAcceptance: report.uiAcceptance,
+  codeExecution: report.codeExecution.status,
+  checks: report.checks,
+}));
+process.exit(report.uiAcceptance === "pass" ? 0 : 1);
