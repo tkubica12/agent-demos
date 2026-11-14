@@ -10,6 +10,8 @@ Demonstrations and educational material for modern Microsoft agent architectures
 - [Foundry Showcase](foundry-showcase/README.md) - a cohesive Foundry solution combining hosted agents, memory, skills, observability, and evaluations, with additional capabilities developed in its [plan](foundry-showcase/PLAN.md).
 - [Agent Harness Comparison](agent-harness-comparison/README.md) - four native harnesses, one trusted research application, real Foundry/WebIQ measurements, and an HTML/PDF comparison.
 
+![Agent Chat Simulator in DEMO mode with fictional users, a shared DOCX file, and an Adaptive Card](autopilots-on-azure/docs/assets/agent-chat-simulator.png)
+
 Educational material about agents is available under [docs](docs/).
 
 Messaging gateway security (English):

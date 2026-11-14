@@ -309,27 +309,25 @@ native/backend startup remains an error.
 
 ### Current validation status
 
-Recorded on 2026-11-14 for one clean-install DEMO stack built from source
-`9e08464e68c39c3b71ca0644cc50c83138d9a66b` and its matching `deployment-images`
-artifact. Later repository commits are not those deployed images.
+Recorded on 2026-11-14 for a DEMO stack in a private test landing zone, built from
+source `8302807c39132a43f58db9f4a228bada81ec259e` and its matching
+`deployment-images` artifact. That test deployment has since been torn down.
 
 | Check | Result |
 | --- | --- |
 | DEMO login with the correct and a wrong access code (API) | Passed |
 | Real model reply with a fresh nonce through simulator, gateway and Hermes | Passed |
-| File upload and download with an exact SHA-256 match | Passed |
-| Model-generated HTML widget | Failed delivery: the gateway returned an error at a transient `waiting_for_approval` state. The original run later completed with a genuine widget, without an approval bypass, but that completion was not delivered |
-| Widget submit and same-chat follow-up | Not run |
-| Browser acceptance (`tests/e2e_private/demo_smoke.mjs`) | Attempted privately, not accepted: reply/widget failed with native HTTP 409; its exact cause remains unestablished |
-| Normal-TLS browser login | Not validated: the observed login used a certificate-error exception |
-| Browser file upload/download | Inconclusive; the separate API check above passed |
+| File upload and download with an exact SHA-256 match (API) | Passed |
+| Local script on an uploaded TXT: write an upper-case copy, keep the original | Passed: the downloaded output equals `original.upper()` byte for byte; native run events show the command reading the uploaded input |
+| Simulator opens in a browser over normal TLS (private network) | Passed |
+| `validate_run` evidence check | Failed: the native run reports empty provider/model metadata |
+| Browser download comparison and model-generated widget | Not run |
+| Entra browser acceptance | Not run |
 
-The source-only repair from `9e1e9d6` is integrated into `main`: approval and
-clarification waits continue polling the same admitted run at 0.5 s, preserve
-native controls, and retain the existing deadline without admitting another run.
-It has not been rebuilt or deployed and does not fix or explain the separate
-browser HTTP 409 by assertion. The remaining full-acceptance checks above and
-Entra browser evidence are still open. This is not a customer-release approval.
+The script test ran with `approvals.unattended_mode: approve` set manually in that
+Worker's `config.yaml`; there is no approval UI, and a new Role Release overwrites
+the setting. Approval and clarification waits now keep polling the same admitted
+run. The remaining checks above are open; this is not a customer-release approval.
 
 ## Cost and teardown
 

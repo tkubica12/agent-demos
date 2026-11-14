@@ -9,6 +9,8 @@ Microsoft 365 Agents SDK**; it does not connect to real Teams or Microsoft Graph
 and is not a Microsoft product. Protocol identifiers such as `msteams`, `28:`,
 Activity schemas and Connector `/v3` routes intentionally remain unchanged.
 
+![Agent Chat Simulator in DEMO mode with fictional users, a shared DOCX file, and an Adaptive Card](../docs/assets/agent-chat-simulator.png)
+
 Python 3.12 / FastAPI / SQLAlchemy / SQLite; React / TypeScript / Vite.
 The repository contains no deployed configuration, tenant identity or credentials.
 Upstream sample licenses and notices remain in `agents\reference-echo` and
@@ -17,6 +19,15 @@ Upstream sample licenses and notices remain in `agents\reference-echo` and
 For Azure deployment with a real Hermes Worker, see the
 [deployment guide and current validation gaps](../docs/simulator-deployment.md#current-validation-status).
 Local protocol/widget tests do not establish deployed model or browser acceptance.
+
+| Section | Read it when you want to |
+| --- | --- |
+| [Run and build](#run-and-build) | Start locally or build the container |
+| [Declarative agents](#declarative-agents) | Register agents in the simulator |
+| [HTML widgets](#html-widgets) | Understand widget limits and isolation |
+| [Explicit, expiring demo mode](#explicit-expiring-demo-mode) | Test without Entra, using test data only |
+| [Environment contract](#environment-contract) | Look up every setting |
+| [Checks and boundaries](#checks-and-boundaries) | Run tests and know what is out of scope |
 
 ## Run and build
 
