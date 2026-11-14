@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createHash, randomUUID, randomInt } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const require = createRequire(import.meta.url);
@@ -42,7 +42,7 @@ async function eventually(action) {
   while (Date.now() < end) { const v = await action(); if (v) return v; await new Promise((r) => setTimeout(r, 2000)); }
   throw new Error("Timed out waiting for condition.");
 }
-const context = await browser.newContext({ acceptDownloads: true });
+const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 720 } });
 const page = await context.newPage();
 page.setDefaultTimeout(30_000);
 let token;
@@ -54,12 +54,39 @@ const fill = async (code) => {
   await page.getByLabel("Display name", { exact: true }).fill(process.env.DEMO_OWNER_NAME);
   await page.getByRole("button", { name: "Enter demo", exact: true }).click();
 };
-await page.goto(url);
-await check("anonymous-api-rejected", async () => {
+const steps = new Set((process.env.DEMO_STEPS ?? "anonymous,wrong-code,login,reply,widget,files").split(","));
+const shot = (name) => page.screenshot({ path: path.join(out, `${name}.png`) });
+const navigation = await page.goto(url);
+const security = await navigation.securityDetails();
+report.tls = security ? { protocol: security.protocol, issuer: security.issuer } : null;
+report.steps = [...steps];
+let modelFailed = false;
+const modelCheck = async (name, action) => {
+  if (modelFailed) { report.checks.push({ name, status: "skipped", failure: "an earlier model-triggering step failed" }); return; }
+  const started = Date.now();
+  await check(name, action);
+  report.checks.at(-1).seconds = Math.round((Date.now() - started) / 1000);
+  if (report.checks.at(-1).status !== "pass") modelFailed = true;
+};
+await page.getByTestId("demo-warning").waitFor();
+report.banner = (await page.getByTestId("demo-warning").innerText()).trim();
+await shot("login-page");
+const sendFromUi = async (text) => {
+  await page.getByTestId("composer").locator("textarea").fill(text);
+  const posted = page.waitForResponse((r) => r.request().method() === "POST" &&
+    new URL(r.url()).pathname === `/api/conversations/${personal}/messages`);
+  await page.getByRole("button", { name: "Send message" }).click();
+  const response = await posted;
+  const body = await response.json().catch(() => ({}));
+  report.sends = [...(report.sends ?? []), { at: new Date().toISOString(), status: response.status(), id: body.id }];
+  assert.equal(response.status(), 201, `Send failed HTTP ${response.status()}`);
+  return body;
+};
+if (steps.has("anonymous")) await check("anonymous-api-rejected", async () => {
   const response = await fetch(`${url}/api/users`, { redirect: "error" });
   assert.ok([401, 403].includes(response.status));
 });
-await check("wrong-code-rejected", async () => {
+if (steps.has("wrong-code")) await check("wrong-code-rejected", async () => {
   await expect(page.getByTestId("demo-warning")).toBeVisible();
   await fill(`wrong-${randomUUID()}`);
   await page.waitForTimeout(3000);
@@ -85,6 +112,8 @@ await check("demo-login", async () => {
   assert.ok(agent, "A registered agent is required.");
   personal = (await api("/chats", "POST", { memberIds: [agent.id] })).conversationId;
   await page.locator(`[data-conversation-id="${personal}"]`).click();
+  report.conversationId = personal;
+  await shot("after-login");
 });
 const reply = async (afterId, predicate) => {
   let last = [];
@@ -100,29 +129,27 @@ const reply = async (afterId, predicate) => {
     throw new Error(`${error.message} Messages after request: ${JSON.stringify(seen)}`);
   }
 };
-await check("real-agent-reply", async () => {
+if (steps.has("reply")) await modelCheck("real-agent-reply", async () => {
   const nonce = randomUUID().replaceAll("-", ""), a = randomInt(100, 999), b = randomInt(100, 999);
-  const sent = await api(`/conversations/${personal}/messages`, "POST", {
-    text: `Reply with the code ${nonce} and the numeric sum of ${a} + ${b}.`,
-  });
+  const sent = await sendFromUi(`Reply with the code ${nonce} and the numeric sum of ${a} + ${b}.`);
   const received = await reply(sent.id, (m) => m.text.includes(nonce) && m.text.includes(String(a + b)));
   await expect(page.locator(`[data-message-id="${received.id}"]`)).toContainText(nonce);
   report.reply = { request: sent.id, response: received.id };
   await page.screenshot({ path: path.join(out, "reply.png") });
 });
-await check("widget-input-submit-followup", async () => {
+if (steps.has("widget")) await modelCheck("widget-input-submit-followup", async () => {
   const nonce = randomUUID().replaceAll("-", "");
-  const sent = await api(`/conversations/${personal}/messages`, "POST", {
-    text: `Use your installed UNCHANGED teams-html-widget skill to generate a real interactive budget planner, not an Adaptive Card, hosted link or code example. ` +
+  const sent = await sendFromUi(
+    `Use your installed UNCHANGED teams-html-widget skill to generate a real interactive budget planner, not an Adaptive Card, hosted link or code example. ` +
       `Put ${nonce} in the title and fallback. Include one number input visibly labelled Budget, initially 5, with data-widget-field="budget"; ` +
       `show twice its value in output id="total" and update it locally on input. ` +
       `Include a user-click action labelled "Discuss planner ${nonce}". When I submit, acknowledge the selected budget and ${nonce} in this same chat. ` +
-      `These numbers are illustrative; no external action or approval is requested.`,
-  });
+      `These numbers are illustrative; no external action, preview check or approval is requested.`);
   const received = await reply(sent.id, (m) => m.textFormat === "extendedmarkdown" &&
     m.text.includes("```html-widget") && m.text.includes(nonce));
   const iframe = page.locator(`[data-message-id="${received.id}"] iframe`);
   await expect(iframe).toBeVisible();
+  await shot("widget-rendered");
   const frame = await (await iframe.elementHandle()).contentFrame();
   assert.ok(frame, "Widget frame unavailable.");
   await expect(frame.getByLabel("Budget", { exact: true })).toHaveValue("5");
@@ -140,18 +167,22 @@ await check("widget-input-submit-followup", async () => {
   report.widget = { request: sent.id, widget: received.id, followup: followup.id };
   await page.screenshot({ path: path.join(out, "widget.png") });
 });
-await check("upload-and-download", async () => {
+if (steps.has("files")) await modelCheck("upload-and-download", async () => {
   const code = randomUUID().replaceAll("-", "");
   const bytes = Buffer.from(`Verification code: ${code}\n`);
-  const form = new FormData();
-  form.set("file", new Blob([bytes]), "demo.txt");
-  const file = await api(`/conversations/${personal}/files`, "POST", form);
-  const sent = await api(`/conversations/${personal}/messages`, "POST", {
-    text: "Read the attached document and tell me its verification code.", attachmentIds: [file.id],
-  });
-  await reply(sent.id, (m) => m.text.includes(code));
+  const name = `demo-${code.slice(0, 8)}.txt`;
+  await page.getByLabel("Upload attachment").setInputFiles({ name, mimeType: "text/plain", buffer: bytes });
+  await expect(page.locator(".pending-attachments")).toContainText(name);
+  const sent = await sendFromUi("Read the attached document and tell me its verification code.");
+  const received = await reply(sent.id, (m) => m.text.includes(code));
+  const card = page.locator(`[data-message-id="${sent.id}"] [data-testid="file-card"]`).filter({ hasText: name });
+  await expect(card).toBeVisible();
+  const [download] = await Promise.all([page.waitForEvent("download"), card.locator(".file-card-name").click()]);
   const hash = (b) => createHash("sha256").update(b).digest("hex");
-  assert.equal(hash(await api(`/files/${file.id}/content`, "GET", undefined, true)), hash(bytes));
+  const downloaded = await readFile(await download.path());
+  report.files = { name, uploadedSha256: hash(bytes), downloadedSha256: hash(downloaded), reply: received.id };
+  assert.equal(hash(downloaded), hash(bytes));
+  await shot("files");
 });
 await writeFile(path.join(out, "demo-smoke.json"), JSON.stringify(report, null, 2));
 await browser.close();
