@@ -20,6 +20,65 @@ from scripts.setup_app_tfvars import build_tfvars, load_or_create_collective_app
 from scripts.tf_helpers import REPO_ROOT, output, run, terraform_output, write_tfvars
 
 
+STACK_NAME_PATTERN = r"agent-[a-z0-9]{1,3}"
+FOUNDRY_DNS_ZONES = (
+    "privatelink.cognitiveservices.azure.com",
+    "privatelink.openai.azure.com", "privatelink.services.ai.azure.com",
+)
+
+
+def validate_shared_foundry(inputs: dict) -> dict | None:
+    mode = inputs.setdefault("foundry_mode", "per_stack")
+    if mode not in {"per_stack", "shared"}:
+        raise ValueError("foundry_mode must be per_stack or shared.")
+    if mode == "per_stack":
+        if "shared_foundry" in inputs:
+            raise ValueError("shared_foundry requires foundry_mode = shared.")
+        return None
+    settings = inputs.get("shared_foundry")
+    if not isinstance(settings, dict) or settings.get("mode") not in {"create", "existing"}:
+        raise ValueError("shared_foundry.mode must be create or existing.")
+    settings = dict(settings)
+    common = {"mode", "model_deployment_name"}
+    create = {"existing_resource_group_name", "account_name", "location", "model_name", "model_version",
+              "model_sku_name", "model_capacity", "existing_private_endpoint_subnet_id"}
+    existing = {"account_resource_id"}
+    if set(settings) - (common | (create if settings["mode"] == "create" else existing)):
+        raise ValueError("Unsupported shared_foundry settings for the selected mode.")
+    settings.setdefault("model_deployment_name", "gpt-6-1-sol")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}", settings["model_deployment_name"]):
+        raise ValueError("shared_foundry.model_deployment_name must be a valid deployment name.")
+    if settings["mode"] == "existing":
+        from scripts.simulator_preflight import _arm_id
+
+        _arm_id(settings.get("account_resource_id"), "Microsoft.CognitiveServices/accounts",
+                "shared_foundry.account_resource_id")
+        if settings["account_resource_id"].split("/")[2].lower() != inputs["subscription_id"].lower():
+            raise ValueError("Shared Foundry must use the configured subscription.")
+    else:
+        group = settings.get("existing_resource_group_name", "")
+        if not isinstance(group, str) or not re.fullmatch(r"[\w.()-]{1,90}", group):
+            raise ValueError("shared_foundry.existing_resource_group_name is required in create mode.")
+        account = settings.get("account_name", "")
+        if not isinstance(account, str) or (account and not re.fullmatch(r"[a-z][a-z0-9-]{1,62}[a-z0-9]", account)):
+            raise ValueError("shared_foundry.account_name must be 3-64 lowercase letters, digits or hyphens.")
+        platform = inputs.get("platform", {})
+        for field, default in (("location", "swedencentral"), ("model_name", "gpt-6.1-sol"),
+                               ("model_version", "2026-09-29"), ("model_sku_name", "GlobalStandard")):
+            settings.setdefault(field, platform.get(field, default))
+            if not isinstance(settings[field], str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]*", settings[field]):
+                raise ValueError(f"shared_foundry.{field} must be a resource/model name.")
+        settings.setdefault("model_capacity", 15)
+        capacity = settings["model_capacity"]
+        if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1:
+            raise ValueError("shared_foundry.model_capacity must be a positive integer.")
+        settings.setdefault("existing_private_endpoint_subnet_id", platform.get("existing_private_endpoint_subnet_id", ""))
+        if inputs.get("network_mode", "private") == "private" and not settings["existing_private_endpoint_subnet_id"]:
+            raise ValueError("Shared private Foundry requires existing_private_endpoint_subnet_id.")
+    inputs["shared_foundry"] = settings
+    return settings
+
+
 def load_config(path: Path, *, validate_expiry: bool = True) -> dict:
     config = tomllib.loads(path.read_text(encoding="utf-8"))
     return validate_config(config, validate_expiry=validate_expiry)
@@ -56,8 +115,8 @@ def validate_config(config: dict, *, validate_expiry: bool = True) -> dict:
     if not agents or len(agents) > 20:
         raise ValueError("Configure 1-20 agents.")
     names = [str(agent["name"]) for agent in agents]
-    if len(set(names)) != len(names) or any(not re.fullmatch(r"agent-[1-9][0-9]*", name) for name in names):
-        raise ValueError("Agent names must be distinct agent-1, agent-2, ...; existing Worker names are prohibited.")
+    if len(set(names)) != len(names) or any(not re.fullmatch(STACK_NAME_PATTERN, name) for name in names):
+        raise ValueError("Agent names must be distinct agent-<1-3 lowercase alphanumeric characters>, e.g. agent-1 or agent-dev.")
     config["agents"] = agents
     role = config.get("role", {})
     if not all(role.get(key) for key in ("blueprint", "source", "release", "commit")):
@@ -83,6 +142,7 @@ def validate_config(config: dict, *, validate_expiry: bool = True) -> dict:
 
 def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool = True) -> list[dict]:
     inputs = tomllib.loads(path.read_text(encoding="utf-8"))
+    validate_shared_foundry(inputs)
     base = str(inputs["environment"])
     if not re.fullmatch(r"[a-z][a-z0-9-]{2,13}", base):
         raise ValueError("The deployment environment prefix must be 3-14 lowercase letters, digits or hyphens.")
@@ -101,8 +161,10 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
     result = []
     for stack in stacks:
         name = stack["name"]
-        if not re.fullmatch(r"agent-[1-9][0-9]*", name):
-            raise ValueError("Stack names must be agent-1, agent-2, ...")
+        if not isinstance(name, str) or not re.fullmatch(STACK_NAME_PATTERN, name):
+            raise ValueError("Stack names must be agent-<1-3 lowercase alphanumeric characters>, e.g. agent-dev.")
+        if any(key in stack for key in ("foundry_mode", "shared_foundry")):
+            raise ValueError("Foundry ownership is deployment-wide, not a per-stack override.")
         if selected and name not in selected:
             continue
         config = {**inputs, **stack}
@@ -138,11 +200,21 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
                 if not config["platform"].get(field):
                     raise ValueError(f"{name}: existing private mode requires platform.{field}.")
         config["environment"] = base + "-" + name
+        config["deployment_environment"] = base
         config["stack_name"] = name
         config["agents"] = [{"name": name, "display_name": stack.get("display_name", name),
                              "assignment": stack.get("assignment", "")}]
         config["model_capacity"] = stack.get("model_capacity", inputs.get("model_capacity", 15))
         result.append(validate_config(config, validate_expiry=validate_expiry))
+    groups = [config["platform"].get("existing_resource_group_name", "").casefold() for config in result]
+    if len([group for group in groups if group]) != len(set(group for group in groups if group)):
+        raise ValueError("Every stack requires its own resource group.")
+    if inputs["foundry_mode"] == "shared":
+        shared = inputs["shared_foundry"]
+        shared_group = (shared["account_resource_id"].split("/")[4] if shared["mode"] == "existing"
+                        else shared["existing_resource_group_name"])
+        if shared_group.casefold() in groups:
+            raise ValueError("Shared Foundry requires a resource group separate from every stack.")
     return result
 
 

@@ -1,9 +1,9 @@
 # Agent Chat Simulator deployment
 
-Deploy six independent `agent-1` through `agent-6` stacks. Each has its own RG,
-Foundry account/model deployment, simulator, gateway, Hermes runtime, workload
+Deploy independent `agent-1` through `agent-6` stacks plus `agent-dev` for canary/IT
+testing. Each has its own RG, simulator, gateway, Hermes runtime, workload
 identities and persistent data. Customer networking, DNS and AMPLS may be shared
-explicitly. This channel is not Microsoft Teams: no Agent 365, `a365`, publishing,
+explicitly. Foundry can be pooled or per stack. This channel is not Microsoft Teams: no Agent 365, `a365`, publishing,
 Work IQ or Microsoft 365 licensing is required. DevOps/Clarity MCP is phase 2.
 
 ## Architecture
@@ -97,6 +97,38 @@ Top-level inputs are `environment` (new 3-14 character lowercase prefix),
 explicit list is supplied; `stack_count` is configurable. Each explicit stack can
 override display name, owner, assignment, role assignments and model capacity.
 Each stack has exactly one simulator and Worker.
+
+Names are `agent-` followed by 1-3 lowercase alphanumeric characters, including
+`agent-dev`. The 9-character limit keeps native Sandbox Group names within 32
+characters even for the `generated-apps` role. `stack_count` generates numeric
+names only; the seven-stack example uses explicit `[[stacks]]`.
+
+`foundry_mode = "per_stack"` is the unchanged default. `foundry_mode = "shared"`
+requires deployment-wide `[shared_foundry]`:
+
+```toml
+[shared_foundry]
+mode = "create"
+existing_resource_group_name = "rg-customer-foundry"
+location = "swedencentral"
+model_name = "gpt-6.1-sol"
+model_version = "2026-09-29"
+model_sku_name = "GlobalStandard"
+model_capacity = 15
+model_deployment_name = "gpt-6-1-sol"
+```
+
+Create mode owns one account, pooled deployment and (in private mode) one PE,
+never the supplied RG or central DNS zones. Optional `account_name` pins a
+globally unique name; otherwise Terraform generates it. Optional
+`existing_private_endpoint_subnet_id` inherits `[platform]`'s endpoint subnet.
+The three Foundry DNS IDs come from `[platform.private_dns_zone_ids]`.
+Alternatively, `mode = "existing"` accepts only `account_resource_id` and
+`model_deployment_name`: account/model/network lifecycle remains the administrator's.
+Shared mode owns one uniquely named project per stack inside the shared account,
+preserving separate telemetry connections, agent registration and stack teardown.
+Shared and stack resource groups must be distinct. Per-stack auth overrides are
+supported by the existing stack merge; DEMO expiry/acknowledgement remain mandatory.
 
 `network_mode = "private"` and `resource_group_mode = "existing"` are defaults.
 Global `[platform]` is merged with `[stacks.platform]`: AI `location`,

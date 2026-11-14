@@ -24,6 +24,7 @@ from scripts.deploy_simulator_environment import (
     select_images,
     environment_root, load_config, load_stack_configs, prepare, prepare_root, remove_owned_smart_alert, source_revision, state_path,
     validate_config,
+    validate_shared_foundry,
     terraform,
     destroy,
 )
@@ -255,6 +256,40 @@ class SimulatorDeploymentTests(unittest.TestCase):
             self.assertEqual(configs[0]["stack_name"], "agent-3")
             with self.assertRaisesRegex(ValueError, "Unknown selected"):
                 load_stack_configs(path, ["agent-2"])
+
+    def test_seven_stacks_include_dev_and_subset_preserves_exact_state_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "inputs.toml"
+            names = [f"agent-{index}" for index in range(1, 7)] + ["agent-dev"]
+            path.write_text(self.input_text() + "".join(f'[[stacks]]\nname = "{name}"\n' for name in names))
+            configs = load_stack_configs(path, [])
+            self.assertEqual([config["stack_name"] for config in configs], names)
+            dev, = load_stack_configs(path, ["agent-dev"])
+            self.assertEqual(dev, configs[-1])
+            paths = {state_path(environment_root(config), "platform", config["environment"]) for config in configs}
+            self.assertEqual(len(paths), 7)
+            self.assertTrue(all(len("ap-" + name + "-generated-apps-abcd") <= 32 for name in names))
+            self.assertEqual(dev["agents"], [{"name": "agent-dev", "display_name": "agent-dev", "assignment": ""}])
+
+    def test_shared_foundry_contract_and_invalid_ownership_are_explicit(self):
+        base = {"subscription_id": self.config()["subscription_id"], "network_mode": "public"}
+        self.assertIsNone(validate_shared_foundry(dict(base)))
+        shared = {"mode": "create", "existing_resource_group_name": "central"}
+        value = validate_shared_foundry({**base, "foundry_mode": "shared", "shared_foundry": shared})
+        self.assertEqual(value["model_capacity"], 15)
+        account_id = f"/subscriptions/{base['subscription_id']}/resourceGroups/central/providers/Microsoft.CognitiveServices/accounts/shared"
+        self.assertEqual(validate_shared_foundry({
+            **base, "foundry_mode": "shared",
+            "shared_foundry": {"mode": "existing", "account_resource_id": account_id},
+        })["account_resource_id"], account_id)
+        for changes in (
+            {"foundry_mode": "invalid"}, {"shared_foundry": shared},
+            {"foundry_mode": "shared", "shared_foundry": {"mode": "create"}},
+            {"foundry_mode": "shared", "shared_foundry": {**shared, "model_capacity": True}},
+            {"foundry_mode": "shared", "shared_foundry": {"mode": "existing", "account_resource_id": "/wrong"}},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_shared_foundry({**base, **changes})
 
     def test_private_defaults_require_explicit_customer_boundaries(self):
         with tempfile.TemporaryDirectory() as temporary:
