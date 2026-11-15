@@ -256,7 +256,7 @@ uv run python -m scripts.worker_lifecycle bootstrap `
   --license-skus "AGENT_365,Office_365_w/o_Teams_Bundle_Business_Premium"
 ```
 
-The Teams and Microsoft 365 Copilot Work IQ servers stay configured as usual. To drop them, remove them from `ToolingManifest.json` and set the `workiq_teams_*` and `workiq_copilot_*` Terraform variables to empty, which disables those servers in the runtime.
+`ToolingManifest.json` does not list the Teams and Microsoft 365 Copilot Work IQ servers, and the `workiq_teams_*` and `workiq_copilot_*` Terraform variables default to empty, so the runtime does not start them. To use them with a Teams channel, add both servers back to `ToolingManifest.json` and set those variables to the server URL and `<audience>/Tools.ListInvoke.All` scope.
 
 Nothing has to be uploaded in Microsoft 365 admin center.
 

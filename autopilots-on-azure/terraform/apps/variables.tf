@@ -271,12 +271,12 @@ variable "workiq_word_mcp_scope" {
 
 variable "workiq_teams_mcp_url" {
   type    = string
-  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_TeamsServer"
+  default = ""
 }
 
 variable "workiq_teams_mcp_scope" {
   type    = string
-  default = "ce5029ee-c1d3-45c0-bdcc-efb5a4245687/Tools.ListInvoke.All"
+  default = ""
 }
 
 variable "workiq_calendar_mcp_url" {
@@ -321,12 +321,12 @@ variable "workiq_excel_mcp_scope" {
 
 variable "workiq_copilot_mcp_url" {
   type    = string
-  default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_M365Copilot"
+  default = ""
 }
 
 variable "workiq_copilot_mcp_scope" {
   type    = string
-  default = "ab7c82de-7946-4454-ac28-70249d17c95e/Tools.ListInvoke.All"
+  default = ""
 }
 
 variable "channel" {
