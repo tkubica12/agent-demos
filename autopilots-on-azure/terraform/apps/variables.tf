@@ -159,6 +159,18 @@ variable "collective_learning_operator_client_id" {
   default = ""
 }
 
+variable "chat_client_ids" {
+  description = "Comma-separated application IDs of chat front ends that may message the Worker. Empty disables chat admission."
+  type        = string
+  default     = ""
+}
+
+variable "chat_service_urls" {
+  description = "Comma-separated HTTPS URLs of the chat services that may receive the Worker's replies."
+  type        = string
+  default     = ""
+}
+
 variable "collective_learning_approval_private_key" {
   type      = string
   default   = ""

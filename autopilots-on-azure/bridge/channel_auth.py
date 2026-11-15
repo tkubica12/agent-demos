@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -20,8 +21,12 @@ from microsoft_agents.hosting.core import (
     RestChannelServiceClientFactory,
     TurnContext,
 )
+from microsoft_agents.hosting.core.connector.teams import TeamsConnectorClient
 from microsoft_agents.hosting.fastapi import CloudAdapter
+from msal import ConfidentialClientApplication
 from pydantic import ValidationError
+
+from bridge.simulator_ingress import SimulatorChannel
 
 
 SERVICE_SETTINGS = "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__"
@@ -58,6 +63,7 @@ class ChannelAuthentication:
     configuration: dict[str, Any] = field(default_factory=dict, repr=False)
     validator: JwtTokenValidator | None = field(default=None, repr=False)
     channel_client_id: str = ""
+    simulator: SimulatorChannel | None = None
 
     @classmethod
     def from_environment(cls) -> "ChannelAuthentication":
@@ -87,7 +93,11 @@ class ChannelAuthentication:
             logger.warning("DEMO CHANNEL ENABLED: no Entra authentication or agentic tools; TEST DATA ONLY.")
             return cls("demo", demo_key=key, demo_service_url=service_url)
         if agentic:
-            return cls("agent365", configuration=load_configuration_from_env(os.environ))
+            return cls(
+                "agent365",
+                configuration=load_configuration_from_env(os.environ),
+                simulator=SimulatorChannel.from_environment(),
+            )
         if not client_id:
             return cls("anonymous")
         configuration = load_configuration_from_env(os.environ)
@@ -111,6 +121,9 @@ class ChannelAuthentication:
         )
 
     async def authenticate(self, request: Request, body: bytes, connection_manager: Any = None) -> None:
+        if self.mode == "agent365" and self.simulator:
+            self._authenticate_simulator(request, body)
+            return
         if self.mode not in {"standard", "demo"}:
             return
         if self.mode == "demo":
@@ -158,6 +171,76 @@ class ChannelAuthentication:
             except ValueError as exc:
                 raise HTTPException(403, "Activity serviceUrl is not mapped to a configured connection.") from exc
         request.state.claims_identity = identity
+
+    def _authenticate_simulator(self, request: Request, body: bytes) -> None:
+        """Agent 365 traffic passes unchanged; activities for the simulator need its channel token."""
+        try:
+            activity = Activity.model_validate(json.loads(body))
+        except (ValueError, UnicodeDecodeError, ValidationError) as exc:
+            raise HTTPException(400, "A valid channel activity is required.") from exc
+        if not self.simulator.owns(activity.service_url):
+            return
+        if activity.is_agentic_request():
+            raise HTTPException(403, "Simulator activities cannot be agentic requests.")
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() != "bearer" or not token or len(token) > 24 * 1024:
+            raise HTTPException(401, "A simulator channel bearer token is required.")
+        try:
+            claims = self.simulator.verify(token)
+        except jwt.PyJWKClientConnectionError as exc:
+            raise HTTPException(503, "Entra signing keys are unavailable.") from exc
+        except ValueError as exc:
+            raise HTTPException(401, str(exc)) from exc
+        request.state.claims_identity = ClaimsIdentity(claims, True, authentication_type="Bearer")
+
+
+class Agent365SimulatorClientFactory(RestChannelServiceClientFactory):
+    """Replies to the simulator use an Agent Identity token for the simulator channel app."""
+
+    def __init__(self, connection_manager: Any, simulator: SimulatorChannel) -> None:
+        super().__init__(connection_manager)
+        self.simulator = simulator
+        self._reply_token = ""
+        self._reply_token_expires = 0.0
+
+    async def _agent_identity_token(self) -> str:
+        if self._reply_token and self._reply_token_expires > time.time() + 300:
+            return self._reply_token
+        blueprint = self._connection_manager.get_default_connection()
+        assertion = await blueprint.get_agentic_application_token(
+            self.simulator.tenant_id, self.simulator.agent_identity_client_id,
+        )
+        if not assertion:
+            raise RuntimeError("The blueprint could not get an Agent Identity exchange token.")
+        application = ConfidentialClientApplication(
+            self.simulator.agent_identity_client_id,
+            authority=f"https://login.microsoftonline.com/{self.simulator.tenant_id}",
+            client_credential={"client_assertion": assertion},
+        )
+        result = await asyncio.to_thread(application.acquire_token_for_client, self.simulator.reply_scopes)
+        if "access_token" not in result:
+            raise RuntimeError(f"Agent Identity reply token failed: {result.get('error')}")
+        self._reply_token = result["access_token"]
+        self._reply_token_expires = time.time() + int(result.get("expires_in", 0))
+        return self._reply_token
+
+    def _is_simulator(self, context) -> bool:
+        activity = getattr(context, "activity", None)
+        return bool(activity) and not activity.is_agentic_request() and self.simulator.owns(activity.service_url)
+
+    async def create_user_token_client(self, context, claims_identity, use_anonymous=False):
+        return await super().create_user_token_client(
+            context, claims_identity, use_anonymous=use_anonymous or self._is_simulator(context),
+        )
+
+    async def create_connector_client(
+        self, context, claims_identity, service_url, audience, scopes=None, use_anonymous=False,
+    ):
+        if self.simulator.owns(service_url) and not (context and context.activity.is_agentic_request()):
+            return TeamsConnectorClient(endpoint=service_url, token=await self._agent_identity_token())
+        return await super().create_connector_client(
+            context, claims_identity, service_url, audience, scopes, use_anonymous=use_anonymous,
+        )
 
 
 class ChannelServiceClientFactory(RestChannelServiceClientFactory):
