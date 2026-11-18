@@ -48,6 +48,24 @@ class ApplicationReleaseTests(unittest.TestCase):
                 for name, digest in payload["files"].items():
                     self.assertEqual(hashlib.sha256(archive.read(name)).hexdigest(), digest)
 
+    def test_role_mcp_release_carries_its_package_and_data_directories(self):
+        source = {"source_directory": "roles/pm/mcp", "package": "pm_tools_mcp", "data_directories": ["config"]}
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "roles" / "pm" / "mcp"
+            for name in ("pm_tools_mcp/server.py", "config/projects.toml", "tests/test_server.py"):
+                (project / name).parent.mkdir(parents=True, exist_ok=True)
+                (project / name).write_text("x\n", encoding="utf-8")
+            with patch("scripts.application_releases.run", return_value=SimpleNamespace(stdout="package==1 --hash=sha256:abc\n")):
+                release = build_release("pm-tools", root=Path(directory), source=source)
+                with self.assertRaisesRegex(ValueError, "missing"):
+                    build_release("pm-tools", root=Path(directory), source={**source, "data_directories": ["knowledge"]})
+            with self.assertRaisesRegex(ValueError, "relative"):
+                build_release("pm-tools", root=Path(directory), source={**source, "source_directory": "../outside"})
+        with zipfile.ZipFile(io.BytesIO(release.archive)) as archive:
+            self.assertEqual(set(archive.namelist()), {
+                "pm_tools_mcp/server.py", "config/projects.toml", "requirements.txt", "release.json",
+            })
+
     def test_application_change_does_not_change_base_image(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

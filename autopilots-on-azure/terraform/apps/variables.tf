@@ -237,6 +237,20 @@ variable "public_shipments_mcp_api_audience" {
   default = ""
 }
 
+variable "role_mcp_servers" {
+  description = "Role-owned MCP servers deployed beside this Worker, keyed by the server name Hermes sees."
+  type = map(object({
+    source_directory         = string
+    package                  = string
+    data_directories         = optional(list(string), [])
+    api_audience             = string
+    required_role            = string
+    environment              = optional(map(string), {})
+    agent_user_token_headers = optional(map(string), {})
+  }))
+  default = {}
+}
+
 variable "workiq_mail_mcp_url" {
   type    = string
   default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_MailTools"
@@ -315,6 +329,17 @@ variable "workiq_copilot_mcp_url" {
 variable "workiq_copilot_mcp_scope" {
   type    = string
   default = "ab7c82de-7946-4454-ac28-70249d17c95e/Tools.ListInvoke.All"
+}
+
+variable "powerbi_mcp_url" {
+  description = "Fabric IQ MCP endpoint for read-only Power BI as the Agent User. Empty disables it."
+  type        = string
+  default     = ""
+}
+
+variable "powerbi_mcp_scope" {
+  type    = string
+  default = "https://analysis.windows.net/powerbi/api/.default"
 }
 
 variable "channel" {

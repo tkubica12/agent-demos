@@ -18,6 +18,7 @@ output "deployment_config" {
     bridge_disk_source_image                 = var.bridge_disk_source_image
     private_mcp_api_audience                 = var.private_mcp_api_audience
     public_shipments_mcp_api_audience        = var.public_shipments_mcp_api_audience
+    role_mcp_servers                         = var.role_mcp_servers
     api_server_key                           = var.api_server_key
     previous_api_server_key                  = var.previous_api_server_key
     agent365_client_id                       = var.agent365_client_id
@@ -64,5 +65,7 @@ output "deployment_config" {
     workiq_excel_mcp_scope                   = var.workiq_excel_mcp_scope
     workiq_copilot_mcp_url                   = var.workiq_copilot_mcp_url
     workiq_copilot_mcp_scope                 = var.workiq_copilot_mcp_scope
+    powerbi_mcp_url                          = var.powerbi_mcp_url
+    powerbi_mcp_scope                        = var.powerbi_mcp_scope
   }, var.generated_chat_files_enabled ? { generated_chat_files_enabled = true } : {})
 }

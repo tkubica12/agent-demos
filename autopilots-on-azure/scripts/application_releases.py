@@ -6,7 +6,7 @@ import json
 import shlex
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from scripts.tf_helpers import REPO_ROOT, run
@@ -35,10 +35,19 @@ class ApplicationRelease:
         return f"/app/releases/{self.digest}"
 
 
+def service_source_directory(root: Path, source_directory: str) -> Path:
+    path = PurePosixPath(source_directory.replace("\\", "/"))
+    if path.is_absolute() or ".." in path.parts or not path.parts or ":" in source_directory:
+        raise ValueError("A service source directory must stay relative to the deployment source root.")
+    return root.joinpath(*path.parts)
+
+
 def build_release(
     role: str, *, root: Path = REPO_ROOT, base_image: str = PYTHON_BASE_IMAGE, role_bundle: dict | None = None,
+    source: dict | None = None,
 ) -> ApplicationRelease:
-    if role not in SERVICE_PACKAGES and role != "runtime":
+    """Package one service; source describes a role-owned MCP server outside SERVICE_PACKAGES."""
+    if role not in SERVICE_PACKAGES and role != "runtime" and not source:
         raise ValueError(f"No thin application package exists for {role!r}.")
     files: dict[str, bytes] = {}
     if role == "runtime":
@@ -57,14 +66,21 @@ def build_release(
             bundled, _ = build_role_bundle(role_bundle, root=root)
             files.update(bundled)
     else:
-        project, package = SERVICE_PACKAGES[role]
-        directory = root / project
+        if source:
+            directory = service_source_directory(root, source["source_directory"])
+            package = source["package"]
+        else:
+            project, package = SERVICE_PACKAGES[role]
+            directory = root / project
         exported = run(
             ["uv", "export", "--frozen", "--no-dev", "--no-emit-project", "--format", "requirements-txt"],
             cwd=directory, capture=True,
         ).stdout
         files["requirements.txt"] = exported.encode("utf-8")
         packages = [(directory / package, package)]
+        packages += [(directory / name, name) for name in (source or {}).get("data_directories", ())]
+        if missing := [str(path) for path, _ in packages if not path.is_dir()]:
+            raise ValueError(f"The {role} release is missing: {', '.join(missing)}")
     for package_directory, prefix in packages:
         for path in sorted(package_directory.rglob("*")):
             if (

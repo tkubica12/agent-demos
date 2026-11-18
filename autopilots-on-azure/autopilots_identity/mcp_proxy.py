@@ -38,6 +38,7 @@ class McpServerConfig:
     upstream_url: str
     scope: str
     identity_mode: str
+    agent_user_token_headers: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_dict(cls, name: str, payload: object) -> "McpServerConfig":
@@ -53,7 +54,13 @@ class McpServerConfig:
             raise ValueError(f"MCP identity proxy server '{name}' requires a scope.")
         if identity_mode not in {"agent", "agent_user"}:
             raise ValueError(f"MCP identity proxy server '{name}' has unsupported identityMode '{identity_mode}'.")
-        return cls(upstream_url=upstream_url, scope=scope, identity_mode=identity_mode)
+        user_headers = payload.get("agentUserTokenHeaders", {})
+        if not isinstance(user_headers, dict) or not all(str(k).strip() and str(v).strip() for k, v in user_headers.items()):
+            raise ValueError(f"MCP identity proxy server '{name}' has invalid agentUserTokenHeaders.")
+        return cls(
+            upstream_url=upstream_url, scope=scope, identity_mode=identity_mode,
+            agent_user_token_headers=tuple((str(k).strip().lower(), str(v).strip()) for k, v in user_headers.items()),
+        )
 
 
 def load_server_configs(value: str | None = None) -> dict[str, McpServerConfig]:
@@ -85,14 +92,31 @@ def upstream_url(config: McpServerConfig, path: str, query: str) -> str:
     return urlunsplit((base.scheme, base.netloc, target_path or "/", query, ""))
 
 
-def forwarded_request_headers(request: Request, token: str) -> dict[str, str]:
+def forwarded_request_headers(
+    request: Request, token: str, user_tokens: dict[str, str] | None = None,
+) -> dict[str, str]:
+    user_tokens = user_tokens or {}
     headers = {
         name: value
         for name, value in request.headers.items()
         if name.lower() not in _HOP_BY_HOP_HEADERS and name.lower() != "authorization"
+        and name.lower() not in user_tokens
     }
     headers["Authorization"] = " ".join(("Bearer", token))
+    headers.update(user_tokens)
     return headers
+
+
+async def agent_user_tokens(config: McpServerConfig) -> dict[str, str]:
+    """Extra agent-user tokens for upstream calls; a failure only disables tools that need them."""
+    provider = token_provider()
+    tokens: dict[str, str] = {}
+    for header, scope in config.agent_user_token_headers:
+        try:
+            tokens[header] = await provider.get_agent_user_token(scope)
+        except Exception as exc:
+            logger.warning("Agent user token for %s failed: %s", scope, exc)
+    return tokens
 
 
 def forwarded_response_headers(response: httpx.Response) -> dict[str, str]:
@@ -167,7 +191,7 @@ async def proxy(server_name: str, request: Request, path: str = "") -> Streaming
     upstream_request = client.build_request(
         request.method,
         upstream_url(config, path, request.url.query),
-        headers=forwarded_request_headers(request, token),
+        headers=forwarded_request_headers(request, token, await agent_user_tokens(config)),
         content=await request.body(),
     )
     try:
