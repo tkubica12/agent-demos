@@ -1,0 +1,16 @@
+# One [servers.<name>] table per role-owned MCP server. <name> is the server name Hermes sees.
+# Pass this file to: uv run python -m scripts.setup_role_mcp --state-name <worker> --config <file>
+
+[servers.pm-tools]
+display_name = "Hermes PM Tools MCP"        # Entra application created for this server
+source_directory = "roles/proj/mcp"         # relative to autopilots-on-azure; holds pyproject.toml and uv.lock
+package = "pm_tools_mcp"                    # started as: python -m pm_tools_mcp.server
+data_directories = ["config", "knowledge"]  # folders beside the package that ship with it
+required_role = "PmTools.Use"               # application role granted to the Worker's Agent Identity
+gateway_roles = ["PmTools.Approve"]         # optional roles granted to the gateway identity only
+
+[servers.pm-tools.environment]              # optional extra environment for the server
+PM_TOOLS_STATE_DIR = "/data/pm-tools"
+
+[servers.pm-tools.agent_user_token_headers] # optional: header = scope, filled with an Agent User token
+x-agent-user-ado-token = "499b84ac-1321-427f-aa17-267ca6975798/.default"

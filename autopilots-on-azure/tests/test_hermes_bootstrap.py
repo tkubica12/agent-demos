@@ -253,6 +253,17 @@ class HermesBootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exited with code 3"):
             start_hermes.wait_for_loopback(Mock(poll=Mock(return_value=3), returncode=3), 9, timeout=2)
 
+    def test_role_mcp_servers_are_registered_and_removed_with_their_configuration(self):
+        url = "http://127.0.0.1:18081/servers/pm-tools"
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"ROLE_MCP_SERVERS_JSON": '{"pm-tools":"' + url + '"}'}, clear=True):
+                configured = start_hermes.hermes_config(Path(directory))
+            self.assertEqual(configured["mcp_servers"]["pm-tools"]["url"], url)
+            configured["mcp_servers"]["owner-added"] = {"url": "https://tools.example/mcp"}
+            with patch.dict(os.environ, {}, clear=True):
+                removed = start_hermes.hermes_config(Path(directory), configured)
+        self.assertEqual(set(removed["mcp_servers"]), {"owner-added"})
+
     def test_health_never_reports_ready_without_a_running_gateway(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

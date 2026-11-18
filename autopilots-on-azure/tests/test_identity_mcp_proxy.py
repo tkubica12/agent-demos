@@ -36,6 +36,21 @@ class IdentityMcpProxyTests(unittest.TestCase):
         self.assertEqual(servers["private"].identity_mode, "agent")
         self.assertEqual(servers["mail"].identity_mode, "agent_user")
 
+    def test_forwards_agent_user_tokens_and_drops_caller_copies(self) -> None:
+        servers = load_server_configs(
+            '{"pm":{"upstreamUrl":"https://pm.example/mcp","scope":"api://pm/.default",'
+            '"agentUserTokenHeaders":{"X-Agent-User-Ado-Token":"ado/.default"}}}'
+        )
+        config = servers["pm"]
+        self.assertEqual(config.agent_user_token_headers, (("x-agent-user-ado-token", "ado/.default"),))
+        request = SimpleNamespace(headers={"x-agent-user-ado-token": "spoofed"})
+        provider = SimpleNamespace(get_agent_user_token=AsyncMock(return_value="user-token"))
+        with patch.object(mcp_proxy, "token_provider", return_value=provider):
+            user_tokens = asyncio.run(mcp_proxy.agent_user_tokens(config))
+        headers = forwarded_request_headers(request, "agent-token", user_tokens)
+        self.assertEqual(headers["x-agent-user-ado-token"], "user-token")
+        provider.get_agent_user_token.assert_awaited_once_with("ado/.default")
+
     def test_rejects_non_https_upstream(self) -> None:
         with self.assertRaisesRegex(ValueError, "HTTPS"):
             load_server_configs(
