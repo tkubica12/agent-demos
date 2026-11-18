@@ -16,7 +16,7 @@ def simulator_worker_environment(config: dict, infrastructure: dict, previous: d
         raise ValueError("Simulator deployments do not provision Agent 365 demo MCP authorization.")
     environment = {
         key: value for key, value in previous.items()
-        if not key.startswith(("AGENT365_", "WORKIQ_", "CONNECTIONS__", "CONNECTIONSMAP__", "PRIVATE_INCIDENTS_", "PUBLIC_SHIPMENTS_", "ROLE_MCP_"))
+        if not key.startswith(("AGENT365_", "WORKIQ_", "CONNECTIONS__", "CONNECTIONSMAP__", "PRIVATE_INCIDENTS_", "PUBLIC_SHIPMENTS_", "ROLE_MCP_", "POWERBI_"))
     }
     environment.update({
         "USE_AGENTIC_AUTH": "false",

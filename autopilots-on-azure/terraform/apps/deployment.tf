@@ -68,5 +68,7 @@ output "deployment_config" {
     workiq_excel_mcp_scope                   = var.workiq_excel_mcp_scope
     workiq_copilot_mcp_url                   = var.workiq_copilot_mcp_url
     workiq_copilot_mcp_scope                 = var.workiq_copilot_mcp_scope
+    powerbi_mcp_url                          = var.powerbi_mcp_url
+    powerbi_mcp_scope                        = var.powerbi_mcp_scope
   }, var.generated_chat_files_enabled ? { generated_chat_files_enabled = true } : {})
 }

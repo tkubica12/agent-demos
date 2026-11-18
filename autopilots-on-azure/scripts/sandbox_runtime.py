@@ -49,6 +49,7 @@ ADDITIONAL_WORKIQ_SERVERS = {
     "workiq-sharepoint": "WORKIQ_SHAREPOINT_MCP_URL",
     "workiq-excel": "WORKIQ_EXCEL_MCP_URL",
     "workiq-copilot": "WORKIQ_COPILOT_MCP_URL",
+    "powerbi": "POWERBI_MCP_URL",
 }
 
 

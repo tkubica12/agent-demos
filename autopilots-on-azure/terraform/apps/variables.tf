@@ -343,6 +343,17 @@ variable "workiq_copilot_mcp_scope" {
   default = "ab7c82de-7946-4454-ac28-70249d17c95e/Tools.ListInvoke.All"
 }
 
+variable "powerbi_mcp_url" {
+  description = "Fabric IQ MCP endpoint for read-only Power BI as the Agent User. Empty disables it."
+  type        = string
+  default     = ""
+}
+
+variable "powerbi_mcp_scope" {
+  type    = string
+  default = "https://analysis.windows.net/powerbi/api/.default"
+}
+
 variable "channel" {
   type    = string
   default = "agent365"

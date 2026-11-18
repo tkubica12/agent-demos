@@ -265,7 +265,7 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "SCHEDULER_MAX_DELIVERY_COUNT": text(config["user_scheduling_max_delivery_count"]),
     })
     for name, value in config.items():
-        if name.startswith(("workiq_", "scheduled_learning_")):
+        if name.startswith(("workiq_", "powerbi_", "scheduled_learning_")):
             key = name.upper().replace("_MCP_URL", "_MCP_UPSTREAM_URL")
             environment[key] = text(value)
     transport = infrastructure.get("transport")
@@ -320,7 +320,7 @@ def gateway_environment(settings: dict[str, str]) -> dict[str, str]:
     return {
         key: value
         for key, value in settings.items()
-        if key not in RUNTIME_ONLY_SETTINGS and not key.startswith("WORKIQ_")
+        if key not in RUNTIME_ONLY_SETTINGS and not key.startswith(("WORKIQ_", "POWERBI_"))
     }
 
 
@@ -333,7 +333,7 @@ def deploy_runtime(settings: dict[str, str], gateway_url: str, credential: Any, 
     if settings.get("USE_AGENTIC_AUTH", "true") == "false":
         environment = {
             key: value for key, value in config.environment.items()
-            if not key.startswith(("AGENT365_", "WORKIQ_"))
+            if not key.startswith(("AGENT365_", "WORKIQ_", "POWERBI_"))
         }
         environment.update({key: settings[key] for key in (
             "WORKER_OWNER_ID", "USE_AGENTIC_AUTH",
