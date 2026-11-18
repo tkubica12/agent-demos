@@ -21,6 +21,8 @@ from .config import validate_transport_url
 
 ADAPTIVE_CARD = "application/vnd.microsoft.card.adaptive"
 FILE_DOWNLOAD = "application/vnd.microsoft.teams.file.download.info"
+# Rejections arrive within a second; a silent agent past this is running its turn.
+ACCEPT_TIMEOUT = httpx.Timeout(15, read=5)
 REACTIONS = {
     "like": "👍", "heart": "❤️", "laugh": "😆", "surprised": "😮",
     "sad": "😢", "angry": "😠", "eyes": "👀", "checkmark": "✅",
@@ -331,17 +333,25 @@ class AgentChannel:
             self.authorize_delivery(session, delivery, agent)
             self.require_active_demo()
             session.rollback()
-            async with self.client.stream("POST", endpoint, json=activity,
-                                          headers=headers) as response:
-                if response.status_code not in {200, 201, 202, 204}:
-                    raise HTTPException(502, f"Agent delivery failed (HTTP {response.status_code})")
-                if widget_call and response.status_code != 200:
-                    raise HTTPException(502, "Widget invokes require synchronous HTTP 200")
-                raw = bytearray()
-                async for chunk in response.aiter_bytes():
-                    if len(raw) + len(chunk) > (65_536 if widget_call else 1024 * 1024):
-                        raise HTTPException(502, "Agent response is too large")
-                    raw.extend(chunk)
+            invoke = activity["type"] == "invoke"
+            try:
+                async with self.client.stream(
+                    "POST", endpoint, json=activity, headers=headers,
+                    timeout=httpx.USE_CLIENT_DEFAULT if invoke else ACCEPT_TIMEOUT,
+                ) as response:
+                    if response.status_code not in {200, 201, 202, 204}:
+                        raise HTTPException(502, f"Agent delivery failed (HTTP {response.status_code})")
+                    if widget_call and response.status_code != 200:
+                        raise HTTPException(502, "Widget invokes require synchronous HTTP 200")
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(raw) + len(chunk) > (65_536 if widget_call else 1024 * 1024):
+                            raise HTTPException(502, "Agent response is too large")
+                        raw.extend(chunk)
+            except httpx.ReadTimeout:
+                # The agent has the activity and answers the request only after its whole turn.
+                if invoke:
+                    raise
             invoke_response = None
             if widget_call:
                 from .html_widgets import strict_json, validate_tool_result
