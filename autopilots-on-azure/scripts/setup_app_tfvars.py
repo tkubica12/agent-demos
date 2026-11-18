@@ -245,6 +245,15 @@ def build_tfvars(
     if not re.fullmatch(r"[0-9a-fA-F]{40}", role_values["hermes_role_release_commit"]):
         raise ValueError("hermes_role_release_commit must be a full 40-character Git commit SHA.")
     tfvars.update({key: value for key, value in role_values.items() if value})
+    if role_values["hermes_role_blueprint_source"] == "local":
+        from scripts.role_bundle import build_role_bundle
+
+        _, tfvars["hermes_role_bundle_sha256"] = build_role_bundle({
+            "blueprint": role_values["hermes_role_blueprint"], "path": role_values["hermes_role_blueprint_path"],
+            "release": role_values["hermes_role_release"], "commit": role_values["hermes_role_release_commit"],
+        }, verify=False)
+    else:
+        tfvars.pop("hermes_role_bundle_sha256", None)
     resolved_agent365_client_id = agent365_client_id or previous.get("agent365_client_id", "")
     resolved_agent365_tenant_id = agent365_tenant_id or previous.get("agent365_tenant_id", "")
     if resolved_agent365_client_id:

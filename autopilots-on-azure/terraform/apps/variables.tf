@@ -249,6 +249,20 @@ variable "public_shipments_mcp_api_audience" {
   default = ""
 }
 
+variable "role_mcp_servers" {
+  description = "Role-owned MCP servers deployed beside this Worker, keyed by the server name Hermes sees."
+  type = map(object({
+    source_directory         = string
+    package                  = string
+    data_directories         = optional(list(string), [])
+    api_audience             = string
+    required_role            = string
+    environment              = optional(map(string), {})
+    agent_user_token_headers = optional(map(string), {})
+  }))
+  default = {}
+}
+
 variable "workiq_mail_mcp_url" {
   type    = string
   default = "https://agent365.svc.cloud.microsoft/agents/servers/mcp_MailTools"

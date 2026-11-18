@@ -220,6 +220,9 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         mcp_servers["private-incidents"] = {"url": private_mcp_url}
     if public_shipments_mcp_url:
         mcp_servers["public-shipments"] = {"url": public_shipments_mcp_url}
+    role_mcp_urls = json.loads(os.getenv("ROLE_MCP_SERVERS_JSON") or "{}")
+    for name, url in role_mcp_urls.items():
+        mcp_servers[name] = {"url": url}
     if agentic_auth_enabled():
         for name, environment_name in WORKIQ_MCP_ENVIRONMENTS.items():
             url = os.getenv(environment_name, "").strip()
@@ -263,6 +266,13 @@ def hermes_config(home: Path, base: dict[str, Any] | None = None) -> dict[str, A
         ):
             if name not in mcp_servers:
                 configured_servers.pop(name, None)
+        identity_proxy = f"http://127.0.0.1:{os.getenv('AGENT_MCP_PROXY_PORT', str(DEFAULT_AGENT_MCP_PROXY_PORT))}/servers/"
+        for name in [
+            name for name, server in configured_servers.items()
+            if name not in mcp_servers and isinstance(server, dict)
+            and str(server.get("url", "")).startswith(identity_proxy)
+        ]:
+            configured_servers.pop(name)
         if not configured_servers:
             config.pop("mcp_servers", None)
     return config

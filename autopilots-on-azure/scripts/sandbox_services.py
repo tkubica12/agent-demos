@@ -233,6 +233,7 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "PRIVATE_INCIDENTS_MCP_SCOPE": config["private_mcp_api_audience"] + "/.default",
         "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL": endpoints.get("public_shipments_mcp_url", ""),
         "PUBLIC_SHIPMENTS_MCP_SCOPE": config["public_shipments_mcp_api_audience"] + "/.default",
+        "ROLE_MCP_UPSTREAMS_JSON": role_mcp_upstreams(config, endpoints),
         "AGENT365_TENANT_ID": tenant,
         "AGENT365_BLUEPRINT_CLIENT_ID": config["agent365_client_id"],
         "AGENT365_AGENT_IDENTITY_CLIENT_ID": config["agent365_agent_identity_client_id"],
@@ -309,6 +310,7 @@ RUNTIME_ONLY_SETTINGS = frozenset({
     "PRIVATE_INCIDENTS_MCP_SCOPE",
     "PUBLIC_SHIPMENTS_MCP_UPSTREAM_URL",
     "PUBLIC_SHIPMENTS_MCP_SCOPE",
+    "ROLE_MCP_UPSTREAMS_JSON",
     "WORKER_ASSIGNMENT_SCOPE",
 })
 
@@ -456,6 +458,64 @@ def mcp_service(role: str, config: dict, infrastructure: dict) -> SandboxService
         command=("/app/.venv/bin/python", "-m", "private_incidents_mcp.server" if private else "public_shipments_mcp.server"),
         environment=environment,
         release=build_release(role),
+    )
+
+
+RESERVED_SERVICE_NAMES = frozenset({
+    "runtime", "gateway", "private-mcp", "public-mcp", "generated-apps",
+    "private-incidents", "public-shipments", "m365-collaboration",
+})
+
+
+def role_mcp_servers(config: dict) -> dict[str, dict]:
+    """Role-owned MCP servers of this Worker, keyed by the server name Hermes sees."""
+    servers = config.get("role_mcp_servers") or {}
+    for name, spec in servers.items():
+        if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", name) or name in RESERVED_SERVICE_NAMES or name.startswith("workiq-"):
+            raise ValueError(f"Role MCP server name {name!r} is invalid or reserved.")
+        if missing := [key for key in ("source_directory", "package", "api_audience", "required_role") if not spec.get(key)]:
+            raise ValueError(f"Role MCP server {name!r} requires: {', '.join(missing)}.")
+    return servers
+
+
+def role_mcp_endpoint_prefix(name: str) -> str:
+    return "role_mcp_" + name.replace("-", "_")
+
+
+def role_mcp_upstreams(config: dict, endpoints: dict) -> str:
+    servers = {
+        name: {
+            "upstreamUrl": endpoints[role_mcp_endpoint_prefix(name) + "_url"],
+            "scope": spec["api_audience"] + "/.default",
+            "agentUserTokenHeaders": spec.get("agent_user_token_headers") or {},
+        }
+        for name, spec in role_mcp_servers(config).items()
+    }
+    return json.dumps(servers, sort_keys=True, separators=(",", ":")) if servers else ""
+
+
+def role_mcp_service(name: str, spec: dict, config: dict, infrastructure: dict) -> SandboxService:
+    """One role-owned MCP server that admits only this Worker's Agent Identity."""
+    tenant = infrastructure["tenant_id"]
+    return SandboxService(
+        role=name,
+        image=PYTHON_BASE_IMAGE,
+        disk_source_image=PYTHON_BASE_IMAGE,
+        port=8765,
+        command=("/app/.venv/bin/python", "-m", spec["package"] + ".server"),
+        environment={
+            **(spec.get("environment") or {}),
+            "HOST": "0.0.0.0",
+            "PORT": "8765",
+            "MCP_AUTH_MODE": "entra_agent_identity",
+            "MCP_JWKS_URL": f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys",
+            "MCP_JWT_ISSUER": f"https://login.microsoftonline.com/{tenant}/v2.0",
+            "MCP_JWT_AUDIENCE": spec["api_audience"].removeprefix("api://"),
+            "MCP_REQUIRED_ROLES": spec["required_role"],
+            "MCP_ALLOWED_CLIENT_IDS": config["agent365_agent_identity_client_id"],
+            "MCP_ALLOWED_OBJECT_IDS": config["agent365_agent_identity_object_id"],
+        },
+        release=build_release(name, source=spec),
     )
 
 
@@ -887,10 +947,14 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                 )
         endpoints["runtime_disk_image_id"] = disks["runtime"]
         runtime: dict[str, Any] = {}
-        for role in ("private-mcp", "public-mcp", "gateway"):
-            if role not in groups:
+        role_servers = role_mcp_servers(config)
+        if role_servers and "private-mcp" not in groups:
+            raise ValueError("Role MCP servers run in the private MCP Sandbox Group; enable demo_mcp_enabled.")
+        for role in ("private-mcp", *role_servers, "public-mcp", "gateway"):
+            host = "private-mcp" if role in role_servers else role
+            if host not in groups:
                 continue
-            group = infrastructure["sandbox_groups"][role]
+            group = infrastructure["sandbox_groups"][host]
             endpoint_environment = None
             if role == "gateway":
                 settings = worker_settings(config, platform, infrastructure, endpoints)
@@ -907,6 +971,8 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                 def endpoint_environment(gateway_url: str) -> dict[str, str]:
                     runtime.update(deploy_runtime(settings, gateway_url, credential, source_commit=source_commit))
                     return {"AGENT_RUNTIME_URL": runtime["runtime_url"]}
+            elif role in role_servers:
+                service = role_mcp_service(role, role_servers[role], config, infrastructure)
             else:
                 service = mcp_service(role, config, infrastructure)
             with SandboxGroupClient(
@@ -916,11 +982,13 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                 audience=DISK_IMAGE_AUDIENCE, read_timeout=1800,
             ) as client:
                 result = deploy_service(
-                    client, service, group, infrastructure["worker_id"], disk_image_id=disks[role],
+                    client, service, group, infrastructure["worker_id"], disk_image_id=disks[host],
                     endpoint_environment=endpoint_environment,
                 )
                 services[role] = result
-                prefix = {"private-mcp": "private_mcp", "public-mcp": "public_shipments_mcp", "gateway": "bridge"}[role]
+                prefix = role_mcp_endpoint_prefix(role) if role in role_servers else {
+                    "private-mcp": "private_mcp", "public-mcp": "public_shipments_mcp", "gateway": "bridge",
+                }[role]
                 endpoints[prefix + "_url"] = result["url"] + ("/mcp" if role != "gateway" else "")
                 endpoints[prefix + "_fqdn"] = urlsplit(result["url"]).hostname
                 endpoints[prefix + "_sandbox_id"] = result["sandbox_id"]

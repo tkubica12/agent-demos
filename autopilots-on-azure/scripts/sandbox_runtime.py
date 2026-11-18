@@ -80,6 +80,7 @@ class AgentSandboxConfig:
     additional_agent_user_mcp_servers: dict[str, dict[str, str]] = field(
         default_factory=dict
     )
+    role_mcp_servers: dict[str, dict[str, Any]] = field(default_factory=dict)
     agent365_tenant_id: str = ""
     agent365_blueprint_client_id: str = ""
     agent365_agent_identity_client_id: str = ""
@@ -323,7 +324,7 @@ def require_worker_refresh_ready(
 
 
 def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
-    servers: dict[str, dict[str, str]] = {}
+    servers: dict[str, dict[str, Any]] = {}
     environment = {
         "AGENT_MCP_PROXY_PORT": str(AGENT_MCP_PROXY_PORT),
         "AGENT365_TENANT_ID": config.agent365_tenant_id,
@@ -383,6 +384,19 @@ def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
         environment[environment_name] = (
             f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/{name}"
         )
+    role_urls = {}
+    for name, server in config.role_mcp_servers.items():
+        if name in servers:
+            raise ValueError(f"Role MCP server name {name!r} collides with a built-in MCP server.")
+        servers[name] = {
+            "upstreamUrl": server["upstreamUrl"],
+            "scope": server["scope"],
+            "identityMode": "agent",
+            "agentUserTokenHeaders": server.get("agentUserTokenHeaders") or {},
+        }
+        role_urls[name] = f"http://127.0.0.1:{AGENT_MCP_PROXY_PORT}/servers/{name}"
+    if role_urls:
+        environment["ROLE_MCP_SERVERS_JSON"] = json.dumps(role_urls, sort_keys=True, separators=(",", ":"))
     if servers:
         required = {
             "AGENT365_TENANT_ID": config.agent365_tenant_id,
@@ -390,7 +404,7 @@ def agent_mcp_environment(config: AgentSandboxConfig) -> dict[str, str]:
             "AGENT365_AGENT_IDENTITY_CLIENT_ID": config.agent365_agent_identity_client_id,
         }
         if any(
-            server.get("identityMode") == "agent_user"
+            server.get("identityMode") == "agent_user" or server.get("agentUserTokenHeaders")
             for server in servers.values()
         ):
             required["AGENT365_AGENT_USER_ID"] = config.agent365_agent_user_id
@@ -534,6 +548,7 @@ def hermes_sandbox_config(**overrides: Any) -> AgentSandboxConfig:
         additional_agent_user_mcp_servers=(
             overrides.get("additional_agent_user_mcp_servers") or {}
         ),
+        role_mcp_servers=overrides.get("role_mcp_servers") or {},
         agent365_tenant_id=overrides.get("agent365_tenant_id") or "",
         agent365_blueprint_client_id=overrides.get("agent365_blueprint_client_id") or "",
         agent365_agent_identity_client_id=overrides.get("agent365_agent_identity_client_id") or "",
@@ -803,6 +818,7 @@ def config_from_environment(
             }
             for name, environment_name in ADDITIONAL_WORKIQ_SERVERS.items()
         },
+        "role_mcp_servers": overrides.get("role_mcp_servers") or json.loads(get_config("ROLE_MCP_UPSTREAMS_JSON", "{}")),
         "agent365_tenant_id": overrides.get("agent365_tenant_id") or get_config("AGENT365_TENANT_ID"),
         "agent365_blueprint_client_id": overrides.get("agent365_blueprint_client_id") or get_config("AGENT365_BLUEPRINT_CLIENT_ID", get_config("CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID")),
         "agent365_agent_identity_client_id": overrides.get("agent365_agent_identity_client_id") or get_config("AGENT365_AGENT_IDENTITY_CLIENT_ID"),
