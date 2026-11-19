@@ -80,6 +80,69 @@ def validate_shared_foundry(inputs: dict) -> dict | None:
     return settings
 
 
+AGENT365_FIELDS = ("blueprint_client_id", "agent_identity_id", "agent_user_id", "agent_user_principal_name")
+
+
+def validate_shared_chat(inputs: dict, stacks: list[dict]) -> dict | None:
+    """One chat for every stack; the stacks run as Agent 365 Workers with admin-created identities."""
+    settings = inputs.get("shared_chat")
+    if settings is None:
+        if any("agent365" in stack for stack in stacks):
+            raise ValueError("stacks.agent365 requires [shared_chat].")
+        return None
+    if not isinstance(settings, dict) or set(settings) != {"host", "client_id", "channel_client_id"}:
+        raise ValueError("[shared_chat] requires exactly host, client_id and channel_client_id.")
+    if settings["host"] not in [stack.get("name") for stack in stacks]:
+        raise ValueError("shared_chat.host must name one of the stacks.")
+    settings = {"host": settings["host"], **{
+        key: str(uuid.UUID(settings[key])) for key in ("client_id", "channel_client_id")
+    }}
+    taken = {settings["client_id"], settings["channel_client_id"]}
+    if len(taken) != 2:
+        raise ValueError("The shared chat sign-in and channel applications must be distinct.")
+    for stack in stacks:
+        if stack.get("auth_mode", inputs.get("auth_mode", "entra")) != "entra":
+            raise ValueError("A shared chat requires auth_mode = entra for every stack.")
+        agent = stack.get("agent365")
+        if not isinstance(agent, dict) or set(agent) != set(AGENT365_FIELDS):
+            raise ValueError(f"{stack.get('name')}: a shared chat requires stacks.agent365 with "
+                             + ", ".join(AGENT365_FIELDS) + ".")
+        for field in AGENT365_FIELDS[:3]:
+            agent[field] = str(uuid.UUID(agent[field]))
+        name = agent["agent_user_principal_name"]
+        if not isinstance(name, str) or not re.fullmatch(r"[^@\s]+@[^@\s]+", name):
+            raise ValueError(f"{stack.get('name')}: agent_user_principal_name must be a user principal name.")
+        if taken & {agent["blueprint_client_id"], agent["agent_identity_id"]}:
+            raise ValueError("Every stack requires its own blueprint and Agent Identity, distinct from the chat applications.")
+        taken |= {agent["blueprint_client_id"], agent["agent_identity_id"]}
+    inputs["shared_chat"] = settings
+    return settings
+
+
+def hosts_chat(config: dict) -> bool:
+    return not config.get("shared_chat") or config["shared_chat"]["host"] == config["stack_name"]
+
+
+def chat_host_root(config: dict, root: Path) -> Path:
+    if hosts_chat(config):
+        return root
+    return state_root() / ("simulator-" + config["deployment_environment"] + "-" + config["shared_chat"]["host"])
+
+
+def shared_chat_identities(config: dict) -> dict:
+    chat = config["shared_chat"]
+    return {"spa": {"client_id": chat["client_id"]}, "channel": {"client_id": chat["channel_client_id"]}, "agents": {}}
+
+
+def record_shared_registrations(host_root: Path, registrations: list[dict]) -> list[dict]:
+    """Every stack keeps its own entry, so one stack's deployment never drops another stack's agent."""
+    path = host_root / "registrations.json"
+    known = load(path) if path.exists() else {}
+    known.update({item["name"]: item for item in registrations})
+    save(path, known)
+    return [known[name] for name in sorted(known)]
+
+
 def load_config(path: Path, *, validate_expiry: bool = True) -> dict:
     config = tomllib.loads(path.read_text(encoding="utf-8"))
     return validate_config(config, validate_expiry=validate_expiry)
@@ -159,6 +222,7 @@ def load_stack_configs(path: Path, selected: list[str], *, validate_expiry: bool
     missing = set(selected) - set(names)
     if missing:
         raise ValueError(f"Unknown selected stacks: {sorted(missing)}")
+    validate_shared_chat(inputs, stacks)
     deployment_platform = dict(inputs.get("platform", {}))
     if inputs.get("private_dns_zone_ids_file"):
         deployment_platform["private_dns_zone_ids"] = load_private_dns_zone_ids(
@@ -566,7 +630,8 @@ def prepare(config: dict, root: Path) -> dict:
         values["registration_client_ids"].setdefault(agent["name"], str(uuid.uuid4()))
     save(private, values)
     prepare_root(root, "platform", "platform")
-    prepare_root(root, "simulator", "simulator")
+    if hosts_chat(config):
+        prepare_root(root, "simulator", "simulator")
     for agent in config["agents"]:
         prepare_root(root, agent["name"], "apps")
     return existing
@@ -614,6 +679,19 @@ def worker_values(config: dict, root: Path, agent: dict, ownership: dict, identi
         "simulator_agent_client_id": identities.get("agents", {}).get(name, {}).get("client_id", ""),
         "simulator_channel_client_id": identities.get("channel", {}).get("client_id", ""),
     })
+    agent365 = config.get("agent365")
+    if agent365:
+        # Without scheduling the Worker needs neither the native transport nor a Service Bus namespace.
+        values.update({
+            "channel": "agent365", "native_transport_enabled": False, "generated_chat_files_enabled": False,
+            "simulator_agent_client_id": "",
+            "agent365_tenant_id": config["tenant_id"],
+            "agent365_client_id": agent365["blueprint_client_id"],
+            "agent365_agent_identity_client_id": agent365["agent_identity_id"],
+            "agent365_agent_identity_object_id": agent365["agent_identity_id"],
+            "agent365_agent_user_id": agent365["agent_user_id"],
+            "agent365_agent_user_principal_name": agent365["agent_user_principal_name"],
+        })
     image_path = root / "runtime-image.json"
     if image_path.exists():
         images = load(image_path)
@@ -635,11 +713,17 @@ def infrastructure(config: dict, root: Path, ownership: dict) -> None:
         "environment_name": config["environment"],
         "deployer_principal_id": ownership["deployer_principal_id"],
     }
-    hosting = terraform(root / "simulator", config["environment"], shared)
-    bindings = {"channel": hosting["channel_binding"], "agents": {}}
+    if hosts_chat(config):
+        hosting = terraform(root / "simulator", config["environment"], shared)
+        bindings = {"channel": hosting["channel_binding"], "agents": {}}
+    else:
+        # A chat binding applied before the stack joined the shared chat stays recorded for teardown.
+        previous = load(root / "bindings.json") if (root / "bindings.json").exists() else {}
+        bindings = {key: previous[key] for key in ("channel",) if key in previous} | {"agents": {}}
+    identity = shared_chat_identities(config) if config.get("shared_chat") else {}
     for agent in config["agents"]:
         worker = terraform(root / agent["name"], config["environment"],
-                           worker_values(config, root, agent, ownership, {}))
+                           worker_values(config, root, agent, ownership, identity))
         gateway = worker["sandbox_groups"]["gateway"]
         bindings["agents"][agent["name"]] = {
             "identity_client_id": gateway["identity_client_id"],
@@ -678,12 +762,21 @@ def deploy(config: dict, root: Path, ownership: dict) -> None:
     from scripts.simulator_hosting import configure_host, deploy_host
 
     identity = {}
-    if config["auth_mode"] == "entra" and not (root / "identities.json").exists():
+    shared_chat = config.get("shared_chat")
+    host_root = chat_host_root(config, root)
+    if config["auth_mode"] == "entra" and not shared_chat and not (root / "identities.json").exists():
         raise ValueError("Entra mode requires the identity stage first.")
     platform = load(root / "platform-outputs.json")
-    binding = deploy_host(config, load(root / "bindings.json")["channel"], platform,
-                          load(root / "simulator-image.json"), root / "hosting.json")
-    if config["auth_mode"] == "entra":
+    if hosts_chat(config):
+        binding = deploy_host(config, load(root / "bindings.json")["channel"], platform,
+                              load(root / "simulator-image.json"), root / "hosting.json")
+    elif not (host_root / "hosting.json").exists():
+        raise ValueError(f"Deploy the chat host stack {shared_chat['host']} before {config['stack_name']}.")
+    else:
+        binding = load(host_root / "hosting.json")
+    if shared_chat:
+        identity = shared_chat_identities(config)
+    elif config["auth_mode"] == "entra":
         identity = identities(config, root, redirect_uri=binding["url"] + "/")
     registrations = []
     for agent in config["agents"]:
@@ -696,14 +789,21 @@ def deploy(config: dict, root: Path, ownership: dict) -> None:
         registrations.append({
             "name": name, "displayName": agent.get("display_name", name),
             "clientId": (
-                identity["agents"][name]["client_id"] if config["auth_mode"] == "entra"
+                config["agent365"]["agent_identity_id"] if shared_chat
+                else identity["agents"][name]["client_id"] if config["auth_mode"] == "entra"
                 else load(root / "secrets.json")["registration_client_ids"][name]
             ),
             "messagingEndpoint": services["bridge_url"] + "/api/messages",
             **({"demoKey": values["simulator_demo_key"]} if config["auth_mode"] == "demo" else {}),
         })
     hosted_config = {**config, **load(root / "secrets.json")}
-    configure_host(hosted_config, binding, identity, registrations)
+    if shared_chat:
+        with nullcontext() if hosts_chat(config) else deployment_lock(host_root):
+            registrations = record_shared_registrations(host_root, registrations)
+            configure_host(hosted_config, binding, identity, registrations)
+        print("Shared chat redirect URI for the sign-in application: " + binding["url"] + "/")
+    else:
+        configure_host(hosted_config, binding, identity, registrations)
     save(root / "deployment.json", {
         "environment": config["environment"], "auth_mode": config["auth_mode"],
         "url": binding["url"], "resource_group": platform["resource_group_name"],
@@ -721,7 +821,7 @@ def verify_readiness(config: dict, root: Path) -> None:
     from scripts.simulator_hosting import group_client
 
     evidence = {"method": "authenticated-sandbox-management", "services": {}, "full_acceptance": False}
-    binding = load(root / "hosting.json")
+    binding = load(chat_host_root(config, root) / "hosting.json")
     with AzureCliCredential(subscription=config["subscription_id"], process_timeout=150) as credential:
         with group_client(binding, credential) as group:
             require_service_health(group.get_sandbox_client(binding["sandbox_id"]), 8000, health_path="/api/health")
@@ -832,6 +932,14 @@ def destroy(config: dict, root: Path) -> None:
             raise ValueError("Teardown inputs differ from the captured ownership.")
     if ownership.get("foundry_mode", "per_stack") != config.get("foundry_mode", "per_stack"):
         raise ValueError("Teardown Foundry ownership mode differs from captured ownership.")
+    registry = chat_host_root(config, root) / "registrations.json"
+    if config.get("shared_chat") and registry.exists():
+        known = load(registry)
+        for agent in config["agents"]:
+            known.pop(agent["name"], None)
+        if hosts_chat(config) and known:
+            raise ValueError("Destroy the other stacks of the shared chat first: " + ", ".join(sorted(known)))
+        save(registry, known)
     for agent in reversed(config["agents"]):
         layer = root / agent["name"]
         if state_path(root, agent["name"], config["environment"]).exists():
@@ -886,7 +994,10 @@ def run_stack_action(config: dict, action: str) -> None:
             print(f"Prepared isolated deployment: {root}")
         if action in {"infrastructure", "all"}:
             infrastructure(config, root, ownership)
-        if action == "identities" or (action == "all" and config["auth_mode"] == "entra"):
+        if config.get("shared_chat"):
+            if action == "identities":
+                print("Shared chat: the Entra applications come from [shared_chat] and stacks.agent365; nothing to create.")
+        elif action == "identities" or (action == "all" and config["auth_mode"] == "entra"):
             identities(config, root)
         if action in {"images", "all"}:
             select_images(config, root)
@@ -919,6 +1030,7 @@ def main() -> None:
     if unknown:
         raise ValueError(f"Unknown selected stacks: {sorted(unknown)}")
     configs = [config for config in inventory if not args.stack or config["stack_name"] in args.stack]
+    configs.sort(key=lambda config: not hosts_chat(config))
     if args.action == "plan":
         from scripts.simulator_preflight import plan
 

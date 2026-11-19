@@ -240,6 +240,10 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "AGENT365_AGENT_USER_PRINCIPAL_NAME": config["agent365_agent_user_principal_name"],
         "WORKER_OWNER_ID": config["worker_owner_id"],
         "COLLECTIVE_LEARNING_OPERATOR_CLIENT_ID": config.get("collective_learning_operator_client_id", ""),
+        "CHAT_CLIENT_IDS": config.get("chat_client_ids", ""),
+        "CHAT_SERVICE_URLS": config.get("chat_service_urls", ""),
+        "SIMULATOR_CHANNEL_CLIENT_ID": config.get("simulator_channel_client_id", ""),
+        "SIMULATOR_SERVICE_URL": config.get("simulator_url", ""),
         "USE_AGENTIC_AUTH": "true",
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID": config["agent365_client_id"],
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID": tenant,
@@ -260,8 +264,11 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
             environment[key] = text(value)
     transport = infrastructure.get("transport")
     simulator = config.get("channel", "agent365") == "simulator"
-    if not isinstance(transport, dict) and not simulator:
+    native_transport = config.get("native_transport_enabled", True)
+    if not isinstance(transport, dict) and not simulator and native_transport:
         raise ValueError("Apply the Worker's native transport infrastructure before deploying applications.")
+    if not native_transport:
+        environment["NATIVE_TRANSPORT_ENABLED"] = "false"
     environment.update({
         "TRANSPORT_ROLE": "gateway",
         "TRANSPORT_JOURNAL_PATH": "/data/autopilots/transport.db",
@@ -616,7 +623,8 @@ def require_quiescent_service(sandbox: Any, previous: dict, port: int) -> None:
         raise RuntimeError("The previous application configuration is missing; inspect the owned Sandbox.")
     environment = previous.get("environment", {})
     gateway = environment.get("TRANSPORT_ROLE") == "gateway"
-    if gateway and not environment.get("TRANSPORT_CONNECTION_ID") and environment.get("USE_AGENTIC_AUTH") != "false":
+    if (gateway and not environment.get("TRANSPORT_CONNECTION_ID") and environment.get("USE_AGENTIC_AUTH") != "false"
+            and environment.get("NATIVE_TRANSPORT_ENABLED") != "false"):
         raise RuntimeError("The previous gateway has no durable scheduling configuration.")
     probe = """
 import json,urllib.request

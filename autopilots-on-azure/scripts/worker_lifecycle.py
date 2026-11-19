@@ -47,6 +47,11 @@ DEFAULT_LICENSE_SKUS = (
 )
 CONFIRMATIONS = "y\n" * 12
 BLUEPRINT_SECRET_KEYS = ("agentBlueprintClientSecret",)
+# Messaging Bot API and Power Platform API serve only the Teams, mail and Copilot channel.
+CHANNEL_ONLY_RESOURCES = frozenset({
+    "5a807f24-c9de-44ee-a3a7-329e88a00ffc",
+    "8578e004-a5c6-46e7-913e-12f58912df43",
+})
 STATE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,22}[a-z0-9]$")
 SECRET_PATTERN = re.compile(
     r"[A-Za-z0-9_.\-]{3,}~[A-Za-z0-9~_.\-]{20,}|eyJ[\w-]+\.[\w-]+\.[\w-]+"
@@ -109,9 +114,31 @@ def release_pin_arguments(tfvars: dict[str, Any]) -> list[str]:
     return arguments
 
 
-def inheritance_complete(text: str) -> bool:
+def worker_settings_pin_arguments(state_name: str, pins_from: str) -> list[str] | None:
+    """Return release pins for new Worker settings, or None when the Worker already has settings."""
+    if runtime_app_tfvars_path(RUNTIME, state_name).exists():
+        return None
+    if pins_from == state_name:
+        raise ValueError("--pins-from must name another, already deployed Worker.")
+    return release_pin_arguments(load_json(runtime_app_tfvars_path(RUNTIME, pins_from)))
+
+
+def inheritance_complete(text: str, ignored_resources: frozenset[str] = frozenset()) -> bool:
+    """True when every resource except ignored_resources has effective inheritance."""
     match = re.search(r"Summary:\s*(\d+)\s+of\s+(\d+)\s+resource", text)
-    return bool(match) and match.group(1) == match.group(2) and int(match.group(2)) > 0
+    if not match:
+        return False
+    if not ignored_resources:
+        return match.group(1) == match.group(2) and int(match.group(2)) > 0
+    resources = re.findall(
+        r"^Resource:[^\n]*\(([0-9a-fA-F-]{36})\)[ \t]*$.*?^[ \t]*Effective inheritance:[ \t]*(\w+)",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if len(resources) != int(match.group(2)):
+        return False
+    required = [effective for app_id, effective in resources if app_id.lower() not in ignored_resources]
+    return bool(required) and all(effective == "OK" for effective in required)
 
 
 def endpoint_registration_needed(registered: str, endpoint: str) -> bool:
@@ -170,7 +197,7 @@ def azure_identity(config_dir: str) -> Iterator[None]:
             os.environ["AZURE_CONFIG_DIR"] = previous
 
 
-def stream(command: list[str], *, cwd: Path, stdin_text: str | None = None) -> str:
+def stream(command: list[str], *, cwd: Path, stdin_text: str | None = None, check: bool = True) -> str:
     """Run a command, print its output with client secrets and tokens redacted, and return it."""
     print("+ " + " ".join(command), flush=True)
     process = subprocess.Popen(
@@ -193,7 +220,7 @@ def stream(command: list[str], *, cwd: Path, stdin_text: str | None = None) -> s
         lines.append(clean)
         print(clean, end="", flush=True)
     code = process.wait()
-    if code != 0:
+    if check and code != 0:
         raise subprocess.CalledProcessError(code, command)
     return "".join(lines)
 
@@ -268,9 +295,7 @@ def require_no_blueprint_secrets(blueprint_id: str, *, attempts: int = 12, delay
 
 def bootstrap(args: argparse.Namespace) -> None:
     state_name = validate_state_name(args.state_name)
-    if args.pins_from == state_name:
-        raise ValueError("--pins-from must name another, already deployed Worker.")
-    pins = release_pin_arguments(load_json(runtime_app_tfvars_path(RUNTIME, args.pins_from)))
+    pins = worker_settings_pin_arguments(state_name, args.pins_from)
     agent_name = args.display_name or worker_display_name(state_name)
     workspace = agent365_workspace(state_name)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -315,7 +340,9 @@ def bootstrap(args: argparse.Namespace) -> None:
         else:
             stream(["a365", "setup", "all", "--aiteammate", "--m365"], cwd=workspace, stdin_text=CONFIRMATIONS)
             blueprint_id = str(load_json(generated_path)["agentBlueprintId"])
-        if not inheritance_complete(stream(["a365", "query-entra", "inheritance"], cwd=workspace)):
+        ignored = CHANNEL_ONLY_RESOURCES if args.skip_messaging_channel else frozenset()
+        inheritance = stream(["a365", "query-entra", "inheritance"], cwd=workspace, check=not ignored)
+        if not inheritance_complete(inheritance, ignored_resources=ignored):
             raise RuntimeError("Effective inheritable permissions are incomplete.")
 
         step(3, "Remove CLI-created blueprint client secrets")
@@ -333,8 +360,8 @@ def bootstrap(args: argparse.Namespace) -> None:
             "--usage-location", args.usage_location,
         )
 
-    step(5, f"Worker settings with release pins from {args.pins_from}")
-    if runtime_app_tfvars_path(RUNTIME, state_name).exists():
+    step(5, "Worker settings" if pins is None else f"Worker settings with release pins from {args.pins_from}")
+    if pins is None:
         print("Keeping existing Worker settings.", flush=True)
     else:
         run_module(
@@ -365,6 +392,18 @@ def bootstrap(args: argparse.Namespace) -> None:
         "--apply", "--auto-approve", "--deploy-services", "--capture",
     )
     run_module("scripts.demo_ops", "status", "--state-name", state_name)
+
+    if args.skip_messaging_channel:
+        with azure_identity(admin):
+            write_json(generated_path, strip_blueprint_secrets(load_json(generated_path)))
+            require_no_blueprint_secrets(blueprint_id)
+        print(
+            "\nBootstrap complete without a messaging endpoint or Agent User package. "
+            f"Reach {state_name} through the gateway /invoke API or a chat front end configured with "
+            "setup_app_tfvars --chat-client-ids and --chat-service-urls.",
+            flush=True,
+        )
+        return
 
     with azure_identity(admin):
         step(9, "Register the deployed messaging endpoint")
@@ -526,7 +565,11 @@ def main() -> None:
 
     create = subparsers.add_parser("bootstrap", help="Create a fresh Worker end to end.")
     create.add_argument("--state-name", required=True, help="New Worker name; also its mail nickname.")
-    create.add_argument("--pins-from", default="hermes2", help="Deployed Worker whose release and image pins to copy.")
+    create.add_argument(
+        "--pins-from",
+        default="hermes2",
+        help="Deployed Worker whose release and image pins to copy. Unused when the Worker already has settings.",
+    )
     create.add_argument("--display-name", default="", help="Agent display name. Defaults to the capitalized state name.")
     create.add_argument("--sponsor-upn", default="", help="Sponsor and manager. Defaults to the signed-in admin.")
     create.add_argument("--upn-domain", default="", help="Agent User domain. Defaults to the tenant initial domain.")
@@ -536,6 +579,11 @@ def main() -> None:
     create.add_argument("--usage-location", default="CZ")
     create.add_argument("--assignment-scope", default="")
     create.add_argument("--admin-config-dir", default="", help=admin_help)
+    create.add_argument(
+        "--skip-messaging-channel",
+        action="store_true",
+        help="Skip messaging endpoint registration and Agent User package publishing (no Teams, mail or Copilot channel).",
+    )
     create.set_defaults(func=bootstrap)
 
     remove = subparsers.add_parser("teardown", help="Preview or delete one Worker and its identities.")

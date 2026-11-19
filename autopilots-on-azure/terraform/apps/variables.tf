@@ -159,6 +159,18 @@ variable "collective_learning_operator_client_id" {
   default = ""
 }
 
+variable "chat_client_ids" {
+  description = "Comma-separated application IDs of chat front ends that may message the Worker. Empty disables chat admission."
+  type        = string
+  default     = ""
+}
+
+variable "chat_service_urls" {
+  description = "Comma-separated HTTPS URLs of the chat services that may receive the Worker's replies."
+  type        = string
+  default     = ""
+}
+
 variable "collective_learning_approval_private_key" {
   type      = string
   default   = ""
@@ -324,6 +336,12 @@ variable "channel" {
     condition     = contains(["agent365", "simulator"], var.channel)
     error_message = "channel must be agent365 or simulator."
   }
+}
+
+variable "native_transport_enabled" {
+  description = "Provision the native scheduling transport of an Agent 365 Worker. Disable only when scheduling, Dreaming and document retry are off; the Worker then needs no Service Bus namespace."
+  type        = bool
+  default     = true
 }
 
 variable "platform_state_path" {

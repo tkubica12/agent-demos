@@ -54,9 +54,12 @@ resource "azapi_resource" "sandbox_group" {
     identity_ids = [azurerm_user_assigned_identity.workload[each.key].id]
   }
   body = {
+    # The private MCP group keeps its environment link in every update: Azure refuses to remove it once set.
     properties = var.private_network_enabled ? {
       environmentId       = lower(local.platform.private_mcp_env_id)
       publicNetworkAccess = "Disabled"
+      } : each.key == "private-mcp" ? {
+      environmentId = lower(local.platform.private_mcp_env_id)
     } : {}
   }
   response_export_values    = ["properties.managementEndpoint", "properties.publicNetworkAccess", "properties.environmentId", "properties.defaultDomain"]
@@ -66,9 +69,17 @@ resource "azapi_resource" "sandbox_group" {
       condition     = var.channel == "agent365" || (!var.user_scheduling_enabled && !var.servicebus_dream_enabled)
       error_message = "The simulator deployment does not enable native scheduling or Dreaming."
     }
+    precondition {
+      condition     = var.native_transport_enabled || (!local.scheduler_transport_enabled && !var.servicebus_dream_enabled)
+      error_message = "Scheduling, Dreaming and document retry require native_transport_enabled."
+    }
     postcondition {
       condition     = !var.private_network_enabled || try(self.output.properties.publicNetworkAccess == "Disabled", false)
       error_message = "Private Sandbox Groups must report publicNetworkAccess Disabled; no public fallback is permitted."
+    }
+    precondition {
+      condition     = each.key != "private-mcp" || local.platform.private_ingress_ready != ""
+      error_message = "Apply the platform Private Endpoint and DNS layer before linking the private MCP group."
     }
     precondition {
       condition     = !var.servicebus_dream_enabled || var.user_scheduling_enabled

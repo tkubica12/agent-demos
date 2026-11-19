@@ -3,6 +3,7 @@ output "deployment_config" {
   value = merge({
     channel                                  = var.channel
     private_network_enabled                  = var.private_network_enabled
+    native_transport_enabled                 = var.native_transport_enabled
     demo_mcp_enabled                         = local.demo_mcp_enabled
     simulator_auth_mode                      = var.simulator_auth_mode
     simulator_url                            = var.simulator_url
@@ -35,6 +36,8 @@ output "deployment_config" {
     worker_assignment_scope                  = var.worker_assignment_scope
     worker_owner_id                          = var.worker_owner_id
     collective_learning_operator_client_id   = var.collective_learning_operator_client_id
+    chat_client_ids                          = var.chat_client_ids
+    chat_service_urls                        = var.chat_service_urls
     collective_learning_approval_private_key = var.collective_learning_approval_private_key
     collective_learning_approval_public_key  = var.collective_learning_approval_public_key
     user_scheduling_enabled                  = var.user_scheduling_enabled
