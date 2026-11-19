@@ -69,6 +69,10 @@ resource "azapi_resource" "sandbox_group" {
       condition     = var.channel == "agent365" || (!var.user_scheduling_enabled && !var.servicebus_dream_enabled)
       error_message = "The simulator deployment does not enable native scheduling or Dreaming."
     }
+    precondition {
+      condition     = var.native_transport_enabled || (!local.scheduler_transport_enabled && !var.servicebus_dream_enabled)
+      error_message = "Scheduling, Dreaming and document retry require native_transport_enabled."
+    }
     postcondition {
       condition     = !var.private_network_enabled || try(self.output.properties.publicNetworkAccess == "Disabled", false)
       error_message = "Private Sandbox Groups must report publicNetworkAccess Disabled; no public fallback is permitted."

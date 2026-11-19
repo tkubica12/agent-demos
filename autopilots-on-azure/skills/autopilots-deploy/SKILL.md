@@ -66,9 +66,11 @@ proof of browser behavior.
 
 ## Known limitations
 
-This path uses ordinary single-tenant app registrations, not Entra Agent ID
-blueprints or Agent 365. Simulator stacks disable agentic M365/collaboration
-tools and scheduling. No Teams licence is required. Shared model capacity
+By default this path uses ordinary single-tenant app registrations, not Entra Agent ID
+blueprints or Agent 365, and simulator stacks disable agentic M365/collaboration
+tools and scheduling. `[shared_chat]` instead runs the stacks as Agent 365 Workers
+behind one chat with admin-created identities; see
+[channel modes](references/channel-modes.md). No Teams licence is required. Shared model capacity
 does not eliminate regional quota or throttling. Image upgrades can replace
 Sandboxes and change service URLs; stable URLs are conditional on retaining
 the same Sandbox. Browser widgets, upload/download, normal-TLS private access

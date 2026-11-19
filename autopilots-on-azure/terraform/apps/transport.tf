@@ -1,5 +1,5 @@
 locals {
-  transport_enabled = var.channel == "agent365"
+  transport_enabled = var.channel == "agent365" && var.native_transport_enabled
   transport_connections = local.transport_enabled ? {
     gateway = "${azapi_resource.transport[0].id}/connections/gateway-servicebus-mi"
   } : {}

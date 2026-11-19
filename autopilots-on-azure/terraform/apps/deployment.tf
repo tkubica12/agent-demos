@@ -3,6 +3,7 @@ output "deployment_config" {
   value = merge({
     channel                                  = var.channel
     private_network_enabled                  = var.private_network_enabled
+    native_transport_enabled                 = var.native_transport_enabled
     demo_mcp_enabled                         = local.demo_mcp_enabled
     simulator_auth_mode                      = var.simulator_auth_mode
     simulator_url                            = var.simulator_url

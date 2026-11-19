@@ -167,6 +167,15 @@ and `privatelink.blob.core.windows.net` DNS/links. No ACR or Service Bus zone is
 required. Workload egress must permit public GHCR pulls and necessary Entra/Azure
 service endpoints; blocked egress is an error, never a public-PaaS fallback.
 
+## One shared chat for Agent 365 Workers
+
+`[shared_chat]` with `[stacks.agent365]` keeps one resource group, gateway and
+runtime per stack but runs a single chat in the host stack and deploys every
+gateway as an Agent 365 Worker with its admin-created blueprint, Agent Identity
+and Agent User. The deployer then creates no Entra application. Inputs, order and
+limits are in the skill's
+[channel modes](../skills/autopilots-deploy/references/channel-modes.md#shared-chat-with-agent-365-workers).
+
 ## Prerequisites and operator flow
 
 Install Azure CLI, Terraform >=1.7 and `uv`; preserve committed provider/dependency
