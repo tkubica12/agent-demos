@@ -304,6 +304,10 @@ The simulator's own simulator-channel Worker is not needed for this.
 
 `deploy_apps_runtime` leaves the new Worker's tfvars active. Other Workers' `deploy_apps_runtime` runs reactivate their own; before raw `terraform` commands, run `demo_ops activate --state-name <worker>` and select the workspace it prints.
 
+## Role packages and role-owned MCP servers
+
+A Worker can load its role from a local package and run its own MCP server beside the runtime. Follow [docs/runbooks/role-mcp-servers.md](docs/runbooks/role-mcp-servers.md).
+
 ## Validation
 
 ### Local checks

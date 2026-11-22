@@ -19,10 +19,12 @@ locals {
     agent_runtime = var.agent_runtime
     layer         = "apps"
   })
-  demo_mcp_enabled = coalesce(var.demo_mcp_enabled, var.channel == "agent365")
+  demo_mcp_enabled    = coalesce(var.demo_mcp_enabled, var.channel == "agent365")
+  private_mcp_enabled = local.demo_mcp_enabled || length(var.role_mcp_servers) > 0
   roles = toset(concat(
     ["runtime", "gateway", "generated-apps"],
-    local.demo_mcp_enabled ? ["private-mcp", "public-mcp"] : []
+    local.private_mcp_enabled ? ["private-mcp"] : [],
+    local.demo_mcp_enabled ? ["public-mcp"] : []
   ))
   document_retry_active = (
     var.channel == "agent365" && var.document_retry_enabled && var.agent365_client_id != ""
@@ -89,7 +91,7 @@ resource "azapi_resource" "sandbox_group" {
 }
 
 resource "azapi_update_resource" "private_ingress" {
-  count       = local.demo_mcp_enabled ? 1 : 0
+  count       = local.private_mcp_enabled ? 1 : 0
   type        = "Microsoft.App/sandboxGroups@2026-02-01-preview"
   resource_id = azapi_resource.sandbox_group["private-mcp"].id
   body = {
@@ -153,7 +155,11 @@ resource "azurerm_role_assignment" "runtime_foundry_user" {
 }
 
 resource "azurerm_role_assignment" "disk_image_acr_pull" {
-  for_each             = local.platform.acr_id == "" ? toset([]) : (var.private_network_enabled ? toset(["runtime", "gateway"]) : toset(["runtime"]))
+  for_each = local.platform.acr_id == "" ? toset([]) : (
+    var.private_network_enabled
+    ? toset(concat(["runtime", "gateway"], local.private_mcp_enabled ? ["private-mcp"] : []))
+    : toset(["runtime"])
+  )
   scope                = local.platform.acr_id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.workload[each.key].principal_id
