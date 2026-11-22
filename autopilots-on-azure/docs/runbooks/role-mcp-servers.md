@@ -44,7 +44,7 @@ $worker = "<worker state name>"
 $workspace = "<terraform workspace>"
 ```
 
-A new Worker is created with `scripts.worker_lifecycle bootstrap` as described in DEPLOYMENT.md, "Fresh Worker bootstrap". Role-owned MCP servers need the `private-mcp` Sandbox Group, which exists when `demo_mcp_enabled` is true (the default for the `agent365` channel). The simulator channel has no Agent Identity and cannot use them.
+A new Worker is created with `scripts.worker_lifecycle bootstrap` as described in DEPLOYMENT.md, "Fresh Worker bootstrap". Terraform provisions the `private-mcp` Sandbox Group whenever `demo_mcp_enabled` is true (the default for the `agent365` channel) or `role_mcp_servers` is non-empty, so `demo_mcp_enabled` may be set to `false` when the demo incidents and shipments servers are not needed. The simulator channel has no Agent Identity and cannot use role-owned MCP servers.
 
 ### 3. Point the Worker at its role
 
@@ -91,7 +91,7 @@ uv run python -m scripts.deploy_apps_runtime `
 ### 7. Verify
 
 ```powershell
-uv run python -m scripts.demo_ops status --state-name $worker --invoke
+uv run python -m scripts.demo_ops status --state-name $worker
 ```
 
 Then check, in this order:
@@ -104,7 +104,7 @@ Then check, in this order:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `Role MCP servers run in the private MCP Sandbox Group` | `demo_mcp_enabled` is false | set it to true and apply |
+| `Role MCP servers require the private-mcp Sandbox Group` | Terraform `apps` has not been applied since adding `role_mcp_servers` | run step 6 with `--apply` |
 | `The <name> release is missing: ...` | wrong `source_directory`, `package`, or `data_directories` | correct the TOML, rerun step 4 |
 | `Local role bundle_sha256 is missing or differs` | role files changed after step 3 | rerun step 3 |
 | Tools missing, server healthy | Agent Identity lacks the application role | rerun step 4 with a login that may assign roles |

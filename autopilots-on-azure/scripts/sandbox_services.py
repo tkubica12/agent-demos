@@ -497,10 +497,12 @@ def role_mcp_upstreams(config: dict, endpoints: dict) -> str:
 def role_mcp_service(name: str, spec: dict, config: dict, infrastructure: dict) -> SandboxService:
     """One role-owned MCP server that admits only this Worker's Agent Identity."""
     tenant = infrastructure["tenant_id"]
+    base_image = config.get("bridge_image") or PYTHON_BASE_IMAGE
+    disk_source = config.get("bridge_disk_source_image") or base_image
     return SandboxService(
         role=name,
-        image=PYTHON_BASE_IMAGE,
-        disk_source_image=PYTHON_BASE_IMAGE,
+        image=base_image,
+        disk_source_image=disk_source,
         port=8765,
         command=("/app/.venv/bin/python", "-m", spec["package"] + ".server"),
         environment={
@@ -515,7 +517,7 @@ def role_mcp_service(name: str, spec: dict, config: dict, infrastructure: dict) 
             "MCP_ALLOWED_CLIENT_IDS": config["agent365_agent_identity_client_id"],
             "MCP_ALLOWED_OBJECT_IDS": config["agent365_agent_identity_object_id"],
         },
-        release=build_release(name, source=spec),
+        release=build_release(name, base_image=base_image, source=spec),
     )
 
 
@@ -906,11 +908,14 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
     if private and not source_commit and not bridge_image.startswith(platform["acr_login_server"] + "/"):
         raise ValueError("The private gateway base image must be mirrored into its stack's private ACR.")
     demo_mcp = config.get("demo_mcp_enabled", not simulator)
+    role_servers = role_mcp_servers(config)
+    if role_servers and source_commit:
+        raise ValueError("Role MCP servers require source-release deployment, not prebuilt container images.")
     required_identity = ("agent365_client_id", "agent365_agent_identity_client_id",
                          "agent365_agent_identity_object_id", "agent365_agent_user_id")
     if not simulator and any(not config.get(key) for key in required_identity):
         raise ValueError("Public gateway deployment requires the existing Agent 365 blueprint, Agent Identity and Agent User.")
-    if demo_mcp and infrastructure["private_ingress"].get("publicNetworkAccess") != "Disabled":
+    if (demo_mcp or role_servers) and infrastructure.get("private_ingress", {}).get("publicNetworkAccess") != "Disabled":
         raise RuntimeError("Private MCP Sandbox Group does not report disabled public ingress.")
     groups = infrastructure["sandbox_groups"]
     roles = tuple(groups)
@@ -947,10 +952,15 @@ def deploy_sandbox_services(infrastructure: dict, platform: dict) -> dict:
                 )
         endpoints["runtime_disk_image_id"] = disks["runtime"]
         runtime: dict[str, Any] = {}
-        role_servers = role_mcp_servers(config)
         if role_servers and "private-mcp" not in groups:
-            raise ValueError("Role MCP servers run in the private MCP Sandbox Group; enable demo_mcp_enabled.")
-        for role in ("private-mcp", *role_servers, "public-mcp", "gateway"):
+            raise ValueError("Role MCP servers require the private-mcp Sandbox Group; apply Terraform apps first.")
+        service_roles = (
+            *(("private-mcp",) if demo_mcp else ()),
+            *role_servers,
+            *(("public-mcp",) if demo_mcp else ()),
+            "gateway",
+        )
+        for role in service_roles:
             host = "private-mcp" if role in role_servers else role
             if host not in groups:
                 continue

@@ -136,11 +136,11 @@ async def access_token(config: McpServerConfig) -> str:
 
 async def warm_upstream(name: str, config: McpServerConfig) -> int:
     """Acquire the server token and open one upstream connection, waking OnDemand compute and private routes."""
-    token = await access_token(config)
+    token, user_tokens = await asyncio.gather(access_token(config), agent_user_tokens(config))
     async with httpx.AsyncClient(timeout=60) as client:
         async with client.stream(
             "GET", config.upstream_url,
-            headers={"Authorization": " ".join(("Bearer", token)), "Accept": "text/event-stream"},
+            headers={"Authorization": " ".join(("Bearer", token)), "Accept": "text/event-stream", **user_tokens},
         ) as response:
             return response.status_code
 

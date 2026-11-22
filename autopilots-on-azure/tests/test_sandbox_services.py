@@ -317,7 +317,7 @@ class SandboxServicesTests(unittest.TestCase):
         config = {**self.config(), "role_mcp_servers": {"pm-tools": spec}}
         with patch("scripts.sandbox_services.build_release") as release:
             service = role_mcp_service("pm-tools", spec, config, self.infrastructure())
-        release.assert_called_once_with("pm-tools", source=spec)
+        release.assert_called_once_with("pm-tools", base_image=PYTHON_BASE_IMAGE, source=spec)
         self.assertEqual(service.command[-1], "pm_tools_mcp.server")
         self.assertEqual(service.environment["MCP_JWT_AUDIENCE"], "pm-tools")
         self.assertEqual(service.environment["MCP_REQUIRED_ROLES"], "PmTools.Use")
@@ -332,6 +332,50 @@ class SandboxServicesTests(unittest.TestCase):
         for invalid in ({"gateway": spec}, {"workiq-mail": spec}, {"pm-tools": {**spec, "api_audience": ""}}):
             with self.assertRaises(ValueError):
                 role_mcp_servers({"role_mcp_servers": invalid})
+        infra_without_demo = {
+            **self.infrastructure(),
+            "worker_id": "worker",
+            "private_ingress": {"publicNetworkAccess": "Disabled"},
+            "deployment_config": {
+                **config, "demo_mcp_enabled": False, "runtime_disk_source_image": "registry.azurecr.io/runtime:src",
+            },
+            "sandbox_groups": {
+                role: self.group(role) for role in ("runtime", "gateway", "private-mcp", "generated-apps")
+            },
+        }
+        deployed_roles = []
+
+        def fake_deploy_service(_client, svc, _group, _worker, *, disk_image_id, endpoint_environment=None):
+            deployed_roles.append((svc.role, disk_image_id))
+            url = f"https://{svc.role}.example"
+            if endpoint_environment is not None:
+                endpoint_environment(url)
+            return {"sandbox_id": svc.role + "-sbx", "url": url}
+
+        platform = {
+            "foundry_openai_base_url": "https://foundry/openai/v1", "model_deployment_name": "model",
+            "acr_name": "registry", "acr_login_server": "registry.azurecr.io",
+            "scheduler_servicebus_fully_qualified_namespace": "sb.servicebus.windows.net",
+            "application_insights_connection_string": "id", "foundry_project_endpoint": "https://foundry/api/projects/p",
+        }
+        with (
+            patch("scripts.sandbox_services.AzureCliCredential"),
+            patch("scripts.sandbox_services.SandboxGroupClient"),
+            patch("scripts.sandbox_services.prepare_disk_image", side_effect=lambda _c, *, role, **_k: role + "-disk"),
+            patch("scripts.sandbox_services.build_release", return_value=SimpleNamespace(digest="rel")),
+            patch("scripts.sandbox_services.deploy_runtime", return_value={"runtime_url": "https://runtime.example"}),
+            patch("scripts.sandbox_services.deploy_service", side_effect=fake_deploy_service),
+        ):
+            outputs = deploy_sandbox_services(infra_without_demo, platform)
+        self.assertEqual(deployed_roles, [("pm-tools", "private-mcp-disk"), ("gateway", "gateway-disk")])
+        self.assertEqual(outputs["role_mcp_pm_tools_url"], "https://pm-tools.example/mcp")
+        self.assertNotIn("private_mcp_url", outputs)
+        self.assertNotIn("public_shipments_mcp_url", outputs)
+        with self.assertRaisesRegex(ValueError, "source-release"):
+            deploy_sandbox_services(
+                {**infra_without_demo, "deployment_config": {**config, "prebuilt_source_commit": "a" * 40}},
+                platform,
+            )
 
     def test_suspended_mcp_ingress_wakes_instead_of_rejecting_requests(self):
         service = mcp_service("private-mcp", self.config(), self.infrastructure())
