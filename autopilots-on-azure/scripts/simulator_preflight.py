@@ -202,6 +202,18 @@ def _scope(config: dict) -> dict:
             "must reach the central endpoint subnet and resolve its three private DNS zones. Projects and OpenAI "
             "User role assignments require write/RBAC permission on the shared account, not only the stack RG."
         )
+    if config.get("shared_chat"):
+        from scripts.deploy_simulator_environment import hosts_chat
+
+        scope["shared_chat"] = {
+            "host": config["shared_chat"]["host"],
+            "hosts_chat": hosts_chat(config),
+        }
+        scope["warnings"].append(
+            "Shared chat runs one simulator in the host stack and deploys gateways as Agent 365 Workers. "
+            "Admin-created Entra objects/federated credentials, Work IQ egress, and private routing between the "
+            "host chat and every stack's gateway are not proven by this read-only plan."
+        )
     return scope
 
 

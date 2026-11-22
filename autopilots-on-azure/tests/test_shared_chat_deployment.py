@@ -197,22 +197,32 @@ class SharedChatDeploymentTests(unittest.TestCase):
         self.assertFalse((roots["agent-2"] / "deployment.lock").exists())
         self.assertEqual(json.loads((roots["agent-1"] / "deployment.json").read_text())["url"], hosting["url"])
 
-    def test_the_chat_host_is_destroyed_last(self):
+    def test_the_chat_host_is_destroyed_last_and_refreshes_live_host(self):
+        from scripts.simulator_preflight import plan
+
         first, second = self.configs()
+        offline = plan([first, second], offline=True)
+        self.assertEqual(offline[0]["shared_chat"], {"host": "agent-2", "hosts_chat": False})
+        self.assertEqual(offline[1]["shared_chat"], {"host": "agent-2", "hosts_chat": True})
         roots = {config["stack_name"]: self.prepared(config) for config in (first, second)}
         registry = roots["agent-2"] / "registrations.json"
         registry.write_text(json.dumps({"agent-1": {"name": "agent-1"}, "agent-2": {"name": "agent-2"}}))
+        (roots["agent-2"] / "hosting.json").write_text(json.dumps({"url": "https://chat.example.test"}))
         for config in (first, second):
             (roots[config["stack_name"]] / "environment.json").write_text(json.dumps({
                 key: config[key] for key in ("environment", "tenant_id", "subscription_id")
             }))
-        with self.assertRaisesRegex(ValueError, "Destroy the other stacks of the shared chat first: agent-1"):
+        with patch("scripts.simulator_hosting.configure_host") as configure:
+            with self.assertRaisesRegex(ValueError, "Destroy the other stacks of the shared chat first: agent-1"):
+                destroy(second, roots["agent-2"])
+            self.assertEqual(set(json.loads(registry.read_text())), {"agent-1", "agent-2"})
+            destroy(first, roots["agent-1"])
+            self.assertEqual(set(json.loads(registry.read_text())), {"agent-2"})
+            configure.assert_called_once()
+            self.assertEqual(configure.call_args.args[3], [{"name": "agent-2"}])
             destroy(second, roots["agent-2"])
-        self.assertEqual(set(json.loads(registry.read_text())), {"agent-1", "agent-2"})
-        destroy(first, roots["agent-1"])
-        self.assertEqual(set(json.loads(registry.read_text())), {"agent-2"})
-        destroy(second, roots["agent-2"])
-        self.assertEqual(json.loads(registry.read_text()), {})
+            self.assertEqual(json.loads(registry.read_text()), {})
+            self.assertEqual(configure.call_count, 1)
 
 
 if __name__ == "__main__":

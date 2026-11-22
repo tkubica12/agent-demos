@@ -683,7 +683,8 @@ def worker_values(config: dict, root: Path, agent: dict, ownership: dict, identi
     if agent365:
         # Without scheduling the Worker needs neither the native transport nor a Service Bus namespace.
         values.update({
-            "channel": "agent365", "native_transport_enabled": False, "generated_chat_files_enabled": False,
+            "channel": "agent365", "native_transport_enabled": False,
+            "generated_chat_files_enabled": config.get("generated_chat_files_enabled", False),
             "simulator_agent_client_id": "",
             "agent365_tenant_id": config["tenant_id"],
             "agent365_client_id": agent365["blueprint_client_id"],
@@ -932,14 +933,12 @@ def destroy(config: dict, root: Path) -> None:
             raise ValueError("Teardown inputs differ from the captured ownership.")
     if ownership.get("foundry_mode", "per_stack") != config.get("foundry_mode", "per_stack"):
         raise ValueError("Teardown Foundry ownership mode differs from captured ownership.")
-    registry = chat_host_root(config, root) / "registrations.json"
-    if config.get("shared_chat") and registry.exists():
-        known = load(registry)
-        for agent in config["agents"]:
-            known.pop(agent["name"], None)
-        if hosts_chat(config) and known:
-            raise ValueError("Destroy the other stacks of the shared chat first: " + ", ".join(sorted(known)))
-        save(registry, known)
+    host_root = chat_host_root(config, root)
+    registry = host_root / "registrations.json"
+    if config.get("shared_chat") and hosts_chat(config) and registry.exists():
+        other_stacks = sorted(set(load(registry)) - {agent["name"] for agent in config["agents"]})
+        if other_stacks:
+            raise ValueError("Destroy the other stacks of the shared chat first: " + ", ".join(other_stacks))
     for agent in reversed(config["agents"]):
         layer = root / agent["name"]
         if state_path(root, agent["name"], config["environment"]).exists():
@@ -969,6 +968,23 @@ def destroy(config: dict, root: Path) -> None:
         remove_owned_smart_alert(config, load(captured) if captured.exists() else terraform_output(root / "platform"))
         terraform(root / "platform", config["environment"],
                   load(root / "platform" / "generated.simulator.auto.tfvars.json"), destroy=True)
+    if config.get("shared_chat") and registry.exists():
+        with nullcontext() if hosts_chat(config) else deployment_lock(host_root):
+            known = load(registry)
+            for agent in config["agents"]:
+                known.pop(agent["name"], None)
+            save(registry, known)
+            if not hosts_chat(config) and (host_root / "hosting.json").exists():
+                from scripts.simulator_hosting import configure_host
+
+                secrets_path = host_root / "secrets.json"
+                hosted_config = {**config, **(load(secrets_path) if secrets_path.exists() else {})}
+                configure_host(
+                    hosted_config,
+                    load(host_root / "hosting.json"),
+                    shared_chat_identities(config),
+                    [known[name] for name in sorted(known)],
+                )
     save(root / "teardown.json", {"completed_at": datetime.now(timezone.utc).isoformat()})
 
 

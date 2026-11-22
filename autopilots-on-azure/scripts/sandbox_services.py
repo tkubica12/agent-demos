@@ -290,8 +290,8 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         from scripts.simulator_channel import simulator_worker_environment
 
         environment = simulator_worker_environment(config, infrastructure, environment)
-        if config.get("generated_chat_files_enabled"):
-            environment["GENERATED_CHAT_FILES_ENABLED"] = "true"
+    if config.get("generated_chat_files_enabled"):
+        environment["GENERATED_CHAT_FILES_ENABLED"] = "true"
     return environment
 
 

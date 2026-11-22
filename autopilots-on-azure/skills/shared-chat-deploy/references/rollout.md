@@ -105,6 +105,6 @@ uv run python -m scripts.deploy_simulator_environment --config $config --state-r
 uv run python -m scripts.deploy_simulator_environment --config $config --state-root $state --stack $chatHost destroy
 ```
 
-A destroyed stack leaves the chat's running list unchanged until the next
-`deploy` of any remaining stack. The Entra objects belong to the admin and are
-not removed by the deployer.
+Destroying a non-host stack updates `registrations.json` and refreshes the
+running shared chat when `hosting.json` is present. The Entra objects belong to
+the admin and are not removed by the deployer.
