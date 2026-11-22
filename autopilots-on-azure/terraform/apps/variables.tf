@@ -338,6 +338,12 @@ variable "channel" {
   }
 }
 
+variable "native_transport_enabled" {
+  description = "Provision the native scheduling transport of an Agent 365 Worker. Disable only when scheduling, Dreaming and document retry are off; the Worker then needs no Service Bus namespace."
+  type        = bool
+  default     = true
+}
+
 variable "platform_state_path" {
   type    = string
   default = "../platform/terraform.tfstate"

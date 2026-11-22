@@ -311,6 +311,35 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertTrue(body["lifecycle"]["autoSuspendPolicy"]["enabled"])
         self.assertEqual(body["ports"][0]["activationMode"], "OnDemand")
 
+    def test_agent365_worker_without_scheduling_needs_no_native_transport(self):
+        from scripts.sandbox_services import require_quiescent_service
+
+        platform = {"foundry_openai_base_url": "https://foundry/openai/v1", "model_deployment_name": "model",
+                    "acr_name": "registry", "scheduler_servicebus_fully_qualified_namespace": "",
+                    "application_insights_connection_string": "instrumentation-identifier",
+                    "foundry_project_endpoint": "https://foundry/api/projects/project"}
+        infrastructure = {key: value for key, value in self.infrastructure().items() if key != "transport"}
+        endpoints = {"runtime_disk_image_id": "runtime-disk"}
+        with self.assertRaisesRegex(ValueError, "native transport infrastructure"):
+            worker_settings(self.config(), platform, infrastructure, endpoints)
+        settings = worker_settings(
+            {**self.config(), "native_transport_enabled": False}, platform, infrastructure, endpoints,
+        )
+        env = gateway_environment(settings)
+        self.assertEqual(env["USE_AGENTIC_AUTH"], "true")
+        self.assertEqual(env["NATIVE_TRANSPORT_ENABLED"], "false")
+        self.assertNotIn("TRANSPORT_CONNECTION_ID", env)
+        self.assertNotIn("NATIVE_TRANSPORT_ENABLED", gateway_environment(worker_settings(
+            self.config(), platform, self.infrastructure(), endpoints,
+        )))
+        sandbox = Mock()
+        sandbox.exec.return_value = SimpleNamespace(exit_code=0, stderr="")
+        require_quiescent_service(sandbox, {"environment": env}, 8000)
+        with self.assertRaisesRegex(RuntimeError, "no durable scheduling"):
+            require_quiescent_service(sandbox, {"environment": {
+                key: value for key, value in env.items() if key != "NATIVE_TRANSPORT_ENABLED"
+            }}, 8000)
+
     def test_gateway_receives_messaging_settings_and_no_runtime_provisioning(self):
         settings = worker_settings(
             self.config(),

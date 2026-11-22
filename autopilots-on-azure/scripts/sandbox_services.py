@@ -269,8 +269,11 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
             environment[key] = text(value)
     transport = infrastructure.get("transport")
     simulator = config.get("channel", "agent365") == "simulator"
-    if not isinstance(transport, dict) and not simulator:
+    native_transport = config.get("native_transport_enabled", True)
+    if not isinstance(transport, dict) and not simulator and native_transport:
         raise ValueError("Apply the Worker's native transport infrastructure before deploying applications.")
+    if not native_transport:
+        environment["NATIVE_TRANSPORT_ENABLED"] = "false"
     environment.update({
         "TRANSPORT_ROLE": "gateway",
         "TRANSPORT_JOURNAL_PATH": "/data/autopilots/transport.db",
@@ -287,8 +290,8 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         from scripts.simulator_channel import simulator_worker_environment
 
         environment = simulator_worker_environment(config, infrastructure, environment)
-        if config.get("generated_chat_files_enabled"):
-            environment["GENERATED_CHAT_FILES_ENABLED"] = "true"
+    if config.get("generated_chat_files_enabled"):
+        environment["GENERATED_CHAT_FILES_ENABLED"] = "true"
     return environment
 
 
@@ -625,7 +628,8 @@ def require_quiescent_service(sandbox: Any, previous: dict, port: int) -> None:
         raise RuntimeError("The previous application configuration is missing; inspect the owned Sandbox.")
     environment = previous.get("environment", {})
     gateway = environment.get("TRANSPORT_ROLE") == "gateway"
-    if gateway and not environment.get("TRANSPORT_CONNECTION_ID") and environment.get("USE_AGENTIC_AUTH") != "false":
+    if (gateway and not environment.get("TRANSPORT_CONNECTION_ID") and environment.get("USE_AGENTIC_AUTH") != "false"
+            and environment.get("NATIVE_TRANSPORT_ENABLED") != "false"):
         raise RuntimeError("The previous gateway has no durable scheduling configuration.")
     probe = """
 import json,urllib.request
