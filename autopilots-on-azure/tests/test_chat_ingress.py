@@ -3,7 +3,7 @@ import os
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -143,6 +143,8 @@ class ChatIngressTests(unittest.IsolatedAsyncioTestCase):
         for service_url in (
             "https://attacker.example/connector",
             "https://chat.example.test.attacker.example/connector",
+            "https://chat.example.test:8443/connector",
+            "https://user@chat.example.test/connector",
             "https://chat.example.test/connector-evil",
             "http://chat.example.test/connector",
             "",
@@ -177,6 +179,7 @@ class ChatIngressTests(unittest.IsolatedAsyncioTestCase):
         import httpx
 
         from bridge import app as bridge_app
+        from bridge.channel_auth import Agent365SimulatorClientFactory, ChannelAuthentication
 
         observed = []
 
@@ -184,16 +187,37 @@ class ChatIngressTests(unittest.IsolatedAsyncioTestCase):
             observed.append(await replay.json())
             return None
 
-        transport = httpx.ASGITransport(app=bridge_app.app)
-        with patch.object(bridge_app, "start_agent_process", side_effect=process):
-            async with httpx.AsyncClient(transport=transport, base_url="https://gateway.test") as client:
-                rejected = await client.post("/api/messages", json=self.activity())
-                forged = await client.post(
-                    "/api/messages", json=self.activity(), headers={"Authorization": f"Bearer {token(key=OTHER_KEY)}"},
-                )
-                accepted = await client.post(
-                    "/api/messages", json=self.activity(), headers={"Authorization": f"Bearer {token()}"},
-                )
+        with patch.dict(os.environ, {
+            "USE_AGENTIC_AUTH": "true",
+            "AGENT365_AGENT_IDENTITY_CLIENT_ID": "88888888-8888-8888-8888-888888888888",
+        }):
+            auth = ChannelAuthentication.from_environment()
+            transport = httpx.ASGITransport(app=bridge_app.app)
+            with (
+                patch.object(bridge_app, "channel_authentication", auth),
+                patch.object(bridge_app, "start_agent_process", side_effect=process),
+            ):
+                async with httpx.AsyncClient(transport=transport, base_url="https://gateway.test") as client:
+                    rejected = await client.post("/api/messages", json=self.activity())
+                    forged = await client.post(
+                        "/api/messages", json=self.activity(), headers={"Authorization": f"Bearer {token(key=OTHER_KEY)}"},
+                    )
+                    accepted = await client.post(
+                        "/api/messages", json=self.activity(), headers={"Authorization": f"Bearer {token()}"},
+                    )
+            blueprint = SimpleNamespace(get_agentic_application_token=AsyncMock(return_value="assertion"))
+            factory = Agent365SimulatorClientFactory(SimpleNamespace(get_default_connection=lambda: blueprint))
+            context = SimpleNamespace(activity=SimpleNamespace(is_agentic_request=lambda: False, service_url=SERVICE_URL))
+            identity = SimpleNamespace(claims={"azp": CHAT_CLIENT})
+            msal_app = SimpleNamespace(acquire_token_for_client=lambda scopes: (
+                {"access_token": "chat-reply", "expires_in": 3600} if scopes == [f"{CHAT_CLIENT}/.default"] else {}
+            ))
+            with (
+                patch("bridge.channel_auth.ConfidentialClientApplication", return_value=msal_app),
+                patch("bridge.channel_auth.TeamsConnectorClient", side_effect=lambda **kw: kw),
+            ):
+                connector = await factory.create_connector_client(context, identity, SERVICE_URL, BLUEPRINT)
+            self.assertEqual(connector, {"endpoint": SERVICE_URL, "token": "chat-reply"})
         self.assertEqual((rejected.status_code, forged.status_code, accepted.status_code), (401, 401, 200))
         self.assertEqual(len(observed), 1)
         self.assertEqual(observed[0]["from"]["aadObjectId"], USER)

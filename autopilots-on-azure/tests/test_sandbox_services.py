@@ -209,6 +209,7 @@ class SandboxServicesTests(unittest.TestCase):
             "worker_owner_id": "owner-object",
             "collective_learning_operator_client_id": "operator-api-client",
             "chat_client_ids": "chat-client", "chat_service_urls": "https://chat.example.test",
+            "simulator_channel_client_id": "sim-channel", "simulator_url": "https://sim.example.test",
         })
         return values
 
@@ -339,6 +340,9 @@ class SandboxServicesTests(unittest.TestCase):
         self.assertEqual(env["COLLECTIVE_LEARNING_OPERATOR_CLIENT_ID"], "operator-api-client")
         self.assertEqual(env["CHAT_CLIENT_IDS"], "chat-client")
         self.assertEqual(env["CHAT_SERVICE_URLS"], "https://chat.example.test")
+        self.assertEqual(env["SIMULATOR_CHANNEL_CLIENT_ID"], "sim-channel")
+        self.assertEqual(env["SIMULATOR_SERVICE_URL"], "https://sim.example.test")
+        self.assertEqual(env["ATTACHMENT_DOWNLOAD_ORIGINS"], "https://sim.example.test")
         self.assertNotIn("ACR_NAME", env)
         self.assertNotIn("AGENT_RUNTIME_REGISTRY_IDENTITY_RESOURCE_ID", env)
         self.assertEqual(env["CONNECTIONS__SERVICE_CONNECTION__SETTINGS__AUTHTYPE"], "FederatedCredentials")

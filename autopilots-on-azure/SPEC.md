@@ -71,7 +71,8 @@ Deployment explicitly separates Terraform resources, identity reconciliation, im
 | Foundry inference | Runtime managed identity and model-resource RBAC; native Hermes `azure-foundry` Entra token callback. |
 | Autonomous custom MCP | Managed identity → blueprint federation → Agent Identity token; server validates issuer, tenant, audience, Worker binding, and app role. |
 | Worker-owned Microsoft 365 | Agent Identity exchange → `user_fic` for the fixed Agent User → delegated Work IQ/Graph token. |
-| Agent 365 ingress | Microsoft 365 Agents SDK validates Activity Protocol authentication. |
+| Agent 365 ingress | Microsoft 365 Agents SDK and `ChannelAuthentication` validate Activity Protocol bearer tokens against Bot Framework or tenant Entra keys and the Worker's blueprint/Agent Identity audience. |
+| Agent 365 simulator ingress | With `SIMULATOR_CHANNEL_CLIENT_ID` and `SIMULATOR_SERVICE_URL`, simulator-origin activities require an app-only token of that channel app, detach normal message turns with `202`, and reply using an Agent Identity token for the channel app. |
 | Chat front end ingress | With `CHAT_CLIENT_IDS`, the gateway requires a delegated Entra token for the blueprint scope `access_agent` from a listed client, binds the activity sender to the token's user, and allows replies only to `CHAT_SERVICE_URLS`. |
 | Native cron Service Bus send | Worker Agent Identity with Data Sender, federated from runtime managed identity. |
 | Document retry publication | Gateway managed identity with queue-scoped Data Sender; no Agent Identity exchange. |

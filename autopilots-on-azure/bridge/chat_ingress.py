@@ -17,6 +17,7 @@ from functools import lru_cache
 from urllib.parse import urlsplit
 
 import jwt
+from microsoft_agents.hosting.core import ClaimsIdentity
 from starlette.responses import JSONResponse
 
 
@@ -71,8 +72,48 @@ class ChatIngressSettings:
             uuid.UUID(self.audience)
         except ValueError as exc:
             raise ChatIngressError(503, "Chat admission is not configured.") from exc
-        if not self.service_urls or any(urlsplit(url).scheme != "https" for url in self.service_urls):
+        if not self.service_urls or any(not _valid_https_service_url(url) for url in self.service_urls):
             raise ChatIngressError(503, "Chat admission is not configured.")
+
+
+def _valid_https_service_url(value: str) -> bool:
+    if not value or "\\" in value or any(ord(char) <= 32 for char in value):
+        return False
+    parsed = urlsplit(value)
+    return (
+        parsed.scheme.lower() == "https"
+        and bool(parsed.hostname)
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def matches_chat_service_url(value: object, allowed_urls: tuple[str, ...]) -> bool:
+    raw = str(value or "").strip()
+    if not raw or "\\" in raw or any(ord(char) <= 32 for char in raw):
+        return False
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        return False
+    candidate_path = parsed.path.rstrip("/")
+    for allowed in allowed_urls:
+        expected = urlsplit(allowed)
+        if (
+            (parsed.hostname or "").lower() != (expected.hostname or "").lower()
+            or (parsed.port or 443) != (expected.port or 443)
+        ):
+            continue
+        allowed_path = expected.path.rstrip("/")
+        if not allowed_path or candidate_path == allowed_path or candidate_path.startswith(allowed_path + "/"):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -80,6 +121,8 @@ class ChatUser:
     object_id: str
     tenant_id: str
     name: str
+    client_id: str = ""
+    claims: dict[str, str] | None = None
 
 
 @lru_cache(maxsize=4)
@@ -119,12 +162,17 @@ def verify_chat_token(token: str, settings: ChatIngressSettings) -> ChatUser:
         or not object_id
     ):
         raise ChatIngressError(403, "This token may not message the Worker.")
-    return ChatUser(object_id=object_id, tenant_id=tenant, name=str(claims.get("name") or ""))
+    return ChatUser(
+        object_id=object_id,
+        tenant_id=tenant,
+        name=str(claims.get("name") or ""),
+        client_id=client_id,
+        claims=claims,
+    )
 
 
 def require_chat_service_url(value: object, settings: ChatIngressSettings) -> None:
-    url = str(value or "").rstrip("/")
-    if not any(url == allowed or url.startswith(allowed + "/") for allowed in settings.service_urls):
+    if not matches_chat_service_url(value, settings.service_urls):
         raise ChatIngressError(403, "Replies may only go to the configured chat service.")
 
 
@@ -184,6 +232,9 @@ class ChatIngressMiddleware:
         body = json.dumps(bind_activity(payload, user), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         headers = [(name, value) for name, value in scope.get("headers") or [] if name != b"content-length"]
         headers.append((b"content-length", str(len(body)).encode()))
+        state = dict(scope.get("state") or {})
+        state["chat_ingress_client_id"] = user.client_id
+        state["claims_identity"] = ClaimsIdentity(dict(user.claims or {}), True, authentication_type="Bearer")
         delivered = False
 
         async def replay():
@@ -193,4 +244,4 @@ class ChatIngressMiddleware:
             delivered = True
             return {"type": "http.request", "body": body, "more_body": False}
 
-        await self.app({**scope, "headers": headers}, replay, send)
+        await self.app({**scope, "headers": headers, "state": state}, replay, send)

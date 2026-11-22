@@ -27,6 +27,7 @@ from microsoft_agents.hosting.fastapi import CloudAdapter
 from msal import ConfidentialClientApplication
 from pydantic import ValidationError
 
+from bridge.chat_ingress import ChatIngressSettings, matches_chat_service_url
 from bridge.simulator_ingress import SimulatorChannel
 
 
@@ -65,6 +66,8 @@ class ChannelAuthentication:
     validator: JwtTokenValidator | None = field(default=None, repr=False)
     channel_client_id: str = ""
     simulator: SimulatorChannel | None = None
+    agent_audiences: frozenset[str] = field(default_factory=frozenset)
+    tenant_id: str = ""
 
     @classmethod
     def from_environment(cls) -> "ChannelAuthentication":
@@ -94,10 +97,35 @@ class ChannelAuthentication:
             logger.warning("DEMO CHANNEL ENABLED: no Entra authentication or agentic tools; TEST DATA ONLY.")
             return cls("demo", demo_key=key, demo_service_url=service_url)
         if agentic:
+            configuration = load_configuration_from_env(os.environ)
+            simulator = SimulatorChannel.from_environment()
+            blueprint = os.getenv("AGENT365_BLUEPRINT_CLIENT_ID", "").strip() or client_id
+            tenant = tenant_id_from_environment()
+            agent_identity = os.getenv("AGENT365_AGENT_IDENTITY_CLIENT_ID", "").strip()
+            validator = None
+            audiences: set[str] = set()
+            normalized_tenant = ""
+            if blueprint and tenant:
+                normalized_blueprint = str(uuid.UUID(blueprint))
+                normalized_tenant = str(uuid.UUID(tenant))
+                audiences.update({normalized_blueprint, f"api://{normalized_blueprint}"})
+                if agent_identity:
+                    audiences.add(str(uuid.UUID(agent_identity)))
+                settings = dict(
+                    configuration.get("CONNECTIONS", {})
+                    .get("SERVICE_CONNECTION", {})
+                    .get("SETTINGS", {})
+                )
+                settings.setdefault("CLIENTID", normalized_blueprint)
+                settings.setdefault("TENANTID", normalized_tenant)
+                validator = JwtTokenValidator(AgentAuthConfiguration(**settings))
             return cls(
                 "agent365",
-                configuration=load_configuration_from_env(os.environ),
-                simulator=SimulatorChannel.from_environment(),
+                configuration=configuration,
+                validator=validator,
+                simulator=simulator,
+                agent_audiences=frozenset(audiences),
+                tenant_id=normalized_tenant,
             )
         if not client_id:
             return cls("anonymous")
@@ -121,9 +149,22 @@ class ChannelAuthentication:
             channel_client_id=channel_id,
         )
 
+    def detaches_message_turns(self, body: bytes) -> bool:
+        if self.mode in {"standard", "demo"}:
+            return True
+        if self.mode == "agent365" and self.simulator is not None:
+            try:
+                activity = Activity.model_validate_json(body)
+            except ValidationError:
+                return False
+            return not activity.is_agentic_request() and self.simulator.owns(activity.service_url)
+        return False
+
     async def authenticate(self, request: Request, body: bytes, connection_manager: Any = None) -> None:
-        if self.mode == "agent365" and self.simulator:
-            self._authenticate_simulator(request, body)
+        if getattr(request.state, "chat_ingress_client_id", ""):
+            return
+        if self.mode == "agent365":
+            await self._authenticate_agent365(request, body)
             return
         if self.mode not in {"standard", "demo"}:
             return
@@ -173,81 +214,164 @@ class ChannelAuthentication:
                 raise HTTPException(403, "Activity serviceUrl is not mapped to a configured connection.") from exc
         request.state.claims_identity = identity
 
-    def _authenticate_simulator(self, request: Request, body: bytes) -> None:
-        """Agent 365 traffic passes unchanged; activities for the simulator need its channel token."""
+    async def _authenticate_agent365(self, request: Request, body: bytes) -> None:
+        """Require verified simulator tokens for the simulator origin and Agent 365 tokens elsewhere."""
         try:
             activity = Activity.model_validate(json.loads(body))
         except (ValueError, UnicodeDecodeError, ValidationError) as exc:
             raise HTTPException(400, "A valid channel activity is required.") from exc
-        if not self.simulator.owns(activity.service_url):
+        if self.simulator and self.simulator.owns(activity.service_url):
+            if activity.is_agentic_request():
+                raise HTTPException(403, "Simulator activities cannot be agentic requests.")
+            scheme, _, token = request.headers.get("authorization", "").partition(" ")
+            if scheme.lower() != "bearer" or not token or len(token) > 24 * 1024:
+                raise HTTPException(401, "A simulator channel bearer token is required.")
+            try:
+                claims = await asyncio.to_thread(self.simulator.verify, token)
+            except jwt.PyJWKClientConnectionError as exc:
+                raise HTTPException(503, "Entra signing keys are unavailable.") from exc
+            except ValueError as exc:
+                raise HTTPException(401, str(exc)) from exc
+            request.state.claims_identity = ClaimsIdentity(claims, True, authentication_type="Bearer")
             return
-        if activity.is_agentic_request():
-            raise HTTPException(403, "Simulator activities cannot be agentic requests.")
+        if self.validator is None or not self.tenant_id or not self.agent_audiences:
+            raise HTTPException(503, "Agent 365 channel authentication is not configured.")
         scheme, _, token = request.headers.get("authorization", "").partition(" ")
         if scheme.lower() != "bearer" or not token or len(token) > 24 * 1024:
-            raise HTTPException(401, "A simulator channel bearer token is required.")
+            raise HTTPException(401, "An Agent 365 bearer token is required.")
         try:
-            claims = self.simulator.verify(token)
+            key = await self.validator._get_public_key_or_secret(token)
+            claims = jwt.decode(
+                token,
+                key=key,
+                algorithms=["RS256"],
+                leeway=300.0,
+                options={"verify_aud": False, "require": ["exp", "iss", "aud"]},
+            )
         except jwt.PyJWKClientConnectionError as exc:
-            raise HTTPException(503, "Entra signing keys are unavailable.") from exc
-        except ValueError as exc:
-            raise HTTPException(401, str(exc)) from exc
-        request.state.claims_identity = ClaimsIdentity(claims, True, authentication_type="Bearer")
+            raise HTTPException(503, "Channel signing keys are unavailable.") from exc
+        except (jwt.PyJWTError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise HTTPException(401, "Invalid Agent 365 channel token.") from exc
+        audience = claims.get("aud")
+        if not isinstance(audience, str) or audience.lower() not in self.agent_audiences:
+            raise HTTPException(401, "Invalid Agent 365 token audience.")
+        issuer = str(claims.get("iss") or "")
+        tenant = self.tenant_id.lower()
+        entra_issuers = {
+            f"https://login.microsoftonline.com/{tenant}/v2.0",
+            f"https://sts.windows.net/{tenant}/",
+        }
+        if issuer == "https://api.botframework.com":
+            if claims.get("scp") is not None:
+                raise HTTPException(401, "Invalid Bot Framework channel claims.")
+        elif issuer.lower() in entra_issuers:
+            if (
+                str(claims.get("tid") or "").lower() != tenant
+                or claims.get("scp") is not None
+                or claims.get("idtyp", "app") != "app"
+            ):
+                raise HTTPException(401, "Invalid Agent 365 application token claims.")
+            caller = str(claims.get("azp") or claims.get("appid") or "").lower()
+            if self.simulator and caller == self.simulator.channel_client_id:
+                raise HTTPException(403, "Simulator channel tokens require the configured simulator serviceUrl.")
+        else:
+            raise HTTPException(401, "Invalid Agent 365 token issuer.")
+        request.state.claims_identity = ClaimsIdentity(
+            claims, True, authentication_type="Bearer", security_token=token,
+        )
 
 
 class Agent365SimulatorClientFactory(RestChannelServiceClientFactory):
-    """Replies to the simulator use an Agent Identity token for the simulator channel app."""
+    """Replies to the simulator or custom chat front end use an Agent Identity token."""
 
-    def __init__(self, connection_manager: Any, simulator: SimulatorChannel) -> None:
+    def __init__(self, connection_manager: Any, simulator: SimulatorChannel | None = None) -> None:
         super().__init__(connection_manager)
         self.simulator = simulator
-        self._reply_token = ""
-        self._reply_token_expires = 0.0
+        self._reply_tokens: dict[tuple[str, ...], tuple[str, float]] = {}
 
-    async def _agent_identity_token(self) -> str:
-        if self._reply_token and self._reply_token_expires > time.time() + 300:
-            return self._reply_token
+    async def _agent_identity_token(self, scopes: list[str] | None = None) -> str:
+        target_scopes = list(scopes) if scopes is not None else list(self.simulator.reply_scopes)
+        cache_key = tuple(target_scopes)
+        cached = self._reply_tokens.get(cache_key)
+        if cached and cached[1] > time.time() + 300:
+            return cached[0]
         for attempt in range(3):
             try:
-                return await self._acquire_agent_identity_token()
+                return await self._acquire_agent_identity_token(target_scopes)
             except requests.exceptions.ConnectionError:
                 # Connections to Entra get reset after the gateway sat idle; the next attempt opens a new one.
                 if attempt == 2:
                     raise
 
-    async def _acquire_agent_identity_token(self) -> str:
-        blueprint = self._connection_manager.get_default_connection()
-        assertion = await blueprint.get_agentic_application_token(
-            self.simulator.tenant_id, self.simulator.agent_identity_client_id,
+    async def _acquire_agent_identity_token(self, scopes: list[str]) -> str:
+        tenant_id = (
+            self.simulator.tenant_id
+            if self.simulator
+            else str(uuid.UUID(tenant_id_from_environment()))
         )
+        agent_identity_id = (
+            self.simulator.agent_identity_client_id
+            if self.simulator
+            else str(uuid.UUID(os.getenv("AGENT365_AGENT_IDENTITY_CLIENT_ID", "").strip()))
+        )
+        blueprint = self._connection_manager.get_default_connection()
+        assertion = await blueprint.get_agentic_application_token(tenant_id, agent_identity_id)
         if not assertion:
             raise RuntimeError("The blueprint could not get an Agent Identity exchange token.")
         application = ConfidentialClientApplication(
-            self.simulator.agent_identity_client_id,
-            authority=f"https://login.microsoftonline.com/{self.simulator.tenant_id}",
+            agent_identity_id,
+            authority=f"https://login.microsoftonline.com/{tenant_id}",
             client_credential={"client_assertion": assertion},
         )
-        result = await asyncio.to_thread(application.acquire_token_for_client, self.simulator.reply_scopes)
+        result = await asyncio.to_thread(application.acquire_token_for_client, scopes)
         if "access_token" not in result:
             raise RuntimeError(f"Agent Identity reply token failed: {result.get('error')}")
-        self._reply_token = result["access_token"]
-        self._reply_token_expires = time.time() + int(result.get("expires_in", 0))
-        return self._reply_token
+        token = result["access_token"]
+        self._reply_tokens[tuple(scopes)] = (token, time.time() + int(result.get("expires_in", 0)))
+        return token
 
     def _is_simulator(self, context) -> bool:
         activity = getattr(context, "activity", None)
-        return bool(activity) and not activity.is_agentic_request() and self.simulator.owns(activity.service_url)
+        return (
+            bool(self.simulator)
+            and bool(activity)
+            and not activity.is_agentic_request()
+            and self.simulator.owns(activity.service_url)
+        )
+
+    @staticmethod
+    def _chat_reply_scopes(context, claims_identity, service_url: str) -> list[str] | None:
+        if context and context.activity.is_agentic_request():
+            return None
+        settings = ChatIngressSettings.from_environment()
+        if not settings.enabled or not matches_chat_service_url(service_url, settings.service_urls):
+            return None
+        claims = getattr(claims_identity, "claims", None) or {}
+        caller = str(claims.get("azp") or claims.get("appid") or "").lower()
+        if caller in settings.client_ids:
+            return [f"{caller}/.default"]
+        if len(settings.client_ids) == 1:
+            return [f"{next(iter(settings.client_ids))}/.default"]
+        return None
 
     async def create_user_token_client(self, context, claims_identity, use_anonymous=False):
+        activity = getattr(context, "activity", None)
+        chat_turn = bool(
+            activity
+            and self._chat_reply_scopes(context, claims_identity, getattr(activity, "service_url", ""))
+        )
         return await super().create_user_token_client(
-            context, claims_identity, use_anonymous=use_anonymous or self._is_simulator(context),
+            context, claims_identity, use_anonymous=use_anonymous or self._is_simulator(context) or chat_turn,
         )
 
     async def create_connector_client(
         self, context, claims_identity, service_url, audience, scopes=None, use_anonymous=False,
     ):
-        if self.simulator.owns(service_url) and not (context and context.activity.is_agentic_request()):
+        if self.simulator and self.simulator.owns(service_url) and not (context and context.activity.is_agentic_request()):
             return TeamsConnectorClient(endpoint=service_url, token=await self._agent_identity_token())
+        chat_scopes = self._chat_reply_scopes(context, claims_identity, service_url)
+        if chat_scopes:
+            return TeamsConnectorClient(endpoint=service_url, token=await self._agent_identity_token(chat_scopes))
         return await super().create_connector_client(
             context, claims_identity, service_url, audience, scopes, use_anonymous=use_anonymous,
         )

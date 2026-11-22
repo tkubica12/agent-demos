@@ -139,14 +139,21 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
         configuration = channel_authentication.configuration
         connection_manager = MsalConnectionManager(**configuration)
         channel_connection_manager = connection_manager
-        adapter_type = ChannelCloudAdapter if channel_authentication.mode == "standard" else CloudAdapter
+        custom_front_end = bool(
+            channel_authentication.simulator or os.getenv("CHAT_CLIENT_IDS", "").strip()
+        )
+        adapter_type = (
+            ChannelCloudAdapter
+            if channel_authentication.mode == "standard" or custom_front_end
+            else CloudAdapter
+        )
         adapter = adapter_type(
             connection_manager=connection_manager,
             channel_service_client_factory=(
                 ChannelServiceClientFactory(connection_manager)
                 if channel_authentication.mode == "standard"
                 else Agent365SimulatorClientFactory(connection_manager, channel_authentication.simulator)
-                if channel_authentication.simulator
+                if custom_front_end
                 else None
             ),
         )
@@ -861,7 +868,7 @@ async def agent365_messages(request: Request):
     body, normalized_product_info = (
         normalize_agent365_activity_body(body)
     )
-    if channel_authentication.mode in {"standard", "demo"}:
+    if channel_authentication.detaches_message_turns(body):
         activity = Activity.model_validate_json(body)
         if (
             activity.type == "message"

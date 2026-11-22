@@ -248,7 +248,7 @@ When the Worker's settings already exist (for example after `setup_app_tfvars`, 
 
 ### Without a Microsoft 365 channel
 
-A Worker can run without a Teams, mail, or Copilot channel, for example when users reach it through the gateway `/invoke` API or a custom chat front end. Bootstrap such a Worker with `--skip-messaging-channel`, which skips step 6 (endpoint registration and package publishing) but still checks that the blueprint has no client secrets. Its inheritance check ignores Messaging Bot API and Power Platform API, which serve only those channels; every other resource must still show effective inheritance. Pass only the licenses its scenario needs:
+A Worker can run without a Teams, mail, or Copilot channel, for example when users reach it through the Agent Chat Simulator or a custom chat front end. Bootstrap such a Worker with `--skip-messaging-channel`, which skips step 6 (endpoint registration and package publishing) but still checks that the blueprint has no client secrets. Its inheritance check ignores Messaging Bot API and Power Platform API, which serve only those channels; every other resource must still show effective inheritance. Pass only the licenses its scenario needs:
 
 ```powershell
 uv run python -m scripts.worker_lifecycle bootstrap `

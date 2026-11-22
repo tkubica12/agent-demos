@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 
 from bridge import simulator_ingress
+from bridge.attachments import attachment_download_origins
 from bridge.channel_auth import Agent365SimulatorClientFactory, ChannelAuthentication
 from bridge.simulator_ingress import SimulatorChannel
 
@@ -86,10 +87,21 @@ class SimulatorIngressTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"SIMULATOR_CHANNEL_CLIENT_ID": "", "SIMULATOR_SERVICE_URL": ""}):
             self.assertIsNone(ChannelAuthentication.from_environment().simulator)
 
-    def test_rejects_plain_http_service_url(self):
-        with patch.dict(os.environ, {"SIMULATOR_SERVICE_URL": "http://pmchat.example.test"}):
-            with self.assertRaises(ValueError):
-                SimulatorChannel.from_environment()
+    def test_rejects_plain_http_or_incomplete_service_url(self):
+        for env in (
+            {"SIMULATOR_SERVICE_URL": "http://pmchat.example.test"},
+            {"SIMULATOR_SERVICE_URL": "https://pmchat.example.test/v3"},
+            {"SIMULATOR_SERVICE_URL": ""},
+            {"SIMULATOR_CHANNEL_CLIENT_ID": ""},
+        ):
+            with self.subTest(env=env), patch.dict(os.environ, env):
+                with self.assertRaises(ValueError):
+                    SimulatorChannel.from_environment()
+
+    def test_simulator_service_url_is_trusted_attachment_download_origin(self):
+        self.assertIn(("https", "pmchat.example.test", 443), attachment_download_origins())
+        self.assertTrue(self.auth.detaches_message_turns(activity(f"{SIMULATOR_URL}/v3")))
+        self.assertFalse(self.auth.detaches_message_turns(activity("https://smba.trafficmanager.net/emea/")))
 
     async def test_accepts_valid_simulator_token(self):
         req = request(token())
@@ -119,15 +131,41 @@ class SimulatorIngressTests(unittest.IsolatedAsyncioTestCase):
                 await self.auth.authenticate(request(bad), activity())
             self.assertEqual(caught.exception.status_code, 401)
 
-    async def test_other_service_urls_pass_through_unchanged(self):
-        req = request()
-        await self.auth.authenticate(req, activity("https://smba.trafficmanager.net/emea/"))
-        self.assertFalse(hasattr(req.state, "claims_identity"))
+    async def test_other_service_urls_require_valid_agent365_or_bot_token(self):
+        teams_url = "https://smba.trafficmanager.net/emea/"
+        with self.assertRaises(HTTPException) as unauthenticated:
+            await self.auth.authenticate(request(), activity(teams_url))
+        self.assertEqual(unauthenticated.exception.status_code, 401)
+        with patch.object(
+            self.auth.validator, "_get_public_key_or_secret", AsyncMock(return_value=KEY.public_key()),
+        ):
+            with self.assertRaises(HTTPException) as wrong_origin_for_sim_token:
+                await self.auth.authenticate(request(token()), activity(teams_url))
+            self.assertEqual(wrong_origin_for_sim_token.exception.status_code, 403)
+            with self.assertRaises(HTTPException) as forged:
+                await self.auth.authenticate(
+                    request(token(key=OTHER_KEY, iss="https://api.botframework.com", azp=None)),
+                    activity(teams_url),
+                )
+            self.assertEqual(forged.exception.status_code, 401)
+            bot_req = request(token(iss="https://api.botframework.com", azp=None, tid=None))
+            await self.auth.authenticate(bot_req, activity(teams_url))
+            self.assertTrue(bot_req.state.claims_identity.is_authenticated)
+            apx_req = request(token(azp="5a807f24-c9de-44ee-a3a7-329e88a00ffc"))
+            await self.auth.authenticate(apx_req, activity(teams_url))
+            self.assertTrue(apx_req.state.claims_identity.is_authenticated)
 
-    async def test_lookalike_host_is_not_the_simulator(self):
-        req = request()
-        await self.auth.authenticate(req, activity(SIMULATOR_URL + ".evil.test"))
-        self.assertFalse(hasattr(req.state, "claims_identity"))
+    async def test_lookalike_host_rejects_unauthenticated_and_simulator_tokens(self):
+        evil_url = SIMULATOR_URL + ".evil.test"
+        with self.assertRaises(HTTPException) as missing:
+            await self.auth.authenticate(request(), activity(evil_url))
+        self.assertEqual(missing.exception.status_code, 401)
+        with patch.object(
+            self.auth.validator, "_get_public_key_or_secret", AsyncMock(return_value=KEY.public_key()),
+        ):
+            with self.assertRaises(HTTPException) as sim_token_on_evil_host:
+                await self.auth.authenticate(request(token()), activity(evil_url))
+            self.assertEqual(sim_token_on_evil_host.exception.status_code, 403)
 
     async def test_accepts_token_for_agent_identity(self):
         req = request(token(aud=AGENT_IDENTITY))
@@ -171,6 +209,66 @@ class SimulatorIngressTests(unittest.IsolatedAsyncioTestCase):
         ) as parent:
             await factory.create_connector_client(context, object(), "https://smba.trafficmanager.net/emea/", "aud")
         self.assertIsNone(parent.await_args.args[4])
+
+    async def test_gateway_route_blocks_bypass_and_detaches_agent365_simulator_turn(self):
+        import asyncio
+        import httpx
+        from microsoft_agents.activity import Activity, ResourceResponse
+        from microsoft_agents.hosting.core import AgentApplication, MemoryStorage
+        from bridge import app as bridge_app
+        from bridge.channel_auth import ChannelCloudAdapter
+
+        replies = []
+        observed_modes = []
+        blueprint = SimpleNamespace(get_agentic_application_token=AsyncMock(return_value="assertion"))
+        factory = Agent365SimulatorClientFactory(
+            SimpleNamespace(get_default_connection=lambda: blueprint), self.auth.simulator,
+        )
+        adapter = ChannelCloudAdapter(channel_service_client_factory=factory)
+        agent = AgentApplication(storage=MemoryStorage(), adapter=adapter, start_typing_timer=False)
+
+        async def handler(context, _state):
+            observed_modes.append(bridge_app.agent_auth_context(context.activity).available_modes)
+            await context.send_activity("Worker reply")
+
+        agent.activity("message")(handler)
+
+        async def send(*args):
+            replies.append(args[-1])
+            return ResourceResponse(id="r1")
+
+        connector = SimpleNamespace(
+            conversations=SimpleNamespace(send_to_conversation=send, reply_to_activity=send),
+            close=AsyncMock(),
+        )
+        msal_app = SimpleNamespace(acquire_token_for_client=lambda _s: {"access_token": "reply", "expires_in": 3600})
+        with (
+            patch.dict(os.environ, {"AGENT365_AGENT_USER_ID": "99999999-9999-9999-9999-999999999999"}),
+            patch.object(bridge_app, "channel_authentication", self.auth),
+            patch.object(bridge_app, "agent365_adapter", adapter),
+            patch.object(bridge_app, "agent365_app", agent),
+            patch("bridge.channel_auth.ConfidentialClientApplication", return_value=msal_app),
+            patch("bridge.channel_auth.TeamsConnectorClient", return_value=connector),
+        ):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=bridge_app.app), base_url="https://gateway.test",
+            ) as client:
+                bypass = await client.post(
+                    "/api/messages",
+                    content=activity("https://smba.trafficmanager.net/emea/"),
+                    headers={"Content-Type": "application/json"},
+                )
+                accepted = await client.post(
+                    "/api/messages",
+                    content=activity(),
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {token(aud=AGENT_IDENTITY)}"},
+                )
+                if bridge_app.background_turns:
+                    await asyncio.gather(*list(bridge_app.background_turns))
+        self.assertEqual(bypass.status_code, 401)
+        self.assertEqual(accepted.status_code, 202)
+        self.assertEqual([item.text for item in replies], ["Worker reply"])
+        self.assertEqual(observed_modes, [("agent_identity", "agent_user")])
 
 
 if __name__ == "__main__":

@@ -244,6 +244,11 @@ def worker_settings(config: dict, platform: dict, infrastructure: dict, endpoint
         "CHAT_SERVICE_URLS": config.get("chat_service_urls", ""),
         "SIMULATOR_CHANNEL_CLIENT_ID": config.get("simulator_channel_client_id", ""),
         "SIMULATOR_SERVICE_URL": config.get("simulator_url", ""),
+        **(
+            {"ATTACHMENT_DOWNLOAD_ORIGINS": text(config["simulator_url"]).rstrip("/")}
+            if config.get("simulator_url")
+            else {}
+        ),
         "USE_AGENTIC_AUTH": "true",
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__CLIENTID": config["agent365_client_id"],
         "CONNECTIONS__SERVICE_CONNECTION__SETTINGS__TENANTID": tenant,

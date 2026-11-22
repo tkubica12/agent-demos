@@ -66,6 +66,14 @@ class SetupAppTfvarsTests(unittest.TestCase):
             build_tfvars(previous={}, chat_client_ids="hermes-chat", **common)
         with self.assertRaises(ValueError):
             build_tfvars(previous={}, chat_service_urls="http://chat.example.test", **common)
+        sim = build_tfvars(
+            previous={}, simulator_channel_client_id=client, simulator_service_url="https://sim.example.test/", **common,
+        )
+        self.assertEqual(sim["simulator_channel_client_id"], client.lower())
+        self.assertEqual(sim["simulator_url"], "https://sim.example.test")
+        for bad_sim_url in ("http://sim.example.test", "https://sim.example.test/v3"):
+            with self.assertRaises(ValueError):
+                build_tfvars(previous={}, simulator_service_url=bad_sim_url, **common)
 
     def test_generated_blueprint_loading_is_keyless_and_does_not_decrypt(self):
         with tempfile.TemporaryDirectory() as directory:

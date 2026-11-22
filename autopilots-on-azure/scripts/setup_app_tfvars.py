@@ -8,6 +8,7 @@ import secrets
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -140,8 +141,18 @@ def build_tfvars(
         tfvars["simulator_channel_client_id"] = str(uuid.UUID(simulator_channel_client_id.strip()))
     if simulator_service_url:
         url = simulator_service_url.strip().rstrip("/")
-        if not url.startswith("https://"):
-            raise ValueError("Simulator service URL must use HTTPS.")
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+            or "\\" in url
+        ):
+            raise ValueError("Simulator service URL must be an HTTPS origin without a path or credentials.")
         tfvars["simulator_url"] = url
     tfvars.update(
         {

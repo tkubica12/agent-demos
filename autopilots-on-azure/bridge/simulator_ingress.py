@@ -33,11 +33,23 @@ class SimulatorChannel:
         service_url = os.getenv("SIMULATOR_SERVICE_URL", "").strip().rstrip("/")
         if not client_id and not service_url:
             return None
+        if not client_id or not service_url:
+            raise ValueError("SIMULATOR_CHANNEL_CLIENT_ID and SIMULATOR_SERVICE_URL must both be set.")
         tenant = os.getenv("AGENT365_TENANT_ID", "").strip()
         blueprint = os.getenv("AGENT365_BLUEPRINT_CLIENT_ID", "").strip()
         agent_identity = os.getenv("AGENT365_AGENT_IDENTITY_CLIENT_ID", "").strip()
         parsed = urlsplit(service_url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.query or parsed.fragment or parsed.username:
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+            or "\\" in service_url
+            or any(ord(char) <= 32 for char in service_url)
+        ):
             raise ValueError("SIMULATOR_SERVICE_URL must be the simulator's HTTPS origin.")
         return cls(
             channel_client_id=str(uuid.UUID(client_id)),
@@ -48,8 +60,20 @@ class SimulatorChannel:
         )
 
     def owns(self, service_url: object) -> bool:
-        url = str(service_url or "").rstrip("/")
-        return url == self.service_url or url.startswith(self.service_url + "/")
+        raw = str(service_url or "").strip()
+        if not raw or "\\" in raw or any(ord(char) <= 32 for char in raw):
+            return False
+        parsed = urlsplit(raw)
+        expected = urlsplit(self.service_url)
+        if (
+            parsed.scheme.lower() != expected.scheme.lower()
+            or (parsed.hostname or "").lower() != (expected.hostname or "").lower()
+            or (parsed.port or 443) != (expected.port or 443)
+            or parsed.username
+            or parsed.password
+        ):
+            return False
+        return parsed.path == "" or parsed.path.startswith("/")
 
     @property
     def reply_scopes(self) -> list[str]:
