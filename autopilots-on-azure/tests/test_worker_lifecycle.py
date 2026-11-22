@@ -1,5 +1,10 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
+from scripts import worker_lifecycle
 from scripts.worker_lifecycle import (
     bootstrap_agent365_config,
     endpoint_registration_needed,
@@ -7,10 +12,12 @@ from scripts.worker_lifecycle import (
     owned_sandbox_groups,
     redact_secrets,
     release_pin_arguments,
+    CHANNEL_ONLY_RESOURCES,
     RELEASE_PIN_FLAGS,
     strip_blueprint_secrets,
     validate_state_name,
     worker_display_name,
+    worker_settings_pin_arguments,
 )
 
 
@@ -51,11 +58,54 @@ class WorkerLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "runtime_image"):
             release_pin_arguments(tfvars)
 
+    def test_existing_worker_settings_need_no_pin_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = {name: root / name / "tfvars.json" for name in ("worker3", "hermes2")}
+            settings["worker3"].parent.mkdir()
+            settings["worker3"].write_text("{}", encoding="utf-8")
+            with mock.patch.object(worker_lifecycle, "runtime_app_tfvars_path", lambda _runtime, state: settings[state]):
+                self.assertIsNone(worker_settings_pin_arguments("worker3", "hermes2"))
+                self.assertIsNone(worker_settings_pin_arguments("worker3", "worker3"))
+
+    def test_new_worker_copies_pins_from_another_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = {name: root / name / "tfvars.json" for name in ("worker3", "hermes2")}
+            settings["hermes2"].parent.mkdir()
+            pins = {key: f"value-{index}" for index, key in enumerate(RELEASE_PIN_FLAGS)}
+            settings["hermes2"].write_text(json.dumps(pins), encoding="utf-8")
+            with mock.patch.object(worker_lifecycle, "runtime_app_tfvars_path", lambda _runtime, state: settings[state]):
+                self.assertEqual(worker_settings_pin_arguments("worker3", "hermes2"), release_pin_arguments(pins))
+                with self.assertRaisesRegex(ValueError, "another"):
+                    worker_settings_pin_arguments("worker3", "worker3")
+
     def test_inheritance_requires_every_resource(self):
         self.assertTrue(inheritance_complete("Summary: 7 of 7 resources have inheritance"))
         self.assertFalse(inheritance_complete("Summary: 6 of 7 resources have inheritance"))
         self.assertFalse(inheritance_complete("Summary: 0 of 0 resources"))
         self.assertFalse(inheritance_complete("no summary"))
+
+    def test_inheritance_without_channel_ignores_bot_and_power_platform(self):
+        def block(name, app_id, effective):
+            return f"Resource: {name} ({app_id})\n  Scopes: OK\n  Effective inheritance: {effective}\n\n"
+
+        tools = block("Microsoft Graph", "00000003-0000-0000-c000-000000000000", "OK") + block(
+            "Work IQ Mail MCP", "16b1878d-62c7-4009-aa25-68989d63bbad", "OK"
+        )
+        bot = block("Messaging Bot API", "5a807f24-c9de-44ee-a3a7-329e88a00ffc", "NONE - not granted")
+        power = block("Power Platform API", "8578e004-a5c6-46e7-913e-12f58912df43", "NONE - not granted")
+        output = tools + bot + power + "Summary: 2 of 4 resource(s) have effective inheritance"
+
+        self.assertFalse(inheritance_complete(output))
+        self.assertTrue(inheritance_complete(output, ignored_resources=CHANNEL_ONLY_RESOURCES))
+        missing_tool = tools.replace("Effective inheritance: OK\n\nResource: Work IQ", "Effective inheritance: NONE\n\nResource: Work IQ")
+        missing_tool = missing_tool.rsplit("Effective inheritance: OK", 1)[0] + "Effective inheritance: NONE\n\n"
+        self.assertFalse(
+            inheritance_complete(missing_tool + bot + power + "Summary: 1 of 4 resource(s)", ignored_resources=CHANNEL_ONLY_RESOURCES)
+        )
+        self.assertFalse(inheritance_complete(bot + power + "Summary: 0 of 2 resource(s)", ignored_resources=CHANNEL_ONLY_RESOURCES))
+        self.assertFalse(inheritance_complete(tools + "Summary: 2 of 3 resource(s)", ignored_resources=CHANNEL_ONLY_RESOURCES))
 
     def test_endpoint_is_registered_once_and_never_replaced(self):
         endpoint = "https://worker.example/api/messages"

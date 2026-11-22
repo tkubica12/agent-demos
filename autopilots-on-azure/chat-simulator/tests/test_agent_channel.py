@@ -1141,3 +1141,25 @@ def test_additive_tables_preserve_existing_collaboration_storage_and_message_dat
         assert response.status_code == 200 and response.json()["text"] == "Hello"
         with reopened.state.sessions() as session:
             assert session.scalar(select(db.Message).where(db.Message.id == resources["message"]["id"])).activity == before
+
+
+def test_agent_still_working_on_a_message_is_not_a_failed_delivery(client, app, accounts, installed):
+    """Agents answer a message request only after their whole turn, which outlasts any sane wait."""
+    state = app.state.protocol_fixture
+
+    async def still_working(activity):
+        raise httpx.ReadTimeout("agent turn still running")
+
+    state["onActivity"] = still_working
+    owner = accounts["owner"]["headers"]
+    response = client.post(f"/api/conversations/{installed['conversation']}/messages",
+                           headers=owner, json={"text": "Long agent turn"})
+    assert response.status_code == 201, response.text
+    deliveries = client.get(f"/api/agents/{installed['agent']['id']}/deliveries", headers=owner).json()
+    assert next(d for d in deliveries if d["activityId"] == response.json()["id"])["status"] == "delivered"
+
+    del state["onActivity"]
+    mid = connector_message(client, installed, attachments=[{"contentType": ADAPTIVE_CARD, "content": CARD}])
+    state["onActivity"] = still_working
+    response = client.post(f"/api/messages/{mid}/actions", headers=owner, json={"action": EXECUTE})
+    assert response.status_code == 502 and response.json()["detail"]["code"] == "agent_delivery_failed"

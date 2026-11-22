@@ -7,7 +7,7 @@ import {
 } from "@fluentui/react-icons";
 import { Popover, PopoverSurface, PopoverTrigger } from "@fluentui/react-components";
 import { Emoji, EmojiPicker } from "./emoji";
-import type { Api, FileItem, Mention, Message, User } from "./api";
+import { ApiError, type Api, type FileItem, type Mention, type Message, type User } from "./api";
 
 type Target = { conversationId: string; createConversation?: never }
   | { conversationId?: never; createConversation: () => Promise<string> };
@@ -57,6 +57,10 @@ export function Composer({ api, conversationId, createConversation, disabled, la
   async function send() {
     if (disabled || sending || uploading || (!text.trim() && !attachments.length)) return;
     setSending(true);
+    // The box empties at once; the draft comes back only if the message was not saved.
+    update("");
+    setAttachments([]);
+    setMentions([]);
     try {
       const target = conversationId ?? (createConversation ? await createConversation() : null);
       if (!target) throw new Error("Choose a conversation before sending.");
@@ -66,10 +70,14 @@ export function Composer({ api, conversationId, createConversation, disabled, la
         attachmentIds: attachments.map((file) => file.id),
       });
       onSent(message);
-      update("");
-      setAttachments([]);
-      setMentions([]);
-    } catch (error) { onError(error); }
+    } catch (error) {
+      if (!(error instanceof ApiError && error.resourceCommitted)) {
+        update(text);
+        setAttachments(attachments);
+        setMentions(mentions);
+      }
+      onError(error);
+    }
     finally { setSending(false); }
   }
   async function upload(file: File) {

@@ -49,6 +49,32 @@ class SetupAppTfvarsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_tfvars(previous={}, worker_owner_id="owner@contoso.com", **common)
 
+    def test_chat_admission_settings_are_validated_and_preserved_on_updates(self):
+        client = "B3C0FFEE-0000-4000-8000-000000000001"
+        common = {
+            "runtime": "hermes", "autopilot_name": "worker",
+            "role_blueprint": "junior-project-manager", "role_blueprint_source": "https://example.com/repo.git",
+            "role_release": "1.0.0", "role_release_commit": "a" * 40,
+        }
+        first = build_tfvars(
+            previous={}, chat_client_ids=client, chat_service_urls="https://chat.example.test/connector/", **common,
+        )
+        self.assertEqual(first["chat_client_ids"], client.lower())
+        self.assertEqual(first["chat_service_urls"], "https://chat.example.test/connector")
+        self.assertEqual(build_tfvars(previous=first, **common)["chat_client_ids"], client.lower())
+        with self.assertRaises(ValueError):
+            build_tfvars(previous={}, chat_client_ids="hermes-chat", **common)
+        with self.assertRaises(ValueError):
+            build_tfvars(previous={}, chat_service_urls="http://chat.example.test", **common)
+        sim = build_tfvars(
+            previous={}, simulator_channel_client_id=client, simulator_service_url="https://sim.example.test/", **common,
+        )
+        self.assertEqual(sim["simulator_channel_client_id"], client.lower())
+        self.assertEqual(sim["simulator_url"], "https://sim.example.test")
+        for bad_sim_url in ("http://sim.example.test", "https://sim.example.test/v3"):
+            with self.assertRaises(ValueError):
+                build_tfvars(previous={}, simulator_service_url=bad_sim_url, **common)
+
     def test_generated_blueprint_loading_is_keyless_and_does_not_decrypt(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

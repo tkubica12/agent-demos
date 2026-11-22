@@ -244,6 +244,64 @@ The operator login runs Terraform and Sandbox deployment; `--admin-config-dir` r
 
 Rerunning resumes: an existing live blueprint, Worker settings, and an already registered identical endpoint are kept; a different registered endpoint stops the run. Finally upload `.local\<worker>\agent365\manifest\manifest.zip` in Microsoft 365 admin center as in step 7.
 
+When the Worker's settings already exist (for example after `setup_app_tfvars`, `build_images`, and an `--infrastructure-only` apply), step 4 keeps them and `--pins-from` is not read.
+
+### Without a Microsoft 365 channel
+
+A Worker can run without a Teams, mail, or Copilot channel, for example when users reach it through the Agent Chat Simulator or a custom chat front end. Bootstrap such a Worker with `--skip-messaging-channel`, which skips step 6 (endpoint registration and package publishing) but still checks that the blueprint has no client secrets. Its inheritance check ignores Messaging Bot API and Power Platform API, which serve only those channels; every other resource must still show effective inheritance. Pass only the licenses its scenario needs:
+
+```powershell
+uv run python -m scripts.worker_lifecycle bootstrap `
+  --state-name worker3 --pins-from hermes2 --admin-config-dir $admin --skip-messaging-channel `
+  --license-skus "AGENT_365,Office_365_w/o_Teams_Bundle_Business_Premium"
+```
+
+The Teams and Microsoft 365 Copilot Work IQ servers stay configured as usual. To drop them, remove them from `ToolingManifest.json` and set the `workiq_teams_*` and `workiq_copilot_*` Terraform variables to empty, which disables those servers in the runtime.
+
+Nothing has to be uploaded in Microsoft 365 admin center.
+
+#### Chat front end
+
+A custom chat application can replace Teams as the Worker's front end. It signs users in with Entra and posts Activity Protocol messages to the gateway `/api/messages` with the user's access token for the Worker's blueprint scope `api://<blueprintAppId>/access_agent`. Enable admission for it and redeploy:
+
+```powershell
+uv run python -m scripts.setup_app_tfvars `
+  --state-name worker3 --autopilot-name worker3 `
+  --chat-client-ids <chatAppId> `
+  --chat-service-urls https://<chat-host>/<connector-path> --runtime-only
+uv run python -m scripts.deploy_apps_runtime `
+  --state-name worker3 --apply --auto-approve --capture
+```
+
+With `chat_client_ids` set, the gateway rejects every `/api/messages` request that does not carry a valid token: signature, tenant, issuer, audience (the blueprint), delegated scope `access_agent`, and a client application from the list. It replaces the activity sender with the user in the token, so Worker owner checks use the signed-in identity, not text typed by the caller. Replies are sent only to an activity `serviceUrl` under `chat_service_urls`; other addresses are rejected before a turn starts. Missing tenant, blueprint, or service URL settings fail closed with HTTP 503.
+
+Without `chat_client_ids` the endpoint keeps the Agent 365 and Teams behavior. A Worker bootstrapped with `--skip-messaging-channel` and reached through a chat front end must therefore set it before users are given the gateway URL. The chat application needs an Entra app registration with delegated permission to the blueprint scope `access_agent`.
+
+#### Chat simulator front end
+
+An Agent 365 Worker can also take the [chat simulator](chat-simulator/README.md) (Entra mode) as its chat front end and keep its Agent Identity, Agent User and Work IQ tools. The simulator delivers activities with an application token of its channel app for the Worker's Agent Identity (`<agentIdentityId>/.default`). The gateway accepts that token only for activities whose `serviceUrl` is under the configured simulator origin, and answers with an Agent Identity token for the channel app (`<channelAppId>/.default`); Entra refuses app-only tokens requested by the blueprint itself (AADSTS82001). Activities with any other `serviceUrl` keep the Agent 365 behavior.
+
+1. Point the Worker at the simulator and redeploy:
+
+   ```powershell
+   uv run python -m scripts.setup_app_tfvars `
+     --state-name worker3 --autopilot-name worker3 `
+     --simulator-channel-client-id <channelAppId> `
+     --simulator-service-url https://<simulator-host> --runtime-only
+   uv run python -m scripts.deploy_apps_runtime `
+     --state-name worker3 --apply --auto-approve --capture
+   ```
+
+2. Register the Worker in the simulator (`TSIM_AGENTS_JSON` or `TSIM_AGENTS_FILE`) with the Agent Identity ID as `clientId` and the gateway URL as the endpoint, then restart the simulator:
+
+   ```json
+   [{"name": "worker3", "displayName": "Worker3", "clientId": "<agentIdentityId>", "messagingEndpoint": "https://<gateway>/api/messages"}]
+   ```
+
+3. Send a message in the simulator and ask the Worker which identity and tools it has. Expected: `Agent User: <agent user UPN>` and the Work IQ servers.
+
+The simulator's own simulator-channel Worker is not needed for this.
+
 `deploy_apps_runtime` leaves the new Worker's tfvars active. Other Workers' `deploy_apps_runtime` runs reactivate their own; before raw `terraform` commands, run `demo_ops activate --state-name <worker>` and select the workspace it prints.
 
 ## Validation

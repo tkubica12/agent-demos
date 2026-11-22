@@ -46,6 +46,7 @@ from bridge.attachments import (
     process_turn_attachments,
 )
 from bridge.channel_auth import (
+    Agent365SimulatorClientFactory,
     ChannelAuthentication,
     ChannelCloudAdapter,
     ChannelServiceClientFactory,
@@ -114,6 +115,7 @@ from bridge.generated_files import GeneratedAttachment, RUN_PATTERN, generated_f
 from bridge.telemetry_http import TelemetryMiddleware
 from bridge.work_activity import ActiveWorkMiddleware, start_active_work
 from bridge.transport_ingress import NativeTransportIngressMiddleware
+from bridge.chat_ingress import ChatIngressMiddleware
 from bridge import durable_transport, event_worker
 
 
@@ -121,6 +123,7 @@ app = FastAPI(title="Autopilot Azure Container Apps bridge")
 app.add_middleware(TelemetryMiddleware)
 app.add_middleware(ActiveWorkMiddleware)
 app.add_middleware(NativeTransportIngressMiddleware)
+app.add_middleware(ChatIngressMiddleware)
 PROCESS_NONCE = uuid.uuid4().hex
 
 
@@ -136,12 +139,21 @@ def create_agent365_app() -> tuple[AgentApplication[TurnState], CloudAdapter]:
         configuration = channel_authentication.configuration
         connection_manager = MsalConnectionManager(**configuration)
         channel_connection_manager = connection_manager
-        adapter_type = ChannelCloudAdapter if channel_authentication.mode == "standard" else CloudAdapter
+        custom_front_end = bool(
+            channel_authentication.simulator or os.getenv("CHAT_CLIENT_IDS", "").strip()
+        )
+        adapter_type = (
+            ChannelCloudAdapter
+            if channel_authentication.mode == "standard" or custom_front_end
+            else CloudAdapter
+        )
         adapter = adapter_type(
             connection_manager=connection_manager,
             channel_service_client_factory=(
                 ChannelServiceClientFactory(connection_manager)
                 if channel_authentication.mode == "standard"
+                else Agent365SimulatorClientFactory(connection_manager, channel_authentication.simulator)
+                if custom_front_end
                 else None
             ),
         )
@@ -856,7 +868,7 @@ async def agent365_messages(request: Request):
     body, normalized_product_info = (
         normalize_agent365_activity_body(body)
     )
-    if channel_authentication.mode in {"standard", "demo"}:
+    if channel_authentication.detaches_message_turns(body):
         activity = Activity.model_validate_json(body)
         if (
             activity.type == "message"

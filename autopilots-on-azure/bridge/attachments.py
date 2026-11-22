@@ -315,7 +315,11 @@ def _loopback_host(host: str) -> bool:
 
 def attachment_download_origins() -> frozenset[tuple[str, str, int]]:
     origins = set()
-    for value in os.getenv("ATTACHMENT_DOWNLOAD_ORIGINS", "").split(","):
+    configured = [
+        *os.getenv("ATTACHMENT_DOWNLOAD_ORIGINS", "").split(","),
+        os.getenv("SIMULATOR_SERVICE_URL", ""),
+    ]
+    for value in configured:
         value = value.strip()
         if not value:
             continue

@@ -57,7 +57,8 @@ export type RealtimeEvent = {
 export type GetToken = () => Promise<string>;
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string, readonly diagnostics?: unknown) { super(message); }
+  constructor(readonly status: number, message: string, readonly diagnostics?: unknown,
+    readonly resourceCommitted = false) { super(message); }
 }
 
 export async function readApiResponse<T>(response: Response): Promise<T> {
@@ -70,7 +71,7 @@ export async function readApiResponse<T>(response: Response): Promise<T> {
       ? "Agent delivery failed. Your changes were saved; a simulator administrator can retry delivery."
       : typeof detail === "object" && detail !== null && "message" in detail && typeof detail.message === "string"
         ? detail.message : `Request failed (${response.status}).`;
-    throw new ApiError(response.status, message, error);
+    throw new ApiError(response.status, message, error, committedDelivery);
   }
   if (response.status === 204) return undefined as T;
   return response.json();
